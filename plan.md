@@ -29,7 +29,7 @@ Planning assumptions:
 
 ## Table of Contents
 
-- [ ] [Phase 1 - Orchestrator Core](./01-phase-orchestrator-core.md)
+- [/] [Phase 1 - Orchestrator Core](./01-phase-orchestrator-core.md)
 - [ ] [Phase 2 - Project Templates And Model-Project Bootstrap](./02-phase-project-templates.md)
 - [ ] [Phase 3 - Direct Modeling Flow Step Implementation](./03-phase-dmf-implementation.md)
 - [ ] [Phase 4 - Experiment Tracking](./04-phase-experiment-tracking.md)
