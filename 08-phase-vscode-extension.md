@@ -31,20 +31,24 @@ The extension cannot reliably parse human-formatted CLI output. Add
 `--json` output to the subcommands the extension consumes so the
 extension reads structured data.
 
-- [ ] Extend `sim-flow status` with `--json` emitting `{ flow,
-  current_step, gates: [...], archived_gates: {...} }`.
-- [ ] Extend `sim-flow runs` with `--json` emitting an array of
+- [x] Extend `sim-flow status` with `--json` emitting `{ flow,
+  current_step, started, gates, archived_gates }`.
+- [x] Extend `sim-flow runs` with `--json` emitting an array of
   `RunRow`-shaped objects.
-- [ ] Extend `sim-flow gate <step>` with `--json` emitting
-  `{ step, clean, failures: [{description, reason}] }`.
-- [ ] Extend `sim-flow baseline list` and `sim-flow baseline compare
-  <name>` with `--json` emitting structured records.
-- [ ] Extend `sim-flow new model` with `--json` emitting
+- [x] Extend `sim-flow gate <step>` with `--json` emitting
+  `{ step, clean, failures: [{description, reason}] }`. JSON is
+  written on stdout even when the gate fails; the exit code
+  distinguishes pass / fail for non-JSON consumers.
+- [x] Extend `sim-flow baseline create`, `list`, and `compare` with
+  `--json` emitting structured records.
+- [x] Extend `sim-flow new model` with `--json` emitting
   `{ project_dir, crate_name, next_step }`.
-- [ ] Document the JSON shapes in a new
-  `docs/architecture/ai-flow/cli-json.md` so the extension can pin
-  against stable output.
-- [ ] Add unit tests for the JSON writer paths in `crates/sim-flow/`.
+- [x] Document the JSON shapes in
+  [cli-json.md](../../architecture/ai-flow/cli-json.md) so the
+  extension can pin against stable output.
+- [x] Add integration tests for the JSON writer paths in
+  `crates/sim-flow/tests/cli_json.rs` covering status, runs, gate,
+  baseline list, baseline compare, and new model.
 
 ## Milestone 2 - Extension Scaffolding
 
@@ -232,10 +236,13 @@ be ready.
 
 ## Status
 
-Not started. Delivered after Phases 1-4; DSF-specific hooks (M12)
-depend on Phase 6. Milestone 1 (CLI JSON output) is the first
-actionable task and can be done in parallel with extension
-scaffolding.
+In progress. Milestone 1 (CLI machine-readable surface) is complete:
+every subcommand the extension consumes now has a `--json` flag,
+schemas are documented in
+[cli-json.md](../../architecture/ai-flow/cli-json.md), and
+integration tests in `crates/sim-flow/tests/cli_json.rs` cover the
+happy paths. Milestones 2-11 remain. DSF-specific hooks (M12) still
+depend on Phase 6.
 
 ## Scope Caveats
 
