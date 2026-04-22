@@ -148,24 +148,39 @@ extension reads structured data.
 
 ## Milestone 5 - Webview Dashboard (v1)
 
-- [ ] Implement `src/webview/host.ts`: create / show / dispose the
-  webview panel; handle postMessage plumbing.
-- [ ] Build `src/webview/panel.ts` as a plain TypeScript front-end
-  (no framework for v1; revisit React in a later phase if complexity
-  warrants).
-- [ ] Render the step rail using the same colors as the SVG in
-  [images/direct-modeling-flow.png](../../architecture/ai-flow/images/direct-modeling-flow.png).
-  Gate diamonds between steps, color-coded by gate status.
-- [ ] Implement the per-step panel: click a step to show its last
-  critique (markdown rendered), gate-check failures if any, and
-  work/critique/reset buttons.
-- [ ] Wire auto-refresh on file-watcher events (Milestone 4).
-- [ ] Implement the Experiments tab: table of recent runs with
-  workload / candidate / study filters, paging.
-- [ ] Implement the Baselines tab: list, create, compare (delta
-  table).
-- [ ] Stub the Sweeps tab with a "coming in Phase 8 M7" note; full
-  implementation after the chat participant lands.
+- [x] Implement `src/webview/host.ts`: `DashboardHost` class owns
+  the single webview panel, renders the HTML shell (strict CSP with
+  per-load nonce), handles postMessage plumbing, and disposes
+  cleanly. Calls `aggregateDashboardState` (pure helper in
+  `src/webview/aggregate.ts`) on every refresh so the aggregation
+  logic is unit-testable without loading vscode.
+- [x] Build `src/webview/panel.ts` as a plain-DOM TypeScript
+  front-end (no framework). Bundled with esbuild to a single IIFE at
+  `dist/webview/panel.js`; a sibling `src/webview/tsconfig.json`
+  type-checks the file separately from the extension compile.
+- [x] Render the step rail with gate diamonds between steps using
+  the same `--step-bg` / `--gate-bg` palette as
+  [images/direct-modeling-flow.dot](../../architecture/ai-flow/images/direct-modeling-flow.dot).
+  Steps carry `passed` / `current` / `locked` / `selected` classes;
+  gates carry `passed` / `failed` classes.
+- [x] Implement the per-step detail panel: clicking a step selects
+  it, shows the Findings list from its critique (Blocker, Unresolved,
+  Resolved with line numbers), and surfaces Run Step / Run Gate /
+  Reset / Open Critique buttons that dispatch messages back to the
+  host.
+- [x] Wire auto-refresh on file-watcher events. `DashboardHost`
+  attaches a `SimFlowStateWatcher` on open; every change coalesces
+  into a single pending refresh (no stampede), which rebuilds state
+  from disk + the CLI and posts it to the webview.
+- [x] Implement the Experiments tab: table of the most recent 200
+  runs with run id, timestamp, workload, study/candidate, and a
+  short git commit (with dirty suffix). Full filter UI is deferred
+  to a future polish pass.
+- [x] Implement the Baselines tab: list (name / run / timestamp).
+  Create / compare UIs are wired through to the CLI methods from M3
+  but not yet surfaced as dashboard buttons; the chat participant
+  in M6 exposes them first.
+- [x] Stub the Sweeps tab with a pointer to Phase 8 M8.
 
 ## Milestone 6 - Chat Participant And Slash Commands
 
@@ -284,7 +299,7 @@ be ready.
 
 ## Status
 
-In progress. Milestones 1 through 4 are complete:
+In progress. Milestones 1 through 5 are complete:
 
 - M1 shipped the `--json` flag on every subcommand the extension
   consumes, the [cli-json.md](../../architecture/ai-flow/cli-json.md)
@@ -301,8 +316,16 @@ In progress. Milestones 1 through 4 are complete:
   experiments SQLite DB (experiments.ts), plus a VS Code
   FileSystemWatcher fan-out (watcher.ts). Parser tests cover the
   three formats with fixture-inline vitest cases.
+- M5 delivered the Flow Dashboard webview. `DashboardHost` owns
+  the panel lifecycle, renders a strict-CSP HTML shell, and
+  streams a DashboardState payload to the webview on every
+  file-system change. The browser-side `panel.ts` is bundled by
+  esbuild to `dist/webview/panel.js`, renders a step rail + per-step
+  detail + experiments/baselines/sweeps tabs, and dispatches
+  run/gate/reset/open-critique messages back to the host. The
+  `sim-flow.openDashboard` command is live.
 
-Milestones 5-11 remain. DSF-specific hooks (M12) still depend on
+Milestones 6-11 remain. DSF-specific hooks (M12) still depend on
 Phase 6.
 
 ## Scope Caveats
