@@ -114,18 +114,37 @@ extension reads structured data.
 
 ## Milestone 4 - State Readers
 
-- [ ] Implement `src/state.ts`: read `.sim-flow/state.toml` using a
-  TS TOML parser. Expose a typed `FlowState` shape matching
-  `crates/sim-flow/src/state.rs`.
-- [ ] Implement `src/critiques.ts`: list + read
-  `.sim-flow/critiques/*.md`, parse `UNRESOLVED:` / `BLOCKER:` /
-  `RESOLVED:` lines using the same rule as the Rust parser.
-- [ ] Implement `src/experiments.ts`: read `.sim-flow/experiments.db`
-  using `better-sqlite3`. Expose query helpers matching the Rust
-  `RunFilter` / `RunRow` shapes.
-- [ ] Add a workspace-scoped file watcher that fires when
-  `state.toml`, `critiques/*.md`, or `experiments.db` change.
-- [ ] Unit-test the parsers with fixture files.
+- [x] Implement `src/state/flowState.ts`: read `.sim-flow/state.toml`
+  using `smol-toml`. Expose a typed `FlowState` shape aliased to the
+  same `StatusResult` used by the CLI wrapper. Parse failures surface
+  as `FlowStateParseError` with file context. Handles flat gates,
+  per-candidate gate subtables, and archived_gates.
+- [x] Implement `src/state/critiques.ts`: list + read
+  `.sim-flow/critiques/*.md`. The parser follows the same rule as
+  `crates/sim-flow/src/critique.rs` -- any line whose first
+  non-whitespace token (after stripping leading `-` or `*` list
+  markers) is `UNRESOLVED:` / `BLOCKER:` / `RESOLVED:` becomes a
+  Finding.
+  `hasBlocking` is true iff any Unresolved or Blocker exists.
+- [x] Implement `src/state/experiments.ts`: read
+  `.sim-flow/experiments.db` via `better-sqlite3` in read-only mode.
+  `ExperimentsReader` mirrors the CLI wrapper's `RunFilter` surface
+  and returns the same `RunRow` / `BaselineRecord` types for
+  structural consistency. `withExperiments(projectDir, cb)` scopes
+  the handle to a callback. Returns null when the DB does not exist
+  (first-run projects).
+- [x] Add a workspace-scoped file watcher in
+  `src/state/watcher.ts`: `createStateWatcher(projectDir)` wraps VS
+  Code's `FileSystemWatcher` on `.sim-flow/state.toml`,
+  `.sim-flow/critiques/*.md`, and `.sim-flow/experiments.db`, fanning
+  events out through a single `onDidChange` EventEmitter tagged with
+  the change kind so subscribers can re-read selectively.
+- [x] Unit-test the parsers with fixture-inline vitest cases:
+  `flowState.test.ts` covers flat / per-candidate / archived shapes
+  and error paths; `critiques.test.ts` covers the four marker paths
+  plus line-number tracking; `experiments.test.ts` seeds an on-disk
+  SQLite DB, then exercises countRuns / listRuns (workload, sweep,
+  limit, newest-first), getRun, and listBaselines.
 
 ## Milestone 5 - Webview Dashboard (v1)
 
@@ -265,7 +284,7 @@ be ready.
 
 ## Status
 
-In progress. Milestones 1, 2, and 3 are complete:
+In progress. Milestones 1 through 4 are complete:
 
 - M1 shipped the `--json` flag on every subcommand the extension
   consumes, the [cli-json.md](../../architecture/ai-flow/cli-json.md)
@@ -276,11 +295,14 @@ In progress. Milestones 1, 2, and 3 are complete:
   stub, and a `vscode-extension` CI job.
 - M3 delivered `src/cli/` - typed wrapper (`SimFlowCli`), binary
   resolution (`resolveBinary`), typed errors (`SimFlowCliError`),
-  and vitest unit tests. The extension now has a complete,
-  tested abstraction over the Rust CLI ready for Milestones 5+ to
-  consume.
+  and vitest unit tests.
+- M4 delivered `src/state/` - direct readers for `state.toml`
+  (flowState.ts), critique markdown files (critiques.ts), and the
+  experiments SQLite DB (experiments.ts), plus a VS Code
+  FileSystemWatcher fan-out (watcher.ts). Parser tests cover the
+  three formats with fixture-inline vitest cases.
 
-Milestones 4-11 remain. DSF-specific hooks (M12) still depend on
+Milestones 5-11 remain. DSF-specific hooks (M12) still depend on
 Phase 6.
 
 ## Scope Caveats
