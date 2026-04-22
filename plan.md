@@ -12,7 +12,8 @@ Planning assumptions:
 
 1. sim-foundation owns orchestration, schemas, templates, and AI instructions.
    sim-models owns user model code. The orchestrator invokes AI clients
-   (Claude, Codex, Copilot) non-interactively; there are no slash commands.
+   interactively so the user can drive work and critique sessions; UI frontends
+   (CLI, VS Code extension) share the same state machine.
 2. Every step runs as a work + critique session pair. The critique runs as a
    fresh, independent AI session and writes a critique file that the
    orchestrator scans for `UNRESOLVED:` / `BLOCKER:` lines.
@@ -21,7 +22,8 @@ Planning assumptions:
    transition, not a new project.
 4. Implementation delivers the DMF end-to-end first, then layers DSF on top.
    Experiment tracking lands between the analysis-light DMF steps (DM0-DM3)
-   and the analysis-heavy DMF step (DM4).
+   and the analysis-heavy DMF step (DM4). The VS Code extension is an
+   adapter added after the CLI is complete.
 5. Phase ordering reflects dependency order, not calendar order.
 6. The architecture documents are the source of truth. Where the plan and
    the architecture diverge, the architecture wins -- update the architecture
@@ -36,3 +38,4 @@ Planning assumptions:
 - [ ] [Phase 5 - Design Study Flow Templates And Orchestrator Support](./05-phase-dsf-templates.md)
 - [ ] [Phase 6 - Design Study Flow Step Implementation](./06-phase-dsf-implementation.md)
 - [ ] [Phase 7 - Polish, Guided Mode, And Deferred Work](./07-phase-polish-and-deferred.md)
+- [ ] [Phase 8 - VS Code Extension](./08-phase-vscode-extension.md)
