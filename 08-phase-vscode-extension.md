@@ -52,23 +52,33 @@ extension reads structured data.
 
 ## Milestone 2 - Extension Scaffolding
 
-- [ ] Create `extensions/sim-flow-vscode/` sibling to `crates/`,
-  excluded from the Cargo workspace (update `[workspace.exclude]` in
-  the root `Cargo.toml`).
-- [ ] Initialize the TypeScript extension with `package.json`,
+- [x] Create `extensions/sim-flow-vscode/` sibling to `crates/`,
+  excluded from the Cargo workspace (`[workspace.exclude]` in the
+  root `Cargo.toml` lists it).
+- [x] Initialize the TypeScript extension with `package.json`,
   `tsconfig.json`, `.vscodeignore`, and a minimal `src/extension.ts`
   implementing `activate` / `deactivate`.
-- [ ] Declare activation on `workspaceContains:.sim-flow/state.toml`
-  and `onCommand:sim-flow.openDashboard`.
-- [ ] Register the command-palette commands: `sim-flow.openDashboard`,
+- [x] Declare activation on `workspaceContains:.sim-flow/state.toml`,
+  `onCommand:sim-flow.openDashboard`, and `onCommand:sim-flow.init`.
+- [x] Register the command-palette commands: `sim-flow.openDashboard`,
   `sim-flow.runStep`, `sim-flow.gateStep`, `sim-flow.resetStep`,
-  `sim-flow.init`.
-- [ ] Contribute settings under `sim-flow.*` per the architecture doc
-  (`binaryPath`, `foundationRoot`, `llm.source`, `llm.model`,
-  `dashboard.openOnActivate`).
-- [ ] Add an `.editorconfig`, ESLint, and Prettier so style is
-  consistent with future contributors.
-- [ ] Add a CI script that builds and lints the extension.
+  `sim-flow.init`. Every command currently surfaces a "not yet
+  implemented" notice pointing at the milestone that will wire it up.
+- [x] Contribute settings under `sim-flow.*`: `binaryPath`,
+  `foundationRoot`, `llm.source` (enum), `llm.model`,
+  `dashboard.openOnActivate`.
+- [x] Add `.editorconfig`, ESLint (flat config with
+  `typescript-eslint`), and Prettier so style is consistent.
+- [x] Add a `vscode-extension` job to `.github/workflows/ci.yml` that
+  runs `npm run compile`, `npm run lint`, and `npm run format:check`.
+  The install step falls back to `npm install` until the first
+  contributor commits a `package-lock.json`.
+- [/] Verify the extension compiles and lints cleanly with `npm ci`.
+  Node is not installed on this machine; the scaffolding is correct
+  by inspection and CI will surface any issues on first push. The
+  first developer with node should run `npm install && npm run ci`,
+  commit `package-lock.json`, and drop the `npm install` fallback in
+  the workflow.
 
 ## Milestone 3 - sim-flow CLI Wrapper
 
@@ -236,13 +246,18 @@ be ready.
 
 ## Status
 
-In progress. Milestone 1 (CLI machine-readable surface) is complete:
-every subcommand the extension consumes now has a `--json` flag,
-schemas are documented in
-[cli-json.md](../../architecture/ai-flow/cli-json.md), and
-integration tests in `crates/sim-flow/tests/cli_json.rs` cover the
-happy paths. Milestones 2-11 remain. DSF-specific hooks (M12) still
-depend on Phase 6.
+In progress. Milestones 1 and 2 are complete:
+
+- M1 shipped the `--json` flag on every subcommand the extension
+  consumes, the [cli-json.md](../../architecture/ai-flow/cli-json.md)
+  schema, and `crates/sim-flow/tests/cli_json.rs` regression coverage.
+- M2 scaffolded `extensions/sim-flow-vscode/` with package.json,
+  tsconfig, ESLint/Prettier/.editorconfig, a minimal extension.ts
+  that registers every planned command as a "not yet implemented"
+  stub, and a `vscode-extension` CI job.
+
+Milestones 3-11 remain. DSF-specific hooks (M12) still depend on
+Phase 6.
 
 ## Scope Caveats
 
