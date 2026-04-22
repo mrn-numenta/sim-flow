@@ -82,16 +82,35 @@ extension reads structured data.
 
 ## Milestone 3 - sim-flow CLI Wrapper
 
-- [ ] Implement `src/cli.ts`: a thin wrapper around `child_process`
-  that runs `sim-flow` subcommands and returns parsed JSON.
-- [ ] Resolve the binary path: setting override > `which sim-flow` >
-  bundled binary (Milestone 9).
-- [ ] Surface non-zero exit codes as typed errors so the UI can render
-  sensible messages.
-- [ ] Handle long-running subcommands by streaming via
-  `child_process.spawn` and forwarding stdout/stderr to a VS Code
-  terminal.
-- [ ] Add vitest / jest unit tests mocking child_process.
+- [x] Implement the CLI wrapper under `src/cli/`:
+  - `types.ts` - TypeScript shapes mirroring
+    [cli-json.md](../../architecture/ai-flow/cli-json.md).
+  - `errors.ts` - `SimFlowCliError` with a typed `kind`
+    (`binary-not-found`, `spawn-failed`, `non-zero-exit`,
+    `json-parse-failed`, `unexpected-stdout`, `not-implemented`).
+  - `executor.ts` - injectable `Execute` function type backed by
+    `promisify(execFile)` so tests swap in a stub.
+  - `resolve.ts` - `resolveBinary({ settingOverride, pathEnv,
+    bundledCandidates, exists })` honoring setting > PATH > bundled.
+    Bundled candidates intentionally empty for now; Milestone 11
+    wires them up.
+  - `simflow.ts` - `SimFlowCli` class with typed methods for every
+    `--json` subcommand (`status`, `runs`, `gate`, `baseline*`,
+    `newModel`) plus `buildArgs` / `buildCommandLine` helpers that
+    Milestone 9 will use to feed commands into a VS Code terminal.
+- [x] Binary resolution prefers the `sim-flow.binaryPath` setting,
+  then `$PATH`, then a future bundled-binary path (placeholder).
+- [x] Surface non-zero exit codes as typed `SimFlowCliError`
+  instances. `gate` tolerates non-zero exits when the failure
+  payload is on stdout (the `gate --json` CLI contract).
+- [/] Long-running subcommands stream via
+  `child_process.spawn` forwarded to a VS Code terminal. The wrapper
+  exposes argv / command-line builders; the terminal wiring itself
+  lives in Milestone 9's `src/terminal.ts`.
+- [x] vitest unit tests in `src/cli/*.test.ts` drive the full
+  wrapper (status, runs, gate, baselines, newModel, argv helpers,
+  resolveBinary) with an injected `Execute`, no real subprocess
+  spawn. `npm run ci` now runs compile + lint + format:check + test.
 
 ## Milestone 4 - State Readers
 
@@ -246,7 +265,7 @@ be ready.
 
 ## Status
 
-In progress. Milestones 1 and 2 are complete:
+In progress. Milestones 1, 2, and 3 are complete:
 
 - M1 shipped the `--json` flag on every subcommand the extension
   consumes, the [cli-json.md](../../architecture/ai-flow/cli-json.md)
@@ -255,8 +274,13 @@ In progress. Milestones 1 and 2 are complete:
   tsconfig, ESLint/Prettier/.editorconfig, a minimal extension.ts
   that registers every planned command as a "not yet implemented"
   stub, and a `vscode-extension` CI job.
+- M3 delivered `src/cli/` - typed wrapper (`SimFlowCli`), binary
+  resolution (`resolveBinary`), typed errors (`SimFlowCliError`),
+  and vitest unit tests. The extension now has a complete,
+  tested abstraction over the Rust CLI ready for Milestones 5+ to
+  consume.
 
-Milestones 3-11 remain. DSF-specific hooks (M12) still depend on
+Milestones 4-11 remain. DSF-specific hooks (M12) still depend on
 Phase 6.
 
 ## Scope Caveats
