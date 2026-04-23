@@ -307,19 +307,27 @@ extension reads structured data.
 - [ ] Per-project `FileSystemWatcher` instances so state updates in
   one project do not refresh unrelated dashboards.
 
-## Milestone 11 - Packaging And Distribution
+## Milestone 11 - Internal Packaging
 
-- [ ] Author a user-facing README under `extensions/sim-flow-vscode/`.
-- [ ] Add a VSIX build script (`vsce package`) and document how to
-  install locally.
-- [ ] Bundle prebuilt `sim-flow` binaries for macOS aarch64, macOS
-  x86-64, Linux x86-64, and Windows x86-64 inside the VSIX, picked
-  at activation based on `process.platform` / `process.arch`.
+This extension is an internal tool and is not published to the VS
+Code Marketplace. Distribution is via the VSIX artifact plus an
+install doc.
+
+- [ ] Author an internal README under `extensions/sim-flow-vscode/`
+  covering prerequisites, `vsce package`, `code --install-extension
+  sim-flow-vscode-<version>.vsix`, and how to point the extension at
+  a sim-foundation checkout.
+- [ ] Add a VSIX build script (`vsce package`) and attach the VSIX
+  to CI artifacts so anyone on the team can grab the latest build
+  without running the toolchain locally.
+- [ ] Bundle prebuilt `sim-flow` binaries for the platforms the team
+  actually uses (macOS aarch64 and Linux x86-64 at minimum; add
+  macOS x86-64 / Windows x86-64 only if someone on the team needs
+  them), picked at activation based on `process.platform` /
+  `process.arch`. Fall back to `$PATH` when the bundled binary
+  doesn't match or fails to launch.
 - [ ] Verify the extension activates and completes a dummy DM0 work
-  session against a scratch project on each platform.
-- [ ] Publish to the VS Code Marketplace as a pre-release, gated
-  behind the user confirming they are comfortable with a 0.x
-  extension.
+  session against a scratch project on each bundled platform.
 
 ## Milestone 12 - DSF Enablement Hooks
 
