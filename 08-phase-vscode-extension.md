@@ -246,20 +246,31 @@ extension reads structured data.
 
 ## Milestone 8 - LLM Source Abstraction
 
-- [ ] Implement `src/llm.ts` with three backends:
-  1. `vscode.lm` via `vscode.lm.selectChatModels(...)`.
-  2. External API via fetch, with key read from
-     `vscode.ExtensionContext.secrets`.
-  3. CLI fallback: spawn `sim-flow run <step>` in a terminal and
-     watch for the critique file to appear.
-- [ ] Route chat-participant LLM calls through the configured
-  `sim-flow.llm.source`.
-- [ ] Expose a command `sim-flow.setApiKey` that prompts for the key
-  and stores it in SecretStorage.
-- [ ] When the source is `"cli"`, the chat participant surfaces a
-  terminal pane and a notice "Interactive session is running in the
-  terminal; return here for the critique".
-- [ ] Sanity-test each backend against a trivial prompt.
+- [x] Implement `src/llm/` with four backends (split across files for
+  testability rather than a single `llm.ts`):
+  1. `vscode.lm` via `vscode.lm.selectChatModels(...)`
+     (`src/llm/vscode.ts`).
+  2. Anthropic Messages API via fetch, key from SecretStorage
+     (`src/llm/anthropic.ts`, key id `sim-flow.anthropic.apiKey`).
+  3. OpenAI Chat Completions API via fetch, key from SecretStorage
+     (`src/llm/openai.ts`, key id `sim-flow.openai.apiKey`).
+  4. CLI fallback: open a VS Code terminal, run `sim-flow run <step>`,
+     and watch for the critique file to land (`src/llm/cli.ts`).
+- [x] Route chat-participant LLM calls through the configured
+  `sim-flow.llm.source` via `createBackend()` in `src/llm/factory.ts`;
+  `handleStep` assembles instruction + tagged history + optional
+  critique artifact summary and streams backend chunks into the chat.
+- [x] Expose `sim-flow.setApiKey` and `sim-flow.clearApiKey` commands
+  (`src/apiKey.ts`) that QuickPick Anthropic vs OpenAI then store or
+  delete the key in `vscode.ExtensionContext.secrets`.
+- [x] CLI-source path: chat participant surfaces a terminal pane,
+  prints a "drive the session in the terminal" notice, and for
+  critique sessions waits on a FileSystemWatcher for the critique file
+  to land before streaming its contents back to chat.
+- [x] Vitest coverage for the non-network parts: factory backend
+  selection, `extractAnthropicText`, `extractOpenAiText`, and the
+  missing-api-key / HTTP-error branches of the Anthropic and OpenAI
+  backends using injected `fetchImpl` stubs (`src/llm/*.test.ts`).
 
 ## Milestone 9 - Terminal Integration
 
@@ -327,7 +338,7 @@ be ready.
 
 ## Status
 
-In progress. Milestones 1 through 7 are complete:
+In progress. Milestones 1 through 8 are complete:
 
 - M1 shipped the `--json` flag on every subcommand the extension
   consumes, the [cli-json.md](../../architecture/ai-flow/cli-json.md)
@@ -362,8 +373,16 @@ In progress. Milestones 1 through 7 are complete:
   `buildMessageHistory` which enforces the fresh-critique invariant
   (work-session turns are filtered out of critique message arrays).
   `/reset` UX now points at the next concrete action.
+- M8 landed the `src/llm/` backend abstraction with four
+  implementations (`vscode.lm`, Anthropic, OpenAI, CLI fallback) and a
+  `createBackend` factory selected by `sim-flow.llm.source`.
+  `handleStep` now reads the configured instruction file, builds the
+  session message array (plus optional critique artifact summary), and
+  streams the backend's chunks into the chat. API keys are managed via
+  `sim-flow.setApiKey` / `sim-flow.clearApiKey` against VS Code
+  SecretStorage. Vitest covers the non-network surface.
 
-Milestones 8-11 remain. DSF-specific hooks (M12) still depend on
+Milestones 9-11 remain. DSF-specific hooks (M12) still depend on
 Phase 6.
 
 ## Scope Caveats
