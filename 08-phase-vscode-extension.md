@@ -287,13 +287,25 @@ extension reads structured data.
 
 ## Milestone 9 - Terminal Integration
 
-- [ ] Implement `src/terminal.ts`: create (or reuse) a named
-  `sim-flow` terminal and run arbitrary CLI commands there.
-- [ ] Dashboard buttons for sweep, baseline create, reset, new
-  candidate, etc. route through the terminal integration so the user
-  sees live progress.
-- [ ] On terminal-run completion (detected by file-watcher signal or
-  exit code if we wrap), refresh the dashboard.
+- [x] Implement `src/terminal.ts`: `SimFlowTerminal` owns a named
+  `sim-flow` terminal, reveals it without stealing focus, sends the
+  caller-supplied command line, and transparently recreates the
+  terminal if the user closed it.
+- [x] Wire the dashboard's existing `Run Step` and `Reset` buttons
+  through the terminal via the `sim-flow.runStep` /
+  `sim-flow.resetStep` commands (previously "not yet implemented"
+  stubs). `sim-flow.init` also runs through the shared terminal for
+  consistency.
+- [x] Dashboard refresh happens automatically: the M4 state watcher
+  on `.sim-flow/state.toml`, critiques, and `experiments.db` already
+  posts a `state-update` to the webview on any file change the CLI
+  makes, so no explicit completion signal is required.
+- [x] Drop the dead `sim-flow.gateStep` command (no caller - the
+  dashboard's `Run Gate` button runs in-process via the CLI wrapper).
+- [ ] Follow-up: add dashboard buttons for `sweep`, `baseline create`,
+  and (DSF) `new candidate` once those tabs grow authoring UI. The
+  terminal routing is already in place; these are purely webview
+  additions.
 
 ## Milestone 10 - Multi-Project Awareness
 
@@ -359,7 +371,7 @@ be ready.
 
 ## Status
 
-In progress. Milestones 1 through 8 are complete:
+In progress. Milestones 1 through 9 are complete:
 
 - M1 shipped the `--json` flag on every subcommand the extension
   consumes, the [cli-json.md](../../architecture/ai-flow/cli-json.md)
@@ -407,8 +419,17 @@ In progress. Milestones 1 through 8 are complete:
   backend's chunks into the chat. API keys are managed via
   `sim-flow.setApiKey` / `sim-flow.clearApiKey` against VS Code
   SecretStorage. Vitest covers the non-network surface.
+- M9 added `src/terminal.ts` (`SimFlowTerminal`) - a reusable named
+  VS Code terminal that the dashboard's Run Step / Reset buttons and
+  the `sim-flow.init` command now route through. The three stub
+  command handlers are gone. Dashboard refresh after a terminal run
+  is driven by the existing file watcher on `.sim-flow/`, so no new
+  signalling is needed. The dead `sim-flow.gateStep` command (no
+  caller, no keybinding) was removed. Follow-up: add dashboard
+  buttons for `sweep` / `baseline create` when those tabs get
+  authoring UI.
 
-Milestones 9-11 remain. DSF-specific hooks (M12) still depend on
+Milestones 10-11 remain. DSF-specific hooks (M12) still depend on
 Phase 6.
 
 ## Scope Caveats
