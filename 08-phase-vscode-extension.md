@@ -309,15 +309,30 @@ extension reads structured data.
 
 ## Milestone 10 - Multi-Project Awareness
 
-- [ ] Resolve the active project directory: walk up from the active
+- [x] Resolve the active project directory: walk up from the active
   editor file until a `.sim-flow/` ancestor is found; fall back to
-  the nearest workspace folder containing one.
-- [ ] Chat participant accepts an optional `--project <path>`
-  argument on every command; the resolver uses it when supplied.
-- [ ] Dashboard exposes a project picker dropdown when more than one
+  the nearest workspace folder containing one. Lives in
+  `src/context.ts::resolveProjectDir` (pre-existing) alongside the
+  new `findProjectCandidates` scanner and `pickProject` QuickPick
+  helper.
+- [x] Chat participant accepts an optional `--project <path>`
+  argument on every command. Implementation: `extractProjectHint`
+  in `src/participant/args.ts` strips the flag once in the
+  dispatcher, then `resolveContext({ projectDir: hint })` trusts
+  the hint (verifying `.sim-flow/state.toml` exists). The hint is
+  never visible to per-command parsers; handlers see the cleaned
+  prompt via the new `HandlerArgs.prompt` field.
+- [x] Dashboard exposes a project picker when more than one
   sim-flow project exists in the workspace.
-- [ ] Per-project `FileSystemWatcher` instances so state updates in
-  one project do not refresh unrelated dashboards.
+  `extension.ts::selectProjectDir` calls `findProjectCandidates` +
+  `pickProject`; single-candidate workspaces skip the prompt.
+- [x] Per-project `FileSystemWatcher` instances so state updates
+  in one project do not refresh unrelated dashboards. Each project
+  gets its own `DashboardHost` in a `Map<projectDir, DashboardHost>`,
+  and each host creates its own `createStateWatcher(projectDir)`
+  instance. The shared terminal is also per-project
+  (`Map<projectDir, SimFlowTerminal>`) so parallel runs from
+  different projects do not interleave output.
 
 ## Milestone 11 - Internal Packaging
 
@@ -371,7 +386,7 @@ be ready.
 
 ## Status
 
-In progress. Milestones 1 through 9 are complete:
+In progress. Milestones 1 through 10 are complete:
 
 - M1 shipped the `--json` flag on every subcommand the extension
   consumes, the [cli-json.md](../../architecture/ai-flow/cli-json.md)
@@ -428,9 +443,20 @@ In progress. Milestones 1 through 9 are complete:
   caller, no keybinding) was removed. Follow-up: add dashboard
   buttons for `sweep` / `baseline create` when those tabs get
   authoring UI.
+- M10 added multi-project awareness. `src/context.ts` gained
+  `findProjectCandidates` (workspace scan via `findFiles`) and
+  `pickProject` (QuickPick), and `resolveContext` now accepts a
+  `{ projectDir }` hint that the chat participant feeds from its
+  `--project <path>` flag. The dispatcher strips the flag via
+  `extractProjectHint` and passes the cleaned prompt through
+  `HandlerArgs.prompt` so per-command parsers never see it.
+  `DashboardHost` and `SimFlowTerminal` are both keyed by project
+  dir now, so opening the dashboard against one project does not
+  collide with another and `/reset DM0 --project /repo/model-b`
+  does the expected thing in a multi-project workspace.
 
-Milestones 10-11 remain. DSF-specific hooks (M12) still depend on
-Phase 6.
+Milestone 11 (packaging) remains. DSF-specific hooks (M12) still
+depend on Phase 6.
 
 ## Scope Caveats
 
