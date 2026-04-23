@@ -246,31 +246,44 @@ extension reads structured data.
 
 ## Milestone 8 - LLM Source Abstraction
 
-- [x] Implement `src/llm/` with four backends (split across files for
+- [x] Implement `src/llm/` with six backends (split across files for
   testability rather than a single `llm.ts`):
   1. `vscode.lm` via `vscode.lm.selectChatModels(...)`
      (`src/llm/vscode.ts`).
   2. Anthropic Messages API via fetch, key from SecretStorage
      (`src/llm/anthropic.ts`, key id `sim-flow.anthropic.apiKey`).
   3. OpenAI Chat Completions API via fetch, key from SecretStorage
-     (`src/llm/openai.ts`, key id `sim-flow.openai.apiKey`).
-  4. CLI fallback: open a VS Code terminal, run `sim-flow run <step>`,
+     (`src/llm/openai.ts`, key id `sim-flow.openai.apiKey`). Shares
+     a base class (`src/llm/openai-compat.ts`) with the two
+     OpenAI-compatible local backends below.
+  4. Ollama via its OpenAI-compatible endpoint
+     (`src/llm/ollama.ts`, default base URL
+     `http://localhost:11434/v1`, key optional).
+  5. LM Studio via its OpenAI-compatible endpoint
+     (`src/llm/lmstudio.ts`, default base URL
+     `http://localhost:1234/v1`, key optional).
+  6. CLI fallback: open a VS Code terminal, run `sim-flow run <step>`,
      and watch for the critique file to land (`src/llm/cli.ts`).
 - [x] Route chat-participant LLM calls through the configured
   `sim-flow.llm.source` via `createBackend()` in `src/llm/factory.ts`;
   `handleStep` assembles instruction + tagged history + optional
   critique artifact summary and streams backend chunks into the chat.
 - [x] Expose `sim-flow.setApiKey` and `sim-flow.clearApiKey` commands
-  (`src/apiKey.ts`) that QuickPick Anthropic vs OpenAI then store or
-  delete the key in `vscode.ExtensionContext.secrets`.
+  (`src/apiKey.ts`) that QuickPick the provider (Anthropic, OpenAI,
+  Ollama, LM Studio) then store or delete the key in
+  `vscode.ExtensionContext.secrets`. Ollama and LM Studio keys are
+  optional - they only matter when fronting a remote instance behind
+  an auth proxy.
 - [x] CLI-source path: chat participant surfaces a terminal pane,
   prints a "drive the session in the terminal" notice, and for
   critique sessions waits on a FileSystemWatcher for the critique file
   to land before streaming its contents back to chat.
 - [x] Vitest coverage for the non-network parts: factory backend
-  selection, `extractAnthropicText`, `extractOpenAiText`, and the
-  missing-api-key / HTTP-error branches of the Anthropic and OpenAI
-  backends using injected `fetchImpl` stubs (`src/llm/*.test.ts`).
+  selection across all six sources, `extractAnthropicText` /
+  `extractOpenAiText`, the missing-api-key / HTTP-error branches for
+  Anthropic and OpenAI, and the base-URL / optional-auth behavior of
+  Ollama and LM Studio - all exercised via injected `fetchImpl` stubs
+  (`src/llm/*.test.ts`).
 
 ## Milestone 9 - Terminal Integration
 
@@ -373,12 +386,17 @@ In progress. Milestones 1 through 8 are complete:
   `buildMessageHistory` which enforces the fresh-critique invariant
   (work-session turns are filtered out of critique message arrays).
   `/reset` UX now points at the next concrete action.
-- M8 landed the `src/llm/` backend abstraction with four
-  implementations (`vscode.lm`, Anthropic, OpenAI, CLI fallback) and a
-  `createBackend` factory selected by `sim-flow.llm.source`.
-  `handleStep` now reads the configured instruction file, builds the
-  session message array (plus optional critique artifact summary), and
-  streams the backend's chunks into the chat. API keys are managed via
+- M8 landed the `src/llm/` backend abstraction with six
+  implementations (`vscode.lm`, Anthropic, OpenAI, Ollama, LM Studio,
+  CLI fallback) and a `createBackend` factory selected by
+  `sim-flow.llm.source`. Ollama and LM Studio share the OpenAI
+  Chat Completions wire format with OpenAI itself via a common
+  `OpenAiCompatibleBackend` base; their default base URLs are
+  configurable through `sim-flow.llm.ollama.baseUrl` and
+  `sim-flow.llm.lmstudio.baseUrl`. `handleStep` now reads the
+  configured instruction file, builds the session message array
+  (plus optional critique artifact summary), and streams the
+  backend's chunks into the chat. API keys are managed via
   `sim-flow.setApiKey` / `sim-flow.clearApiKey` against VS Code
   SecretStorage. Vitest covers the non-network surface.
 
