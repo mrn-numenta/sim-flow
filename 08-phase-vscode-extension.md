@@ -184,21 +184,34 @@ extension reads structured data.
 
 ## Milestone 6 - Chat Participant And Slash Commands
 
-- [ ] Register `@sim-flow` via
-  `vscode.chat.createChatParticipant('sim-flow', handler)`.
-- [ ] Implement `src/participant.ts` dispatcher parsing the slash
-  commands listed in the architecture doc.
-- [ ] Implement read-only commands first: `/status`, `/runs`, `/gate`.
-  These respond with rendered text; no LLM call.
-- [ ] Implement `/step <id>.work` and `/step <id>.critique`: seed the
-  conversation context, invoke the language model (Milestone 7), and
-  stream the response.
-- [ ] Implement `/reset <step-id>` shelling out to the CLI.
-- [ ] Tag each chat session with its `(step, kind)` via participant
-  metadata so subsequent turns know the context.
-- [ ] Provide followup suggestions (`vscode.ChatFollowup`) that
-  suggest the next sensible action (`/gate`, `/step DM1.work`, etc.)
-  based on orchestrator state.
+- [x] Register `@sim-flow` via
+  `vscode.chat.createChatParticipant('sim-flow', handler)` and
+  declare commands + activation event in package.json.
+- [x] Implement `src/participant/` split into modules: `index.ts`
+  (dispatcher + followup provider), `args.ts` (pure parsers),
+  `handlers.ts` (per-command implementations), `format.ts`
+  (markdown formatters), `instructions.ts` (reads
+  `sim-foundation/instructions/<slug>.md`), and `followups.ts`
+  (state-driven suggestion logic).
+- [x] Implement read-only commands `/status`, `/runs`, `/gate`,
+  `/reset` against the CLI wrapper. No LLM required. Markdown output
+  tables are rendered via `format.ts` helpers.
+- [/] Implement `/step <id>.work` and `/step <id>.critique`. The
+  parser, state gating (refuses when `state.current_step` differs
+  from the requested step), and instruction-file preview are in
+  place; the actual LLM turn lands in M7. Until then the handler
+  shows the instruction markdown that would be fed to the LLM
+  along with the existing critique when present.
+- [x] `/reset <step-id>` shells out via `cli.buildArgs` + a local
+  execFile wrapper; emits a confirmation and points the user at
+  `/status`.
+- [/] Tag each chat session with its `(step, kind)` via participant
+  metadata. Tagging is not stored yet; the handler re-parses the
+  most recent command per turn. M7 adds metadata-backed context so
+  free-form follow-up turns know which step they belong to.
+- [x] Followup provider reads state and suggests the next sensible
+  action (work + critique + gate while the current gate is open;
+  next step once it passes; /status when the flow is complete).
 
 ## Milestone 7 - Step Gating And Session Isolation
 
@@ -299,7 +312,7 @@ be ready.
 
 ## Status
 
-In progress. Milestones 1 through 5 are complete:
+In progress. Milestones 1 through 6 are complete:
 
 - M1 shipped the `--json` flag on every subcommand the extension
   consumes, the [cli-json.md](../../architecture/ai-flow/cli-json.md)
@@ -324,8 +337,16 @@ In progress. Milestones 1 through 5 are complete:
   detail + experiments/baselines/sweeps tabs, and dispatches
   run/gate/reset/open-critique messages back to the host. The
   `sim-flow.openDashboard` command is live.
+- M6 registered `@sim-flow` as a chat participant with slash
+  commands `/status`, `/runs`, `/gate`, `/reset`, `/init`, `/step`.
+  The CLI-backed commands shell out to the M1 `--json` surface and
+  render markdown tables. `/step` validates the step reference,
+  refuses when the requested step is not current, and previews the
+  instruction file the work/critique session would receive; full
+  LLM wiring lands in M7. A followup provider suggests the next
+  sensible action based on state.
 
-Milestones 6-11 remain. DSF-specific hooks (M12) still depend on
+Milestones 7-11 remain. DSF-specific hooks (M12) still depend on
 Phase 6.
 
 ## Scope Caveats
