@@ -215,19 +215,34 @@ extension reads structured data.
 
 ## Milestone 7 - Step Gating And Session Isolation
 
-- [ ] Implement `src/gate.ts`: for each chat request, look up the
-  tagged `(step, kind)` and compare against `state.toml`. Refuse
-  with a friendly message if mismatched.
-- [ ] Preserve the fresh-critique invariant: the critique handler
-  constructs a fresh `[system, user]` message array using ONLY the
-  critique instructions and the artifact manifest; the work session's
-  history is not included, even if the user ran `/step X.work` and
-  `/step X.critique` in the same chat tab.
-- [ ] Add a "revisit prior step" UX path: `/reset <step-id>` opens
-  the relevant chat(s) (if any exist) and tells the user to resume
-  there.
-- [ ] Unit-test the gating logic with synthetic `state.toml`
-  fixtures.
+- [x] Implement `src/participant/gating.ts`: `checkStepGate(state,
+  step, kind)` returns a typed GateOutcome. Rules: refuse with an
+  `/init` hint when state is missing; allow the current step;
+  refuse with a `/reset` hint when the requested step has already
+  passed; refuse with the current-step hint when the requested step
+  is ahead of the flow.
+- [x] Preserve the fresh-critique invariant in
+  `src/participant/session.ts`. `buildMessageHistory` constructs the
+  LLM message array per turn:
+  - Work sessions: system (instructions) + prior turns tagged with
+    the same `(step, "work")` + current user prompt.
+  - Critique sessions: system (instructions) + optional artifact
+    manifest + current user prompt. Prior work-session turns are
+    filtered out even when the user ran `/step X.work` and
+    `/step X.critique` in the same chat tab.
+- [x] Tag `/step` responses with `{ tag: "sim-flow", step, kind }`
+  via the returned `ChatResult.metadata`. `extractSessionTag(history)`
+  walks prior turns newest-first to find the most recent tagged
+  response; Milestone 8 will use it to bind free-form continuation
+  turns to the right session.
+- [x] Reworked `/reset` UX so the confirmation points the user at
+  the next concrete action (`/step <step>.work` / `.critique`) and
+  mentions that prior chat history stays visible.
+- [x] Unit-test the gating logic and session builders with inline
+  fixtures: `gating.test.ts` covers the four outcomes;
+  `session.test.ts` verifies work-turn filtering, the fresh-critique
+  shape, empty-prompt handling, and `extractSessionTag` newest-first
+  semantics.
 
 ## Milestone 8 - LLM Source Abstraction
 
@@ -312,7 +327,7 @@ be ready.
 
 ## Status
 
-In progress. Milestones 1 through 6 are complete:
+In progress. Milestones 1 through 7 are complete:
 
 - M1 shipped the `--json` flag on every subcommand the extension
   consumes, the [cli-json.md](../../architecture/ai-flow/cli-json.md)
@@ -340,13 +355,15 @@ In progress. Milestones 1 through 6 are complete:
 - M6 registered `@sim-flow` as a chat participant with slash
   commands `/status`, `/runs`, `/gate`, `/reset`, `/init`, `/step`.
   The CLI-backed commands shell out to the M1 `--json` surface and
-  render markdown tables. `/step` validates the step reference,
-  refuses when the requested step is not current, and previews the
-  instruction file the work/critique session would receive; full
-  LLM wiring lands in M7. A followup provider suggests the next
+  render markdown tables. A followup provider suggests the next
   sensible action based on state.
+- M7 centralized the gate decision (`participant/gating.ts`),
+  introduced session tagging via `ChatResult.metadata`, and added
+  `buildMessageHistory` which enforces the fresh-critique invariant
+  (work-session turns are filtered out of critique message arrays).
+  `/reset` UX now points at the next concrete action.
 
-Milestones 7-11 remain. DSF-specific hooks (M12) still depend on
+Milestones 8-11 remain. DSF-specific hooks (M12) still depend on
 Phase 6.
 
 ## Scope Caveats
