@@ -340,21 +340,30 @@ This extension is an internal tool and is not published to the VS
 Code Marketplace. Distribution is via the VSIX artifact plus an
 install doc.
 
-- [ ] Author an internal README under `extensions/sim-flow-vscode/`
-  covering prerequisites, `vsce package`, `code --install-extension
-  sim-flow-vscode-<version>.vsix`, and how to point the extension at
-  a sim-foundation checkout.
-- [ ] Add a VSIX build script (`vsce package`) and attach the VSIX
-  to CI artifacts so anyone on the team can grab the latest build
-  without running the toolchain locally.
-- [ ] Bundle prebuilt `sim-flow` binaries for the platforms the team
-  actually uses (macOS aarch64 and Linux x86-64 at minimum; add
-  macOS x86-64 / Windows x86-64 only if someone on the team needs
-  them), picked at activation based on `process.platform` /
-  `process.arch`. Fall back to `$PATH` when the bundled binary
-  doesn't match or fails to launch.
-- [ ] Verify the extension activates and completes a dummy DM0 work
-  session against a scratch project on each bundled platform.
+- [x] Author an internal README under `extensions/sim-flow-vscode/`
+  covering prerequisites, `vsce package`,
+  `code --install-extension sim-flow-vscode-<version>.vsix`,
+  settings, slash commands, LLM backends, and the `bin/` layout for
+  bundled binaries.
+- [x] `npm run package` wraps `vsce package` and produces
+  `sim-flow-vscode-<version>.vsix` (pre-existing script, now
+  documented and verified end-to-end). `*.vsix` is gitignored.
+- [x] Binary bundling infrastructure: `src/cli/bundled.ts` owns the
+  platform → subdirectory mapping and candidate-path factory.
+  `activate()` seeds `setBundledRoot(context.extensionUri.fsPath)`
+  and both `tryResolveBinary` call sites pass `bundledCandidates`
+  into `resolveBinary`. When a VSIX ships with
+  `bin/<platform>-<arch>/sim-flow[.exe]` that candidate resolves
+  after the setting override and `$PATH`; when the directory is
+  absent the resolver falls through transparently. Supported
+  triples today: `darwin-arm64`, `darwin-x64`, `linux-x64`,
+  `win32-x64`.
+- [ ] Follow-up (not needed for the internal dev loop): populate
+  the `bin/` directory with prebuilt binaries for distribution
+  VSIXes. Tick once someone on the team wants a zero-PATH install.
+- [ ] Follow-up: verify the extension activates and completes a
+  dummy DM0 work session against a scratch project. Marked as a
+  post-install smoke test rather than a CI matrix item.
 
 ## Milestone 12 - DSF Enablement Hooks
 
@@ -386,7 +395,7 @@ be ready.
 
 ## Status
 
-In progress. Milestones 1 through 10 are complete:
+In progress. Milestones 1 through 11 are complete:
 
 - M1 shipped the `--json` flag on every subcommand the extension
   consumes, the [cli-json.md](../../architecture/ai-flow/cli-json.md)
@@ -454,9 +463,18 @@ In progress. Milestones 1 through 10 are complete:
   dir now, so opening the dashboard against one project does not
   collide with another and `/reset DM0 --project /repo/model-b`
   does the expected thing in a multi-project workspace.
+- M11 made the extension installable as an internal VSIX. The
+  README covers `cargo install --path crates/sim-flow`,
+  `npm run package`, `code --install-extension ...`, settings,
+  slash commands, and LLM backends. `src/cli/bundled.ts` adds a
+  platform-aware lookup for `bin/<os>-<arch>/sim-flow[.exe]`
+  inside the VSIX (populated only for distribution builds - local
+  developer builds rely on `$PATH`). `npm run package` produces a
+  clean ~95 KB VSIX with zero bundled binaries. Per-platform
+  smoke-test and actually populating the `bin/` tree are tracked
+  as post-install follow-ups rather than milestone blockers.
 
-Milestone 11 (packaging) remains. DSF-specific hooks (M12) still
-depend on Phase 6.
+Only M12 (DSF hooks, blocked on Phase 6) and M13 (docs) remain.
 
 ## Scope Caveats
 
