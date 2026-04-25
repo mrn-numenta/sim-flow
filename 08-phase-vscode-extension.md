@@ -1,4 +1,27 @@
-# Phase 8 - VS Code Extension
+# Phase 8 - VS Code Extension (chat-driven; superseded by Phase 9)
+
+> **Status as of Phase 9 pivot**: Milestones 1-11 of this phase are
+> complete and shipped a working chat-driven VS Code extension that
+> owned much of the session orchestration in TypeScript. End-to-end
+> testing exposed structural issues (step knowledge duplicated across
+> Rust and TS, no command to advance state after a gate passes,
+> no first-class tool concept for code-authoring steps, hosts other
+> than VS Code would have to re-implement orchestration). Phase 9
+> commits to **orchestrator as master**: sim-flow drives sessions via
+> a host-neutral JSONL protocol, and the VS Code extension becomes a
+> renderer. See
+> [09-phase-orchestrator-driven-sessions.md](./09-phase-orchestrator-driven-sessions.md)
+> for the migration plan and
+> [06-vscode-extension.md](../../architecture/ai-flow/06-vscode-extension.md)
+> for the new architecture.
+>
+> The milestones below remain useful as a record of what was
+> implemented (CLI JSON surface, state readers, dashboard webview,
+> chat participant, gating, session tagging, LLM source abstraction,
+> terminal integration, multi-project awareness, internal packaging).
+> Most of the in-extension orchestration code from M6-M8 is removed
+> in Phase 9; the dashboard, file-system watcher, multi-project
+> awareness, and packaging plumbing carry forward unchanged.
 
 Phase dependency: Phase 1 (orchestrator core), Phase 2 (model-project
 template), Phase 3 (DMF instructions and gate checks), Phase 4
