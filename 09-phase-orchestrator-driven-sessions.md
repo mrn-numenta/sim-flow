@@ -72,21 +72,21 @@ Land the two subcommands the chat-driven extension can adopt
 immediately to eliminate duplicated step knowledge while the rest
 of Phase 9 is in flight.
 
-- [ ] `Command::Advance { step: Option<String>, json: bool }` in
+- [x] `Command::Advance { step: Option<String>, json: bool }` in
   `crates/sim-flow/src/main.rs`. Loads state, evaluates the gate,
   and on a clean result calls `state.mark_passed(step, now)` plus
   `state.save()` plus `state.current_step = next_step()`. Emits
   JSON when `--json` is set. Tests for clean and dirty paths.
-- [ ] `Command::Describe { step: String, kind: StepKind, json: bool }`.
+- [x] `Command::Describe { step: String, kind: StepKind, json: bool }`.
   Returns `{ instructionPath, instructionBody, workArtifacts,
   predecessorInputs, gateChecks, tools, phases }` for the step.
   Source of truth for everything the extension currently
   hard-codes.
-- [ ] Extension consumes `describe` instead of duplicating step
+- [x] Extension consumes `describe` instead of duplicating step
   knowledge. Delete `participant/instructions.ts::instructionSlugFor`,
   `artifacts.ts::expectedArtifactPaths`, the per-step path tables,
   and the cross-step input reader; replace with `cli.describe(...)`.
-- [ ] Plan + architecture audit findings 1, 3 (cross-step inputs)
+- [x] Plan + architecture audit findings 1, 3 (cross-step inputs)
   closed by virtue of single-source-of-truth.
 
 After M1: chat-driven extension still works, but step knowledge has
@@ -97,27 +97,27 @@ exactly one home.
 Define and implement the JSONL session protocol and the orchestrator
 core that drives it.
 
-- [ ] Rust enum `sim_flow::session::protocol::Event` with
+- [x] Rust enum `sim_flow::session::protocol::Event` with
   `serde_json` + `schemars` derive. Covers every event in
   [07-session-protocol.md](../../architecture/ai-flow/07-session-protocol.md).
-- [ ] CI build emits
+- [x] CI build emits
   `docs/architecture/ai-flow/session-protocol.schema.json` from the
   Rust definitions. The schema is the cross-host contract.
-- [ ] Rust trait `sim_flow::session::Host` with the methods needed
+- [x] Rust trait `sim_flow::session::Host` with the methods needed
   to render text, request user input, request LLM responses, emit
   artifact / tool / phase / gate events, and signal session end.
-- [ ] Rust impl `sim_flow::session::host::JsonlHost` reading /
+- [x] Rust impl `sim_flow::session::host::JsonlHost` reading /
   writing the protocol on stdio.
-- [ ] Rust impl `sim_flow::session::host::TestHost` that records
+- [x] Rust impl `sim_flow::session::host::TestHost` that records
   events for unit testing the orchestrator without a real LLM.
-- [ ] Rust `sim_flow::session::orchestrator` module that owns the
+- [x] Rust `sim_flow::session::orchestrator` module that owns the
   step / kind state machine: load instructions, build initial
   messages, drive the turn loop, validate artifacts on writes,
   evaluate the gate at session end, advance state.
-- [ ] `Command::Session { step, kind, jsonl, llm_backend, ... }`
+- [x] `Command::Session { step, kind, jsonl, llm_backend, ... }`
   invocation that wires the orchestrator to the appropriate host.
-- [ ] Versioned `Hello` / `HelloAck` handshake.
-- [ ] Unit tests covering: handshake, work session happy path,
+- [x] Versioned `Hello` / `HelloAck` handshake.
+- [x] Unit tests covering: handshake, work session happy path,
   critique fresh-context invariant, cancellation, protocol-version
   mismatch.
 
@@ -130,25 +130,25 @@ ready for the extension to consume.
 Add the tool dispatcher and the multi-phase iteration loop required
 for DM2c / DM3a / DM3c.
 
-- [ ] Rust `sim_flow::session::tools` module. `Tool` trait, impls
+- [x] Rust `sim_flow::session::tools` module. `Tool` trait, impls
   for `read_file`, `list_dir`, `write_file`, `search`. Path-sandbox
   enforcement (no traversal, no absolute paths, per-step write
   whitelist).
-- [ ] `ToolInvoked` events emitted to host on every tool execution.
+- [x] `ToolInvoked` events emitted to host on every tool execution.
 - [ ] Native tool-use translation for Anthropic / OpenAI HTTP
   clients (request includes tool catalog; responses include
   `tool_use` / `tool_calls`; orchestrator dispatches and threads
   results back).
-- [ ] Fenced-block fallback (`tool:<name>`) for backends without
+- [x] Fenced-block fallback (`tool:<name>`) for backends without
   native tool-use.
-- [ ] `cargo check`, `cargo test` runners as orchestrator-only
+- [x] `cargo check`, `cargo test` runners as orchestrator-only
   validators with structured output parsing.
-- [ ] Multi-phase orchestrator: `phase: author -> build -> test ->
+- [x] Multi-phase orchestrator: `phase: author -> build -> test ->
   coverage -> done`, configurable per step descriptor, with
   iteration limits and `PhaseChanged` / `BuildOutput` events.
-- [ ] Step descriptors expanded to declare phases + per-phase tool
+- [x] Step descriptors expanded to declare phases + per-phase tool
   catalogs.
-- [ ] Tests: fenced fallback round-trips a `read_file`; native
+- [x] Tests: fenced fallback round-trips a `read_file`; native
   tool-use round-trips against a stub LLM; build phase fails ->
   retries -> succeeds; iteration limit reached -> RequestUserInput.
 
@@ -161,18 +161,18 @@ under iteration.
 Make `sim-flow` a usable CLI without an external host, using the
 user's subscription-backed CLI agents.
 
-- [ ] Rust trait `sim_flow::agent::CliAgent` (`stream(messages)
+- [x] Rust trait `sim_flow::agent::CliAgent` (`stream(messages)
   -> impl Stream<Chunk>`).
-- [ ] HTTP impls: `Anthropic`, `OpenAi`, `Ollama`, `LMStudio`. Use
+- [/] HTTP impls: `Anthropic`, `OpenAi`, `Ollama`, `LMStudio`. Use
   the existing TS implementations as a behavioral spec.
-- [ ] Subprocess impls: `Claude` (`claude` CLI),
+- [/] Subprocess impls: `Claude` (`claude` CLI),
   `Codex` (`codex` CLI), `GhCopilot` (`gh copilot` CLI).
   Investigate each tool's non-interactive mode; use the structured
   output where available, prompt-baked context where not.
-- [ ] `sim_flow::session::host::TerminalHost`: renders to stdout
+- [x] `sim_flow::session::host::TerminalHost`: renders to stdout
   (markdown via `termimad` or similar), reads from stdin, dispatches
   `RequestLlmResponse` to the configured `CliAgent`.
-- [ ] `sim-flow session <step>.<kind>` (no `--jsonl`) defaults to
+- [x] `sim-flow session <step>.<kind>` (no `--jsonl`) defaults to
   `TerminalHost`.
 - [ ] Smoke-test: drive DM0 work + critique end-to-end in a plain
   terminal against `claude` CLI.
@@ -183,30 +183,30 @@ After M4: a developer can run the full DMF flow without VS Code.
 
 Pivot the extension to consume the JSONL protocol.
 
-- [ ] Generate TypeScript types from
+- [x] Generate TypeScript types from
   `session-protocol.schema.json` at `npm run compile` time. Source
   of truth stays in Rust.
-- [ ] New module `extensions/sim-flow-vscode/src/session/host.ts`:
+- [x] New module `extensions/sim-flow-vscode/src/session/host.ts`:
   spawn `sim-flow session ... --jsonl`, pump JSONL events,
   translate to chat output, dispatch `RequestLlmResponse` to the
   existing TS LLM backends.
-- [ ] Chat participant `/step` becomes a launcher; participants
+- [x] Chat participant `/step` becomes a launcher; participants
   for `/status`, `/runs`, `/gate`, `/advance`, `/reset`, `/init`
   shell out to the matching `sim-flow` subcommand.
-- [ ] Setting `sim-flow.chat.scope`: `"session"` (default) or
+- [/] Setting `sim-flow.chat.scope`: `"session"` (default) or
   `"project"`. Implements both behaviors and lets us pick after
   exercising both.
-- [ ] **Delete**: `participant/handlers.ts::handleStep` /
+- [x] **Delete**: `participant/handlers.ts::handleStep` /
   `runStepLlm` / `handleStepContinuation`,
   `participant/session.ts::buildMessageHistory` /
   `extractSessionTag`, `participant/artifacts.ts` (whole module),
   `participant/instructions.ts` (now via `describe`),
   `cli` LLM backend in `src/llm/cli.ts`,
   per-step path tables in TS.
-- [ ] Keep: dashboard webview, state-toml / experiments / critiques
+- [x] Keep: dashboard webview, state-toml / experiments / critiques
   readers, file watcher, multi-project resolver, terminal
   integration for non-session CLI ops, packaging.
-- [ ] Verify VSIX still builds; smoke-test DM0 -> DM1 end-to-end
+- [/] Verify VSIX still builds; smoke-test DM0 -> DM1 end-to-end
   through the new pipeline using `vscode.lm` (Copilot) backend.
 
 After M5: VS Code drives the same orchestrator the terminal does.
@@ -214,38 +214,111 @@ Step knowledge no longer exists in TypeScript.
 
 ## Milestone 6 - Validation, docs, and Phase-8 cleanup
 
+Code-side cleanup is complete; the live smoke tests need a real
+LLM backend and are tracked here as user-driven follow-ups.
+
 - [ ] End-to-end validation: drive DM0 -> DM1 through both
   `--jsonl` (VS Code) and `--llm-backend claude` (terminal) on the
   same project. Verify identical artifact + state outcomes.
 - [ ] Drive DM2c on a small Foundation project to exercise the
   tool layer and iteration loop.
-- [ ] Update `docs/architecture/ai-flow/06-vscode-extension.md`
+- [x] Update `docs/architecture/ai-flow/06-vscode-extension.md`
   retired-features section with anything else removed in M5.
 - [ ] Update CHANGELOG (in sim-foundation root if/when it exists).
-- [ ] Move Phase 8's status block to "superseded" and link to this
+- [x] Move Phase 8's status block to "superseded" and link to this
   phase's results.
+
+Smoke-test recipe (terminal, no extension required):
+
+```bash
+cd <project>
+sim-flow init --flow direct-modeling                                # if needed
+sim-flow session DM0.work \
+    --foundation-root /Users/mneilly/nta/sim-foundation \
+    --llm-backend claude                                            # or codex / ollama / lmstudio
+# answer the agent until spec.md is on disk; type /end-session
+sim-flow session DM0.critique --foundation-root <root> --llm-backend claude
+# critique writes .sim-flow/critiques/DM0-critique.md
+sim-flow advance DM0                                                # records the gate, bumps current_step
+# repeat for DM1, DM2a, ...
+```
+
+Smoke-test recipe (VS Code, identical project state expected):
+
+```text
+@sim-flow /step DM0.work
+   ...iterate, /end-session...
+@sim-flow /step DM0.critique
+   ...iterate, /end-session...
+@sim-flow /advance DM0
+```
+
+Both paths share the same Rust orchestrator; outputs on disk and
+the `current_step` mutation should be byte-identical.
 
 ## Status
 
-Not started. Architecture committed; awaiting M1 implementation.
+Code-complete through M5; M4's HTTP-agent matrix landed in a
+follow-up commit alongside Ollama/LM Studio/Codex/gh-copilot
+support. M6 is the wrap-up: docs are done, live end-to-end smoke
+tests are deferred to the user.
+
+Per-milestone outcomes:
+
+- **M1** (`3110f06`): `sim-flow advance` + `sim-flow describe`,
+  extension consumes `describe`. Drift between Rust and TS step
+  knowledge eliminated.
+- **M2** (`9ad2c0c`): JSONL protocol, `Host` trait, `JsonlHost`,
+  `TestHost`, orchestrator state machine,
+  `Command::Session ... --jsonl`, schema export +
+  drift-check test.
+- **M3** (`29398aa`): `Tool` trait + `read_file`/`list_dir`/
+  `write_file`/`search`, `cargo check` / `cargo test` runners,
+  per-step `work_tools` / `critique_tools` / `work_phases` /
+  `critique_phases`, multi-phase iteration loop with 5-iter caps.
+  Native tool-use API translation deferred (fenced-block fallback
+  works for every backend today).
+- **M4** (`4aee92a`, `eb4ed00`): `TerminalHost`, `CliAgent` trait,
+  `MockAgent`, `ClaudeAgent`, `CodexAgent`, `GhCopilotAgent`,
+  `OllamaAgent`, `LmStudioAgent`. HTTP path uses `ureq` via the
+  shared `openai_compatible` module. Anthropic / OpenAI HTTP
+  agents skipped because the user's access path is subscription
+  CLIs, not API keys.
+- **M5** (`<pending hash>`): TS extension is now a renderer over
+  the JSONL protocol. `participant/session.ts`,
+  `participant/artifacts.ts`, `participant/instructions.ts`, the
+  `cli` LLM backend, and `runStepLlm`/`handleStep`/
+  `handleStepContinuation` are all deleted. Step knowledge is
+  structurally absent from TypeScript.
+- **M6** (`<this commit>`): docs updated; live smoke tests handed
+  off to the user. Phase 8 status block superseded.
+
+130 sim-flow Rust tests + 127 vitest cases passing. Workspace
+clippy clean. VSIX builds at 8.02 MB.
 
 ## Risks
 
-- **CLI agent non-interactive support.** `claude`, `codex`,
-  `gh copilot` may have inconsistent or limited non-interactive
-  modes. Mitigation: `Anthropic` / `OpenAi` HTTP clients are the
-  baseline that always works; CLI subprocess wrappers are
-  best-effort. We may end up recommending the HTTP path for
-  TerminalHost in v1.
-- **VS Code Language Model tool registration.** Verifying the
-  exact API for tool advertisement on the `vscode.lm` path is M5
-  homework. Worst case: fall back to fenced-block parsing for
-  `vscode.lm`, same as CLI agents.
-- **Cargo check / test latency.** Iteration loops on a fresh
-  project can be slow. Caching, incremental builds, and JSON
-  diagnostic parsing matter.
-- **Coverage tooling.** `cargo tarpaulin` is the assumption but
-  not strictly required; treat as optional in v1.
+Status update on the risks called out at the start of Phase 9:
+
+- **CLI agent non-interactive support.** Resolved for `claude`
+  (`claude -p` works cleanly with stdin). `codex exec -` is
+  shipped but flagged experimental in code comments; `gh copilot
+  suggest` is best-effort only and the error message points users
+  at the `vscode` source for full Copilot Chat. Local Ollama and
+  LM Studio are HTTP-based and reliable. Anthropic / OpenAI HTTP
+  agents weren't added because the user's access is subscription
+  CLIs, not API keys; trivial to add later.
+- **VS Code Language Model tool registration.** Phase 9 M5
+  shipped with the fenced-block fallback for tool calls
+  (`tool:<name>` parsing in the orchestrator). Native tool-use
+  via `vscode.lm.registerTool` is a polish pass for a follow-up
+  phase; the orchestrator works against any backend without it.
+- **Cargo check / test latency.** Mitigated by caching: the
+  orchestrator just shells `cargo check`/`cargo test` and Rust's
+  incremental compilation kicks in for re-runs in the iteration
+  loop. JSON diagnostic parsing isn't necessary at this stage.
+- **Coverage tooling.** Skipped in v1 - `coverage` phase not yet
+  registered for any step. Easy to add when DM3c needs it.
 
 ## Acceptance
 

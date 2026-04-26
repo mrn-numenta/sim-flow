@@ -497,7 +497,22 @@ In progress. Milestones 1 through 11 are complete:
   smoke-test and actually populating the `bin/` tree are tracked
   as post-install follow-ups rather than milestone blockers.
 
-Only M12 (DSF hooks, blocked on Phase 6) and M13 (docs) remain.
+**Superseded by [Phase 9](./09-phase-orchestrator-driven-sessions.md).**
+M1-M11 above shipped, but the chat-driven orchestration logic in
+M6-M8 (handleStep / runStepLlm / handleStepContinuation /
+buildMessageHistory / extractArtifacts / per-step path tables /
+the `cli` LLM backend) was removed in Phase 9 M5 when sim-flow
+became the master and the extension became a renderer over the
+JSONL session protocol. The dashboard, state readers, file
+watcher, multi-project resolver, terminal integration for
+non-session ops, and packaging plumbing carry forward unchanged.
+M9's stub-deletion + terminal-routing work also remains valid;
+its dashboard "Run Step" button now spawns a chat-tab session
+backed by `sim-flow session ... --jsonl` rather than a
+`sim-flow run <step>` terminal invocation.
+
+M12 (DSF hooks) is unchanged — still blocked on Phase 6.
+M13 (docs) folded into Phase 9 M6.
 
 ## Scope Caveats
 
