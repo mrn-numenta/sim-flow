@@ -23,8 +23,8 @@ stubs DM4 with tracking-dependent checks marked as blocked until Phase 4.
 - [x] Author `dm2a-decomposition.md` and `dm2a-decomposition-critique.md`.
 - [x] Author `dm2b-pipeline-mapping.md` and
   `dm2b-pipeline-mapping-critique.md`.
-- [x] Author `dm2c-model-implementation.md` and
-  `dm2c-model-implementation-critique.md`, including references to
+- [x] Author `dm2c-model-impl-plan.md` and
+  `dm2c-model-impl-plan-critique.md`, including references to
   Foundation patterns (`Module`, `HasLogic`, `HasInstances`,
   `ConnectivityPlan`) and `sim-models/examples`.
 - [x] Author `dm3a-testbench-impl.md` and `dm3a-testbench-impl-critique.md`
