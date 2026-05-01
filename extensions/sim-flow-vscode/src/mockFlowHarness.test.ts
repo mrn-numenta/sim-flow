@@ -16,6 +16,12 @@ const mock = vi.hoisted(() => {
     | {
         text: string;
         waitForSignal?: string;
+      }
+    | {
+        throwMessage: string;
+        throwKind?: string;
+        throwDetail?: string;
+        waitForSignal?: string;
       };
   type PumpTurn = {
     onSettle?: (renderer: {
@@ -437,7 +443,8 @@ vi.mock("./session/pump", () => ({
 }));
 
 vi.mock("./chatPanel/session", () => ({
-  supportsPanelTransport: () => true,
+  supportsPanelTransport: (source: string) =>
+    !["claude-cli", "codex-cli", "gh-copilot-cli"].includes(source),
   buildPanelMessages: (
     context: { projectDir: string | null; currentStep: string | null },
     transcript: Array<{ kind: string; body: string }>,
@@ -480,6 +487,9 @@ vi.mock("./chatPanel/session", () => ({
         if (token.isCancellationRequested) {
           return;
         }
+      }
+      if ("throwMessage" in chunk) {
+        throw new Error(chunk.throwMessage);
       }
       yield chunk.text;
     }
@@ -1894,6 +1904,176 @@ describe("mocked dashboard/chat harness", () => {
     state = latestState(view);
     expect(mock.state.directReplyRequests.at(-1)?.source).toBe("ollama");
     expect(transcriptBodies(state!)).toContain("Reply from Ollama.");
+  });
+
+  it("surfaces an unsupported-source note instead of sending panel chat on terminal backends", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.config.set("llm.source", "claude-cli");
+
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      new mock.FakeMemento() as never,
+      { get: async () => undefined },
+    );
+    const view = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(view as never, {} as never, {} as never);
+
+    let state = latestState(view);
+    expect(state?.supportsPromptEntry).toBe(false);
+
+    await view.webview.emit({
+      type: "send-prompt",
+      prompt: "This should stay out of panel chat.",
+    });
+    await flushAsyncWork();
+
+    state = latestState(view);
+    expect(mock.state.directReplyRequests).toEqual([]);
+    expect(transcriptBodies(state!)).toContain(
+      "This panel only drives API backends. Switch `sim-flow.llm.source` to `lmstudio`, `ollama`, `openai`, `anthropic`, or `vscode` to send prompts here.",
+    );
+  });
+
+  it("shows a fallback assistant turn and error note when the backend fails before any text arrives", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.directReplies.set(exampleDir, [
+      {
+        throwMessage: "Mock backend unavailable.",
+      },
+    ]);
+
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      new mock.FakeMemento() as never,
+      { get: async () => undefined },
+    );
+    const view = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(view as never, {} as never, {} as never);
+
+    await view.webview.emit({
+      type: "send-prompt",
+      prompt: "Summarize the example project.",
+    });
+    await flushAsyncWork();
+
+    const state = latestState(view);
+    expect(state?.canStop).toBe(false);
+    expect(transcriptBodies(state!)).toContain("The request failed before the model returned any text.");
+    expect(transcriptBodies(state!)).toContain("Mock backend unavailable.");
+  });
+
+  it("keeps partial assistant output visible when the backend fails after streaming starts", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.directReplies.set(exampleDir, [
+      "Partial answer before failure.",
+      {
+        throwMessage: "Mock stream failed mid-response.",
+      },
+    ]);
+
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      new mock.FakeMemento() as never,
+      { get: async () => undefined },
+    );
+    const view = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(view as never, {} as never, {} as never);
+
+    await view.webview.emit({
+      type: "send-prompt",
+      prompt: "Summarize the example project.",
+    });
+    await flushAsyncWork();
+
+    const state = latestState(view);
+    expect(state?.canStop).toBe(false);
+    expect(transcriptBodies(state!)).toContain("Partial answer before failure.");
+    expect(transcriptBodies(state!)).toContain("Mock stream failed mid-response.");
+    expect(transcriptBodies(state!)).not.toContain("The request failed before the model returned any text.");
+    expect((state?.totalOutputTokensEstimate ?? 0)).toBeGreaterThan(0);
+  });
+
+  it("does not launch an auto session when no active project can be resolved", async () => {
+    mock.state.currentProjectDir = undefined;
+    mock.state.workspaceFolders = [];
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    mock.state.chatProvider = provider as never;
+    const view = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(view as never, {} as never, {} as never);
+
+    await provider.launchAutoSession(undefined, undefined);
+    await flushAsyncWork();
+
+    const state = latestState(view);
+    expect(state?.projectLabel).toBe("No project selected");
+    expect(mock.state.pumpLaunches).toEqual([]);
+    expect(state?.transcript).toEqual([]);
+  });
+
+  it("records session completion cleanly when the orchestrator ends without visible assistant content", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const specPath = path.join(exampleDir, "docs", "spec.md");
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        result: {
+          status: "ended",
+          endReason: "completed",
+          endMessage: "Mock session ended without model output.",
+        },
+      },
+    ]);
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    mock.state.chatProvider = provider as never;
+    const chatView = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(chatView as never, {} as never, {} as never);
+
+    const dashboardHost = new DashboardHost({
+      extensionUri: { fsPath: "/extension" } as never,
+      projectDir: exampleDir,
+      cli: {} as never,
+      workspaceState: workspaceState as never,
+    });
+    await dashboardHost.open();
+
+    await mock.state.lastDashboardPanel!.webview.emit({
+      type: "run-auto",
+      specPath,
+    });
+    await flushAsyncWork();
+
+    const state = latestState(chatView);
+    expect(state?.canStop).toBe(false);
+    expect(transcriptBodies(state!)).toContain("Started sim-flow auto");
+    expect(transcriptBodies(state!)).toContain("Mock session ended without model output.");
   });
 
   it("restores the latest visible direct-reply transcript after provider reload", async () => {
