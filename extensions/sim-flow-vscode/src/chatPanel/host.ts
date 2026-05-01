@@ -224,12 +224,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
     const context = await this.readPanelContext();
-    if (
-      this.activePump &&
-      this.activePump.projectDir === context.projectDir &&
-      this.activePump.awaitingInput
-    ) {
-      await this.sendPumpPrompt(context, prompt);
+    if (this.activePump) {
+      if (
+        this.activePump.projectDir === context.projectDir &&
+        this.activePump.awaitingInput
+      ) {
+        await this.sendPumpPrompt(context, prompt);
+      }
       return;
     }
     let conversation = this.readConversation(context.projectDir);

@@ -177,3 +177,23 @@ user-visible failures, root causes, and the tests that now guard
       as direct chat`
     in
     [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).
+
+### Round 9 - Active Session Prompt Guard Regression Tests
+
+- [x] Prompts arriving during a live auto session could incorrectly
+  start direct chat.
+  - Symptom: if a `send-prompt` message reached the host while an auto
+    session was still running but not waiting for input, the panel
+    could start an unrelated direct reply on top of the orchestrated
+    flow.
+  - Root cause: `sendPrompt()` only diverted prompts into the live pump
+    when `awaitingInput` was true; otherwise it fell through into the
+    direct-chat path instead of treating the active auto session as a
+    blocking state.
+  - Guard:
+    - `does not start direct chat when a prompt arrives during an
+      active auto session`
+    - `does not clear the transcript while an auto session is active`
+    - `does not clear the transcript while a direct reply is active`
+    in
+    [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).
