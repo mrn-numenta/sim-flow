@@ -1051,6 +1051,133 @@ describe("mocked dashboard/chat harness", () => {
     expect(transcriptBodies(state!)).toContain("Partial auto-session output before reload.");
   });
 
+  it("restores awaiting-input transcript state after provider reload", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const specPath = path.join(exampleDir, "docs", "spec.md");
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("Please choose the grayscale coefficients before continuing.\n");
+        },
+        result: {
+          status: "awaiting-input",
+        },
+      },
+    ]);
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    mock.state.chatProvider = provider as never;
+    const chatView = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(chatView as never, {} as never, {} as never);
+
+    const dashboardHost = new DashboardHost({
+      extensionUri: { fsPath: "/extension" } as never,
+      projectDir: exampleDir,
+      cli: {} as never,
+      workspaceState: workspaceState as never,
+    });
+    await dashboardHost.open();
+
+    await mock.state.lastDashboardPanel!.webview.emit({
+      type: "run-auto",
+      specPath,
+    });
+    await flushAsyncWork();
+
+    let state = latestState(chatView);
+    expect(state?.notice).toContain("waiting for your next reply");
+    expect(transcriptBodies(state!)).toContain(
+      "Please choose the grayscale coefficients before continuing.",
+    );
+
+    provider.dispose();
+    await flushAsyncWork();
+
+    const restoredProvider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    const restoredView = new mock.FakeWebviewView();
+    await restoredProvider.resolveWebviewView(restoredView as never, {} as never, {} as never);
+    await flushAsyncWork();
+
+    state = latestState(restoredView);
+    expect(state?.projectLabel).toBe("example");
+    expect(state?.canStop).toBe(false);
+    expect(state?.supportsPromptEntry).toBe(true);
+    expect(transcriptBodies(state!)).toContain(
+      "Please choose the grayscale coefficients before continuing.",
+    );
+    expect(transcriptBodies(state!)).toContain("reloaded or closed");
+  });
+
+  it("restores project-specific transcripts across reload after switching projects", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const secondDir = createProjectFromFixture(tmpRoot, "other-project");
+    mock.state.directReplies.set(exampleDir, ["Example persistent reply."]);
+    mock.state.directReplies.set(secondDir, ["Other persistent reply."]);
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+      { uri: { fsPath: secondDir }, name: "other-project", index: 1 },
+    ];
+    mock.state.currentProjectDir = exampleDir;
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    const view = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(view as never, {} as never, {} as never);
+
+    await view.webview.emit({ type: "send-prompt", prompt: "Hello example" });
+    await flushAsyncWork();
+
+    mock.state.currentProjectDir = secondDir;
+    await mock.fireActiveEditorChange();
+    await flushAsyncWork();
+    await view.webview.emit({ type: "send-prompt", prompt: "Hello other" });
+    await flushAsyncWork();
+
+    provider.dispose();
+    await flushAsyncWork();
+
+    const restoredProvider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    const restoredView = new mock.FakeWebviewView();
+    await restoredProvider.resolveWebviewView(restoredView as never, {} as never, {} as never);
+    await flushAsyncWork();
+
+    let state = latestState(restoredView);
+    expect(state?.projectLabel).toBe("other-project");
+    expect(transcriptBodies(state!)).toContain("Other persistent reply.");
+    expect(transcriptBodies(state!)).not.toContain("Example persistent reply.");
+
+    mock.state.currentProjectDir = exampleDir;
+    await mock.fireActiveEditorChange();
+    await flushAsyncWork();
+
+    state = latestState(restoredView);
+    expect(state?.projectLabel).toBe("example");
+    expect(transcriptBodies(state!)).toContain("Example persistent reply.");
+    expect(transcriptBodies(state!)).not.toContain("Other persistent reply.");
+  });
+
   it("resumes a mocked auto session after the orchestrator asks for input", async () => {
     const exampleDir = createProjectFromFixture(tmpRoot, "example");
     const specPath = path.join(exampleDir, "docs", "spec.md");
