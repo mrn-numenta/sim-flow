@@ -1357,6 +1357,90 @@ describe("mocked dashboard/chat harness", () => {
     expect(transcriptBodies(state!)).not.toContain("This should never be sent as direct chat.");
   });
 
+  it("returns to normal direct chat after clearing a dead restored auto-session transcript", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const specPath = path.join(exampleDir, "docs", "spec.md");
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("Please choose the grayscale coefficients before continuing.\n");
+        },
+        result: {
+          status: "awaiting-input",
+        },
+      },
+    ]);
+    mock.state.directReplies.set(exampleDir, ["Fresh direct chat reply after clearing."]);
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    mock.state.chatProvider = provider as never;
+    const chatView = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(chatView as never, {} as never, {} as never);
+
+    const dashboardHost = new DashboardHost({
+      extensionUri: { fsPath: "/extension" } as never,
+      projectDir: exampleDir,
+      cli: {} as never,
+      workspaceState: workspaceState as never,
+    });
+    await dashboardHost.open();
+
+    await mock.state.lastDashboardPanel!.webview.emit({
+      type: "run-auto",
+      specPath,
+    });
+    await flushAsyncWork();
+
+    provider.dispose();
+    await flushAsyncWork();
+
+    const restoredProvider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    const restoredView = new mock.FakeWebviewView();
+    await restoredProvider.resolveWebviewView(restoredView as never, {} as never, {} as never);
+    await flushAsyncWork();
+
+    let state = latestState(restoredView);
+    expect(state?.supportsPromptEntry).toBe(false);
+    expect(state?.transcript.length).toBeGreaterThan(0);
+
+    await restoredView.webview.emit({ type: "clear-transcript" });
+    await flushAsyncWork();
+
+    state = latestState(restoredView);
+    expect(state?.supportsPromptEntry).toBe(true);
+    expect(state?.totalInputTokensEstimate).toBe(0);
+    expect(state?.transcript).toEqual([]);
+
+    await restoredView.webview.emit({
+      type: "send-prompt",
+      prompt: "Start over as direct chat.",
+    });
+    await flushAsyncWork();
+
+    state = latestState(restoredView);
+    expect(mock.state.directReplyRequests.at(-1)).toEqual(
+      expect.objectContaining({
+        projectDir: exampleDir,
+        source: "vscode",
+      }),
+    );
+    expect(transcriptBodies(state!)).toContain("Fresh direct chat reply after clearing.");
+  });
+
   it("routes an immediate reply back into the relaunched auto session after an llm source switch from awaiting-input", async () => {
     const exampleDir = createProjectFromFixture(tmpRoot, "example");
     const specPath = path.join(exampleDir, "docs", "spec.md");
