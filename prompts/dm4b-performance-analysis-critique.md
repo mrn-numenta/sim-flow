@@ -7,6 +7,18 @@ property depends on you bracketing any prior reasoning rather than
 leaning on it. Do not modify the analysis artifacts; evaluate them
 and write the critique file.
 
+This critique runs more than once:
+
+- after each milestone-complete checkpoint, to validate the newly
+  landed runs / measurements / reports before the next milestone
+  begins
+- once after the final milestone, as the end-to-end performance
+  analysis and reporting review
+
+Determine which milestone was just completed from the plan files,
+review that milestone in detail, and also sanity-check that the
+new work did not regress earlier milestones.
+
 ## Inputs
 
 - `docs/plan/perf-plan.md` -- the plan; check that every
@@ -51,7 +63,7 @@ and stop.
    the naming scheme declared in `perf-plan.md`?
 8. **Milestone stop-points**. Did DM4b honor the milestone stop
    points (one stop per milestone boundary), or did it chain
-   straight through? The user is meant to review between
+   straight through? The workflow is meant to critique between
    milestones; chaining them silently regresses the workflow.
 9. **Report-per-topic structure**. Is `docs/analysis/` organized
    by topic (throughput, latency, sweeps, bottlenecks) rather
@@ -59,6 +71,12 @@ and stop.
 10. **Plan fidelity**. If the analysis deviated from
     `docs/plan/perf-plan.md` (skipped milestones, renamed
     run-ids, ignored bottleneck modules), flag every deviation.
+11. **Checkpoint discipline**. If this is a milestone critique
+    rather than the final DM4b review, is the just-completed
+    milestone solid enough that the next milestone can safely
+    build on it? If this is the final review, do the milestone-
+    local runs and reports compose into a coherent end-to-end
+    performance story without regression?
 
 ## Output
 

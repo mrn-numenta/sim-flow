@@ -26,7 +26,8 @@ until fixed). Prefix informational notes with `UNRESOLVED:`. The
 orchestrator fails the DM4a gate on `BLOCKER:` lines only.
 
 1. Does `docs/plan/perf-plan.md` follow the conventions in
-   `plan-management.md`? Is there an overview and a TOC pointing
+   `plan-management.md` and `perf-plan.md.tmpl`? Is there an
+   overview and a TOC pointing
    at each `perf-milestone-NN-<name>.md`?
 2. Are milestones named `Milestone NN: <description>` and saved
    as `perf-milestone-NN-<name>.md`? Are the numbers contiguous?
@@ -51,23 +52,28 @@ orchestrator fails the DM4a gate on `BLOCKER:` lines only.
    also name the measurement task (run-id or sweep cell) that
    produces the number? Reject unmapped targets and vague
    mappings ("covered by overall analysis").
-6. **Module / stage coverage**. Does the bottleneck-analysis
+6. **Workload justification**. Does every planned workload or
+   sweep family say why it is representative and which target
+   row(s) or bottleneck question(s) it supports? Reject plans
+   that assume the workload-to-target mapping is self-evident.
+7. **Module / stage coverage**. Does the bottleneck-analysis
    milestone reference every non-trivial module from
    `docs/analysis/decomposition.md`? Per-module observations
    should be planned, not picked-up-as-we-go.
-7. **Run-id scheme**. Is the run-id naming scheme documented and
+8. **Run-id scheme**. Is the run-id naming scheme documented and
    followed (e.g. `baseline-<workload>`, `sweep-<param>-<value>`)?
    Are run-ids stable enough that DM4b can re-run a single id
    without ambiguity?
-8. **Milestone ordering**. Baseline before sweeps, sweeps before
-   bottleneck analysis (analysis depends on sweep data), all
-   measurement before reporting. Flag tasks whose dependencies
-   live in later milestones.
-9. **Stop-points for review**. Does the plan tell DM4b to stop
-   for user review at each milestone boundary (rather than
-   running the entire perf flow unattended)? Long perf runs are
-   the exact place where the user wants checkpoints.
-10. **Scope discipline**. Reject tasks that pre-empt DM4b's
+9. **Milestone ordering**. Is the milestone order justified by
+   data dependencies? Baseline must precede any milestone that
+   depends on baseline numbers; reporting must come after the
+   measurements it cites. Reject unexplained ordering that would
+   force DM4b to use data from a later milestone.
+10. **Stop-points for critique**. Does the plan tell DM4b to stop
+    for a paired critique at each milestone boundary rather than
+    running the entire perf flow unattended? Long perf runs are
+    exactly where milestone critiques are valuable.
+11. **Scope discipline**. Reject tasks that pre-empt DM4b's
     execution (specific scripts, embedded TOML, full report
     text). The plan describes WHAT will be measured and WHAT
     reports will be written, not HOW each measurement is run.

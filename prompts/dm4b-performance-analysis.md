@@ -48,10 +48,11 @@ Reference material (read on demand):
      skip ahead.
    - When you complete the LAST task in the milestone, **STOP**.
      Surface a clear notice -- `Milestone NN: <name> complete;
-     ready for review.` followed by a one-line summary of what
-     landed -- and wait for user input before starting the next
-     milestone. Do NOT chain milestones automatically. The user
-     reviews the recorded runs / reports between milestones.
+     ready for critique.` followed by a one-line summary of what
+     landed -- and wait for the paired critique session before
+     starting the next milestone. Do NOT chain milestones
+     automatically. The critique is the primary milestone gate;
+     user review may happen around it.
 3. **Run-record discipline**. Every `cargo run -- --run-id <id>`
    invocation should use a run-id that matches the scheme
    declared in `perf-plan.md` (typically `baseline-<workload>`
@@ -102,9 +103,9 @@ it as a `BLOCKER:`.
   to be wrong or impossible, flag the issue rather than
   silently deviating. The plan is the contract.
 - Do NOT skip the milestone stop-points; the user is meant to
-  review each one's runs / reports. Auto-mode should still
+  critique each one's runs / reports. Auto-mode should still
   honor the stop -- emit the "milestone complete" notice and
-  let the user decide when to advance.
+  let the critique run before advancing.
 - Do NOT modify `docs/plan/perf-plan.md`'s structure (only
   flip `[ ]` to `[x]` and append run-id / measurement notes
   inside task lines). Re-architecting the plan is DM4a's job.
@@ -118,6 +119,14 @@ it as a `BLOCKER:`.
   log; run-ids match the plan's scheme.
 - Every task in every `perf-milestone-NN-*.md` is `[x]` (or
   documented as deferred with a reason).
+
+Milestone completion and step completion are different:
+
+- After each milestone is complete, stop and wait for the paired
+  milestone critique before starting the next milestone.
+- After the final milestone is complete, stop for the final DM4b
+  critique. That final critique is the end-to-end performance
+  analysis / reporting gate, not the first serious review.
 
 When the artifacts above are complete, stop. Do not write
 `docs/critiques/DM4b-critique.md`; the critique is a distinct task.

@@ -99,12 +99,13 @@ sub-bullet:
 Don't grow the codebase silently; every artifact should trace to
 a checkbox in some milestone.
 
-## Stop-points for review
+## Stop-points for critique
 
 Each milestone-completion is a natural stop point. When all rows
 in a milestone are resolved, the work session emits
-`Milestone NN: <name> complete; ready for review.` plus a
-one-line summary, then waits for the user to review the
-artifacts (code, tests, runs, reports) before moving on. Do
-not chain milestones automatically -- the user is expected to
-inspect between them.
+`Milestone NN: <name> complete; ready for critique.` plus a
+one-line summary, then waits for the paired critique before
+moving on. User review may happen around that checkpoint, but
+the critique is the primary gate. Do not chain milestones
+automatically -- the workflow is expected to inspect and
+critique between them.

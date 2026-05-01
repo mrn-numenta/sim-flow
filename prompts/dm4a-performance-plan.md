@@ -40,7 +40,13 @@ that's DM4b's concern when running experiments and writing reports.
 ## Procedure
 
 1. Read each input above.
-2. Decide the milestone breakdown. Use this skeleton; each entry is
+2. If `docs/plan/perf-plan.md` does not exist, create it from
+   `docs/plan/perf-plan.md.tmpl`. Create each
+   `docs/plan/perf-milestone-NN-<name>.md` from
+   `docs/plan/perf-milestone.md.tmpl`. Use the templates as the
+   required structure, but adapt them to the design rather than
+   filling them mechanically.
+3. Decide the milestone breakdown. Use this skeleton; each entry is
    a milestone DM4b will work through in order:
    - **Baseline measurement** -- run the model on the canonical
      workload(s) named in `docs/spec.md`, record into
@@ -71,23 +77,29 @@ that's DM4b's concern when running experiments and writing reports.
    Drop or merge milestones only when the design genuinely doesn't
    need them (e.g. no sweeps); document the rationale in the plan.
 
-3. For each milestone, list its tasks as a `[ ]`-prefixed bullet
+4. For each milestone, list its tasks as a `[ ]`-prefixed bullet
    list. Each task names a concrete artifact: a run-id, a sweep
    config, a metric extraction, a report path. Vague tasks like
    "measure performance" are not acceptable.
-4. **Trace every target**. Every row of `docs/targets.md` must map
+5. **Trace every target**. Every row of `docs/targets.md` must map
    to at least one task in `Target verification` and to the
    measurement that produced its number (a run-id from
    `Baseline measurement` or a sweep cell from `Parameter sweeps`).
-5. **Run-id discipline**. Plan the run-ids upfront so DM4b can use
+6. **Run-id discipline**. Plan the run-ids upfront so DM4b can use
    them deterministically: one run-id per workload + parameter
    combination, named like `baseline-<workload>` or
    `sweep-<param>-<value>`. Document the run-id naming scheme in
    the plan so each run-recording task in DM4b can reference it.
-6. **Stop-points for user review**. Tell DM4b explicitly: after
+7. **Workload justification**. For every baseline workload,
+   stress-derived workload, or sweep family, record why it is
+   representative and which target row(s) or bottleneck question(s)
+   it supports. Do not assume the mapping is obvious from the
+   workload name alone.
+8. **Stop-points for critique**. Tell DM4b explicitly: after
    completing all tasks in a milestone (every `[ ]` is `[x]`),
-   stop and surface a "milestone NN complete; ready for review"
-   notice rather than rolling straight into milestone NN+1.
+   stop and surface a "milestone NN complete; ready for critique"
+   notice rather than rolling straight into milestone NN+1. The
+   paired critique is the primary milestone gate.
 
 ## Output
 

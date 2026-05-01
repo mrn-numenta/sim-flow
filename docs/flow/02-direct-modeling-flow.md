@@ -802,30 +802,36 @@ coverage/regression gate.
 
 ---
 
-### DM4: Performance Analysis
+### DM4a: Performance Analysis Plan
 
-**Purpose:** Analyze design performance and identify bottlenecks.
+**Purpose:** Produce the performance-analysis plan that DM4b will
+execute.
 
 **Prerequisites:** DM3c gate passed.
 
-**Instruction files:** `instructions/dm4-performance-analysis.md`
+**Instruction files:** `instructions/dm4a-performance-plan.md`
 
 **Work prompt:**
 
 ```text
-You are executing step DM4 (Performance Analysis) of the Direct Modeling
-Flow.
+You are executing step DM4a (Performance Analysis Plan) of the Direct
+Modeling Flow.
 
-Read the step instructions provided. Read targets.md for the performance
-targets.
+Read the step instructions provided. Start from
+`docs/plan/perf-plan.md.tmpl` and `docs/plan/perf-milestone.md.tmpl`,
+then produce `docs/plan/perf-plan.md` plus
+`docs/plan/perf-milestone-NN-<name>.md` files covering:
 
-1. Run simulations with appropriate workloads to collect performance data.
-2. Analyze results: throughput, latency, memory and communication
-   bandwidth, utilization per module, pipeline bubbles, and bottlenecks.
-3. If the design is parameterizable, perform parameter sweeps.
-4. Report results using Foundation standard reporting mechanisms: obsv
-   artifacts, charts, and report templates.
-5. Write the analysis report to docs/analysis/.
+1. Baseline measurement workloads and run-ids.
+2. Parameter sweeps or an explicit no-sweeps rationale.
+3. Bottleneck analysis coverage over modules and stages.
+4. One target-verification task per row of `docs/targets.md`.
+5. Reporting tasks for `docs/analysis/<topic>.md`.
+6. Workload-to-target justification and stable run-id naming.
+7. Milestone stop-points that tell DM4b to stop with
+   `ready for critique` after each milestone.
+
+Do not run any simulations or write analysis reports in this step.
 
 A separate critique session will review your output.
 ```
@@ -833,26 +839,88 @@ A separate critique session will review your output.
 **Critique prompt (separate critique session):**
 
 ```text
-You are a critique session reviewing the work produced by the DM4 work
-session. Read the analysis report in docs/analysis/ and evaluate:
-- Are all target metrics from targets.md measured?
-- Are bottlenecks identified with supporting evidence?
-- Do parameter sweep results make physical sense?
-- Are any results inconsistent with the spec or the model's intended
-  behavior?
-- Does the report use distributions (percentiles) rather than just
-  scalar summaries?
+You are a critique session reviewing the work produced by the DM4a work
+session. Read `docs/plan/perf-plan.md`, the per-milestone files, and
+the supporting spec / target / analysis docs and evaluate:
+- Does the plan follow the perf-plan template and plan-management
+  conventions?
+- Are the required milestones present or explicitly justified as
+  dropped / merged?
+- Does every target map to a concrete measurement task?
+- Are workloads justified against the targets or bottleneck questions
+  they support?
+- Is milestone ordering justified by data dependencies?
+- Does the plan stop DM4b for a paired critique at each milestone?
 
-Write findings to .sim-flow/critiques/DM4-critique.md. Prefix unresolved
+Write findings to docs/critiques/DM4a-critique.md. Prefix unresolved
+issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
+```
+
+**Gate checks:**
+
+1. `docs/plan/perf-plan.md` exists
+2. `docs/plan/perf-milestone-*.md` exists
+3. Every `docs/targets.md` row traces to at least one measurement task
+4. `docs/critiques/DM4a-critique.md` exists without blockers
+
+---
+
+### DM4b: Performance Analysis
+
+**Purpose:** Execute the performance-analysis plan, record experiment
+results, and write the analysis reports.
+
+**Prerequisites:** DM4a gate passed.
+
+**Instruction files:** `instructions/dm4b-performance-analysis.md`
+
+**Work prompt:**
+
+```text
+You are executing step DM4b (Performance Analysis) of the Direct
+Modeling Flow.
+
+Read the step instructions provided. Read `docs/plan/perf-plan.md` and
+the `perf-milestone-*.md` files.
+
+1. Execute the plan milestone by milestone.
+2. Record runs using the run-id scheme declared in the plan and confirm
+   they land in `.sim-flow/experiments.db`.
+3. Use the planned workloads / sweeps to measure throughput, latency,
+   bottlenecks, and target outcomes.
+4. Write per-topic reports in `docs/analysis/` with evidence and run-id
+   citations.
+5. Stop after each completed milestone for a paired critique before
+   moving to the next milestone.
+
+The final DM4b critique is the end-to-end performance-analysis gate.
+```
+
+**Critique prompt (separate critique session):**
+
+```text
+You are a critique session reviewing the work produced by the DM4b work
+session. Read the perf plan, milestone files, reports, and experiment
+index and evaluate:
+- Are all planned tasks complete or explicitly deferred with reasons?
+- Are all target rows measured and tied to run-ids?
+- Are bottlenecks supported by evidence rather than speculation?
+- Do sweep results and distributions make sense?
+- Did DM4b honor milestone stop-points for paired critiques?
+- Is the just-completed milestone sound enough to support the next one,
+  or, on the final critique, do the results compose into a coherent
+  end-to-end performance story?
+
+Write findings to docs/critiques/DM4b-critique.md. Prefix unresolved
 issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
 ```
 
 **Gate checks:**
 
 1. At least one experiment run recorded in tracking
-2. Analysis report exists in `docs/analysis/`
-3. Report contains throughput and latency metrics
-4. `.sim-flow/critiques/DM4-critique.md` exists without blockers
+2. Analysis reports exist in `docs/analysis/`
+3. Reports contain target-linked throughput / latency / bottleneck data
+4. `docs/critiques/DM4b-critique.md` exists without blockers
 
 ---
 
@@ -860,7 +928,7 @@ issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
 
 **Purpose:** Generate RTL and support external synthesis for PPA.
 
-**Prerequisites:** DM4 gate passed.
+**Prerequisites:** DM4b gate passed.
 
 **Instruction files:** `instructions/dm5-ppa-analysis.md`
 
@@ -891,7 +959,8 @@ sim-foundation/
         dm3b-testbench-impl.md
         dm3c-test-execution.md
         dm3-critique.md         # shared critique-session preamble, if any
-        dm4-performance-analysis.md
+        dm4a-performance-plan.md
+        dm4b-performance-analysis.md
         dm5-ppa-analysis.md
 ```
 

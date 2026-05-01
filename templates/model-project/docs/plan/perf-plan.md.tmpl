@@ -1,0 +1,55 @@
+# Performance Analysis Plan
+
+## Purpose
+
+Summarize what DM4b will measure and why. Describe the design's
+performance questions in a few sentences and name the target
+documents this plan traces back to:
+
+- `docs/spec.md`
+- `docs/targets.md`
+- `docs/analysis/decomposition.md`
+- `docs/analysis/pipeline-mapping.md`
+- `docs/plan/test-plan.md`
+
+## Run-ID Scheme
+
+Document the naming convention DM4b must use for recorded runs.
+Keep it stable and deterministic.
+
+Example:
+
+- `baseline-<workload>`
+- `sweep-<parameter>-<value>`
+- `stress-<workload>-<variant>`
+
+## Workload Justification
+
+For each workload family DM4b will run, explain:
+
+- which target rows it helps verify
+- why it is representative
+- whether it comes from the spec directly, from DM3 stress tests,
+  or is an inferred analysis workload
+
+## Milestones
+
+List the milestone files in execution order.
+
+1. [Milestone 01: Baseline Measurement](./perf-milestone-01-baseline-measurement.md)
+2. [Milestone 02: Parameter Sweeps](./perf-milestone-02-parameter-sweeps.md)
+3. [Milestone 03: Bottleneck Analysis](./perf-milestone-03-bottleneck-analysis.md)
+4. [Milestone 04: Target Verification](./perf-milestone-04-target-verification.md)
+5. [Milestone 05: Reporting](./perf-milestone-05-reporting.md)
+
+Replace, merge, or drop milestones only when justified by the
+design, and document that rationale here.
+
+## Notes
+
+- DM4b executes milestone by milestone.
+- After each completed milestone, DM4b stops and surfaces:
+  `Milestone NN: <name> complete; ready for critique.`
+- A paired critique runs before the next milestone begins.
+- The final DM4b critique is the end-to-end performance-analysis
+  gate after all milestones are complete.
