@@ -7,6 +7,11 @@ import {
 } from "../session/pump";
 import type { LlmSourceTag } from "../webview/messages";
 
+export interface ManagedStepRef {
+  step: string;
+  kind: "work" | "critique";
+}
+
 export interface ManagedAutoSessionState {
   sessionId: string;
   socketPath: string;
@@ -23,6 +28,8 @@ export interface ManagedAutoSessionState {
   currentArtifact: string | null;
   sourceTag: LlmSourceTag;
   model: string;
+  sessionMode: "auto" | "step";
+  stepRef: ManagedStepRef | null;
   launchSpecPath: string | undefined;
 }
 
@@ -33,6 +40,8 @@ export interface StoredAutoSessionRecord {
   awaitingInput: boolean;
   sourceTag: LlmSourceTag;
   model: string;
+  sessionMode: "auto" | "step";
+  stepRef: ManagedStepRef | null;
   launchSpecPath: string | undefined;
   updatedAtMs: number;
 }
@@ -71,6 +80,8 @@ export class AutoSessionManager implements vscode.Disposable {
       pump: LiveSessionTransport;
       sourceTag: LlmSourceTag;
       model: string;
+      sessionMode: "auto" | "step";
+      stepRef: ManagedStepRef | null;
       launchSpecPath: string | undefined;
     },
     delegate: AutoSessionDriveDelegate,
@@ -91,6 +102,8 @@ export class AutoSessionManager implements vscode.Disposable {
       currentArtifact: null,
       sourceTag: options.sourceTag,
       model: options.model,
+      sessionMode: options.sessionMode,
+      stepRef: options.stepRef,
       launchSpecPath: options.launchSpecPath,
     };
     this.activeSession = session;
@@ -147,7 +160,15 @@ export class AutoSessionManager implements vscode.Disposable {
   }
 
   readStoredRecord(projectDir: string): StoredAutoSessionRecord | undefined {
-    return this.workspaceState.get<StoredAutoSessionRecord>(recordKey(projectDir));
+    const record = this.workspaceState.get<StoredAutoSessionRecord>(recordKey(projectDir));
+    if (!record) {
+      return undefined;
+    }
+    return {
+      ...record,
+      sessionMode: record.sessionMode ?? "auto",
+      stepRef: record.stepRef ?? null,
+    };
   }
 
   async attach(
@@ -171,6 +192,8 @@ export class AutoSessionManager implements vscode.Disposable {
       currentArtifact: null,
       sourceTag: record.sourceTag,
       model: record.model,
+      sessionMode: record.sessionMode,
+      stepRef: record.stepRef,
       launchSpecPath: record.launchSpecPath,
     };
     this.activeSession = session;
@@ -230,6 +253,8 @@ export class AutoSessionManager implements vscode.Disposable {
       awaitingInput: session.awaitingInput,
       sourceTag: session.sourceTag,
       model: session.model,
+      sessionMode: session.sessionMode,
+      stepRef: session.stepRef,
       launchSpecPath: session.launchSpecPath,
       updatedAtMs: Date.now(),
     };

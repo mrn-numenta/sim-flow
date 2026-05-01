@@ -494,6 +494,13 @@ h2 {
   );
 }
 
+.step:not(.step-first) {
+  /* Slightly overlap the previous step so the doubled boundary line
+     reads as one continuous rail instead of a dark divider. The gate
+     diamond still sits above that seam via its higher z-index. */
+  margin-top: -1px;
+}
+
 .step.step-first {
   /* Flat top edge for the very first step in the rail. */
   clip-path: polygon(
@@ -735,7 +742,21 @@ button {
 button:hover {
   background: var(--vscode-button-hoverBackground, #dcdcdc);
 }
+button:disabled {
+  background: var(--vscode-disabledInputBackground, #f1f1f1);
+  color: var(--vscode-disabledForeground, #8a8a8a);
+  border-color: color-mix(in srgb, var(--border-color) 70%, transparent);
+  cursor: default;
+  opacity: 1;
+  filter: saturate(0.25);
+}
+button:disabled:hover {
+  background: var(--vscode-disabledInputBackground, #f1f1f1);
+}
 button.secondary {
+  background: transparent;
+}
+button.secondary:disabled {
   background: transparent;
 }
 

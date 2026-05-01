@@ -24,6 +24,7 @@ import {
 } from "./chatPanel/host";
 import { AutoSessionManager } from "./chatPanel/autoSessionManager";
 import { DashboardHost } from "./webview/host";
+import { cliBackendArgFor, isTerminalLlmSource, type LlmSourceTag } from "./webview/messages";
 
 const dashboardHosts = new Map<string, DashboardHost>();
 const terminals = new Map<string, SimFlowTerminal>();
@@ -547,17 +548,69 @@ async function runStepCommand(
     await vscode.window.showErrorMessage(`sim-flow: ${kind} needs a step id (e.g. "DM0").`);
     return;
   }
+  const source = (vscode.workspace.getConfiguration("sim-flow").get<string>("llm.source") ??
+    "vscode") as LlmSourceTag;
   switch (kind) {
     case "runStep":
+      if (isTerminalLlmSource(source)) {
+        await runStepInTerminal(step, "work", source, projectDirHint);
+        return;
+      }
+      if (usesBuiltInChatSurface(source)) {
+        await openChatForStep(step, "work", projectDirHint);
+        return;
+      }
+      if (await tryLaunchStepInChatPanel(step, "work", projectDirHint)) {
+        return;
+      }
       await openChatForStep(step, "work", projectDirHint);
       return;
     case "runCritique":
+      if (isTerminalLlmSource(source)) {
+        await runStepInTerminal(step, "critique", source, projectDirHint);
+        return;
+      }
+      if (usesBuiltInChatSurface(source)) {
+        await openChatForStep(step, "critique", projectDirHint);
+        return;
+      }
+      if (await tryLaunchStepInChatPanel(step, "critique", projectDirHint)) {
+        return;
+      }
       await openChatForStep(step, "critique", projectDirHint);
       return;
     case "resetStep":
       await runCliInTerminal(["reset", step], projectDirHint);
       return;
   }
+}
+
+async function tryLaunchStepInChatPanel(
+  step: string,
+  kind: "work" | "critique",
+  projectDirHint: string | undefined,
+): Promise<boolean> {
+  const source = (vscode.workspace.getConfiguration("sim-flow").get<string>("llm.source") ??
+    "vscode") as LlmSourceTag;
+  if (isTerminalLlmSource(source) || !chatPanelProvider) {
+    return false;
+  }
+  await chatPanelProvider.launchStepSession(step, kind, projectDirHint);
+  return true;
+}
+
+async function runStepInTerminal(
+  step: string,
+  kind: "work" | "critique",
+  source: LlmSourceTag,
+  projectDirHint: string | undefined,
+): Promise<void> {
+  const sub: string[] = ["session", `${step}.${kind}`, "--llm-backend", cliBackendArgFor(source)];
+  const model = vscode.workspace.getConfiguration("sim-flow").get<string>("llm.model")?.trim();
+  if (model && model.length > 0) {
+    sub.push("--llm-model", model);
+  }
+  await runCliInTerminal(sub, projectDirHint);
 }
 
 async function openChatForStep(
@@ -567,6 +620,16 @@ async function openChatForStep(
 ): Promise<void> {
   const projectFlag = projectDirHint ? ` --project ${shellQuote(projectDirHint)}` : "";
   const query = `@sim-flow /step ${step}.${kind}${projectFlag}`;
+  await openChatWithQuery(query);
+}
+
+async function openChatForAuto(
+  specPath: string | undefined,
+  projectDirHint: string | undefined,
+): Promise<void> {
+  const specFlag = specPath?.trim() ? ` --spec ${shellQuote(specPath.trim())}` : "";
+  const projectFlag = projectDirHint ? ` --project ${shellQuote(projectDirHint)}` : "";
+  const query = `@sim-flow /auto${specFlag}${projectFlag}`;
   await openChatWithQuery(query);
 }
 
@@ -583,6 +646,12 @@ async function runFlowChatCommand(
   specPath: string | undefined,
   projectDirHint: string | undefined,
 ): Promise<void> {
+  const source = (vscode.workspace.getConfiguration("sim-flow").get<string>("llm.source") ??
+    "vscode") as LlmSourceTag;
+  if (usesBuiltInChatSurface(source)) {
+    await openChatForAuto(specPath, projectDirHint);
+    return;
+  }
   if (!chatPanelProvider) {
     await vscode.window.showErrorMessage(
       "sim-flow: chat panel is not available yet. Reload the window and try again.",
@@ -722,6 +791,10 @@ function shellQuote(value: string): string {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function usesBuiltInChatSurface(source: LlmSourceTag): boolean {
+  return source === "vscode";
 }
 
 /**

@@ -66,6 +66,8 @@ describe("chatPanel/autoSessionManager", () => {
         pump: new FakePump() as never,
         sourceTag: "ollama",
         model: "llama3.1",
+        sessionMode: "auto",
+        stepRef: null,
         launchSpecPath: "docs/spec.md",
       },
       noopDelegate,
@@ -78,6 +80,8 @@ describe("chatPanel/autoSessionManager", () => {
       awaitingInput: false,
       sourceTag: "ollama",
       model: "llama3.1",
+      sessionMode: "auto",
+      stepRef: null,
       launchSpecPath: "docs/spec.md",
     });
 

@@ -604,7 +604,18 @@ function renderLlmSourcePicker(): HTMLElement {
   select.addEventListener("change", () => {
     const value = select.value as LlmSourceTag;
     ui.llmSource = value;
+    // Kick off the source-local model refresh immediately. The host
+    // echoes the chosen source back via `llm-config`, but by then the
+    // optimistic local `ui.llmSource` update means a pure
+    // "did-source-change?" check would not fire.
+    ui.llmModel = "";
+    ui.llmModelList = [];
+    ui.llmModelListSource = value;
+    ui.llmModelListPending = true;
+    ui.llmModelListNote = null;
+    render();
     send({ type: "set-llm-source", source: value });
+    send({ type: "request-model-list", source: value });
   });
   wrap.appendChild(select);
   return wrap;

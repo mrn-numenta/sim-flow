@@ -26,6 +26,7 @@ import {
   AutoSessionManager,
   type AutoSessionDriveDelegate,
   type ManagedAutoSessionState,
+  type ManagedStepRef,
   type StoredAutoSessionRecord,
 } from "./autoSessionManager";
 import {
@@ -416,10 +417,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       verbose: settings.verbose,
       ollamaBaseUrl: settings.ollamaBaseUrl,
       lmstudioBaseUrl: settings.lmstudioBaseUrl,
-      sessionLabel: currentStep ? `${currentStep}.work` : "General chat",
-      statusLine: currentStep
-        ? `Chat with ${settings.sourceLabel} while working on ${currentStep}.`
-        : `Direct chat panel backed by ${settings.sourceLabel}.`,
+      ...describePanelSession(projectDir, currentStep, settings.sourceLabel, this.activePump),
     };
   }
 
@@ -443,6 +441,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (
       this.activePump &&
       this.activePump.projectDir === ctx.projectDir &&
+      this.activePump.sessionMode === "auto" &&
       this.activePump.launchSpecPath === trimmedSpec &&
       this.activePump.sourceTag === settings.source &&
       this.activePump.model === settings.model
@@ -479,6 +478,54 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       trimmedSpec,
       { resetConversation: true },
     );
+  }
+
+  async launchStepSession(
+    step: string,
+    kind: "work" | "critique",
+    projectDirHint: string | undefined,
+  ): Promise<void> {
+    await vscode.commands.executeCommand(
+      `workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`,
+    );
+    const ctx = await resolveContext({
+      projectDir: projectDirHint,
+      showErrors: true,
+    });
+    if (!ctx) {
+      return;
+    }
+
+    const settings = readPanelSettings();
+    const stepRef: ManagedStepRef = { step, kind };
+    if (
+      this.activePump &&
+      this.activePump.projectDir === ctx.projectDir &&
+      this.activePump.sessionMode === "step" &&
+      this.activePump.stepRef?.step === step &&
+      this.activePump.stepRef?.kind === kind &&
+      this.activePump.sourceTag === settings.source &&
+      this.activePump.model === settings.model
+    ) {
+      return;
+    }
+
+    if (this.inFlight) {
+      await this.stopDirectResponse(
+        this.inFlight,
+        "Launching step session",
+        `Stopped the current response to launch \`${step}.${kind}\` from the dashboard.`,
+      );
+    }
+    if (this.activePump) {
+      await this.stopActivePumpSession(
+        this.activePump,
+        "Launching new session",
+        `Stopped the running sim-flow session to launch \`${step}.${kind}\`.`,
+      );
+    }
+
+    await this.startStepSession(ctx, stepRef, { resetConversation: true });
   }
 
   private async startAutoSession(
@@ -553,6 +600,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           pump,
           sourceTag: llmConfig.source as LlmSourceTag,
           model: llmConfig.model ?? "",
+          sessionMode: "auto",
+          stepRef: null,
           launchSpecPath: trimmedSpec,
         },
         this.autoSessionDelegate(),
@@ -565,6 +614,68 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         this.pendingAutoLaunch = undefined;
       }
     }
+  }
+
+  private async startStepSession(
+    ctx: { projectDir: string; cli: { binary: string; foundationRoot?: string } },
+    stepRef: ManagedStepRef,
+    options: { resetConversation: boolean; launchTitle?: string; launchBody?: string },
+  ): Promise<void> {
+    const config = vscode.workspace.getConfiguration("sim-flow");
+    const llmConfig = buildPumpLlmConfig(ctx, this.secrets, config);
+
+    const sessionId = randomUUID();
+    const socketPath = reconnectableSocketPath(sessionId);
+    const args = ["session", `${stepRef.step}.${stepRef.kind}`, "--transport-socket", socketPath];
+    if (ctx.cli.foundationRoot) {
+      args.push("--foundation-root", ctx.cli.foundationRoot);
+    }
+    args.push("--project", ctx.projectDir);
+    args.push("--llm-backend", llmConfig.source);
+    if (llmConfig.model) {
+      args.push("--llm-model", llmConfig.model);
+    }
+
+    const context = await this.readPanelContextForProject(ctx.projectDir);
+    let conversation = options.resetConversation
+      ? clearConversationState()
+      : this.readConversation(ctx.projectDir);
+    conversation = appendNote(
+      conversation,
+      options.launchTitle ?? "Step session launched",
+      options.launchBody ??
+        `Started sim-flow session \`${stepRef.step}.${stepRef.kind}\` for \`${path.basename(ctx.projectDir)}\`.`,
+    );
+    await this.persistConversation(ctx.projectDir, conversation);
+    await this.postState(context, conversation);
+
+    const pump = new SocketSessionPump(
+      {
+        sessionId,
+        socketPath,
+        launch: {
+          binary: ctx.cli.binary,
+          args,
+          cwd: ctx.projectDir,
+        },
+      },
+      llmConfig,
+    );
+    await pump.ready();
+    await this.autoSessions.launch(
+      {
+        sessionId,
+        socketPath,
+        projectDir: ctx.projectDir,
+        pump,
+        sourceTag: llmConfig.source as LlmSourceTag,
+        model: llmConfig.model ?? "",
+        sessionMode: "step",
+        stepRef,
+        launchSpecPath: undefined,
+      },
+      this.autoSessionDelegate(),
+    );
   }
 
   private buildState(
@@ -875,10 +986,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       projectDir,
       projectLabel: path.basename(projectDir),
       currentStep,
-      sessionLabel: currentStep ? `${currentStep}.work` : "General chat",
-      statusLine: currentStep
-        ? `Chat with ${base.sourceLabel} while working on ${currentStep}.`
-        : `Direct chat panel backed by ${base.sourceLabel}.`,
+      ...describePanelSession(projectDir, currentStep, base.sourceLabel, this.activePump),
     };
   }
 
@@ -1004,6 +1112,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     ) {
       const relaunch = {
         projectDir: this.activePump.projectDir,
+        sessionMode: this.activePump.sessionMode,
+        stepRef: this.activePump.stepRef,
         launchSpecPath: this.activePump.launchSpecPath,
       };
       await this.stopActivePumpSession(
@@ -1012,18 +1122,30 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         `Stopped the running sim-flow session because the LLM source changed to \`${settings.sourceLabel}\`. Relaunching on the new source.`,
       );
       if (isTerminalLlmSource(settings.source)) {
+        const terminalRelaunchBody =
+          relaunch.sessionMode === "step" && relaunch.stepRef
+            ? `Relaunched sim-flow session \`${relaunch.stepRef.step}.${relaunch.stepRef.kind}\` in the terminal on the new source \`${settings.sourceLabel}\`.`
+            : `Relaunched sim-flow auto in the terminal on the new source \`${settings.sourceLabel}\`.`;
         const conversation = appendNote(
           this.readConversation(relaunch.projectDir),
           "LLM source switched",
-          `Relaunched sim-flow auto in the terminal on the new source \`${settings.sourceLabel}\`.`,
+          terminalRelaunchBody,
         );
         await this.persistConversation(relaunch.projectDir, conversation);
-        await vscode.commands.executeCommand(
-          "sim-flow.runFlowTerminal",
-          cliBackendArgFor(settings.source),
-          relaunch.launchSpecPath ?? "",
-          relaunch.projectDir,
-        );
+        if (relaunch.sessionMode === "step" && relaunch.stepRef) {
+          await vscode.commands.executeCommand(
+            relaunch.stepRef.kind === "work" ? "sim-flow.runStep" : "sim-flow.runCritique",
+            relaunch.stepRef.step,
+            relaunch.projectDir,
+          );
+        } else {
+          await vscode.commands.executeCommand(
+            "sim-flow.runFlowTerminal",
+            cliBackendArgFor(settings.source),
+            relaunch.launchSpecPath ?? "",
+            relaunch.projectDir,
+          );
+        }
         return;
       }
       const ctx = await resolveContext({
@@ -1031,6 +1153,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         showErrors: true,
       });
       if (!ctx) {
+        return;
+      }
+      if (relaunch.sessionMode === "step" && relaunch.stepRef) {
+        await this.startStepSession(ctx, relaunch.stepRef, {
+          resetConversation: false,
+          launchTitle: "LLM source switched",
+          launchBody: `Relaunched sim-flow session \`${relaunch.stepRef.step}.${relaunch.stepRef.kind}\` on the new source \`${settings.sourceLabel}\`.`,
+        });
         return;
       }
       await this.startAutoSession(
@@ -1133,6 +1263,33 @@ interface PanelContext {
   lmstudioBaseUrl: string;
   sessionLabel: string;
   statusLine: string;
+}
+
+function describePanelSession(
+  projectDir: string | null,
+  currentStep: string | null,
+  sourceLabel: string,
+  activeSession: ManagedAutoSessionState | undefined,
+): { sessionLabel: string; statusLine: string } {
+  if (
+    projectDir &&
+    activeSession &&
+    activeSession.projectDir === projectDir &&
+    activeSession.sessionMode === "step" &&
+    activeSession.stepRef
+  ) {
+    const { step, kind } = activeSession.stepRef;
+    return {
+      sessionLabel: `${step}.${kind}`,
+      statusLine: `Step ${step} ${kind} session with ${sourceLabel}.`,
+    };
+  }
+  return {
+    sessionLabel: currentStep ? `${currentStep}.work` : "General chat",
+    statusLine: currentStep
+      ? `Chat with ${sourceLabel} while working on ${currentStep}.`
+      : `Direct chat panel backed by ${sourceLabel}.`,
+  };
 }
 
 function readPanelSettings(): {
