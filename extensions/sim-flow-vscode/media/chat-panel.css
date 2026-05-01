@@ -129,6 +129,12 @@ body {
   border: 1px solid color-mix(in srgb, var(--vscode-button-background) 75%, white);
 }
 
+.pill-offline {
+  color: var(--chat-muted);
+  background: transparent;
+  border: 1px solid var(--chat-border);
+}
+
 .hero-meta {
   display: flex;
   flex-wrap: wrap;

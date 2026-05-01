@@ -864,6 +864,20 @@ tbody tr:hover {
   background: rgba(196, 60, 60, 0.1);
   color: var(--vscode-errorForeground, #c43c3c);
   border: 1px solid rgba(196, 60, 60, 0.3);
+  overflow-wrap: anywhere;
+}
+
+.error pre {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  font-size: 0.95em;
+}
+
+.error code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* ------------------------------------------------------------

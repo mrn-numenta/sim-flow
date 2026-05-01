@@ -98,7 +98,7 @@ function header(state: ChatPanelState): HTMLElement {
     ),
     section(
       "hero-actions",
-      pill(state.isStreaming ? "STREAMING" : "LIVE", state.isStreaming ? "streaming" : "live"),
+      statusPill(state),
       actionButton("Stop", state.canStop, () => {
         send({ type: "stop-conversation" });
       }, "hero-stop"),
@@ -364,6 +364,16 @@ function metaPill(label: string, value: string): HTMLElement {
 
 function pill(text: string, variant: string): HTMLElement {
   return el("span", { class: `pill pill-${variant}` }, text);
+}
+
+function statusPill(state: ChatPanelState): HTMLElement {
+  if (state.isStreaming) {
+    return pill("STREAMING", "streaming");
+  }
+  if (state.canStop) {
+    return pill("LIVE", "live");
+  }
+  return pill("OFFLINE", "offline");
 }
 
 function formatTokenCount(tokens: number): string {
