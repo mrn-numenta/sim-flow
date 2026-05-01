@@ -22,22 +22,27 @@ import {
   CHAT_PANEL_VIEW_ID,
   ChatPanelProvider,
 } from "./chatPanel/host";
+import { AutoSessionManager } from "./chatPanel/autoSessionManager";
 import { DashboardHost } from "./webview/host";
 
 const dashboardHosts = new Map<string, DashboardHost>();
 const terminals = new Map<string, SimFlowTerminal>();
 let chatPanelProvider: ChatPanelProvider | undefined;
+let autoSessionManager: AutoSessionManager | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   console.log("sim-flow: extension activated");
   setBundledRoot(context.extensionUri.fsPath);
+  autoSessionManager = new AutoSessionManager(context.workspaceState);
   chatPanelProvider = new ChatPanelProvider(
     context.extensionUri,
     context.workspaceState,
     context.secrets,
+    autoSessionManager,
   );
 
   context.subscriptions.push(
+    autoSessionManager,
     chatPanelProvider,
     vscode.window.registerWebviewViewProvider(CHAT_PANEL_VIEW_ID, chatPanelProvider),
     vscode.commands.registerCommand("sim-flow.openChatPanel", () => openChatPanel()),

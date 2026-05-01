@@ -20,6 +20,11 @@ import type {
   WebviewMessage,
 } from "./messages";
 import {
+  AutoSessionManager,
+  type AutoSessionDriveDelegate,
+  type ManagedAutoSessionState,
+} from "./autoSessionManager";
+import {
   appendAssistantChunk,
   appendAssistantPlaceholder,
   appendNote,
@@ -49,36 +54,25 @@ interface DirectResponseState {
   stopRequested: boolean;
 }
 
-interface ActivePumpState {
-  projectDir: string;
-  pump: SessionPump;
-  awaitingInput: boolean;
-  assistantId: string | null;
-  pendingPromptEntryId: string | null;
-  pendingRequestTokensEstimate: number | null;
-  currentPhase: string | null;
-  currentTool: string | null;
-  currentArtifact: string | null;
-  sourceTag: LlmSourceTag;
-  model: string;
-  launchSpecPath: string | undefined;
-}
-
 export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private view: vscode.WebviewView | undefined;
   private readonly disposables: vscode.Disposable[] = [];
   private readonly conversations = new Map<string, ChatConversationState>();
   private inFlight: DirectResponseState | undefined;
-  private activePump: ActivePumpState | undefined;
   private disposed = false;
   private refreshing = false;
   private refreshQueued = false;
   private postChain: Promise<void> = Promise.resolve();
 
+  private get activePump(): ManagedAutoSessionState | undefined {
+    return this.autoSessions.getActiveSession();
+  }
+
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly workspaceState: vscode.Memento,
     private readonly secrets: SecretStorage,
+    private readonly autoSessions: AutoSessionManager = new AutoSessionManager(workspaceState),
   ) {
     this.disposables.push(
       vscode.workspace.onDidChangeConfiguration((event) => {
@@ -113,8 +107,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       );
       void this.persistConversation(projectDir, conversation);
     }
-    if (this.activePump) {
-      const projectDir = this.activePump.projectDir;
+    const activeSession = this.autoSessions.getActiveSession();
+    if (activeSession) {
+      const projectDir = activeSession.projectDir;
       const conversation = appendNote(
         this.readConversation(projectDir),
         "Session interrupted",
@@ -126,8 +121,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.inFlight.source.cancel();
       this.inFlight = undefined;
     }
-    this.activePump?.pump.dispose();
-    this.activePump = undefined;
     this.view = undefined;
     for (const d of this.disposables) {
       d.dispose();
@@ -379,8 +372,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
 
     if (this.activePump?.projectDir === context.projectDir) {
-      this.activePump.awaitingInput = false;
-      this.activePump.pump.cancel();
+      if (this.activePump.stopRequested) {
+        return;
+      }
+      this.activePump.stopRequested = true;
       conversation = appendNote(
         conversation,
         "Stopping session",
@@ -388,6 +383,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       );
       await this.persistConversation(context.projectDir, conversation);
       await this.postState(context, conversation);
+      await this.autoSessions.cancel(this.activePump);
     }
   }
 
@@ -508,28 +504,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     await this.persistConversation(ctx.projectDir, conversation);
     await this.postState(context, conversation);
 
-    this.activePump = {
-      projectDir: ctx.projectDir,
-      pump: new SessionPump(
-        {
-          binary: ctx.cli.binary,
-          args,
-          cwd: ctx.projectDir,
-        },
-        llmConfig,
-      ),
-      awaitingInput: false,
-      assistantId: null,
-      pendingPromptEntryId: null,
-      pendingRequestTokensEstimate: null,
-      currentPhase: null,
-      currentTool: null,
-      currentArtifact: null,
-      sourceTag: llmConfig.source as LlmSourceTag,
-      model: llmConfig.model ?? "",
-      launchSpecPath: trimmedSpec,
-    };
-    void this.drivePumpSession(this.activePump);
+    await this.autoSessions.launch(
+      {
+        projectDir: ctx.projectDir,
+        pump: new SessionPump(
+          {
+            binary: ctx.cli.binary,
+            args,
+            cwd: ctx.projectDir,
+          },
+          llmConfig,
+        ),
+        sourceTag: llmConfig.source as LlmSourceTag,
+        model: llmConfig.model ?? "",
+        launchSpecPath: trimmedSpec,
+      },
+      this.autoSessionDelegate(),
+    );
   }
 
   private buildState(
@@ -642,7 +633,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     context: PanelContext,
     prompt: string,
   ): Promise<void> {
-    if (!this.activePump || this.activePump.projectDir !== context.projectDir) {
+    const session = this.activePump;
+    if (!session || session.projectDir !== context.projectDir) {
+      return;
+    }
+    await this.autoSessions.waitForDrive(session);
+    if (!this.activePump || this.activePump !== session || session.projectDir !== context.projectDir) {
       return;
     }
     const started = appendUserPrompt(
@@ -651,40 +647,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       userMeta(context),
       assistantMeta(context),
     );
-    this.activePump.assistantId = started.assistantId;
-    this.activePump.pendingPromptEntryId = started.userId;
-    this.activePump.pendingRequestTokensEstimate = null;
-    this.activePump.awaitingInput = false;
+    session.assistantId = started.assistantId;
+    session.pendingPromptEntryId = started.userId;
+    session.pendingRequestTokensEstimate = null;
+    session.awaitingInput = false;
     await this.persistConversation(context.projectDir, started.state);
     await this.postState(context, started.state);
-    this.activePump.pump.sendUserMessage(prompt);
-    void this.drivePumpSession(this.activePump);
+    await this.autoSessions.resumeWithPrompt(
+      session,
+      prompt,
+      this.autoSessionDelegate(),
+    );
   }
 
-  private async drivePumpSession(session: {
-    projectDir: string;
-    pump: SessionPump;
-    awaitingInput: boolean;
-    assistantId: string | null;
-    pendingPromptEntryId: string | null;
-    pendingRequestTokensEstimate: number | null;
-    currentPhase: string | null;
-    currentTool: string | null;
-    currentArtifact: string | null;
-  }): Promise<void> {
-    const renderer = {
-      markdown: (text: string) => {
-        this.appendPumpMarkdown(session, text);
-      },
-      requestTokensEstimate: (tokens: number) => {
-        this.recordPumpRequestTokensEstimate(session, tokens);
-      },
-    };
-    const result = await session.pump.settle(renderer);
-    if (this.activePump !== session) {
-      return;
-    }
-
+  private async onManagedSessionSettled(
+    session: ManagedAutoSessionState,
+    result: { status: "awaiting-input" | "ended"; endReason?: string; endMessage?: string },
+  ): Promise<void> {
     let conversation = this.readConversation(session.projectDir);
     if (session.assistantId) {
       conversation = completeAssistantTurn(
@@ -697,7 +676,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
 
     if (result.status === "awaiting-input") {
-      session.awaitingInput = true;
+      await this.autoSessions.markAwaitingInput(session);
+      session.stopRequested = false;
       session.pendingPromptEntryId = null;
       await this.persistConversation(session.projectDir, conversation);
       await this.postState(await this.readPanelContextForProject(session.projectDir), conversation);
@@ -705,6 +685,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
 
     session.awaitingInput = false;
+    session.stopRequested = false;
     session.pendingPromptEntryId = null;
     session.pendingRequestTokensEstimate = null;
     session.currentTool = null;
@@ -722,20 +703,27 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         result.endMessage,
       );
     }
-    this.activePump = undefined;
+    await this.autoSessions.clearIfActive(session);
     await this.persistConversation(session.projectDir, conversation);
     await this.postState(await this.readPanelContextForProject(session.projectDir), conversation);
   }
 
+  private autoSessionDelegate(): AutoSessionDriveDelegate {
+    return {
+      markdown: (session, text) => {
+        this.appendPumpMarkdown(session, text);
+      },
+      requestTokensEstimate: (session, tokens) => {
+        this.recordPumpRequestTokensEstimate(session, tokens);
+      },
+      settled: async (session, result) => {
+        await this.onManagedSessionSettled(session, result);
+      },
+    };
+  }
+
   private appendPumpMarkdown(
-    session: {
-      projectDir: string;
-      assistantId: string | null;
-      pendingRequestTokensEstimate: number | null;
-      currentPhase: string | null;
-      currentTool: string | null;
-      currentArtifact: string | null;
-    },
+    session: ManagedAutoSessionState,
     text: string,
   ): void {
     if (!this.activePump || this.activePump !== session || text.length === 0) {
@@ -798,12 +786,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   private recordPumpRequestTokensEstimate(
-    session: {
-      projectDir: string;
-      assistantId: string | null;
-      pendingPromptEntryId: string | null;
-      pendingRequestTokensEstimate: number | null;
-    },
+    session: ManagedAutoSessionState,
     tokens: number,
   ): void {
     if (!this.activePump || this.activePump !== session) {
@@ -957,13 +940,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   private async stopActivePumpSession(
-    session: ActivePumpState,
+    session: ManagedAutoSessionState,
     title: string,
     body: string,
   ): Promise<void> {
+    await this.autoSessions.clearIfActive(session);
     session.awaitingInput = false;
+    session.stopRequested = true;
     session.pump.cancel();
-    this.activePump = undefined;
     const conversation = appendNote(
       this.readConversation(session.projectDir),
       title,

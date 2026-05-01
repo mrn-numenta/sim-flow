@@ -197,3 +197,35 @@ user-visible failures, root causes, and the tests that now guard
     - `does not clear the transcript while a direct reply is active`
     in
     [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).
+
+### Round 10 - Auto Session Manager Refactor
+
+- [x] Detached auto sessions could still win the UI race after project
+  or source switches.
+  - Symptom: during the workspace-scoped session-manager refactor, a
+    cancelled old auto session could still post its final state after a
+    project or source switch, leaving the chat panel pinned to the old
+    project or causing duplicate relaunch behavior.
+  - Root cause: the old session remained manager-active long enough for
+    its settle callback to run, so teardown and relaunch overlapped.
+  - Guard:
+    - `switches projects during an active auto session and stops the
+      old session`
+    - `does not duplicate relaunch when llm source changes and play is
+      pressed immediately`
+    in
+    [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).
+
+- [x] Immediate replies after a source-switch relaunch from
+  `awaiting-input` could lose the resumed assistant output.
+  - Symptom: the reply was routed back into the relaunched auto
+    session, but the assistant's resumed text could disappear while the
+    end note still showed up.
+  - Root cause: the provider created the next user/assistant placeholder
+    before the prior settle callback had fully finished, so the old
+    callback could stomp the new turn's assistant state.
+  - Guard:
+    - `routes an immediate reply back into the relaunched auto session
+      after an llm source switch from awaiting-input`
+    in
+    [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).
