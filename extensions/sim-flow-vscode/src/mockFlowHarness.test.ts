@@ -1281,11 +1281,80 @@ describe("mocked dashboard/chat harness", () => {
     state = latestState(restoredView);
     expect(state?.projectLabel).toBe("example");
     expect(state?.canStop).toBe(false);
-    expect(state?.supportsPromptEntry).toBe(true);
+    expect(state?.supportsPromptEntry).toBe(false);
+    expect(state?.notice).toContain("no longer live");
     expect(transcriptBodies(state!)).toContain(
       "Please choose the grayscale coefficients before continuing.",
     );
     expect(transcriptBodies(state!)).toContain("reloaded or closed");
+  });
+
+  it("does not treat a reply to a restored dead awaiting-input session as direct chat", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const specPath = path.join(exampleDir, "docs", "spec.md");
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("Please choose the grayscale coefficients before continuing.\n");
+        },
+        result: {
+          status: "awaiting-input",
+        },
+      },
+    ]);
+    mock.state.directReplies.set(exampleDir, ["This should never be sent as direct chat."]);
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    mock.state.chatProvider = provider as never;
+    const chatView = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(chatView as never, {} as never, {} as never);
+
+    const dashboardHost = new DashboardHost({
+      extensionUri: { fsPath: "/extension" } as never,
+      projectDir: exampleDir,
+      cli: {} as never,
+      workspaceState: workspaceState as never,
+    });
+    await dashboardHost.open();
+
+    await mock.state.lastDashboardPanel!.webview.emit({
+      type: "run-auto",
+      specPath,
+    });
+    await flushAsyncWork();
+
+    provider.dispose();
+    await flushAsyncWork();
+
+    const restoredProvider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    const restoredView = new mock.FakeWebviewView();
+    await restoredProvider.resolveWebviewView(restoredView as never, {} as never, {} as never);
+    await flushAsyncWork();
+
+    await restoredView.webview.emit({
+      type: "send-prompt",
+      prompt: "Use Rec. 601.",
+    });
+    await flushAsyncWork();
+
+    const state = latestState(restoredView);
+    expect(mock.state.directReplyRequests).toEqual([]);
+    expect(transcriptBodies(state!)).toContain("Relaunch the flow from the dashboard");
+    expect(transcriptBodies(state!)).not.toContain("This should never be sent as direct chat.");
   });
 
   it("routes an immediate reply back into the relaunched auto session after an llm source switch from awaiting-input", async () => {
