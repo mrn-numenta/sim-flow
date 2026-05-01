@@ -142,3 +142,18 @@ user-visible failures, root causes, and the tests that now guard
       during a direct reply`
     in
     [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).
+
+### Round 7 - Reload Persistence Queue Regression Tests
+
+- [x] Restored chat panels could read stale transcript state before the
+  previous provider's final conversation write had finished.
+  - Symptom: if the panel was reloaded while a last-minute transcript
+    persistence write was still in flight, the newly created panel
+    could restore too early and miss the latest interrupted-session
+    note or assistant text.
+  - Root cause: provider disposal kicked off asynchronous
+    `workspaceState.update(...)` writes, but a newly created provider
+    did not wait for those pending writes before its initial refresh.
+  - Guard: `waits for pending conversation persistence before restoring
+    after reload` in
+    [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).

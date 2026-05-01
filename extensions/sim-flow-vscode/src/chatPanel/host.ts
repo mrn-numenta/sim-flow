@@ -39,6 +39,8 @@ import { buildPanelMessages, streamPanelReply, supportsPanelTransport } from "./
 export const CHAT_PANEL_VIEW_ID = "simFlow.chatPanel";
 export const CHAT_PANEL_CONTAINER_ID = "sim-flow-chat-panel";
 
+let pendingConversationWrites: Promise<void> = Promise.resolve();
+
 interface DirectResponseState {
   projectDir: string | null;
   source: vscode.CancellationTokenSource;
@@ -68,6 +70,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   private readonly conversations = new Map<string, ChatConversationState>();
   private inFlight: DirectResponseState | undefined;
   private activePump: ActivePumpState | undefined;
+  private disposed = false;
+  private refreshing = false;
+  private refreshQueued = false;
+  private postChain: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -96,6 +102,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   dispose(): void {
+    this.disposed = true;
+    this.refreshQueued = false;
     if (this.inFlight) {
       const projectDir = this.inFlight.projectDir;
       const conversation = appendNote(
@@ -181,12 +189,29 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   private async refresh(): Promise<void> {
-    if (!this.view) {
+    if (!this.view || this.disposed) {
       return;
     }
-    await this.reconcileModeSwitches();
-    const context = await this.readPanelContext();
-    await this.postState(context, this.readConversation(context.projectDir));
+    if (this.refreshing) {
+      this.refreshQueued = true;
+      return;
+    }
+    this.refreshing = true;
+    try {
+      await waitForPendingConversationWrites();
+      if (!this.view || this.disposed) {
+        return;
+      }
+      await this.reconcileModeSwitches();
+      const context = await this.readPanelContext();
+      await this.postState(context, this.readConversation(context.projectDir));
+    } finally {
+      this.refreshing = false;
+      if (this.refreshQueued && this.view && !this.disposed) {
+        this.refreshQueued = false;
+        void this.refresh();
+      }
+    }
   }
 
   private async sendPrompt(promptRaw: string): Promise<void> {
@@ -573,11 +598,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     projectDir: string | null,
     conversation: ChatConversationState,
   ): Promise<void> {
-    this.rememberConversation(projectDir, conversation);
-    await this.workspaceState.update(
-      conversationStorageKey(projectDir),
-      toStoredConversation(conversation),
-    );
+    const key = conversationStorageKey(projectDir);
+    const stored = toStoredConversation(conversation);
+    this.conversations.set(key, conversation);
+    await queueConversationWrite(async () => {
+      await this.workspaceState.update(key, stored);
+    });
   }
 
   private async postState(
@@ -591,7 +617,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   private async post(message: HostMessage): Promise<void> {
-    await this.view?.webview.postMessage(message);
+    await this.enqueuePost(async () => {
+      await this.view?.webview.postMessage(message);
+    });
   }
 
   private async sendPumpPrompt(
@@ -928,6 +956,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     await this.persistConversation(session.projectDir, conversation);
   }
 
+  private async enqueuePost(task: () => Promise<void>): Promise<void> {
+    const next = this.postChain.catch(() => undefined).then(async () => {
+      if (this.disposed || !this.view) {
+        return;
+      }
+      await task();
+    });
+    this.postChain = next.catch(() => undefined);
+    await next;
+  }
+
   private renderHtml(webview: vscode.Webview): string {
     const nonce = randomNonce();
     const scriptUri = webview.asWebviewUri(
@@ -998,6 +1037,16 @@ function readPanelSettings(): {
 function normalizeSpecPath(specPath: string | undefined): string | undefined {
   const trimmed = specPath?.trim() ?? "";
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function queueConversationWrite(task: () => Promise<void>): Promise<void> {
+  const write = pendingConversationWrites.catch(() => undefined).then(task);
+  pendingConversationWrites = write.catch(() => undefined);
+  return write;
+}
+
+async function waitForPendingConversationWrites(): Promise<void> {
+  await pendingConversationWrites;
 }
 
 async function resolveProjectDirForPanel(): Promise<string | null> {
