@@ -114,7 +114,7 @@ const ui: UiState = {
 };
 
 const FLOW_LOCKED_REASON =
-  "Click Play / Resume first to unlock the step controls for this dashboard session.";
+  "Click Connect first to unlock the step controls for this dashboard session.";
 
 // --------------------------------------------------------------
 // Message wiring
@@ -419,7 +419,7 @@ function renderSettingsTab(): Node[] {
       el(
         "p",
         { class: "muted" },
-        "Show the red end-to-end automated-flow button next to Play / Stop on the Flow tab. Hidden by default because the automated flow walks every step without stopping for review and can burn meaningful LLM credits.",
+        "Show the red end-to-end automated-flow button next to Connect / Disconnect on the Flow tab. Hidden by default because the automated flow walks every step without stopping for review and can burn meaningful LLM credits.",
       ),
       el("div", { class: "settings-row" }, renderFullyAutomatedToggle()),
     ),
@@ -720,16 +720,16 @@ function renderFlowTab(data: DashboardState): Node[] {
 
 function renderAutoFlowRow(): HTMLElement {
   // Two-row control panel:
-  //   row 1: Play (▶) / Stop (■) icon buttons.
+  //   row 1: Connect (🔌) / Disconnect (⏻) icon buttons.
   //   row 2: `Spec:` label + path input + Browse... button.
-  // The CLI driver reads `state.current_step` and proceeds from there,
-  // so Play is also "resume": clicking it after a run that hit a cap /
-  // dropped to interactive picks up where the last run left off. Stop
-  // injects `/exit` over the single-session control socket, which
-  // tells the running claude TUI to leave; the orchestrator then
-  // parks at "waiting for the next dashboard command".
-  const playBtn = actionButton(
-    "▶", // ▶
+  // Connect launches a sim-flow session (or no-ops if one is already
+  // up); it does NOT start running a step on its own -- the user
+  // drives the step rail explicitly. Disconnect injects `/exit` over
+  // the single-session control socket, telling the running claude
+  // TUI to leave; the orchestrator then parks at "waiting for the
+  // next dashboard command".
+  const connectBtn = actionButton(
+    "\u{1F50C}", // 🔌
     "run-auto",
     () => {
       ui.autoRunning = true;
@@ -739,20 +739,20 @@ function renderAutoFlowRow(): HTMLElement {
       render();
     },
   );
-  playBtn.title =
-    "Play / Resume the automated flow. Picks up at `current_step` from state.toml. " +
-    "After clicking Play the step rail and per-step buttons become active.";
-  playBtn.classList.add("auto-run-btn", "auto-icon-btn");
+  connectBtn.title =
+    "Connect to a sim-flow session. Launches the flow if none is running. " +
+    "After connecting, the step rail and per-step buttons become active so you can drive each step explicitly.";
+  connectBtn.classList.add("auto-run-btn", "auto-connect-btn", "auto-icon-btn");
   applyButtonState(
-    playBtn,
+    connectBtn,
     !ui.autoRunning,
     ui.autoRunning
-      ? "Play is disabled while a session is already running."
-      : playBtn.title,
+      ? "Connect is disabled while a session is already attached."
+      : connectBtn.title,
   );
 
-  const stopBtn = actionButton(
-    "■", // ■
+  const disconnectBtn = actionButton(
+    "\u{23FB}", // ⏻
     "stop-auto",
     () => {
       ui.autoRunning = false;
@@ -761,17 +761,17 @@ function renderAutoFlowRow(): HTMLElement {
     },
     "secondary",
   );
-  stopBtn.title =
-    "Stop the automated flow by injecting `/exit` over the control socket. " +
+  disconnectBtn.title =
+    "Disconnect from the sim-flow session by injecting `/exit` over the control socket. " +
     "The running claude TUI exits cleanly; the orchestrator parks waiting for the next command. " +
-    "After Stop the step rail re-locks until you click Play again.";
-  stopBtn.classList.add("auto-stop-btn", "auto-icon-btn");
+    "After Disconnect the step rail re-locks until you Connect again.";
+  disconnectBtn.classList.add("auto-stop-btn", "auto-disconnect-btn", "auto-icon-btn");
   applyButtonState(
-    stopBtn,
+    disconnectBtn,
     ui.autoRunning,
     ui.autoRunning
-      ? stopBtn.title
-      : "Stop is disabled because there is no active session.",
+      ? disconnectBtn.title
+      : "Disconnect is disabled because there is no active session.",
   );
 
   // End-to-end "automated" red play. Hidden unless the user has
@@ -800,7 +800,7 @@ function renderAutoFlowRow(): HTMLElement {
     fullyAutoBtn.classList.add("auto-fully-automated-btn", "auto-icon-btn");
     buttonRowChildren.push(fullyAutoBtn);
   }
-  buttonRowChildren.push(playBtn, stopBtn);
+  buttonRowChildren.push(connectBtn, disconnectBtn);
 
   const specLabel = el(
     "label",
@@ -832,7 +832,7 @@ function renderAutoFlowRow(): HTMLElement {
   const specHelp = el(
     "p",
     { class: "auto-flow-spec-help" },
-    "User-provided specification that drives the flow toward a Foundation model. If left empty, the agent will prompt you for what to model when DM0 starts. After entering the path to your spec (or leaving it blank) click the Play button to proceed.",
+    "User-provided specification that drives the flow toward a Foundation model. If left empty, the agent will prompt you for what to model when DM0 starts. After entering the path to your spec (or leaving it blank) click the Connect button to launch the session, then drive each step from the rail.",
   );
 
   // Stack the help line directly on top of the input within its own
@@ -840,10 +840,10 @@ function renderAutoFlowRow(): HTMLElement {
   // Spec: label or Browse... button to either side.
   const specInputCol = el("div", { class: "auto-spec-input-col" }, specHelp, input);
 
-  // Single row: [Spec:] [help+input column] [Browse...] [▶?] [▶] [■].
+  // Single row: [Spec:] [help+input column] [Browse...] [▶?] [🔌] [⏻].
   // The user reads the inline description, enters a spec (or
-  // browses to one), then clicks Play; Stop sits at the right edge
-  // of the same row so it's always reachable.
+  // browses to one), then clicks Connect; Disconnect sits at the
+  // right edge of the same row so it's always reachable.
   return el(
     "div",
     { class: "auto-flow-row" },

@@ -179,44 +179,30 @@ export class DashboardHost {
         await this.advanceStep(msg.step);
         return;
       case "run-auto": {
-        // CLI-agent sources (`claude-cli`, `codex-cli`,
-        // `gh-copilot-cli`) bypass the chat participant and run
-        // `sim-flow auto --llm-backend <name>` in a per-project
-        // terminal. Their auth comes from the user's existing CLI
-        // login (claude /login, codex login, gh auth login). Other
-        // sources continue to route through the chat pane via
-        // `sim-flow.runFlow` so the orchestrator can render
+        // Connect button. CLI-agent sources (`claude-cli`,
+        // `codex-cli`, `gh-copilot-cli`) bypass the chat participant
+        // and run `sim-flow auto --llm-backend <name>` in a
+        // per-project terminal. Their auth comes from the user's
+        // existing CLI login (claude /login, codex login, gh auth
+        // login). Other sources continue to route through the chat
+        // pane via `sim-flow.runFlow` so the orchestrator can render
         // streaming chunks, tool invocations, and gate results in
         // the same participant. The webview message is still named
         // `run-auto` (matching the underlying `sim-flow auto` CLI
-        // subcommand), but it drives the general "run the flow"
-        // launch -- not specifically the automated red-Play path,
-        // which has its own `run-auto-end-to-end` message.
+        // subcommand), but the dashboard surfaces it as Connect:
+        // it just establishes the session. Driving steps is left
+        // to the explicit step-rail buttons.
         const config = vscode.workspace.getConfiguration("sim-flow");
         const source = (config.get<string>("llm.source") ?? "vscode") as LlmSourceTag;
         if (isTerminalLlmSource(source)) {
           // Single-session mode: if a sim-flow auto process is
           // already running and idle (the user typed `/exit` in
           // claude and sim-flow is "Waiting for the next dashboard
-          // command"), don't spawn a second one. Hand off to "run
-          // current step" via the control socket, which makes the
-          // existing sim-flow respawn claude with the current
-          // step's prompt. Without this guard, Run/Resume just
-          // sends the launch command to a terminal where sim-flow
-          // is already foregrounded -- the keystrokes get swallowed
-          // and nothing happens.
+          // command"), don't spawn a second one and don't auto-run
+          // a step -- just acknowledge the existing connection. The
+          // user drives the next step explicitly from the rail.
           if (controlSocketLikelyPresent(this.options.projectDir)) {
-            const state = await readFlowStateSafe(this.options.projectDir);
-            const ok = await this.tryControlSocketRunStep(
-              state.current_step,
-              "work",
-            );
-            if (ok) {
-              return;
-            }
-            // Socket disappeared between the stat() and the connect
-            // (e.g. user just closed the terminal); fall through to
-            // a fresh launch.
+            return;
           }
           await vscode.commands.executeCommand(
             "sim-flow.runFlowTerminal",
@@ -509,7 +495,7 @@ export class DashboardHost {
         type: "error",
         message: "Generate Verilog needs the agent to be running.",
         detail:
-          "Click the Play (▶) button to launch the flow first, then click " +
+          "Click the Connect (\u{1F50C}) button to launch the flow first, then click " +
           "Generate Verilog. The prompt is injected over the single-session " +
           "control socket, which only exists while sim-flow is running in " +
           "single-session mode.",
@@ -544,11 +530,11 @@ export class DashboardHost {
     if (!controlSocketLikelyPresent(this.options.projectDir)) {
       await this.post({
         type: "error",
-        message: "No running flow to stop.",
+        message: "No running flow to disconnect.",
         detail:
-          "Stop sends `/exit` over the single-session control socket, " +
+          "Disconnect sends `/exit` over the single-session control socket, " +
           "but no socket is reachable for this project. Either the " +
-          "automated flow isn't running (click Play) or it's running " +
+          "flow isn't running (click Connect) or it's running " +
           "in per-step mode, in which case typing `/exit` directly in " +
           "the terminal is the way to stop it.",
       });
