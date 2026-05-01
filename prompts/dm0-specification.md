@@ -1,36 +1,106 @@
 # DM0 - Specification (work session)
 
 You are executing step DM0 (Specification) of the Direct Modeling Flow.
-Don't critique your own output here; that's the critique pass.
 
 ## Goal
 
 Produce or validate `docs/spec.md` at the project root. The specification is
-an input for every later DMF step (DM1 targets, DM2a decomposition,
-DM3 testbench, DM4 analysis). Gaps here ripple forward.
+an input for every later DMF step. The goal is not to exhaustively spell out
+every possible detail; the goal is to capture the design intent clearly enough
+that a competent modeling agent can decompose, pipeline, and implement the
+model without guessing at core behavior.
+
+## Two kinds of "spec"
+
+This step distinguishes between two artifacts that both have "spec" in
+the name; do not conflate them:
+
+- **Source spec** -- the user-supplied document the orchestrator
+  ingested before this session started. When present, it lives at:
+  - `.sim-flow/source-spec.md` (or `.sim-flow/source-spec.<ext>` for
+    PDF / TXT inputs the orchestrator paginated for you)
+  - `.sim-flow/spec-pages/<NNN>.md` -- one file per source page,
+    zero-padded; use these for `read_file` lookups
+  - `.sim-flow/source-spec-toc.md` -- table of contents the
+    orchestrator may have inlined into the system stack
+  Treat the source spec as authoritative input. **Do not modify it**
+  (`.sim-flow/` is the orchestrator's tree).
+- **Sim-flow spec** -- the structured artifact you produce, at
+  `docs/spec.md`. This is your output and the input to every later DM
+  step.
 
 ## Procedure
 
 1. Check whether `docs/spec.md` exists.
-   - If yes, review it against the required content below and fill in
-     any gaps.
-   - If no, draft a skeleton and walk the user through filling it in.
-2. Ensure `docs/spec.md` contains:
-   - **Clock frequency** (e.g., "2 GHz", "1500 MHz") -- must match the
-     regex `\d+\s*(MHz|GHz)`.
-   - **Technology node** (e.g., "7 nm", "5nm") -- must match the regex
-     `\d+\s*nm`.
-   - **Detailed functional description** -- inputs, outputs, the
-     transformation between them. Structured headings preferred.
-   - **Internal and external interfaces** -- port names, widths,
-     protocols, direction, and where they connect.
-   - **Pipelining and hierarchy** -- intended pipeline depth, stage
-     boundaries, and sub-modules.
-   - **Parameterization** -- if the design is parameterizable, list the
-     parameters and their valid ranges.
-3. Do not invent requirements the user has not stated. Flag ambiguities
-   by adding a brief "Open Questions" subsection; do not silently
-   resolve them.
+   - If yes, review it against `docs/spec.md.tmpl` and fill in any
+     missing or incomplete sections.
+   - If no, copy `docs/spec.md.tmpl` to `docs/spec.md` and use the
+     template as the required structure for this step.
+2. Check whether `.sim-flow/source-spec*` exists (for example via
+   `read_file` on `.sim-flow/source-spec-toc.md` or `Glob`).
+   - If yes, the user provided a source document. Read it selectively
+     (use the TOC and per-page files for large specs; do not request
+     everything at once) and fill in `docs/spec.md` from it.
+   - Treat the source spec as authoritative. Do not silently invent
+     requirements that are not supported by the source.
+   - When the source is ambiguous, incomplete, or contradictory, record
+     that in `## Open Questions` and cite source-spec page numbers.
+3. If no source spec was provided, or if the source spec does not answer
+   everything needed to complete `docs/spec.md`, fill in the template as
+   far as you can from the available project artifacts and then:
+   - if `AUTOMATED mode is ACTIVE for this session.`, make your best
+     educated guess for the missing information and record each
+     non-trivial assumption in `## Auto-decisions`
+   - otherwise, prompt the user for the missing information and keep
+     updating `docs/spec.md` until the template is completed as fully as
+     the user can answer
+4. Use the template headings as the required document structure, but use
+   engineering judgement about depth. The template is scaffolding for a
+   clear, consistent spec; it is not a demand that every field be
+   exhaustively detailed. Focus on capturing enough normative information
+   for downstream modeling.
+5. Prefer explicit requirements over inferred detail.
+   - If the source material or user gives a detail explicitly, preserve it.
+   - If two explicit requirements conflict, call that out in
+     `## Open Questions`; do not silently pick one.
+   - If a secondary detail is omitted but can be reasonably inferred
+     without changing architectural behavior, interface semantics, timing
+     intent, or correctness expectations, you may infer it.
+   - If a missing detail would likely cause two competent agents to build
+     materially different models, do not guess silently. Ask the user in
+     manual mode or record an auto-decision in automated mode.
+6. At minimum, `docs/spec.md` must include enough information for later
+   steps to infer the rest reasonably. That usually means:
+   - **Technology node** matching regex `\d+\s*nm`
+   - **Clock frequency** matching regex `\d+\s*(MHz|GHz)`
+   - **Gate budget per cycle** as either:
+     - an explicit target stated by the user or source material, or
+     - enough information to derive a reasonable estimate, which usually
+       means the frequency and technology target above
+   - **External interfaces** with names, widths, protocols, direction,
+     and semantics
+   - **Functional behavior** detailed enough to derive named operations
+     and data movement
+   - **Timing, latency, throughput, and flow-control behavior**
+   - **Pipeline and hierarchy intent**
+   - **Reset / initialization / flush behavior**
+   - **Parameters and valid ranges**, when applicable
+   - **Representative examples or scenarios** detailed enough to trace
+     expected behavior when the design would otherwise be ambiguous
+   - **Open Questions** for unresolved ambiguity and **Auto-decisions**
+     for non-trivial assumptions in automated mode
+7. Remove placeholder text as you replace it with real content. If a
+   section truly does not apply, say so explicitly rather than leaving
+   the placeholder in place.
+8. The gate-budget requirement is hard because DM2 needs it to reason
+   about functional decomposition and pipeline staging. If the user or
+   source material gives an explicit gates-per-cycle or logic-budget
+   target, preserve it. Otherwise, make sure the spec includes the
+   frequency and technology information needed for DM1 to derive a
+   reasonable estimate.
+9. Do not stop after creating a partially filled scaffold. The goal of
+   this step is a model-ready `docs/spec.md` that preserves explicit
+   requirements and makes downstream inference safe and bounded.
 
 ## Output
 

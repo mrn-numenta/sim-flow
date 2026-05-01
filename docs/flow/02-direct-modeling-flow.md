@@ -224,17 +224,25 @@ The work session produces artifacts; the critique session reads those artifacts 
 ```text
 You are executing step DM0 (Specification) of the Direct Modeling Flow.
 
-Read the step instructions provided. The user needs to provide or create a
-specification document (spec.md). Guide them through creating it with all
-required content: clock frequency, technology node, detailed functional
-description, internal and external interfaces, pipelining and hierarchy,
-and parameterization requirements.
+Read the step instructions provided. Produce or validate `docs/spec.md`
+using `docs/spec.md.tmpl` as the required structure:
 
-If spec.md already exists, review it against the requirements and identify
-gaps.
+- if `docs/spec.md` does not exist, copy the template and fill it in
+- if a user-provided source spec was ingested, treat it as authoritative
+  and derive `docs/spec.md` from it
+- preserve explicit requirements faithfully
+- infer only secondary details that a competent modeling agent can
+  reasonably fill in without changing architectural behavior
+- if a missing detail would likely lead to materially different models,
+  ask the user in manual mode or record an auto-decision in automated mode
 
-Report whether the specification is ready to proceed. A separate critique
-session will review your output.
+The goal is a model-ready spec, not an exhaustively detailed one. It must
+include enough information for later steps to decompose, pipeline, and
+implement the design safely. In particular, it must contain either an
+explicit gate-budget-per-cycle target or enough information to derive one,
+usually via frequency plus technology target.
+
+A separate critique session will review your output.
 ```
 
 **Critique prompt (separate critique session):**
@@ -242,14 +250,17 @@ session will review your output.
 ```text
 You are a critique session reviewing the work produced by the DM0 work
 session. Read spec.md and evaluate it:
+- Is the spec clear enough that a competent modeling agent can infer the
+  rest reasonably without guessing at core behavior?
 - Does it specify clock frequency and technology node?
-- Is the functional description detailed enough to decompose into
-  operations?
-- Are all interfaces (internal and external) described?
-- Is pipelining and hierarchy specified?
-- Are parameterization requirements identified (if applicable)?
-- Is anything ambiguous or contradictory?
-- Is anything missing that would block DM1?
+- Does it contain an explicit gate budget per cycle or enough information
+  for DM1 to derive a reasonable estimate?
+- Are interfaces, functional behavior, dataflow, and pipeline intent clear
+  enough for DM2a / DM2b?
+- Are reset, state, flow-control, and exceptional behaviors specified
+  well enough to avoid incorrect modeling assumptions where they matter?
+- Are ambiguities, contradictions, or unresolved conflicts called out
+  explicitly?
 
 Write findings to .sim-flow/critiques/DM0-critique.md. Prefix every
 unresolved issue line with `UNRESOLVED:` and every gate-blocking issue
@@ -261,15 +272,17 @@ line with `BLOCKER:`.
 1. `spec.md` exists and is non-empty
 2. `spec.md` contains a frequency value (regex match for MHz/GHz pattern)
 3. `spec.md` contains a technology node value (regex match for nm pattern)
-4. `.sim-flow/critiques/DM0-critique.md` exists
-5. Critique file does not contain unresolved issues (no lines starting with
+4. `spec.md` contains either an explicit gate-budget-per-cycle target or
+   enough information for DM1 to derive one
+5. `.sim-flow/critiques/DM0-critique.md` exists
+6. Critique file does not contain unresolved issues (no lines starting with
    `UNRESOLVED:` or `BLOCKER:`)
 
 ---
 
 ### DM1: Modeling Setup
 
-**Purpose:** Establish verification targets and testbench requirements.
+**Purpose:** Establish modeling targets and verification strategy.
 
 **Prerequisites:** DM0 gate passed.
 
@@ -282,13 +295,18 @@ You are executing step DM1 (Modeling Setup) of the Direct Modeling Flow.
 
 Read the step instructions provided. Read spec.md and:
 
-1. Parse the specification and establish target throughput, latency, area,
-   and power values. Write these to targets.md with quantitative values
-   and the spec sections they derive from.
-
-2. Define UVM-lite testbench requirements: what Sequencers, Drivers,
-   Monitors, and Scoreboards are needed. What interfaces must the
-   testbench drive and observe. Write to testbench.md.
+1. Create `targets.md` as the target-and-metrics strategy document.
+   Capture explicit, derived, inferred, unconstrained, or deferred
+   targets with provenance, rationale, and measurement method.
+2. Include a gate-budget-per-cycle target or estimate. If the spec gives
+   one explicitly, preserve it. Otherwise derive it from the frequency
+   and technology target and explain the basis.
+3. Create `testbench.md` as the verification-strategy and
+   testbench-architecture document. Describe what behaviors, guarantees,
+   scenarios, observability, and checking strategies the later testbench
+   must support, plus the likely UVM-lite structure.
+4. Do not write the detailed test plan or implement tests here; that
+   belongs in DM3.
 
 A separate critique session will review your output.
 ```
@@ -298,13 +316,15 @@ A separate critique session will review your output.
 ```text
 You are a critique session reviewing the work produced by the DM1 work
 session. Read targets.md, testbench.md, and spec.md and evaluate:
-- Are all targets derived from spec.md? Can each target be traced to a
-  spec requirement?
-- Are the testbench requirements sufficient to verify every target?
-- Is anything from the spec not covered by a target or testbench
-  requirement?
-- Are the testbench component types (Sequencer, Driver, Monitor,
-  Scoreboard) appropriate for the interfaces described in the spec?
+- Does every target trace back to spec.md with appropriate status /
+  provenance?
+- Does `targets.md` include a gate-budget-per-cycle target or estimate,
+  and is its basis reasonable and clearly explained?
+- Is anything important from spec.md missing from the target strategy?
+- Does `testbench.md` describe a real verification strategy, not just a
+  shallow component list?
+- Are the proposed testbench structures appropriate for the interfaces and
+  behaviors described in the spec?
 
 Write findings to .sim-flow/critiques/DM1-critique.md. Prefix unresolved
 issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
@@ -312,9 +332,10 @@ issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
 
 **Gate checks:**
 
-1. `targets.md` exists with quantitative values
-2. `testbench.md` exists with testbench component requirements
-3. `.sim-flow/critiques/DM1-critique.md` exists without blockers
+1. `targets.md` exists with traceable targets, statuses, and rationale
+2. `targets.md` includes a gate-budget-per-cycle target or estimate
+3. `testbench.md` exists with verification-strategy and testbench-architecture content
+4. `.sim-flow/critiques/DM1-critique.md` exists without blockers
 
 ---
 

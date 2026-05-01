@@ -1,0 +1,217 @@
+# Design Specification
+
+## Metadata
+
+- Design name:
+- Version / revision:
+- Spec status: draft | reviewed | approved
+- Author(s):
+- Source document(s):
+- Last updated:
+
+## Purpose And Scope
+
+### Purpose
+
+Describe what the design does in one or two paragraphs.
+
+### Scope
+
+Describe what this model must include.
+
+### Non-goals
+
+Describe what is explicitly out of scope for this model.
+
+## Assumptions And Constraints
+
+### Technology target
+
+- Technology node: `<N nm>`
+- Clock frequency: `<N MHz | N GHz>`
+- Gate budget per cycle: `<explicit value, or "derive from frequency + technology target">`
+
+### Environmental assumptions
+
+Document assumptions about surrounding blocks, traffic patterns, memory system behavior, clocking, reset, or software control.
+
+### Architectural constraints
+
+Document any fixed architectural requirements the model must honor.
+
+## External Interfaces
+
+For each externally visible interface, provide a subsection using the structure below.
+
+### Interface: `<name>`
+
+- Direction: input | output | bidirectional
+- Protocol:
+- Clock domain:
+- Connected peer(s):
+- Purpose:
+
+| Signal / field | Width | Type / encoding | Required | Description |
+| --- | --- | --- | --- | --- |
+| `<signal>` | `<bits>` | `<type>` | yes/no | `<meaning>` |
+
+#### Transaction semantics
+
+Describe what constitutes a request, response, command, packet, beat, flit, or transaction on this interface.
+
+#### Timing and flow control
+
+Describe handshake semantics, backpressure behavior, credit rules, arbitration constraints, ordering requirements, and any cycle-level timing rules.
+
+#### Error and exceptional behavior
+
+Describe malformed input handling, timeouts, retries, drops, stalls, and recovery behavior.
+
+## Internal Interfaces
+
+List the important internal boundaries the model must represent. Use this section when internal pipes, queues, scoreboards, arbiters, or storage interfaces matter to decomposition or pipelining.
+
+### Internal interface: `<name>`
+
+- Source block:
+- Destination block:
+- Purpose:
+- Clock domain:
+
+| Signal / field | Width | Type / encoding | Description |
+| --- | --- | --- | --- |
+| `<signal>` | `<bits>` | `<type>` | `<meaning>` |
+
+#### Semantics
+
+Describe the meaning of the transferred data and any required ordering, hazard, or flow-control behavior.
+
+## Functional Behavior
+
+### End-to-end behavior
+
+Describe the top-level transformation from inputs to outputs.
+
+### Operation flow
+
+List the major operations in execution order. This section should be detailed enough that later steps can decompose the design into named operations without guessing.
+
+1. `<operation name>`: `<purpose>`
+2. `<operation name>`: `<purpose>`
+3. `<operation name>`: `<purpose>`
+
+### Data movement
+
+Describe what data items move between operations, including payload meaning, widths, production and consumption points, and any rate or burst assumptions.
+
+### State and storage
+
+Describe architecturally visible state, queues, tables, buffers, caches, scoreboards, or counters the model must represent.
+
+### Arbitration and scheduling
+
+Describe any arbitration, prioritization, fairness, or scheduling rules that affect behavior or performance.
+
+## Timing, Latency, And Throughput
+
+### Performance intent
+
+Document any throughput, latency, bandwidth, utilization, or initiation-interval expectations.
+
+### Latency expectations
+
+Describe expected end-to-end latency and any important per-stage or per-operation timing requirements.
+
+### Throughput expectations
+
+Describe steady-state throughput, burst behavior, concurrency limits, and any occupancy or buffering expectations.
+
+### Stall and backpressure behavior
+
+Describe what causes stalls, how backpressure propagates, and which operations or interfaces can block one another.
+
+## Pipeline And Hierarchy
+
+### Pipeline intent
+
+Describe intended pipeline depth, stage boundaries, and any mandatory stage placements.
+
+### Hierarchy
+
+Describe the intended sub-modules or major blocks and their responsibilities.
+
+### Clocking
+
+Describe clock domains, clock crossings, synchronizers, FIFOs, or other CDC structures the model must represent.
+
+## Reset, Initialization, Flush, And Drain Behavior
+
+### Reset behavior
+
+Describe reset inputs, reset scope, reset values, and what state is cleared or preserved.
+
+### Initialization
+
+Describe any startup sequencing, training, warm-up, or required preconditions before normal operation.
+
+### Flush and drain
+
+Describe how in-flight work is flushed, drained, canceled, or completed.
+
+## Parameters And Configuration
+
+If the design is parameterizable, list each parameter using the structure below.
+
+### Parameter: `<name>`
+
+- Description:
+- Type:
+- Valid range / values:
+- Default:
+- Behavioral impact:
+
+## Corner Cases And Exceptional Behavior
+
+Document any corner cases that the model must implement explicitly.
+
+- Empty or idle input behavior:
+- Full-buffer behavior:
+- Reordering behavior:
+- Hazard / conflict behavior:
+- Error detection and reporting:
+- Unsupported or reserved encodings:
+- Any other exceptional cases:
+
+## Worked Examples
+
+Provide one or more concrete examples that trace data through the design.
+
+### Example 1: `<name>`
+
+#### Inputs
+
+Describe the input transaction or stimulus.
+
+#### Expected flow
+
+Describe the major operations, state updates, and transfers that should occur.
+
+#### Expected outputs
+
+Describe the output transaction(s), timing, and any observable side effects.
+
+### Example 2: `<name>`
+
+Use this for a corner case, stall case, or error case when applicable.
+
+## Open Questions
+
+List ambiguities, contradictions, or missing information that later steps should not silently resolve.
+
+- `<question>`
+
+## Auto-decisions
+
+When operating without a human in the loop, record each non-trivial assumption here.
+
+- decided `<decision>`; rationale: `<one sentence>`
