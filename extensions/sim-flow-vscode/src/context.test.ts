@@ -11,7 +11,7 @@ interface FakeWorkspaceFolder {
 
 let workspaceFolders: FakeWorkspaceFolder[] = [];
 let findFilesResults: Array<{ fsPath: string }> = [];
-let quickPickResult: { dir: string } | undefined;
+let quickPickResult: { dir?: string; pickKind?: "project" | "new" } | undefined;
 const errorMessages: string[] = [];
 let getConfigurationValue: string | undefined;
 
@@ -54,7 +54,9 @@ vi.mock("./cli", () => ({
   SimFlowCliError: class SimFlowCliError extends Error {},
 }));
 
-const { findProjectCandidates, pickProject, resolveContext } = await import("./context");
+const { PICK_PROJECT_NEW, findProjectCandidates, pickProject, resolveContext } = await import(
+  "./context"
+);
 
 function makeProject(dir: string): void {
   fs.mkdirSync(path.join(dir, ".sim-flow"), { recursive: true });
@@ -135,7 +137,19 @@ describe("pickProject", () => {
   });
 
   it("delegates to QuickPick when multiple candidates exist", async () => {
-    quickPickResult = { dir: "/tmp/b" };
+    quickPickResult = { pickKind: "project", dir: "/tmp/b" };
     expect(await pickProject(["/tmp/a", "/tmp/b"])).toBe("/tmp/b");
+  });
+
+  it("returns the new-project sentinel when the user picks $(plus) New project under allowNew", async () => {
+    quickPickResult = { pickKind: "new" };
+    expect(await pickProject(["/tmp/only-one"], { allowNew: true })).toBe(PICK_PROJECT_NEW);
+  });
+
+  it("does not auto-select the single candidate when allowNew is set", async () => {
+    quickPickResult = { pickKind: "project", dir: "/tmp/only-one" };
+    // Without allowNew this short-circuits with no UI; with allowNew we
+    // always show the picker so the user can choose New project.
+    expect(await pickProject(["/tmp/only-one"], { allowNew: true })).toBe("/tmp/only-one");
   });
 });

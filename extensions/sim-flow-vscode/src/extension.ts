@@ -14,7 +14,7 @@ import {
   SimFlowCli,
   SimFlowCliError,
 } from "./cli";
-import { findProjectCandidates, pickProject, resolveProjectDir } from "./context";
+import { PICK_PROJECT_NEW, findProjectCandidates, pickProject, resolveProjectDir } from "./context";
 import { registerChatParticipant } from "./participant";
 import { SimFlowTerminal } from "./terminal";
 import {
@@ -176,13 +176,15 @@ async function openDashboardForProject(
 async function switchProjectCommand(context: vscode.ExtensionContext): Promise<void> {
   const candidates = await findProjectCandidates();
   if (candidates.length === 0) {
-    void vscode.window.showWarningMessage(
-      "sim-flow: no projects found. Use \"New project...\" to create one.",
-    );
+    await vscode.commands.executeCommand("sim-flow.newProject");
     return;
   }
-  const picked = await pickProject(candidates);
+  const picked = await pickProject(candidates, { allowNew: true });
   if (!picked) {
+    return;
+  }
+  if (picked === PICK_PROJECT_NEW) {
+    await vscode.commands.executeCommand("sim-flow.newProject");
     return;
   }
   await openDashboardForProject(context, picked);
@@ -325,7 +327,15 @@ function defaultProjectDestination(currentProjectDir: string | undefined): strin
 async function selectProjectDir(): Promise<string | undefined> {
   const candidates = await findProjectCandidates();
   if (candidates.length > 0) {
-    return pickProject(candidates);
+    const picked = await pickProject(candidates, { allowNew: true });
+    if (picked === PICK_PROJECT_NEW) {
+      // newProjectCommand opens its own dashboard for the freshly
+      // created project, so we return undefined to skip the caller's
+      // `openDashboardForProject` step.
+      await vscode.commands.executeCommand("sim-flow.newProject");
+      return undefined;
+    }
+    return picked;
   }
   const fallback = resolveProjectDir();
   if (fallback && fs.existsSync(path.join(fallback, ".sim-flow", "state.toml"))) {

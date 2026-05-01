@@ -183,27 +183,65 @@ function isTemplateDir(dir: string): boolean {
 }
 
 /**
- * Prompt the user to pick a project from the given list. If only one
- * candidate exists, returns it immediately with no UI. Returns
+ * Sentinel returned by `pickProject` when the user picks the
+ * "+ New project…" entry that's prepended to the picker under
+ * `options.allowNew`. Callers should dispatch the
+ * `sim-flow.newProject` command in response.
+ */
+export const PICK_PROJECT_NEW = "::sim-flow-pick::new" as const;
+export type PickProjectResult = string | typeof PICK_PROJECT_NEW | undefined;
+
+/**
+ * Prompt the user to pick a project from the given list. With no
+ * options, a single candidate auto-resolves with no UI. When
+ * `allowNew` is true, the picker is always shown and a leading
+ * "+ New project…" item lets the user request a fresh project; in
+ * that case `pickProject` returns `PICK_PROJECT_NEW`. Returns
  * `undefined` when the user cancels.
  */
-export async function pickProject(candidates: string[]): Promise<string | undefined> {
+export async function pickProject(
+  candidates: string[],
+  options: { allowNew?: boolean } = {},
+): Promise<PickProjectResult> {
+  const allowNew = options.allowNew ?? false;
   if (candidates.length === 0) {
     return undefined;
   }
-  if (candidates.length === 1) {
+  if (candidates.length === 1 && !allowNew) {
     return candidates[0];
   }
-  const items = candidates.map((dir) => ({
-    label: workspaceRelativeLabel(dir),
-    description: dir,
-    dir,
-  }));
+  interface ProjectPickItem extends vscode.QuickPickItem {
+    pickKind: "project" | "new";
+    dir?: string;
+  }
+  const items: ProjectPickItem[] = [];
+  if (allowNew) {
+    items.push({
+      pickKind: "new",
+      label: "$(plus) New project…",
+      description: "Create a new sim-flow project",
+      alwaysShow: true,
+    });
+  }
+  for (const dir of candidates) {
+    items.push({
+      pickKind: "project",
+      dir,
+      label: workspaceRelativeLabel(dir),
+      description: dir,
+    });
+  }
   const picked = await vscode.window.showQuickPick(items, {
     placeHolder: "Select a sim-flow project",
     matchOnDescription: true,
   });
-  return picked?.dir;
+  if (!picked) {
+    return undefined;
+  }
+  if (picked.pickKind === "new") {
+    return PICK_PROJECT_NEW;
+  }
+  return picked.dir;
 }
 
 function workspaceRelativeLabel(dir: string): string {
