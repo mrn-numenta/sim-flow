@@ -1559,6 +1559,111 @@ describe("mocked dashboard/chat harness", () => {
     expect(state?.transcript).toEqual([]);
   });
 
+  it("accepts a new prompt immediately after switching projects during a direct reply", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const secondDir = createProjectFromFixture(tmpRoot, "other-project");
+    mock.state.directReplies.set(exampleDir, [
+      "Example first chunk.",
+      {
+        text: " Example trailing chunk should be dropped.",
+        waitForSignal: "release-immediate-project-switch-direct",
+      },
+    ]);
+    mock.state.directReplies.set(secondDir, ["Other project reply."]);
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+      { uri: { fsPath: secondDir }, name: "other-project", index: 1 },
+    ];
+    mock.state.currentProjectDir = exampleDir;
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    const view = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(view as never, {} as never, {} as never);
+
+    const originalSend = view.webview.emit({
+      type: "send-prompt",
+      prompt: "Summarize example.",
+    });
+    await flushAsyncWork();
+
+    mock.state.currentProjectDir = secondDir;
+    const projectSwitch = mock.fireActiveEditorChange();
+    const secondSend = view.webview.emit({
+      type: "send-prompt",
+      prompt: "Summarize other project.",
+    });
+    mock.resolveSignal("release-immediate-project-switch-direct");
+    await originalSend;
+    await projectSwitch;
+    await secondSend;
+    await flushAsyncWork();
+
+    const state = latestState(view);
+    expect(state?.projectLabel).toBe("other-project");
+    expect(transcriptBodies(state!)).toContain("Other project reply.");
+
+    mock.state.currentProjectDir = exampleDir;
+    await mock.fireActiveEditorChange();
+    await flushAsyncWork();
+
+    const exampleState = latestState(view);
+    expect(transcriptBodies(exampleState!)).not.toContain("Example trailing chunk should be dropped.");
+  });
+
+  it("accepts a new prompt immediately after switching llm sources during a direct reply", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    mock.state.directReplies.set(exampleDir, [
+      "VS Code chunk.",
+      {
+        text: " VS Code trailing chunk should be dropped.",
+        waitForSignal: "release-immediate-source-switch-direct",
+      },
+    ]);
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.config.set("llm.source", "vscode");
+
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      new mock.FakeMemento() as never,
+      { get: async () => undefined },
+    );
+    const view = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(view as never, {} as never, {} as never);
+
+    const originalSend = view.webview.emit({
+      type: "send-prompt",
+      prompt: "First prompt.",
+    });
+    await flushAsyncWork();
+
+    mock.state.config.set("llm.source", "ollama");
+    mock.state.config.set("llm.model", "llama3.1");
+    mock.state.directReplies.set(exampleDir, ["Reply from Ollama after switch."]);
+    const sourceSwitch = mock.fireConfigurationChange("llm.source", "llm.model");
+    const secondSend = view.webview.emit({
+      type: "send-prompt",
+      prompt: "Second prompt.",
+    });
+    mock.resolveSignal("release-immediate-source-switch-direct");
+    await originalSend;
+    await sourceSwitch;
+    await secondSend;
+    await flushAsyncWork();
+
+    const state = latestState(view);
+    expect(state?.sourceLabel).toContain("Ollama");
+    expect(transcriptBodies(state!)).toContain("Reply from Ollama after switch.");
+    expect(transcriptBodies(state!)).not.toContain("VS Code trailing chunk should be dropped.");
+  });
+
   it("resumes a mocked auto session after the orchestrator asks for input", async () => {
     const exampleDir = createProjectFromFixture(tmpRoot, "example");
     const specPath = path.join(exampleDir, "docs", "spec.md");
