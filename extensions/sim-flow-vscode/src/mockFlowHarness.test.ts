@@ -580,6 +580,10 @@ function transcriptBodies(state: { transcript: Array<{ kind: string; body?: stri
     .join("\n");
 }
 
+function countOccurrences(text: string, needle: string): number {
+  return text.split(needle).length - 1;
+}
+
 async function flushAsyncWork(rounds = 4): Promise<void> {
   for (let i = 0; i < rounds; i += 1) {
     await Promise.resolve();
@@ -930,6 +934,156 @@ describe("mocked dashboard/chat harness", () => {
     expect(transcriptBodies(state!)).toContain("new source");
     expect(transcriptBodies(state!)).toContain("Relaunched on Ollama.");
     expect(state?.canStop).toBe(false);
+  });
+
+  it("does not duplicate relaunch when llm source changes and play is pressed immediately", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const specPath = path.join(exampleDir, "docs", "spec.md");
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+    mock.state.config.set("llm.source", "vscode");
+
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("Initial source is still running.\n");
+        },
+        waitForCancel: true,
+        result: {
+          status: "ended",
+        },
+      },
+    ]);
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    mock.state.chatProvider = provider as never;
+    const chatView = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(chatView as never, {} as never, {} as never);
+
+    const dashboardHost = new DashboardHost({
+      extensionUri: { fsPath: "/extension" } as never,
+      projectDir: exampleDir,
+      cli: {} as never,
+      workspaceState: workspaceState as never,
+    });
+    await dashboardHost.open();
+
+    await mock.state.lastDashboardPanel!.webview.emit({
+      type: "run-auto",
+      specPath,
+    });
+    await flushAsyncWork();
+
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("Relaunched on Ollama.\n");
+        },
+        result: {
+          status: "ended",
+          endReason: "completed",
+          endMessage: "Relaunched on the new source.",
+        },
+      },
+    ]);
+    mock.state.config.set("llm.source", "ollama");
+    mock.state.config.set("llm.model", "llama3.1");
+
+    const sourceSwitch = mock.fireConfigurationChange("llm.source", "llm.model");
+    const rerun = mock.state.lastDashboardPanel!.webview.emit({
+      type: "run-auto",
+      specPath,
+    });
+    await sourceSwitch;
+    await rerun;
+    await flushAsyncWork();
+
+    const state = latestState(chatView);
+    const bodies = transcriptBodies(state!);
+    expect(mock.state.pumpLaunches).toHaveLength(2);
+    expect(countOccurrences(bodies, "Relaunched on Ollama.")).toBe(1);
+    expect(countOccurrences(bodies, "Relaunched on the new source.")).toBe(1);
+  });
+
+  it("does not duplicate relaunch when the project changes and play is pressed immediately", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const secondDir = createProjectFromFixture(tmpRoot, "other-project");
+    const secondSpecPath = path.join(secondDir, "docs", "spec.md");
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+      { uri: { fsPath: secondDir }, name: "other-project", index: 1 },
+    ];
+
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("Example session still running.\n");
+        },
+        waitForCancel: true,
+        result: {
+          status: "ended",
+        },
+      },
+    ]);
+    mock.state.pumpScripts.set(secondDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("Other project relaunched session.\n");
+        },
+        result: {
+          status: "ended",
+          endReason: "completed",
+          endMessage: "Other project session completed.",
+        },
+      },
+    ]);
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    mock.state.chatProvider = provider as never;
+    const chatView = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(chatView as never, {} as never, {} as never);
+
+    const dashboardHost = new DashboardHost({
+      extensionUri: { fsPath: "/extension" } as never,
+      projectDir: exampleDir,
+      cli: {} as never,
+      workspaceState: workspaceState as never,
+    });
+    await dashboardHost.open();
+
+    await mock.state.lastDashboardPanel!.webview.emit({
+      type: "run-auto",
+      specPath: path.join(exampleDir, "docs", "spec.md"),
+    });
+    await flushAsyncWork();
+
+    mock.state.currentProjectDir = secondDir;
+    const projectSwitch = mock.fireActiveEditorChange();
+    const rerun = provider.launchAutoSession(secondSpecPath, secondDir);
+    await projectSwitch;
+    await rerun;
+    await flushAsyncWork();
+
+    const state = latestState(chatView);
+    const bodies = transcriptBodies(state!);
+    expect(mock.state.pumpLaunches).toHaveLength(2);
+    expect(mock.state.pumpLaunches[0]?.projectDir).toBe(exampleDir);
+    expect(mock.state.pumpLaunches[1]?.projectDir).toBe(secondDir);
+    expect(state?.projectLabel).toBe("other-project");
+    expect(countOccurrences(bodies, "Other project relaunched session.")).toBe(1);
   });
 
   it("switches from an api source to a cli source by stopping the panel session and routing to terminal", async () => {
@@ -1895,6 +2049,62 @@ describe("mocked dashboard/chat harness", () => {
     expect(transcriptBodies(state!)).not.toContain(
       "Working through the initial grayscale decomposition.",
     );
+  });
+
+  it("does not append duplicate stop notes when stop is pressed repeatedly during an auto session", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const specPath = path.join(exampleDir, "docs", "spec.md");
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("**Step `DM0` auto session** — mock orchestrator.\n\n");
+          renderer.markdown("Working through the initial grayscale decomposition.\n");
+        },
+        waitForCancel: true,
+        result: {
+          status: "ended",
+        },
+      },
+    ]);
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    mock.state.chatProvider = provider as never;
+    const chatView = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(chatView as never, {} as never, {} as never);
+
+    const dashboardHost = new DashboardHost({
+      extensionUri: { fsPath: "/extension" } as never,
+      projectDir: exampleDir,
+      cli: {} as never,
+      workspaceState: workspaceState as never,
+    });
+    await dashboardHost.open();
+
+    await mock.state.lastDashboardPanel!.webview.emit({
+      type: "run-auto",
+      specPath,
+    });
+    await flushAsyncWork();
+
+    await chatView.webview.emit({ type: "stop-conversation" });
+    await chatView.webview.emit({ type: "stop-conversation" });
+    await chatView.webview.emit({ type: "refresh" });
+    await flushAsyncWork();
+
+    const state = latestState(chatView);
+    const bodies = transcriptBodies(state!);
+    expect(countOccurrences(bodies, "Cancellation requested for the running sim-flow session.")).toBe(1);
+    expect(countOccurrences(bodies, "Stopped the running sim-flow session.")).toBe(1);
   });
 
   it("stops an in-flight direct panel reply without losing the stop note", async () => {
