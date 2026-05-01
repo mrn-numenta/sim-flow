@@ -562,6 +562,9 @@ function latestState(view: InstanceType<typeof mock.FakeWebviewView>) {
     | {
         projectLabel: string;
         currentStep: string | null;
+        currentPhase: string | null;
+        currentTool: string | null;
+        currentArtifact: string | null;
         notice: string;
         canStop: boolean;
         supportsPromptEntry: boolean;
@@ -738,6 +741,52 @@ describe("mocked dashboard/chat harness", () => {
     expect(transcriptBodies(state!)).not.toContain("Other reply.");
   });
 
+  it("keeps token totals isolated per project when switching and returning", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const secondDir = createProjectFromFixture(tmpRoot, "other-project");
+    mock.state.directReplies.set(exampleDir, ["Example reply."]);
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+      { uri: { fsPath: secondDir }, name: "other-project", index: 1 },
+    ];
+    mock.state.currentProjectDir = exampleDir;
+
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      new mock.FakeMemento() as never,
+      { get: async () => undefined },
+    );
+    const view = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(view as never, {} as never, {} as never);
+
+    await view.webview.emit({ type: "send-prompt", prompt: "Hello from example" });
+    await flushAsyncWork();
+
+    let state = latestState(view);
+    const exampleInput = state?.totalInputTokensEstimate ?? 0;
+    const exampleOutput = state?.totalOutputTokensEstimate ?? 0;
+    expect(exampleInput).toBeGreaterThan(0);
+    expect(exampleOutput).toBeGreaterThan(0);
+
+    mock.state.currentProjectDir = secondDir;
+    await view.webview.emit({ type: "refresh" });
+    await flushAsyncWork();
+
+    state = latestState(view);
+    expect(state?.projectLabel).toBe("other-project");
+    expect(state?.totalInputTokensEstimate).toBe(0);
+    expect(state?.totalOutputTokensEstimate).toBe(0);
+
+    mock.state.currentProjectDir = exampleDir;
+    await view.webview.emit({ type: "refresh" });
+    await flushAsyncWork();
+
+    state = latestState(view);
+    expect(state?.projectLabel).toBe("example");
+    expect(state?.totalInputTokensEstimate).toBe(exampleInput);
+    expect(state?.totalOutputTokensEstimate).toBe(exampleOutput);
+  });
+
   it("switches projects during an active auto session and stops the old session", async () => {
     const exampleDir = createProjectFromFixture(tmpRoot, "example");
     const secondDir = createProjectFromFixture(tmpRoot, "other-project");
@@ -805,6 +854,73 @@ describe("mocked dashboard/chat harness", () => {
     state = latestState(chatView);
     expect(state?.projectLabel).toBe("example");
     expect(transcriptBodies(state!)).toContain("active project changed");
+  });
+
+  it("does not leak phase, tool, or artifact header state to the new project after an auto-session switch", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const secondDir = createProjectFromFixture(tmpRoot, "other-project");
+    const specPath = path.join(exampleDir, "docs", "spec.md");
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+      { uri: { fsPath: secondDir }, name: "other-project", index: 1 },
+    ];
+
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("_Phases:_ `discover` -> `implement`\n");
+          renderer.markdown("**Phase:** `discover`\n");
+          renderer.markdown("_Tool `read_file` (docs/spec.md) -> ok (12 ms)._\n");
+          renderer.markdown("_Wrote `docs/plan.md` (128 bytes)._\n");
+          renderer.markdown("Example session still running.\n");
+        },
+        waitForCancel: true,
+        result: {
+          status: "ended",
+        },
+      },
+    ]);
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    mock.state.chatProvider = provider as never;
+    const chatView = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(chatView as never, {} as never, {} as never);
+
+    const dashboardHost = new DashboardHost({
+      extensionUri: { fsPath: "/extension" } as never,
+      projectDir: exampleDir,
+      cli: {} as never,
+      workspaceState: workspaceState as never,
+    });
+    await dashboardHost.open();
+
+    await mock.state.lastDashboardPanel!.webview.emit({
+      type: "run-auto",
+      specPath,
+    });
+    await flushAsyncWork();
+
+    let state = latestState(chatView);
+    expect(state?.currentPhase).toBe("discover");
+    expect(state?.currentTool).toContain("read_file");
+    expect(state?.currentArtifact).toContain("docs/plan.md");
+
+    mock.state.currentProjectDir = secondDir;
+    await mock.fireActiveEditorChange();
+    await flushAsyncWork();
+
+    state = latestState(chatView);
+    expect(state?.projectLabel).toBe("other-project");
+    expect(state?.currentPhase).toBeNull();
+    expect(state?.currentTool).toBeNull();
+    expect(state?.currentArtifact).toBeNull();
+    expect(state?.transcript).toEqual([]);
   });
 
   it("ignores duplicate Play for the same active auto session", async () => {
@@ -2337,6 +2453,9 @@ describe("mocked dashboard/chat harness", () => {
 
     state = latestState(chatView);
     expect(state?.canStop).toBe(false);
+    expect(state?.currentPhase).toBeNull();
+    expect(state?.currentTool).toBeNull();
+    expect(state?.currentArtifact).toBeNull();
     expect(transcriptBodies(state!)).toContain("Cancellation requested for the running sim-flow session.");
     expect(transcriptBodies(state!)).toContain("Stopped the running sim-flow session.");
 
