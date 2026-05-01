@@ -44,6 +44,7 @@ interface DirectResponseState {
   source: vscode.CancellationTokenSource;
   sourceTag: LlmSourceTag;
   model: string;
+  stopRequested: boolean;
 }
 
 interface ActivePumpState {
@@ -248,6 +249,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       source,
       sourceTag: context.source,
       model: context.model,
+      stopRequested: false,
     };
     await this.postState(context, conversation);
 
@@ -321,6 +323,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     let conversation = this.readConversation(context.projectDir);
 
     if (this.inFlight?.projectDir === context.projectDir) {
+      if (this.inFlight.stopRequested) {
+        return;
+      }
+      this.inFlight.stopRequested = true;
       this.inFlight.source.cancel();
       conversation = appendNote(
         conversation,

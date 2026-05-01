@@ -109,3 +109,17 @@ user-visible failures, root causes, and the tests that now guard
       stale response`
     in
     [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).
+
+### Round 5 - Direct Reply Stop-Race Regression Tests
+
+- [x] Repeated Stop presses during a direct reply appended duplicate
+  cancellation notes.
+  - Symptom: pressing Stop multiple times before the first cancellation
+    fully unwound could add the same "Cancellation requested for the
+    current model response." note more than once.
+  - Root cause: the direct-response state had no "stop already
+    requested" guard, so each Stop action appended a new note while the
+    same in-flight request was still canceling.
+  - Guard: `does not append duplicate stop notes when stop is pressed
+    repeatedly during a direct reply` in
+    [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).
