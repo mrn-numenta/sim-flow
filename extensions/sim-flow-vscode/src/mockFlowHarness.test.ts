@@ -1129,6 +1129,79 @@ describe("mocked dashboard/chat harness", () => {
     expect(state?.canStop).toBe(false);
   });
 
+  it("switches llm model by stopping and relaunching the active auto session on the same source", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const specPath = path.join(exampleDir, "docs", "spec.md");
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+    mock.state.config.set("llm.source", "ollama");
+    mock.state.config.set("llm.model", "llama3.1");
+
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("Initial Ollama model is still running.\n");
+        },
+        waitForCancel: true,
+        result: {
+          status: "ended",
+        },
+      },
+    ]);
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    mock.state.chatProvider = provider as never;
+    const chatView = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(chatView as never, {} as never, {} as never);
+
+    const dashboardHost = new DashboardHost({
+      extensionUri: { fsPath: "/extension" } as never,
+      projectDir: exampleDir,
+      cli: {} as never,
+      workspaceState: workspaceState as never,
+    });
+    await dashboardHost.open();
+
+    await mock.state.lastDashboardPanel!.webview.emit({
+      type: "run-auto",
+      specPath,
+    });
+    await flushAsyncWork();
+
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("Relaunched on llama3.2.\n");
+        },
+        result: {
+          status: "ended",
+          endReason: "completed",
+          endMessage: "Relaunched on the new model.",
+        },
+      },
+    ]);
+    mock.state.config.set("llm.model", "llama3.2");
+
+    await mock.fireConfigurationChange("llm.model");
+    await flushAsyncWork();
+
+    const state = latestState(chatView);
+    expect(mock.state.pumpLaunches).toHaveLength(2);
+    expect(mock.state.pumpLaunches[0]?.llmSource).toBe("ollama");
+    expect(mock.state.pumpLaunches[0]?.llmModel).toBe("llama3.1");
+    expect(mock.state.pumpLaunches[1]?.llmSource).toBe("ollama");
+    expect(mock.state.pumpLaunches[1]?.llmModel).toBe("llama3.2");
+    expect(transcriptBodies(state!)).toContain("new source");
+    expect(transcriptBodies(state!)).toContain("Relaunched on llama3.2.");
+  });
+
   it("does not duplicate relaunch when llm source changes and play is pressed immediately", async () => {
     const exampleDir = createProjectFromFixture(tmpRoot, "example");
     const specPath = path.join(exampleDir, "docs", "spec.md");
@@ -1971,6 +2044,68 @@ describe("mocked dashboard/chat harness", () => {
     state = latestState(view);
     expect(mock.state.directReplyRequests.at(-1)?.source).toBe("ollama");
     expect(transcriptBodies(state!)).toContain("Reply from Ollama.");
+  });
+
+  it("switches llm model during a direct panel reply and resumes on the new model with the same source", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    mock.state.directReplies.set(exampleDir, [
+      "Direct first chunk.",
+      {
+        text: " Direct second chunk should be dropped after model change.",
+        waitForSignal: "release-model-switch-direct",
+      },
+    ]);
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.config.set("llm.source", "ollama");
+    mock.state.config.set("llm.model", "llama3.1");
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    const view = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(view as never, {} as never, {} as never);
+
+    const sendPromise = view.webview.emit({
+      type: "send-prompt",
+      prompt: "Summarize example.",
+    });
+    await flushAsyncWork();
+
+    let state = latestState(view);
+    expect(state?.sourceLabel).toContain("Ollama");
+    expect(transcriptBodies(state!)).toContain("Direct first chunk.");
+
+    mock.state.config.set("llm.model", "llama3.2");
+    await mock.fireConfigurationChange("llm.model");
+    await flushAsyncWork();
+    mock.resolveSignal("release-model-switch-direct");
+    await sendPromise;
+    await flushAsyncWork();
+
+    state = latestState(view);
+    expect(state?.sourceLabel).toContain("Ollama");
+    expect(transcriptBodies(state!)).toContain("LLM source changed");
+    expect(transcriptBodies(state!)).not.toContain(
+      "Direct second chunk should be dropped after model change.",
+    );
+
+    mock.state.directReplies.set(exampleDir, ["Reply from llama3.2."]);
+    await view.webview.emit({
+      type: "send-prompt",
+      prompt: "Summarize again.",
+    });
+    await flushAsyncWork();
+
+    state = latestState(view);
+    expect(mock.state.directReplyRequests.at(-1)?.source).toBe("ollama");
+    expect(mock.state.directReplyRequests.at(-1)?.model).toBe("llama3.2");
+    expect(transcriptBodies(state!)).toContain("Reply from llama3.2.");
   });
 
   it("surfaces an unsupported-source note instead of sending panel chat on terminal backends", async () => {
