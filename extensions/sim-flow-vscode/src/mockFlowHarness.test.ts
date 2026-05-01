@@ -32,6 +32,24 @@ const mock = vi.hoisted(() => {
     cancelResult?: { status: "ended"; endReason?: string; endMessage?: string };
     result: { status: "awaiting-input" | "ended"; endReason?: string; endMessage?: string };
   };
+  type PumpSharedSession = {
+    projectDir: string;
+    turns: PumpTurn[];
+    index: number;
+    cancelled: boolean;
+    cancelWaiters: Array<() => void>;
+    args: string[];
+    llmSource: string | undefined;
+    llmModel: string | undefined;
+    sentMessages: string[];
+    history: Array<
+      | { kind: "markdown"; text: string }
+      | { kind: "requestTokensEstimate"; tokens: number }
+    >;
+    pendingResult:
+      | { status: "awaiting-input" | "ended"; endReason?: string; endMessage?: string }
+      | null;
+  };
 
   function createDeferred(): {
     promise: Promise<void>;
@@ -162,63 +180,119 @@ const mock = vi.hoisted(() => {
 
   class FakeSessionPump {
     readonly projectDir: string;
-    readonly sentMessages: string[] = [];
-    private readonly turns: PumpTurn[];
-    private index = 0;
-    private cancelled = false;
-    private readonly cancelWaiters: Array<() => void> = [];
+    readonly sentMessages: string[];
     readonly args: string[];
     readonly llmSource: string | undefined;
     readonly llmModel: string | undefined;
+    private readonly shared: PumpSharedSession;
+    private replayed = false;
 
     constructor(
-      options: { cwd: string; args?: string[] },
+      options: {
+        cwd?: string;
+        args?: string[];
+        launch?: { cwd: string; args?: string[] };
+        socketPath?: string;
+      },
       llmConfig?: { source?: string; model?: string },
     ) {
-      this.projectDir = options.cwd;
-      this.turns = state.pumpScripts.get(this.projectDir) ?? [];
-      this.args = options.args ?? [];
-      this.llmSource = llmConfig?.source;
-      this.llmModel = llmConfig?.model;
+      this.projectDir = options.launch?.cwd ?? options.cwd ?? "";
+      const args = options.launch?.args ?? options.args ?? [];
+      const socketPath = options.socketPath;
+      const launchKey = socketPath ?? this.projectDir;
+      const shouldCountAsLaunch = !!options.launch || !socketPath;
+      if (shouldCountAsLaunch || !state.reconnectablePumps.has(launchKey)) {
+        const shared: PumpSharedSession = {
+          projectDir: this.projectDir,
+          turns: state.pumpScripts.get(this.projectDir) ?? [],
+          index: 0,
+          cancelled: false,
+          cancelWaiters: [],
+          args: [...args],
+          llmSource: llmConfig?.source,
+          llmModel: llmConfig?.model,
+          sentMessages: [],
+          history: [],
+          pendingResult: null,
+        };
+        state.reconnectablePumps.set(launchKey, shared);
+        if (shouldCountAsLaunch) {
+          state.pumpLaunches.push({
+            projectDir: this.projectDir,
+            args: [...args],
+            llmSource: llmConfig?.source,
+            llmModel: llmConfig?.model,
+          });
+        }
+      }
+      this.shared = state.reconnectablePumps.get(launchKey)!;
+      this.sentMessages = this.shared.sentMessages;
+      this.args = this.shared.args;
+      this.llmSource = this.shared.llmSource;
+      this.llmModel = this.shared.llmModel;
       state.pumpInstances.set(this.projectDir, this);
-      state.pumpLaunches.push({
-        projectDir: this.projectDir,
-        args: [...this.args],
-        llmSource: this.llmSource,
-        llmModel: this.llmModel,
-      });
+    }
+
+    async ready(): Promise<void> {
+      return;
     }
 
     async settle(renderer: {
       markdown(text: string): void;
       requestTokensEstimate?(tokens: number): void;
     }): Promise<{ status: "awaiting-input" | "ended"; endReason?: string; endMessage?: string }> {
-      const turn = this.turns[this.index++] ?? { result: { status: "ended" as const } };
-      await turn.onSettle?.(renderer);
-      if (turn.waitForCancel && !this.cancelled) {
+      if (!this.replayed) {
+        for (const item of this.shared.history) {
+          if (item.kind === "markdown") {
+            renderer.markdown(item.text);
+          } else {
+            renderer.requestTokensEstimate?.(item.tokens);
+          }
+        }
+        this.replayed = true;
+      }
+      if (this.shared.pendingResult) {
+        return this.shared.pendingResult;
+      }
+      const turn = this.shared.turns[this.shared.index++] ?? { result: { status: "ended" as const } };
+      const recordingRenderer = {
+        markdown: (text: string) => {
+          this.shared.history.push({ kind: "markdown", text });
+          renderer.markdown(text);
+        },
+        requestTokensEstimate: (tokens: number) => {
+          this.shared.history.push({ kind: "requestTokensEstimate", tokens });
+          renderer.requestTokensEstimate?.(tokens);
+        },
+      };
+      await turn.onSettle?.(recordingRenderer);
+      if (turn.waitForCancel && !this.shared.cancelled) {
         await new Promise<void>((resolve) => {
-          this.cancelWaiters.push(resolve);
+          this.shared.cancelWaiters.push(resolve);
         });
       }
-      if (turn.waitForCancel && this.cancelled) {
-        return (
+      if (turn.waitForCancel && this.shared.cancelled) {
+        const result =
           turn.cancelResult ?? {
             status: "ended" as const,
             endReason: "cancelled",
             endMessage: "Mock session cancelled.",
-          }
-        );
+          };
+        this.shared.pendingResult = result;
+        return result;
       }
+      this.shared.pendingResult = turn.result;
       return turn.result;
     }
 
     sendUserMessage(text: string): void {
-      this.sentMessages.push(text);
+      this.shared.sentMessages.push(text);
+      this.shared.pendingResult = null;
     }
 
     cancel(): void {
-      this.cancelled = true;
-      for (const resolve of this.cancelWaiters.splice(0)) {
+      this.shared.cancelled = true;
+      for (const resolve of this.shared.cancelWaiters.splice(0)) {
         resolve();
       }
     }
@@ -235,6 +309,7 @@ const mock = vi.hoisted(() => {
     projectStates: new Map<string, unknown>(),
     directReplies: new Map<string, DirectReplyChunk[]>(),
     pumpScripts: new Map<string, PumpTurn[]>(),
+    reconnectablePumps: new Map<string, PumpSharedSession>(),
     pumpInstances: new Map<string, FakeSessionPump>(),
     executedCommands: [] as Array<{ command: string; args: unknown[] }>,
     lastDashboardPanel: undefined as FakeWebviewPanel | undefined,
@@ -266,6 +341,7 @@ const mock = vi.hoisted(() => {
     state.projectStates = new Map<string, unknown>();
     state.directReplies = new Map<string, string[]>();
     state.pumpScripts = new Map<string, PumpTurn[]>();
+    state.reconnectablePumps = new Map<string, PumpSharedSession>();
     state.pumpInstances = new Map<string, FakeSessionPump>();
     state.executedCommands = [];
     state.lastDashboardPanel = undefined;
@@ -442,6 +518,10 @@ vi.mock("./state/watcher", () => ({
 vi.mock("./session/pump", () => ({
   BREVITY_DIRECTIVE: "Be concise.",
   SessionPump: mock.FakeSessionPump,
+}));
+
+vi.mock("./session/socketPump", () => ({
+  SocketSessionPump: mock.FakeSessionPump,
 }));
 
 vi.mock("./chatPanel/session", () => ({
@@ -1780,13 +1860,12 @@ describe("mocked dashboard/chat harness", () => {
 
     state = latestState(restoredView);
     expect(state?.projectLabel).toBe("example");
-    expect(state?.canStop).toBe(false);
-    expect(state?.supportsPromptEntry).toBe(false);
-    expect(state?.notice).toContain("no longer live");
+    expect(state?.canStop).toBe(true);
+    expect(state?.supportsPromptEntry).toBe(true);
+    expect(state?.notice).toContain("waiting for your next reply");
     expect(transcriptBodies(state!)).toContain(
       "Please choose the grayscale coefficients before continuing.",
     );
-    expect(transcriptBodies(state!)).toContain("reloaded or closed");
   });
 
   it("does not treat a reply to a restored dead awaiting-input session as direct chat", async () => {
@@ -1804,6 +1883,16 @@ describe("mocked dashboard/chat harness", () => {
         },
         result: {
           status: "awaiting-input",
+        },
+      },
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("Resumed the restored session with Rec. 601.\n");
+        },
+        result: {
+          status: "ended",
+          endReason: "completed",
+          endMessage: "Restored session completed.",
         },
       },
     ]);
@@ -1853,7 +1942,8 @@ describe("mocked dashboard/chat harness", () => {
 
     const state = latestState(restoredView);
     expect(mock.state.directReplyRequests).toEqual([]);
-    expect(transcriptBodies(state!)).toContain("Relaunch the flow from the dashboard");
+    expect(mock.state.pumpInstances.get(exampleDir)?.sentMessages).toEqual(["Use Rec. 601."]);
+    expect(transcriptBodies(state!)).toContain("Resumed the restored session with Rec. 601.");
     expect(transcriptBodies(state!)).not.toContain("This should never be sent as direct chat.");
   });
 
@@ -1872,6 +1962,16 @@ describe("mocked dashboard/chat harness", () => {
         },
         result: {
           status: "awaiting-input",
+        },
+      },
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("Restored session completed before clearing.\n");
+        },
+        result: {
+          status: "ended",
+          endReason: "completed",
+          endMessage: "Ready to clear after restore.",
         },
       },
     ]);
@@ -1914,8 +2014,14 @@ describe("mocked dashboard/chat harness", () => {
     await flushAsyncWork();
 
     let state = latestState(restoredView);
-    expect(state?.supportsPromptEntry).toBe(false);
+    expect(state?.supportsPromptEntry).toBe(true);
     expect(state?.transcript.length).toBeGreaterThan(0);
+
+    await restoredView.webview.emit({
+      type: "send-prompt",
+      prompt: "Use Rec. 601.",
+    });
+    await flushAsyncWork();
 
     await restoredView.webview.emit({ type: "clear-transcript" });
     await flushAsyncWork();
@@ -2103,7 +2209,6 @@ describe("mocked dashboard/chat harness", () => {
     state = latestState(restoredView);
     expect(state?.projectLabel).toBe("example");
     expect(transcriptBodies(state!)).toContain("Example auto-session output before reload.");
-    expect(transcriptBodies(state!)).toContain("reloaded or closed");
   });
 
   it("restores project-specific transcripts across reload after switching projects", async () => {

@@ -26,6 +26,8 @@ class FakeMemento {
 
 class FakePump {
   readonly sentMessages: string[] = [];
+  readonly session = null;
+  readonly descriptor = null;
 
   settle(): Promise<{ status: "awaiting-input" | "ended"; endReason?: string; endMessage?: string }> {
     return new Promise(() => undefined);
@@ -58,6 +60,8 @@ describe("chatPanel/autoSessionManager", () => {
   it("persists and clears the active auto-session record", async () => {
     const session = await manager.launch(
       {
+        sessionId: "session-1",
+        socketPath: "/tmp/session-1.sock",
         projectDir: "/tmp/example",
         pump: new FakePump() as never,
         sourceTag: "ollama",
@@ -68,6 +72,8 @@ describe("chatPanel/autoSessionManager", () => {
     );
 
     expect(manager.readStoredRecord("/tmp/example")).toMatchObject({
+      sessionId: "session-1",
+      socketPath: "/tmp/session-1.sock",
       projectDir: "/tmp/example",
       awaitingInput: false,
       sourceTag: "ollama",
