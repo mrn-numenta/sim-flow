@@ -1,0 +1,17 @@
+# Build artifacts
+/target/
+
+# AI scratchpad (session-ephemeral)
+.claude/scratchpad/*
+!.claude/scratchpad/.gitkeep
+
+# Heavy binary observability artifacts (reproducible from code + config)
+.experiments/*/*.obsv
+
+# SQLite transients
+*.db-wal
+*.db-shm
+
+# Orchestrator critiques and state are committed (institutional memory).
+# Orchestrator logs are ephemeral.
+.sim-flow/logs/*.log

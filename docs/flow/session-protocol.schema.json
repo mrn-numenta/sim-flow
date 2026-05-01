@@ -1,0 +1,755 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Versioned wire format for sim-flow session events. protocolVersion = 1.",
+  "oneOf": [
+    {
+      "schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "definitions": {
+          "DiagnosticLevel": {
+            "enum": [
+              "info",
+              "warning",
+              "error"
+            ],
+            "type": "string"
+          },
+          "GateFailureOut": {
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "description",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "LlmAttachment": {
+            "properties": {
+              "data": {
+                "description": "Base64-encoded payload bytes. Hosts decode and forward to the LLM. Base64 is used because the protocol is JSONL.",
+                "type": "string"
+              },
+              "mime": {
+                "description": "MIME type, e.g. \"image/jpeg\" or \"image/png\".",
+                "type": "string"
+              },
+              "source": {
+                "description": "Project-relative source path, surfaced for tracing in logs. Optional because not every attachment originates from a file.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "data",
+              "mime"
+            ],
+            "type": "object"
+          },
+          "LlmMessage": {
+            "properties": {
+              "attachments": {
+                "description": "Optional binary attachments associated with this message. Most messages have none; tool-output user messages may carry image bytes that the agent should treat as inline content (multimodal). The host (extension) is responsible for forwarding these to the underlying LLM via whatever multimodal API the backend supports; if the backend can't accept images the attachments are dropped and a Diagnostic is emitted.",
+                "items": {
+                  "$ref": "#/definitions/LlmAttachment"
+                },
+                "type": "array"
+              },
+              "content": {
+                "type": "string"
+              },
+              "role": {
+                "$ref": "#/definitions/LlmRole"
+              }
+            },
+            "required": [
+              "content",
+              "role"
+            ],
+            "type": "object"
+          },
+          "LlmRole": {
+            "enum": [
+              "system",
+              "user",
+              "assistant"
+            ],
+            "type": "string"
+          },
+          "LlmTool": {
+            "description": "Tool catalog descriptor for a single advertised tool. Phase 9 M3 fills the `args_schema` with real JSON Schema for arg shapes.",
+            "properties": {
+              "args_schema": {
+                "description": "JSON Schema describing the tool's argument object."
+              },
+              "description": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "args_schema",
+              "description",
+              "name"
+            ],
+            "type": "object"
+          },
+          "SessionKindOut": {
+            "description": "Mirror of `client::SessionKind` exposed in the protocol. Kept independent of the internal type so the wire format stays stable even if the internal representation changes.",
+            "enum": [
+              "work",
+              "critique"
+            ],
+            "type": "string"
+          },
+          "SessionTag": {
+            "properties": {
+              "candidate": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/definitions/SessionKindOut"
+              },
+              "step": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "step"
+            ],
+            "type": "object"
+          },
+          "StepDescriptorOut": {
+            "description": "Step descriptor sent in `HelloAck`. Same data as `sim-flow describe`'s output, but using protocol-stable field names.",
+            "properties": {
+              "flow": {
+                "type": "string"
+              },
+              "instruction_path": {
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/definitions/SessionKindOut"
+              },
+              "per_candidate": {
+                "type": "boolean"
+              },
+              "phases": {
+                "description": "Per-step phases. M2 uses `[\"chat\"]`; M3 expands for code steps to e.g. `[\"author\", \"build\", \"test\", \"coverage\"]`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "predecessor_inputs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "prerequisite": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "step": {
+                "type": "string"
+              },
+              "tools": {
+                "default": [],
+                "description": "Tool catalog the orchestrator will advertise to the LLM. Empty in M2; populated by step + kind in M3.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "work_artifacts": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "flow",
+              "instruction_path",
+              "kind",
+              "per_candidate",
+              "phases",
+              "predecessor_inputs",
+              "step",
+              "work_artifacts"
+            ],
+            "type": "object"
+          }
+        },
+        "description": "Event direction: orchestrator -> host.\n\nSerialized as a tagged JSON object with `event` carrying the variant name and the payload fields flattened next to it. We use kebab-case for the tag to match the JSON convention in the extension's existing types.",
+        "oneOf": [
+          {
+            "description": "Reply to the host's `Hello`. Carries the resolved step descriptor so the host knows what kind of session it is hosting and can render header / phase information.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "hello-ack"
+                ],
+                "type": "string"
+              },
+              "protocol_version": {
+                "type": "string"
+              },
+              "session": {
+                "$ref": "#/definitions/SessionTag"
+              },
+              "sim_flow_version": {
+                "type": "string"
+              },
+              "step_descriptor": {
+                "$ref": "#/definitions/StepDescriptorOut"
+              }
+            },
+            "required": [
+              "event",
+              "protocol_version",
+              "session",
+              "sim_flow_version",
+              "step_descriptor"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A chunk of assistant text to render in the chat UI. `final` is true on the last chunk of a single turn.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "assistant-text"
+                ],
+                "type": "string"
+              },
+              "final_chunk": {
+                "type": "boolean"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event",
+              "final_chunk",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Pause the orchestrator and wait for a `UserMessage` on stdin. Hosts use the optional hints to focus or label the input area.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "request-user-input"
+                ],
+                "type": "string"
+              },
+              "placeholder": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "prompt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "event"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Ask the host to run an LLM call. Host streams the response back as `LlmChunk` / `LlmEnd` host events tagged with the same `request_id`.",
+            "properties": {
+              "backend": {
+                "type": "string"
+              },
+              "event": {
+                "enum": [
+                  "request-llm-response"
+                ],
+                "type": "string"
+              },
+              "messages": {
+                "items": {
+                  "$ref": "#/definitions/LlmMessage"
+                },
+                "type": "array"
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "request_id": {
+                "type": "string"
+              },
+              "tools": {
+                "default": [],
+                "description": "Tool catalog for backends that support native tool-use. Empty in M2; populated in M3.",
+                "items": {
+                  "$ref": "#/definitions/LlmTool"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "backend",
+              "event",
+              "messages",
+              "request_id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The orchestrator wrote a project file. Informational only; the host displays \"wrote spec.md (123 bytes)\" or similar.",
+            "properties": {
+              "bytes": {
+                "format": "uint64",
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              "event": {
+                "enum": [
+                  "artifact-written"
+                ],
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "bytes",
+              "event",
+              "path"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The orchestrator executed a tool. Informational; host renders \"reading src/model/lib.rs...\" etc. Phase 9 M3 wires real tool invocations; M2 emits this only for artifact writes.",
+            "properties": {
+              "args_summary": {
+                "type": "string"
+              },
+              "duration_ms": {
+                "format": "uint64",
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              "event": {
+                "enum": [
+                  "tool-invoked"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "args_summary",
+              "duration_ms",
+              "event",
+              "name",
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Session moved to a new phase. Phase 9 M3 introduces the build/test/coverage iteration loop; M2 emits a single `chat` phase for the duration of the session.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "phase-changed"
+                ],
+                "type": "string"
+              },
+              "phase": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event",
+              "phase"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Output from a build or test runner during a code-step phase. Empty in M2; present in the schema for forward compatibility.",
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "event": {
+                "enum": [
+                  "build-output"
+                ],
+                "type": "string"
+              },
+              "exit_code": {
+                "format": "int32",
+                "type": "integer"
+              },
+              "stderr_tail": {
+                "type": "string"
+              },
+              "stdout_tail": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "command",
+              "event",
+              "exit_code",
+              "stderr_tail",
+              "stdout_tail"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Result of a gate evaluation. Emitted opportunistically (e.g. after each turn that wrote artifacts) and definitively at session end. Emitting `clean: true` does not by itself advance state - that happens via `StateAdvanced` after successful gate + mark_passed.",
+            "properties": {
+              "clean": {
+                "type": "boolean"
+              },
+              "event": {
+                "enum": [
+                  "gate-result"
+                ],
+                "type": "string"
+              },
+              "failures": {
+                "items": {
+                  "$ref": "#/definitions/GateFailureOut"
+                },
+                "type": "array"
+              },
+              "step": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "clean",
+              "event",
+              "failures",
+              "step"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The orchestrator advanced `current_step` from one step to another. Emitted right after `mark_passed` + `save`.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "state-advanced"
+                ],
+                "type": "string"
+              },
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "event",
+              "from"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Suggested next action for the host to render as a quick-pick button. Optional capability; hosts that don't advertise `followups` will not receive these.",
+            "properties": {
+              "action": {
+                "type": "string"
+              },
+              "event": {
+                "enum": [
+                  "followup"
+                ],
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "action",
+              "event",
+              "label"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Non-fatal diagnostic for the host to display.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "diagnostic"
+                ],
+                "type": "string"
+              },
+              "level": {
+                "$ref": "#/definitions/DiagnosticLevel"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event",
+              "level",
+              "message"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Session finished. `reason` is `completed`, `cancelled`, or `error`; `message` is an optional human-readable detail.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "session-end"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event",
+              "reason"
+            ],
+            "type": "object"
+          }
+        ],
+        "title": "Event"
+      },
+      "title": "Event (orchestrator -> host)"
+    },
+    {
+      "schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "definitions": {
+          "HostInfo": {
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "version"
+            ],
+            "type": "object"
+          }
+        },
+        "description": "Event direction: host -> orchestrator.",
+        "oneOf": [
+          {
+            "description": "Initial handshake. Host announces its protocol version and optional capabilities.",
+            "properties": {
+              "capabilities": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "event": {
+                "enum": [
+                  "hello"
+                ],
+                "type": "string"
+              },
+              "host": {
+                "$ref": "#/definitions/HostInfo"
+              },
+              "protocol_version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event",
+              "host",
+              "protocol_version"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "User typed (or pasted) the next message in the chat.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "user-message"
+                ],
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Streaming LLM response chunk fulfilling a prior `RequestLlmResponse`.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "llm-chunk"
+                ],
+                "type": "string"
+              },
+              "request_id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event",
+              "request_id",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "LLM response finished.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "llm-end"
+                ],
+                "type": "string"
+              },
+              "request_id": {
+                "type": "string"
+              },
+              "stop_reason": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "event",
+              "request_id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "LLM dispatch failed.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "llm-error"
+                ],
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "request_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event",
+              "kind",
+              "message",
+              "request_id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "User clicked a `Followup` quick-action.",
+            "properties": {
+              "action": {
+                "type": "string"
+              },
+              "event": {
+                "enum": [
+                  "followup-selected"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "action",
+              "event"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "User requested cancellation. The orchestrator stops, evaluates the gate one last time (informational), and emits SessionEnd.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "cancel"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "event"
+            ],
+            "type": "object"
+          }
+        ],
+        "title": "HostEvent"
+      },
+      "title": "HostEvent (host -> orchestrator)"
+    }
+  ],
+  "title": "sim-flow session protocol"
+}

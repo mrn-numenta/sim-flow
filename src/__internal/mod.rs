@@ -1,0 +1,18 @@
+pub mod client;
+pub mod clients;
+pub mod config;
+pub mod critique;
+pub mod error;
+pub mod foundation_root;
+pub mod gate;
+pub mod git_commit;
+pub mod new_project;
+pub mod prompts;
+pub mod runner;
+pub mod session;
+pub mod state;
+pub mod steps;
+pub mod template;
+pub mod tracking;
+
+pub use error::{Error, Result};

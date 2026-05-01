@@ -1,0 +1,331 @@
+//! Agent-callable tools the orchestrator advertises to the LLM.
+//!
+//! Two classes of capability live in `sim-flow` (see
+//! docs/architecture/ai-flow/08-orchestrator-tools.md):
+//!
+//! - **Agent-callable tools** in this module: bounded I/O the LLM
+//!   uses during a turn (read_file, list_dir, write_file, search).
+//!   Path-sandboxed to the project directory.
+//! - **Orchestrator-only validators** in `session::runners`: cargo
+//!   check / test / coverage. Never invoked by the agent directly.
+//!
+//! Tools execute inside the orchestrator (filesystem + grep). Hosts
+//! get `ToolInvoked` notifications for display. If we ever need
+//! user approval before a destructive op, we'd add a
+//! `RequestToolApproval` event - explicit protocol extension, not a
+//! quiet behavior change.
+
+use std::path::{Path, PathBuf};
+
+use crate::{Error, Result};
+
+mod edit_file;
+mod list_dir;
+mod read_file;
+mod run_cargo;
+mod search;
+mod write_file;
+
+pub use edit_file::EditFileTool;
+pub use list_dir::ListDirTool;
+pub use read_file::ReadFileTool;
+pub use run_cargo::RunCargoTool;
+pub use search::SearchTool;
+pub use write_file::WriteFileTool;
+
+/// Roots a tool may resolve paths against. `project_dir` is read+write;
+/// `library_root` (when present) is read-only and is the auto-detected
+/// sim-models repo containing `docs/`, `examples/`, and `library/`.
+/// `framework_root` (also read-only) points at the
+/// `<foundation>/crates/framework/` crate so the agent can read the
+/// framework's public API surface (the traits and types models
+/// implement against). Tools accept paths in three forms:
+///
+/// - bare relative path -- resolves under `project_dir` (existing
+///   behavior; what `write_file` and the artifact-write convention use).
+/// - `lib:<rel>` prefix -- resolves under `library_root`. Tools that
+///   only read (`read_file`, `list_dir`, `search`) honor this prefix;
+///   `write_file` rejects it.
+/// - `fw:<rel>` prefix -- resolves under `framework_root`. Read-only
+///   like `lib:`. Use this to read the foundation framework's public
+///   API (start with `fw:src/lib.rs` and `fw:src/prelude.rs`).
+pub struct ToolContext<'a> {
+    pub project_dir: &'a Path,
+    pub library_root: Option<&'a Path>,
+    pub framework_root: Option<&'a Path>,
+}
+
+impl<'a> ToolContext<'a> {
+    pub fn new(
+        project_dir: &'a Path,
+        library_root: Option<&'a Path>,
+        framework_root: Option<&'a Path>,
+    ) -> Self {
+        Self {
+            project_dir,
+            library_root,
+            framework_root,
+        }
+    }
+}
+
+/// Common shape every tool implements. The orchestrator dispatches
+/// by name; a tool's `args` is a JSON object whose schema each impl
+/// documents inline.
+pub trait Tool {
+    fn name(&self) -> &'static str;
+    fn description(&self) -> &'static str;
+    /// JSON Schema for the tool's args. Used both for native tool-use
+    /// advertisement (Anthropic / OpenAI) and as an inline reminder
+    /// for the fenced-block fallback.
+    fn args_schema(&self) -> serde_json::Value;
+    /// Execute the tool. Path-sandbox checks live in each impl (or a
+    /// shared helper in this module).
+    fn invoke(&self, ctx: &ToolContext, args: &serde_json::Value) -> Result<ToolResult>;
+}
+
+/// Result of a single tool invocation. The orchestrator threads
+/// `display` into the next user-message LLM turn so the model sees
+/// the tool's output directly. `ok` controls whether the chat UI
+/// renders a success or error annotation. `attachments` carries
+/// binary content (e.g. an image returned by `read_file` against a
+/// `.jpg` / `.png` file) that the orchestrator forwards to the host
+/// as multimodal parts on the next user message; tools that only
+/// produce text leave it empty. The struct itself is internal --
+/// `display` is what serializes through `ToolInvoked.args_summary`,
+/// not the whole result.
+#[derive(Debug, Clone)]
+pub struct ToolResult {
+    pub ok: bool,
+    pub display: String,
+    pub attachments: Vec<ToolAttachment>,
+}
+
+/// Internal-only; never serialized over the JSONL protocol. The
+/// orchestrator converts these to base64-encoded `LlmAttachment`s
+/// before they cross the boundary.
+#[derive(Debug, Clone)]
+pub struct ToolAttachment {
+    pub mime: String,
+    pub bytes: Vec<u8>,
+    pub source_path: String,
+}
+
+impl ToolResult {
+    pub fn ok(display: impl Into<String>) -> Self {
+        Self {
+            ok: true,
+            display: display.into(),
+            attachments: Vec::new(),
+        }
+    }
+    pub fn err(display: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            display: display.into(),
+            attachments: Vec::new(),
+        }
+    }
+    pub fn ok_with_attachment(
+        display: impl Into<String>,
+        mime: impl Into<String>,
+        bytes: Vec<u8>,
+        source_path: impl Into<String>,
+    ) -> Self {
+        Self {
+            ok: true,
+            display: display.into(),
+            attachments: vec![ToolAttachment {
+                mime: mime.into(),
+                bytes,
+                source_path: source_path.into(),
+            }],
+        }
+    }
+}
+
+/// Maps a path's extension to a standard image MIME type. Returns
+/// `None` for non-image extensions; callers fall back to text-mode
+/// reads.
+pub fn image_mime_from_path(path: &Path) -> Option<&'static str> {
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("jpg") | Some("jpeg") => Some("image/jpeg"),
+        Some("png") => Some("image/png"),
+        Some("gif") => Some("image/gif"),
+        Some("webp") => Some("image/webp"),
+        _ => None,
+    }
+}
+
+/// Build the orchestrator's tool dispatcher from a list of tool
+/// names. Unknown names are skipped silently so descriptors can
+/// declare aspirational tools that aren't implemented yet.
+pub fn build_dispatcher(names: &[&'static str]) -> Vec<Box<dyn Tool>> {
+    let mut out: Vec<Box<dyn Tool>> = Vec::new();
+    for name in names {
+        match *name {
+            "read_file" => out.push(Box::new(ReadFileTool)),
+            "list_dir" => out.push(Box::new(ListDirTool)),
+            "write_file" => out.push(Box::new(WriteFileTool)),
+            "edit_file" => out.push(Box::new(EditFileTool)),
+            "search" => out.push(Box::new(SearchTool)),
+            "run_cargo" => out.push(Box::new(RunCargoTool)),
+            _ => {} // unknown tool name; skip
+        }
+    }
+    out
+}
+
+/// Path-safety check shared by all tools. Rejects absolute paths,
+/// `..` traversal, control chars, and Windows meta chars. The
+/// behavior matches the artifact-write extractor in
+/// `session::orchestrator::is_safe_relative_path` so write_file via
+/// tool and write_file via fenced artifact agree on what is safe.
+pub fn is_safe_relative_path(p: &str) -> bool {
+    if p.is_empty() {
+        return false;
+    }
+    if p.starts_with('/') || p.starts_with('\\') {
+        return false;
+    }
+    if p.contains("..") {
+        return false;
+    }
+    if p.contains(['<', '>', ':', '"', '|', '?', '*']) {
+        return false;
+    }
+    if p.chars().any(|c| (c as u32) < 0x20) {
+        return false;
+    }
+    true
+}
+
+/// Resolve a relative path under the project dir, rejecting any
+/// path that fails `is_safe_relative_path`. Tools call this before
+/// any filesystem op.
+pub fn resolve_safe_path(project_dir: &Path, rel: &str) -> Result<PathBuf> {
+    if !is_safe_relative_path(rel) {
+        return Err(Error::State(format!("rejecting unsafe tool path: {rel}")));
+    }
+    Ok(project_dir.join(rel))
+}
+
+/// Read-side resolver. Accepts either a bare project-relative path,
+/// a `lib:<rel>` prefix (library root), or an `fw:<rel>` prefix
+/// (framework root). Returns `Ok(Some(abs))` when the input names a
+/// real path inside one of the allowed roots, `Ok(None)` when a
+/// prefix is used but the corresponding root is not configured, and
+/// `Err` when the path fails the safety check.
+pub fn resolve_read_path(ctx: &ToolContext, raw: &str) -> Result<Option<PathBuf>> {
+    if let Some(rel) = raw.strip_prefix("lib:") {
+        return resolve_under(ctx.library_root, "lib", rel);
+    }
+    if let Some(rel) = raw.strip_prefix("fw:") {
+        return resolve_under(ctx.framework_root, "fw", rel);
+    }
+    Ok(Some(resolve_safe_path(ctx.project_dir, raw)?))
+}
+
+fn resolve_under(root: Option<&Path>, prefix: &str, rel: &str) -> Result<Option<PathBuf>> {
+    let Some(root) = root else {
+        return Ok(None);
+    };
+    if rel.is_empty() {
+        return Ok(Some(root.to_path_buf()));
+    }
+    if !is_safe_relative_path(rel) {
+        return Err(Error::State(format!(
+            "rejecting unsafe tool path: {prefix}:{rel}"
+        )));
+    }
+    Ok(Some(root.join(rel)))
+}
+
+/// Parse a fenced tool-call block (`tool:<name>` info-string) into
+/// (name, raw_body). The body is whatever lives between the open
+/// and close fences; per-tool argument parsers live alongside their
+/// `Tool` impl.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedToolCall {
+    pub name: String,
+    pub body: String,
+}
+
+/// Scan `response_text` for fenced `tool:<name>` blocks. The
+/// orchestrator runs this alongside artifact extraction; the two
+/// kinds of fences are mutually exclusive (an info-string is either
+/// a relative file path with a dot, or a `tool:<name>` directive).
+pub fn extract_tool_calls(response_text: &str) -> Vec<ParsedToolCall> {
+    let mut out: Vec<ParsedToolCall> = Vec::new();
+    let mut in_block: Option<(String, Vec<String>)> = None;
+    for line in response_text.split('\n') {
+        if let Some((_, body)) = in_block.as_mut() {
+            if line.trim_start().starts_with("```") && line.trim().len() == 3 {
+                let (name, lines) = in_block.take().expect("guarded by Some");
+                out.push(ParsedToolCall {
+                    name,
+                    body: lines.join("\n"),
+                });
+                continue;
+            }
+            body.push(line.to_string());
+        } else if let Some(rest) = line.strip_prefix("```") {
+            let info = rest.trim();
+            if let Some(name) = info.strip_prefix("tool:") {
+                let name = name.trim();
+                if !name.is_empty() {
+                    in_block = Some((name.to_string(), Vec::new()));
+                }
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_a_single_tool_call() {
+        let body = "We need to read a file.\n\n```tool:read_file\nsrc/lib.rs\n```\n";
+        let calls = extract_tool_calls(body);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].body, "src/lib.rs");
+    }
+
+    #[test]
+    fn ignores_non_tool_fences() {
+        let body = "```rust\nfn main() {}\n```\n```spec.md\n# Spec\n```\n";
+        assert!(extract_tool_calls(body).is_empty());
+    }
+
+    #[test]
+    fn parses_multiple_tool_calls_in_one_response() {
+        let body = "```tool:list_dir\nsrc/\n```\n\n```tool:read_file\nsrc/lib.rs\n```\n";
+        let calls = extract_tool_calls(body);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name, "list_dir");
+        assert_eq!(calls[1].name, "read_file");
+    }
+
+    #[test]
+    fn safe_path_helper_rejects_traversal() {
+        assert!(is_safe_relative_path("src/lib.rs"));
+        assert!(!is_safe_relative_path("/etc/passwd"));
+        assert!(!is_safe_relative_path("../escape.md"));
+        assert!(!is_safe_relative_path(""));
+    }
+
+    #[test]
+    fn dispatcher_filters_unknown_tools() {
+        let tools = build_dispatcher(&["read_file", "bogus", "search"]);
+        let names: Vec<_> = tools.iter().map(|t| t.name()).collect();
+        assert_eq!(names, vec!["read_file", "search"]);
+    }
+}

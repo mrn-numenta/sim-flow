@@ -1,0 +1,906 @@
+:root {
+  /* Match the DOT diagram palette so the dashboard feels continuous
+     with docs/architecture/ai-flow/images/. */
+  --step-bg: #e8e8e8;
+  --step-bg-passed: #c9e9c9;
+  --step-bg-current: #8cb8ff;
+  --step-bg-locked: #f3f3f3;
+  --step-fg: #111;
+  --gate-bg: #ffd966;
+  --gate-bg-passed: #66cc66;
+  --gate-bg-failed: #cc5555;
+  --border-color: #b8b8b8;
+  --muted: #6a6a6a;
+  --accent: #3366cc;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  font-family: var(--vscode-font-family, system-ui, sans-serif);
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+  margin: 0;
+  padding: 0;
+  font-size: var(--vscode-font-size, 13px);
+  display: flex;
+  flex-direction: column;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+main {
+  padding: 16px 20px 16px;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tab-panel.active {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* -----------------------------------------------------------------
+   Auto-flow row (above the step rail / detail layout)
+   ----------------------------------------------------------------- */
+
+.project-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.project-row .spacer {
+  flex: 1 1 auto;
+}
+
+/* -----------------------------------------------------------------
+   Projects + Settings tabs
+   ----------------------------------------------------------------- */
+
+.settings-section {
+  margin-top: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+.settings-section:last-child {
+  border-bottom: none;
+}
+.settings-section h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.llm-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-left: 8px;
+}
+
+.documents-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0 16px;
+  font-size: 12px;
+}
+
+.documents-table th,
+.documents-table td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: middle;
+}
+
+.documents-table th {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.documents-table .actions {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.doc-missing td {
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.doc-group {
+  margin-top: 16px;
+  font-size: 13px;
+}
+
+.llm-source-select {
+  font: inherit;
+  padding: 2px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--vscode-input-background, #fff);
+  color: var(--vscode-input-foreground, #111);
+}
+
+.llm-source-refresh {
+  margin-left: 4px;
+  padding: 2px 6px;
+  font-size: 13px;
+  line-height: 1;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--vscode-input-background, #fff);
+  color: var(--vscode-input-foreground, #111);
+  cursor: pointer;
+}
+
+.llm-source-refresh:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.llm-verbose {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-left: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.llm-verbose input[type="checkbox"] {
+  margin: 0;
+}
+
+.new-project-input {
+  width: 220px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--vscode-input-background, #fff);
+  color: var(--vscode-input-foreground, #111);
+  font: inherit;
+}
+
+/* Two-row flow control panel: play/stop icon buttons on top, spec
+   path picker beneath. Stacking them puts the action buttons at
+   the same column as the step rail's first box and lets the spec
+   row stretch to full width. */
+.auto-flow-row {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 0;
+  flex: 0 0 auto;
+}
+
+/* Holds the help text on top of the input. `flex: 1 1 auto` so it
+   absorbs the leftover row width between the Spec label and the
+   Browse button -- mirroring what the bare <input> used to do. The
+   `min-width: 0` is the standard fix that lets a flex child shrink
+   below its content's natural width. */
+.auto-spec-input-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Inline description for the Spec field. Italic + mid gray so it
+   reads as guidance rather than as a value, and only spans the
+   width of the input field below it (not the Spec: label or the
+   Browse... button to either side, since it lives inside
+   `.auto-spec-input-col`). */
+.auto-flow-spec-help {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  font-style: italic;
+  color: #888;
+}
+
+/* ▶ / ■ icon buttons. Sized like other action buttons but with a
+   larger, centered glyph and no extra padding around the symbol. */
+.auto-icon-btn {
+  flex: 0 0 auto;
+  min-width: 36px;
+  padding: 4px 12px;
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 700;
+  font-family: var(--vscode-font-family, system-ui, sans-serif);
+}
+
+.auto-run-btn {
+  flex: 0 0 auto;
+  font-weight: 600;
+}
+
+/* End-to-end fully-automated play. Red so it reads as "this is the
+   long, hands-off variant" -- distinct from the regular ▶ that
+   starts manual step-by-step. Hidden by default; the user opts in
+   via the Settings-tab checkbox. */
+.auto-fully-automated-btn {
+  background: #c43c3c;
+  color: #fff;
+  border: 1px solid #8a2c2c;
+}
+.auto-fully-automated-btn:hover {
+  filter: brightness(1.1);
+}
+.auto-fully-automated-btn:disabled {
+  filter: brightness(0.85);
+}
+
+.auto-spec-label {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.auto-spec-input {
+  /* Fill the parent column (`.auto-spec-input-col`); the column
+     itself is the flex child that grabs leftover row width. */
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--vscode-input-background, #fff);
+  color: var(--vscode-input-foreground, #111);
+  font: inherit;
+}
+
+.auto-spec-pick-btn {
+  flex: 0 0 auto;
+}
+
+.verilog-simulator-path {
+  flex: 1 1 auto;
+  min-width: 320px;
+  padding: 4px 8px;
+  margin-left: 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--vscode-input-background, #fff);
+  color: var(--vscode-input-foreground, #111);
+  font: inherit;
+}
+
+/* When the user hasn't clicked Play yet, gray the step rail + per-
+   step detail so they can't accidentally drive the flow without
+   starting the automated driver. The spec row + Play / Stop
+   buttons stay live (they're outside `.flow-layout`). */
+.flow-layout.flow-locked {
+  opacity: 0.5;
+  pointer-events: none;
+  filter: saturate(0.6);
+}
+
+h1,
+h2,
+h3 {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+
+h1 {
+  font-size: 18px;
+}
+h2 {
+  font-size: 14px;
+  margin-top: 20px;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 4px;
+}
+
+/* -----------------------------------------------------------------
+   Tabs
+   ----------------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  border-bottom: 1px solid var(--border-color);
+  margin: 16px 0 12px;
+}
+
+.block-diagram-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.block-diagram-svg {
+  width: 100%;
+  overflow: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 8px;
+  background: var(--vscode-editor-background, #fff);
+}
+
+.block-diagram-svg svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.tabs-separator {
+  width: 1px;
+  margin: 4px 8px;
+  background: var(--border-color);
+  align-self: stretch;
+}
+
+.tab {
+  padding: 6px 12px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--vscode-foreground);
+  border: none;
+  border-bottom: 2px solid transparent;
+  font: inherit;
+}
+
+.tab:hover {
+  color: var(--accent);
+}
+
+.tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+.tab-panel {
+  display: none;
+}
+.tab-panel.active {
+  display: block;
+}
+
+/* -----------------------------------------------------------------
+   Step rail
+   ----------------------------------------------------------------- */
+
+/* Two-column layout: vertical step rail on the left, action / gate
+   detail on the right. Wraps to a single column when the pane is
+   too narrow for both columns to be useful. */
+.flow-layout {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 16px;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.flow-rail-column {
+  flex: 0 0 auto;
+  min-width: 160px;
+  max-width: 240px;
+  overflow-y: auto;
+}
+
+.flow-detail-column {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+@media (max-width: 640px) {
+  .flow-layout {
+    flex-direction: column;
+  }
+  .flow-rail-column {
+    max-width: none;
+    width: 100%;
+  }
+}
+
+.step-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  /* Steps stack flush; the gate diamonds float in the cut-outs at
+     each step boundary using negative margins below. */
+  gap: 0;
+  padding: 8px 0;
+  width: 100%;
+}
+
+/* Step boxes have triangular cut-outs at top + bottom (except the
+   first / last step) so the gate diamonds can sit visually inside
+   the boundary between consecutive steps. The cut-out geometry is
+   driven by two CSS variables so the gate's negative-margin and the
+   step's clip-path stay coordinated.
+     --cut-half-width  half the cut-out's base width (px)
+     --cut-depth       how deep the cut-out reaches into the step (px) */
+.step {
+  --cut-half-width: 12px;
+  --cut-depth: 10px;
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  /* Extra vertical padding compensates for the cut-outs eating into
+     the visible area; without this the step-id / step-label can
+     overlap the diamond glyph. */
+  padding: calc(2px + var(--cut-depth)) 10px;
+  background: var(--step-bg);
+  color: var(--step-fg);
+  cursor: pointer;
+  overflow: hidden;
+  min-width: 0;
+  transition: transform 60ms ease-out;
+  /* Outline. clip-path eats `border` and outer `outline` rules, so
+     we trace the silhouette with an inset box-shadow -- inset
+     shadows render inside the content box and are clipped together
+     with the step's background, which means the 1px ring follows
+     the cut-out triangles cleanly. */
+  box-shadow: inset 0 0 0 1px var(--border-color);
+  /* Default shape: cut-outs at both top and bottom. Overridden by
+     `.step-first` (no top cut) and `.step-last` (no bottom cut)
+     below. The polygon walks the outline clockwise starting at the
+     top-left corner. */
+  clip-path: polygon(
+    0 0,
+    calc(50% - var(--cut-half-width)) 0,
+    50% var(--cut-depth),
+    calc(50% + var(--cut-half-width)) 0,
+    100% 0,
+    100% 100%,
+    calc(50% + var(--cut-half-width)) 100%,
+    50% calc(100% - var(--cut-depth)),
+    calc(50% - var(--cut-half-width)) 100%,
+    0 100%
+  );
+}
+
+.step.step-first {
+  /* Flat top edge for the very first step in the rail. */
+  clip-path: polygon(
+    0 0,
+    100% 0,
+    100% 100%,
+    calc(50% + var(--cut-half-width)) 100%,
+    50% calc(100% - var(--cut-depth)),
+    calc(50% - var(--cut-half-width)) 100%,
+    0 100%
+  );
+}
+
+.step.step-last {
+  /* Flat bottom edge for the very last step in the rail. */
+  clip-path: polygon(
+    0 0,
+    calc(50% - var(--cut-half-width)) 0,
+    50% var(--cut-depth),
+    calc(50% + var(--cut-half-width)) 0,
+    100% 0,
+    100% 100%,
+    0 100%
+  );
+}
+
+.step:hover {
+  transform: translateY(-1px);
+}
+
+.step.passed {
+  background: var(--step-bg-passed);
+}
+.step.current {
+  background: var(--step-bg-current);
+  color: #fff;
+  /* Stack: base 1px border + 2px translucent accent ring marking
+     the current step. Both are inset so they follow the cut-outs. */
+  box-shadow:
+    inset 0 0 0 1px var(--border-color),
+    inset 0 0 0 3px rgba(51, 102, 204, 0.4);
+}
+.step.locked {
+  background: var(--step-bg-locked);
+  color: var(--muted);
+}
+
+/* Selected = the rail row the user clicked. We override the base
+   border with a thicker accent ring so the selection reads even on
+   passed / current backgrounds. Stacks the base border underneath
+   so both edges trace the cut-outs. */
+.step.selected {
+  box-shadow:
+    inset 0 0 0 1px var(--border-color),
+    inset 0 0 0 2px var(--accent);
+}
+.step.current.selected {
+  box-shadow:
+    inset 0 0 0 1px var(--border-color),
+    inset 0 0 0 2px var(--accent);
+}
+
+.step .step-id {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.step .step-label {
+  font-size: 11px;
+  color: inherit;
+  opacity: 0.85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Gate diamonds. Sit in the cut-outs between consecutive steps:
+   negative margins shrink the diamond's flex-allocated height to
+   roughly zero so the steps remain visually flush, and z-index
+   keeps the diamond on top of step backgrounds where the cut-outs
+   overlap. The dimensions match the `--cut-depth` / `--cut-half-width`
+   on `.step` -- if you change them there, change them here. */
+.gate {
+  align-self: center;
+  width: 12px;
+  height: 12px;
+  margin-top: -6px;
+  margin-bottom: -6px;
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: transparent;
+  font-size: 7px;
+  font-weight: 700;
+  transform: rotate(45deg);
+  background: var(--gate-bg);
+  border: 1px solid var(--border-color);
+}
+
+.gate > span {
+  transform: rotate(-45deg);
+  display: inline-block;
+}
+
+.gate.passed {
+  background: var(--gate-bg-passed);
+  color: #fff;
+}
+.gate.failed {
+  background: var(--gate-bg-failed);
+  color: #fff;
+}
+
+/* -----------------------------------------------------------------
+   Detail panel (per-step)
+   ----------------------------------------------------------------- */
+
+.detail {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.detail h3 {
+  margin-bottom: 4px;
+}
+
+.detail .actions {
+  margin: 10px 0;
+  display: flex;
+  gap: 8px;
+}
+
+/* "Generate Verilog" sits at the right edge of the actions row,
+   separated from the per-step buttons. `margin-left: auto` pushes it
+   into the leftover flex space, which is the simplest way to get a
+   right-aligned trailing button without breaking the existing flow. */
+.detail .actions .generate-verilog-btn {
+  margin-left: auto;
+}
+
+/* -----------------------------------------------------------------
+   Prompts tab
+   ----------------------------------------------------------------- */
+
+.prompts-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 12px;
+}
+
+.prompts-table th,
+.prompts-table td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: top;
+}
+
+.prompts-table th {
+  font-weight: 600;
+  background: rgba(127, 127, 127, 0.08);
+}
+
+.prompts-table .scope {
+  font-weight: 600;
+}
+
+.prompts-table .scope.project {
+  color: var(--accent);
+}
+
+.prompts-table .scope.global {
+  color: #a06400;
+}
+
+.prompts-table .scope.default {
+  color: var(--muted);
+}
+
+.prompts-table .actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.prompt-editor {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
+.prompt-editor h3 {
+  margin-bottom: 8px;
+}
+
+.prompt-textarea {
+  width: 100%;
+  min-height: 320px;
+  resize: vertical;
+  padding: 8px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  background: var(--vscode-input-background, #fff);
+  color: var(--vscode-input-foreground, #111);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+.prompt-editor .actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+button {
+  padding: 4px 10px;
+  font: inherit;
+  border: 1px solid var(--border-color);
+  background: var(--vscode-button-background, #eee);
+  color: var(--vscode-button-foreground, #111);
+  border-radius: 4px;
+  cursor: pointer;
+}
+button:hover {
+  background: var(--vscode-button-hoverBackground, #dcdcdc);
+}
+button.secondary {
+  background: transparent;
+}
+
+.critique {
+  font-family: var(--vscode-editor-font-family, monospace);
+  white-space: pre-wrap;
+  background: var(--vscode-textBlockQuote-background, #1111);
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.finding {
+  margin-bottom: 4px;
+}
+.finding.resolved {
+  color: var(--vscode-gitDecoration-addedResourceForeground, #4ca84c);
+}
+.finding.unresolved {
+  color: var(--vscode-gitDecoration-modifiedResourceForeground, #c08f14);
+}
+.finding.blocker {
+  color: var(--vscode-errorForeground, #c43c3c);
+  font-weight: 600;
+}
+
+/* -----------------------------------------------------------------
+   Tables (runs, baselines, sweeps)
+   ----------------------------------------------------------------- */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+th {
+  background: transparent;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+tbody tr:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.empty {
+  color: var(--muted);
+  padding: 12px 0;
+  font-style: italic;
+}
+
+.error {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: 4px;
+  background: rgba(196, 60, 60, 0.1);
+  color: var(--vscode-errorForeground, #c43c3c);
+  border: 1px solid rgba(196, 60, 60, 0.3);
+}
+
+/* ------------------------------------------------------------
+ * Plan-execution progress (under the per-step buttons).
+ * Renders for DM2d / DM3c / DM4b only; other steps hide it.
+ *   gray   = milestone has no resolved rows
+ *   yellow = milestone is in progress
+ *   green  = every row resolved (done + deferred = total)
+ * ------------------------------------------------------------ */
+.plan-progress {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.02);
+}
+.plan-progress-heading {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.milestone-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.milestone-box {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 64px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--step-fg);
+  transition: filter 80ms ease;
+}
+.milestone-box:hover {
+  filter: brightness(0.96);
+}
+.milestone-id {
+  font-weight: 600;
+  font-size: 12px;
+}
+.milestone-pct {
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 2px;
+}
+.milestone-empty {
+  background: #ececec;
+}
+.milestone-in-progress {
+  background: #fff4c2; /* light yellow */
+  border-color: #e6c84a;
+}
+.milestone-done {
+  background: #d6f0d6; /* light green */
+  border-color: #66cc66;
+}
+.plan-progress-current {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+.plan-progress-current.muted {
+  color: var(--muted);
+  font-style: italic;
+}
+.plan-progress-current .linkish {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+}
+.plan-progress-current .linkish:hover {
+  filter: brightness(0.85);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+}

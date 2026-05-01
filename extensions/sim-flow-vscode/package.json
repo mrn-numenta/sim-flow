@@ -1,0 +1,301 @@
+{
+  "name": "sim-flow-vscode",
+  "displayName": "sim-flow",
+  "description": "VS Code adapter for the sim-flow AI-assisted modeling orchestrator (DMF and DSF).",
+  "version": "0.1.0",
+  "publisher": "numenta",
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NumentaCorp/sim-foundation"
+  },
+  "engines": {
+    "vscode": "^1.95.0",
+    "node": ">=20"
+  },
+  "categories": [
+    "Other",
+    "AI"
+  ],
+  "keywords": [
+    "sim-flow",
+    "sim-foundation",
+    "hardware",
+    "ai",
+    "orchestrator"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/.sim-flow/state.toml",
+    "onChatParticipant:sim-flow"
+  ],
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "sim-flow",
+        "name": "sim-flow",
+        "fullName": "sim-flow",
+        "description": "Drive the AI-assisted modeling flow (DMF and DSF).",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "status",
+            "description": "Show the current flow, step, and gate status."
+          },
+          {
+            "name": "runs",
+            "description": "List recent experiment runs. Optional filter args are forwarded to the CLI."
+          },
+          {
+            "name": "gate",
+            "description": "Read-only gate validation for <step>. Defaults to the current step."
+          },
+          {
+            "name": "advance",
+            "description": "Validate the gate and, if clean, mark the step passed and bump current_step."
+          },
+          {
+            "name": "reset",
+            "description": "Reset a step and cascade downstream gates. Usage: /reset <step>."
+          },
+          {
+            "name": "step",
+            "description": "Start a work or critique session. Usage: /step <step-id>.work or /step <step-id>.critique."
+          },
+          {
+            "name": "auto",
+            "description": "Run the entire flow unattended from the current step through the end (work -> critique -> advance per step). Optional --spec <path> seeds DM0; otherwise DM0.work is interactive and the rest is automated."
+          },
+          {
+            "name": "init",
+            "description": "Initialize sim-flow state in the current workspace."
+          }
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "sim-flow.openDashboard",
+        "title": "sim-flow: Open Flow Dashboard"
+      },
+      {
+        "command": "sim-flow.runStep",
+        "title": "sim-flow: Run Step"
+      },
+      {
+        "command": "sim-flow.runCritique",
+        "title": "sim-flow: Run Critique"
+      },
+      {
+        "command": "sim-flow.runAuto",
+        "title": "sim-flow: Run Automated Flow"
+      },
+      {
+        "command": "sim-flow.runAutoTerminal",
+        "title": "sim-flow: Run Automated Flow (CLI agent in terminal)"
+      },
+      {
+        "command": "sim-flow.dumpAvailableLmModels",
+        "title": "sim-flow: List Available Language Models"
+      },
+      {
+        "command": "sim-flow.testLmModel",
+        "title": "sim-flow: Test Language Model (probe with `hi`)"
+      },
+      {
+        "command": "sim-flow.switchProject",
+        "title": "sim-flow: Switch Project"
+      },
+      {
+        "command": "sim-flow.newProject",
+        "title": "sim-flow: New Project"
+      },
+      {
+        "command": "sim-flow.renameProject",
+        "title": "sim-flow: Rename Project"
+      },
+      {
+        "command": "sim-flow.resetStep",
+        "title": "sim-flow: Reset Step"
+      },
+      {
+        "command": "sim-flow.setApiKey",
+        "title": "sim-flow: Set LLM API Key"
+      },
+      {
+        "command": "sim-flow.clearApiKey",
+        "title": "sim-flow: Clear LLM API Key"
+      }
+    ],
+    "configuration": {
+      "title": "sim-flow",
+      "properties": {
+        "sim-flow.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the sim-flow binary. Empty string falls back to $PATH, then to the bundled binary."
+        },
+        "sim-flow.foundationRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Explicit path to the sim-foundation repository root. Passed to the CLI as --foundation-root. Empty string delegates to the CLI's own resolution."
+        },
+        "sim-flow.session.mode": {
+          "type": "string",
+          "enum": [
+            "per-step",
+            "single"
+          ],
+          "enumDescriptions": [
+            "Spawn a fresh CLI-agent session per step (per-step mode). User types `/exit` to end each step; orchestrator gates and advances automatically.",
+            "Keep one CLI-agent session alive for the whole flow (single-session mode). Dashboard buttons inject prompts / gate results / advance commands via a Unix control socket. User types `/exit` to end the entire flow; orchestrator lazy-respawns on the next dashboard command."
+          ],
+          "default": "per-step",
+          "description": "Lifecycle for the interactive CLI-agent backend (`claude-cli` etc.). Ignored for chat-pane backends."
+        },
+        "sim-flow.llm.verbose": {
+          "type": "boolean",
+          "default": true,
+          "description": "When OFF, the dashboard injects a `be concise` system message into every LLM request so models skip preamble, recaps, and hedging language. ON keeps the model's natural verbosity."
+        },
+        "sim-flow.llm.source": {
+          "type": "string",
+          "enum": [
+            "vscode",
+            "anthropic",
+            "openai",
+            "ollama",
+            "lmstudio",
+            "claude-cli",
+            "codex-cli",
+            "gh-copilot-cli"
+          ],
+          "enumDescriptions": [
+            "Use VS Code's built-in Language Model API (requires Copilot or another provider).",
+            "Call the Anthropic API directly; requires an API key in SecretStorage.",
+            "Call the OpenAI API directly; requires an API key in SecretStorage.",
+            "Call a local Ollama server via its OpenAI-compatible endpoint.",
+            "Call a local LM Studio server via its OpenAI-compatible endpoint.",
+            "Anthropic Claude CLI (terminal-only). Runs `sim-flow auto --llm-backend claude` in a VS Code terminal; uses the user's `claude /login` (Pro/Team).",
+            "OpenAI Codex CLI (terminal-only). Runs `sim-flow auto --llm-backend codex` in a VS Code terminal; uses the user's `codex login`.",
+            "GitHub Copilot CLI (terminal-only). Runs `sim-flow auto --llm-backend gh-copilot` in a VS Code terminal; uses the user's `gh auth login`."
+          ],
+          "default": "vscode",
+          "description": "Which language model source to use. The first five run inside the @sim-flow chat pane; the `*-cli` variants run `sim-flow auto` in a terminal tab and bypass the chat participant -- pick one when you want to use your existing CLI auth instead of API keys."
+        },
+        "sim-flow.chat.scope": {
+          "type": "string",
+          "enum": [
+            "session",
+            "project"
+          ],
+          "enumDescriptions": [
+            "Each /step launches a fresh chat tab; the tab closes when the session ends.",
+            "Sticky tab per project; new sessions stream into the existing tab."
+          ],
+          "default": "session",
+          "description": "Reserved for Phase 9 polish; currently the chat-tab lifecycle follows VS Code's defaults."
+        },
+        "sim-flow.llm.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model identifier passed to the configured source. Empty string delegates to the source's default."
+        },
+        "sim-flow.llm.ollama.baseUrl": {
+          "type": "string",
+          "default": "http://localhost:11434/v1",
+          "description": "Base URL for the Ollama OpenAI-compatible endpoint. Include the `/v1` suffix."
+        },
+        "sim-flow.llm.lmstudio.baseUrl": {
+          "type": "string",
+          "default": "http://localhost:1234/v1",
+          "description": "Base URL for the LM Studio OpenAI-compatible endpoint. Include the `/v1` suffix."
+        },
+        "sim-flow.dashboard.openOnActivate": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically open the Flow Dashboard when a sim-flow project is detected in the workspace."
+        },
+        "sim-flow.dashboard.showFullyAutomated": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show the red end-to-end automated-flow button next to the manual Play / Stop controls. Hidden by default because the automated flow walks every step (DM0 → DM4b) without stopping for review and can burn significant LLM credits. Toggle this on (Settings tab) only when you genuinely want a hands-off run from a complete spec."
+        },
+        "sim-flow.dashboard.verilogSimEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "When the Generate Verilog button runs, also instruct the agent to simulate the emitted RTL with the user-supplied simulator binary, diagnose any failures, and iterate the generated SystemVerilog until simulation matches the Foundation model. Requires `sim-flow.dashboard.verilogSimulatorPath` to be non-empty; otherwise the simulate-and-iterate section is omitted from the injected prompt."
+        },
+        "sim-flow.dashboard.verilogSimulatorPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path (or PATH-resolvable command) of a SystemVerilog simulator the agent may invoke when `sim-flow.dashboard.verilogSimEnabled` is true. Examples: `/usr/local/bin/verilator`, `/tools/synopsys/vcs/bin/vcs`, `/opt/modelsim/bin/vsim`. Leave empty to disable the simulate-and-iterate appendix even when the checkbox is on."
+        },
+        "sim-flow.auto.maxWorkIterations": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 3,
+          "description": "Per-session structural-gate iteration cap in automated mode. If a single work or critique session can't reach a clean structural gate within this many turns, the orchestrator falls through to interactive."
+        },
+        "sim-flow.auto.maxCritiqueIterations": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 3,
+          "description": "Maximum number of times the auto driver re-runs a step's work session in response to critique blockers before stopping the auto run."
+        },
+        "sim-flow.debug": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "events",
+              "raw",
+              "llm"
+            ]
+          },
+          "uniqueItems": true,
+          "default": [],
+          "description": "Debug log categories. Each enabled token writes to <project>/.sim-flow/logs/. `events` = parsed events both directions plus the full message stack on every LLM request. `raw` = JSONL lines on the wire. `llm` = vscode.lm dispatch detail (input messages, every chunk, errors). Empty disables logging. Setting overrides the SIM_FOUNDATION_DEBUG environment variable."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "typecheck:extension": "tsc -p ./ --noEmit",
+    "codegen:protocol": "node --import tsx scripts/generate-protocol-types.ts",
+    "compile:extension": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --external:better-sqlite3 --outfile=dist/extension.js --log-level=warning",
+    "compile:webview": "esbuild src/webview/panel.ts --bundle --format=iife --outfile=dist/webview/panel.js --target=es2022 --log-level=warning",
+    "compile:webview-types": "tsc -p src/webview/tsconfig.json",
+    "compile": "npm run codegen:protocol && npm run typecheck:extension && npm run compile:extension && npm run compile:webview-types && npm run compile:webview",
+    "compile:cargo": "node scripts/compile-cargo.mjs",
+    "watch": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --external:better-sqlite3 --outfile=dist/extension.js --watch",
+    "lint": "eslint src --max-warnings 0",
+    "format": "prettier --write \"src/**/*.ts\" \"*.json\" \"*.md\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"*.json\" \"*.md\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "package": "node scripts/package-dev.mjs",
+    "reload": "node scripts/reload.mjs",
+    "vscode:prepublish": "npm run compile",
+    "ci": "npm run compile && npm run lint && npm run format:check && npm run test"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.5.0",
+    "smol-toml": "^1.3.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.8.0",
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.95.0",
+    "@vscode/vsce": "^3.1.0",
+    "esbuild": "^0.24.0",
+    "eslint": "^9.8.0",
+    "json-schema-to-typescript": "^15.0.4",
+    "prettier": "^3.3.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^2.1.0"
+  }
+}

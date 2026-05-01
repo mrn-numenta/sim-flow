@@ -1,0 +1,22 @@
+digraph direct_modeling_flow {
+    rankdir=LR;
+    node [shape=box, style="rounded,filled", fillcolor="#e8e8e8",
+          fontname="Helvetica", fontsize=10, margin="0.12,0.06"];
+    edge [arrowsize=0.7];
+
+    // Steps.
+    dm0 [label="DM0\nSpecification"];
+    dm1 [label="DM1\nModeling\nSetup"];
+    dm2 [label="DM2\nDesign\nModeling"];
+    dm3 [label="DM3\nValidation"];
+    dm4 [label="DM4\nPerformance\nAnalysis"];
+    dm5 [label="DM5\nExternal\nPPA Analysis"];
+
+    // Gate markers between steps.
+    node [shape=diamond, style="filled", fillcolor="#ffd966", fontsize=8,
+          fixedsize=true, width=0.32, height=0.32, margin="0.01,0.01",
+          label="G"];
+    g01; g12; g23; g34; g45;
+
+    dm0 -> g01 -> dm1 -> g12 -> dm2 -> g23 -> dm3 -> g34 -> dm4 -> g45 -> dm5;
+}

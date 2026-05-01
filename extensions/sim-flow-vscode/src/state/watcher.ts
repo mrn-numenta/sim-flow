@@ -1,0 +1,70 @@
+// Workspace-scoped file watcher over the three on-disk state sources
+// the dashboard cares about: state.toml, critique markdown files, and
+// experiments.db. Emits a single coarse `change` event each time
+// anything under `.sim-flow/` changes; consumers decide what to
+// re-read. We accept the coarser granularity because each read is cheap
+// (TOML is small, critiques are small, the sqlite DB open is fast).
+//
+// This module imports vscode and therefore cannot run inside
+// vitest. Keep the logic here trivially thin: all reading / parsing
+// lives in the sibling modules, which have their own tests.
+
+import * as vscode from "vscode";
+
+export type StateChangeKind =
+  | "state-toml"
+  | "critiques"
+  | "experiments-db"
+  | "plan";
+
+export interface StateChangeEvent {
+  projectDir: string;
+  kind: StateChangeKind;
+  uri: vscode.Uri;
+}
+
+export interface SimFlowStateWatcher extends vscode.Disposable {
+  onDidChange: vscode.Event<StateChangeEvent>;
+}
+
+/**
+ * Create a watcher over a specific sim-flow project directory. Call
+ * `.dispose()` when the project is no longer of interest (e.g. the
+ * user closed the workspace).
+ */
+export function createStateWatcher(projectDir: string): SimFlowStateWatcher {
+  const emitter = new vscode.EventEmitter<StateChangeEvent>();
+  const disposables: vscode.Disposable[] = [emitter];
+  const base = vscode.Uri.file(projectDir);
+
+  const register = (pattern: string, kind: StateChangeKind) => {
+    const rel = new vscode.RelativePattern(base, pattern);
+    const watcher = vscode.workspace.createFileSystemWatcher(rel);
+    const fire = (uri: vscode.Uri) => {
+      emitter.fire({ projectDir, kind, uri });
+    };
+    disposables.push(
+      watcher,
+      watcher.onDidCreate(fire),
+      watcher.onDidChange(fire),
+      watcher.onDidDelete(fire),
+    );
+  };
+
+  register(".sim-flow/state.toml", "state-toml");
+  register("docs/critiques/*.md", "critiques");
+  register(".sim-flow/experiments.db", "experiments-db");
+  // Plan files drive the progress panel under the step buttons. Edits
+  // by the agent (flipping `- [ ]` to `- [x]`) need to refresh the
+  // dashboard so the milestone boxes + current-task line stay live.
+  register("docs/plan/*.md", "plan");
+
+  return {
+    onDidChange: emitter.event,
+    dispose(): void {
+      for (const d of disposables) {
+        d.dispose();
+      }
+    },
+  };
+}

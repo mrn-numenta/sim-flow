@@ -1,0 +1,837 @@
+# 2. Direct Modeling Flow
+
+## Purpose
+
+Define the detailed implementation of the Direct Modeling Flow (DM0-DM5): the
+session structure, orchestrator behavior, gate validation, AI client invocation, and command specifications for each step. This document is the implementation specification for the `sim-flow` orchestrator crate.
+
+## Overview
+
+The Direct Modeling Flow turns a design specification into a cycle-accurate
+sim-foundation model through six steps (DM0-DM5). The `sim-flow` orchestrator
+manages state, enforces step ordering, invokes AI sessions, and validates
+outputs.
+
+Each step runs as two **sessions**: a work session that produces the step's artifacts, and a critique session that reviews them. The two are logically independent (different prompts, distinct artifacts, independent review).
+
+1. **Work session** -- the agent receives the step's work prompt and produces the named artifacts. When the artifacts are written it stops; it does not author the critique file and does not `/exit` on its own.
+2. **Critique session** -- the agent receives the step's critique prompt. It reads the work artifacts (treating them as work produced by a third party even if it produced them itself), evaluates them against the step's gate criteria, and writes `docs/critiques/<step>-critique.md`.
+
+### Mode × session-policy matrix
+
+The orchestrator has two **orthogonal** axes the user (or caller) selects independently:
+
+- **Mode** -- whether the agent is supposed to be operating without a human in the loop.
+  - `automated` (`auto: true`): no human responder. The agent must auto-decide on ambiguities and document choices in `## Auto-decisions`. Inlined via `tools/sim-flow/prompts/_conventions/auto-mode.md` when this mode is active.
+  - `manual` (`auto: false`): human is in the loop and may answer questions; clarifying questions are appropriate.
+
+- **Session policy** -- how the orchestrator realizes the work/critique boundary at the process level.
+  - `per-step`: each session is a fresh AI CLI subprocess; conversation state does not carry over. Independent review is enforced by process isolation.
+  - `single`: one long-lived AI CLI process for the whole flow; the orchestrator injects each new prompt into the same process. Independent review is enforced by prompt structure -- the critique prompt asks the agent to bracket any prior reasoning rather than relying on it.
+
+All four combinations are valid:
+
+|               | per-step                                                                                          | single-session                                                                                                              |
+| ------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **automated** | sim-flow walks DM0→DM4b spawning a fresh subprocess per session; agent never asks questions.      | sim-flow walks DM0→DM4b in one long-lived agent; conversation history accumulates; agent never asks questions.              |
+| **manual**    | user `/exits` between sessions; sim-flow waits, then spawns the next subprocess.                  | dashboard buttons drive one long-lived agent (Run Step, Run Critique, Advance, etc.); conversation history accumulates.     |
+
+The agent's per-session contract is identical in all four cells: produce/review artifacts, stop when done, don't author the wrong file, don't `/exit` on its own. Mode-specific rules live in the mode convention file (`auto-mode.md`); session-policy mechanics are an orchestrator implementation detail, not something the agent needs to special-case.
+
+Automated callers (tests, the mock client) can opt into one-shot non-interactive invocation for the same prompt content; the interactive/one-shot distinction is captured by the `SessionMode` dimension of the client abstraction.
+
+```text
+sim-flow run <step>                         # per-step session-policy example
+    |
+    1. Check prerequisite gate (previous step must have passed)
+    |
+    2. Load work prompt and step instructions from sim-foundation
+    |
+    3. Start AI client work session
+       - per-step:  spawn a fresh subprocess inheriting the user's TTY
+       - single:    inject the work prompt into the long-lived agent
+       - Agent produces the artifacts and stops
+    |
+    4. Load critique prompt
+    |
+    5. Start AI client critique session
+       - per-step:  spawn a fresh subprocess with no shared state
+       - single:    inject the critique prompt into the same agent
+       - Critique writes docs/critiques/<step>-critique.md
+    |
+    6. Orchestrator runs gate validation (automatic)
+       - Artifact checks (files exist, cargo builds, etc.)
+       - Scans critique file for UNRESOLVED: or BLOCKER: lines
+    |
+    7. If gate passes: update state, done
+       If gate fails: report what failed
+```
+
+## AI Client Abstraction
+
+The orchestrator supports multiple AI clients. Each client implements the same
+interface: accept a prompt, a system prompt (or appended instructions), tool
+permissions, and output format. The orchestrator constructs the prompt from
+step-specific markdown files and passes it to whichever client is configured.
+
+### Client Invocation
+
+Each client has an interactive and a one-shot invocation form. The
+orchestrator uses interactive by default and falls back to one-shot only
+for automated testing.
+
+| Client | Interactive | One-shot | Tool permissions |
+| ------ | ----------- | -------- | ---------------- |
+| Claude Code | `claude "<prompt>"` with inherited stdio | `claude -p "<prompt>"` | `--allowedTools` (one-shot only) |
+| Codex | `codex "<prompt>"` with inherited stdio | `codex exec "<prompt>"` | `-a never -s workspace-write` (one-shot) |
+| Copilot | `copilot "<prompt>"` with inherited stdio | `copilot -p "<prompt>" --allow-all-tools` | `--allow-all-tools` (one-shot) |
+
+Interactive invocations do not pass tool-permission flags because the AI
+CLI applies its own project-level settings (e.g. `.claude/settings.json`)
+when running as a TUI.
+
+### Structured Output
+
+| Client | JSON output | Parsing |
+| ------ | ----------- | ------- |
+| Claude Code | `--output-format json` | `jq -r '.result'` |
+| Codex | `--json` | JSONL events, final message on stdout |
+| Copilot | `--output-format json` | JSONL |
+
+### Instruction Files
+
+Step instructions are stored as markdown files in **sim-foundation** alongside the orchestrator (see [05-templates.md](05-templates.md) for the layout). The orchestrator reads these and passes them to the AI client as the system prompt or appended instructions.
+
+For Claude Code: passed via the appropriate system-prompt CLI flag (exact flag resolved at implementation time).
+
+For Codex and Copilot: written to `AGENTS.md` in the project directory before
+the session starts, then restored after the session ends. Alternatively, the
+orchestrator concatenates the instruction content into the prompt itself.
+
+The orchestrator always builds the full prompt from instruction files and passes it to the AI client non-interactively. There are no slash commands. All three clients receive equivalent instructions.
+
+### Configuration
+
+The AI client is configured in `.sim-flow/config.toml`. This file is committed so the configuration is tracked with the project:
+
+```toml
+[client]
+name = "claude"          # "claude", "codex", or "copilot"
+
+[client.claude]
+model = "sonnet"
+max_turns = 50
+allowed_tools = ["Bash", "Read", "Edit", "Write", "Glob", "Grep"]
+
+[client.codex]
+model = "o3"
+sandbox = "workspace-write"
+approval = "never"
+
+[client.copilot]
+model = "claude-sonnet-4.5"
+mode = "autopilot"
+```
+
+### Configuration Precedence
+
+Where the same setting is specified in multiple places, precedence is:
+
+1. `.sim-flow/config.toml` (committed, project-owned source of truth)
+2. `sim-flow` CLI flags (per-invocation overrides)
+3. Environment variables (`SIM_FOUNDATION_ROOT`, etc.)
+
+Per-step client overrides (e.g., "use Claude for DM2, Codex for DM3") are supported by adding a `[steps.<step-id>]` table that overrides `client.name` or model choice for that step.
+
+### Session Lifecycle
+
+Timeout, abort, and retry behavior for AI client sessions is TBD. For the initial implementation the orchestrator will invoke the client synchronously with no timeout and surface a non-zero exit from the client as a gate failure. Refinements (interrupt handling, per-step timeouts, automatic retry on transient errors) are a follow-up item.
+
+## State Management
+
+### State File
+
+The orchestrator stores state in `.sim-flow/state.toml`:
+
+```toml
+flow = "direct-modeling"
+current_step = "DM2a"
+started = "2026-04-17T10:00:00Z"
+
+[gates]
+DM0 = { passed = true, timestamp = "2026-04-17T10:15:00Z" }
+DM1 = { passed = true, timestamp = "2026-04-17T11:00:00Z" }
+DM2a = { passed = false }
+```
+
+### State Transitions
+
+Forward transitions require the current step's gate to pass. Back transitions
+(re-entering a previous step) are always allowed. When a step is re-entered,
+its gate status and all downstream gate statuses are reset to `passed = false`.
+
+### CLI Interface
+
+```text
+sim-flow init --flow direct-modeling     Create .sim-flow/ and state.toml
+sim-flow status                          Show current step, gate status, history
+sim-flow run [step]                      Run step (default: current). Validates
+                                         prerequisite, spawns session, validates gate.
+sim-flow gate [step]                     Run gate validation only (no AI session)
+sim-flow reset [step]                    Reset step and all downstream to not-passed
+sim-flow config                          Show/edit client configuration
+```
+
+## Session Decomposition
+
+Each DM step is split into sub-steps where natural (DM2a, DM2b, DM2c). Every sub-step runs as a pair of sessions: one **work** session plus one **critique** session. The orchestrator treats each pair as a single gated unit.
+
+```text
+DM0    Specification                     (work + critique)
+DM1    Modeling Setup                    (work + critique)
+DM2a   Functional Decomposition          (work + critique)
+DM2b   Pipeline Mapping                  (work + critique)
+DM2c   Model Implementation              (work + critique)
+DM3a   Testbench Implementation          (work + critique)
+DM3b   Test Plan Creation                (work + critique)
+DM3c   Test Execution and Coverage       (1+ work + critique pairs)
+DM4    Performance Analysis              (work + critique)
+DM5    External PPA Analysis             (TBD)
+```
+
+## Step Specifications
+
+Each step specification defines:
+- **Purpose**: What the step accomplishes
+- **Prerequisites**: Which gate must have passed
+- **Instruction files**: Which markdown files provide detailed guidance
+- **Work prompt**: What the work session is told to do
+- **Critique prompt**: What the critique session evaluates
+- **Gate checks**: What the orchestrator validates independently
+
+The work session produces artifacts; the critique session reads those artifacts and writes the critique file. Both sessions are logically independent (different prompts, distinct artifacts, independent review); how that separation is realized at the process level depends on the **session policy** (see the matrix above). Work prompts do not ask the agent to critique its own output -- that is the critique session's job.
+
+### DM0: Specification
+
+**Purpose:** Create or validate the design specification document.
+
+**Prerequisites:** None (entry point).
+
+**Instruction files:** `instructions/dm0-specification.md`
+
+**Work prompt:**
+
+```text
+You are executing step DM0 (Specification) of the Direct Modeling Flow.
+
+Read the step instructions provided. The user needs to provide or create a
+specification document (spec.md). Guide them through creating it with all
+required content: clock frequency, technology node, detailed functional
+description, internal and external interfaces, pipelining and hierarchy,
+and parameterization requirements.
+
+If spec.md already exists, review it against the requirements and identify
+gaps.
+
+Report whether the specification is ready to proceed. A separate critique
+session will review your output.
+```
+
+**Critique prompt (separate critique session):**
+
+```text
+You are a critique session reviewing the work produced by the DM0 work
+session. Read spec.md and evaluate it:
+- Does it specify clock frequency and technology node?
+- Is the functional description detailed enough to decompose into
+  operations?
+- Are all interfaces (internal and external) described?
+- Is pipelining and hierarchy specified?
+- Are parameterization requirements identified (if applicable)?
+- Is anything ambiguous or contradictory?
+- Is anything missing that would block DM1?
+
+Write findings to .sim-flow/critiques/DM0-critique.md. Prefix every
+unresolved issue line with `UNRESOLVED:` and every gate-blocking issue
+line with `BLOCKER:`.
+```
+
+**Gate checks (orchestrator-validated):**
+
+1. `spec.md` exists and is non-empty
+2. `spec.md` contains a frequency value (regex match for MHz/GHz pattern)
+3. `spec.md` contains a technology node value (regex match for nm pattern)
+4. `.sim-flow/critiques/DM0-critique.md` exists
+5. Critique file does not contain unresolved issues (no lines starting with
+   `UNRESOLVED:` or `BLOCKER:`)
+
+---
+
+### DM1: Modeling Setup
+
+**Purpose:** Establish verification targets and testbench requirements.
+
+**Prerequisites:** DM0 gate passed.
+
+**Instruction files:** `instructions/dm1-modeling-setup.md`
+
+**Work prompt:**
+
+```text
+You are executing step DM1 (Modeling Setup) of the Direct Modeling Flow.
+
+Read the step instructions provided. Read spec.md and:
+
+1. Parse the specification and establish target throughput, latency, area,
+   and power values. Write these to targets.md with quantitative values
+   and the spec sections they derive from.
+
+2. Define UVM-lite testbench requirements: what Sequencers, Drivers,
+   Monitors, and Scoreboards are needed. What interfaces must the
+   testbench drive and observe. Write to testbench.md.
+
+A separate critique session will review your output.
+```
+
+**Critique prompt (separate critique session):**
+
+```text
+You are a critique session reviewing the work produced by the DM1 work
+session. Read targets.md, testbench.md, and spec.md and evaluate:
+- Are all targets derived from spec.md? Can each target be traced to a
+  spec requirement?
+- Are the testbench requirements sufficient to verify every target?
+- Is anything from the spec not covered by a target or testbench
+  requirement?
+- Are the testbench component types (Sequencer, Driver, Monitor,
+  Scoreboard) appropriate for the interfaces described in the spec?
+
+Write findings to .sim-flow/critiques/DM1-critique.md. Prefix unresolved
+issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
+```
+
+**Gate checks:**
+
+1. `targets.md` exists with quantitative values
+2. `testbench.md` exists with testbench component requirements
+3. `.sim-flow/critiques/DM1-critique.md` exists without blockers
+
+---
+
+### DM2a: Functional Decomposition
+
+**Purpose:** Decompose the design into functional units with data movement
+characterization.
+
+**Prerequisites:** DM1 gate passed.
+
+**Instruction files:** `instructions/dm2a-decomposition.md`
+
+**Work prompt:**
+
+```text
+You are executing step DM2a (Functional Decomposition) of the Direct
+Modeling Flow.
+
+Read the step instructions provided. Read spec.md and:
+
+1. Break the design into discrete functional units / operations.
+2. Identify data dependencies between operations.
+3. Characterize data movement between operations: data types, bit widths,
+   rates (items per cycle), burst patterns, fanout.
+4. Write the decomposition to analysis/decomposition.md.
+5. Write the data movement characterization to analysis/data-movement.md.
+
+The data movement characterization will become the payload types and port
+definitions for sim-foundation models in DM2c.
+
+A separate critique session will review your output.
+```
+
+**Critique prompt (separate critique session):**
+
+```text
+You are a critique session reviewing the work produced by the DM2a work
+session. Read analysis/decomposition.md, analysis/data-movement.md, and
+spec.md and evaluate:
+- Are all functions in spec.md represented as operations?
+- Are there operations that are not in the spec (invented functionality)?
+- Are data dependencies correct and complete?
+- Is the data movement characterization complete (types, widths, rates)?
+- Is the decomposition at the right granularity -- not too fine (one gate
+  per operation) and not too coarse (entire pipeline as one operation)?
+
+Write findings to .sim-flow/critiques/DM2a-critique.md. Prefix unresolved
+issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
+```
+
+**Gate checks:**
+
+1. `analysis/decomposition.md` exists with operation list
+2. `analysis/data-movement.md` exists with data characterization
+3. `.sim-flow/critiques/DM2a-critique.md` exists without blockers
+
+---
+
+### DM2b: Pipeline Mapping
+
+**Purpose:** Map operations to pipeline stages at the target frequency and
+technology node.
+
+**Prerequisites:** DM2a gate passed.
+
+**Instruction files:** `instructions/dm2b-pipeline-mapping.md`
+
+**Work prompt:**
+
+```text
+You are executing step DM2b (Pipeline Mapping) of the Direct Modeling Flow.
+
+Read the step instructions provided. Read spec.md and
+analysis/decomposition.md and:
+
+1. Using the target frequency and technology node from spec.md, estimate
+   the gate budget per cycle.
+2. Map operations from the decomposition to pipeline stages. Each stage
+   must fit within the gate budget.
+3. Verify there are no combinational loops in the pipeline.
+4. The mapping must respect the pipelining described in the spec.
+5. Write the pipeline mapping to analysis/pipeline-mapping.md.
+
+A separate critique session will review your output.
+```
+
+**Critique prompt (separate critique session):**
+
+```text
+You are a critique session reviewing the work produced by the DM2b work
+session. Read analysis/pipeline-mapping.md and evaluate:
+- Does the mapping respect the target frequency and technology node?
+- Does each stage fit within the estimated gate budget per cycle?
+- Are there combinational loops?
+- Does the mapping match the spec's prescribed pipelining and hierarchy?
+- Are all operations from the decomposition mapped to a stage?
+- Is anything split across stages that should not be, or combined that
+  should be split?
+
+Write findings to .sim-flow/critiques/DM2b-critique.md. Prefix unresolved
+issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
+```
+
+**Gate checks:**
+
+1. `analysis/pipeline-mapping.md` exists
+2. Pipeline stages map to decomposition operations (orchestrator can check
+   that operation names from decomposition.md appear in pipeline-mapping.md)
+3. `.sim-flow/critiques/DM2b-critique.md` exists without blockers
+
+---
+
+### DM2c: Model Implementation
+
+**Purpose:** Build the sim-foundation model from the pipeline mapping.
+
+**Prerequisites:** DM2b gate passed.
+
+**Instruction files:** `instructions/dm2c-model-implementation.md`
+
+**Work prompt:**
+
+```text
+You are executing step DM2c (Model Implementation) of the Direct Modeling
+Flow.
+
+Read the step instructions provided. Read analysis/pipeline-mapping.md
+and analysis/data-movement.md and:
+
+1. If needed review sim-models/examples and sim-models/docs/modeling-guide
+2. Create payload types (Rust structs) from the data movement
+   characterization.
+3. Build a ConnectivityPlan that wires all pipeline stages.
+4. Implement each module using the Foundation Module, HasLogic, and
+   HasInstances traits. Each module has flopped inputs.
+5. For simple modules, implement logic directly in evaluate().
+   For complex modules, factor into helper functions called from
+   evaluate().
+6. Write smoke tests: elaboration, basic data flow, backpressure, idle.
+7. Run cargo build and cargo test after each module.
+
+Do not attempt exhaustive testing -- that is DM3.
+
+Stop once the model builds, elaborates, and passes smoke tests. A separate
+critique session will review your output.
+```
+
+**Critique prompt (separate critique session):**
+
+```text
+You are a critique session reviewing the work produced by the DM2c work
+session. Read the model source, ConnectivityPlan, and smoke tests and
+evaluate:
+- Does the ConnectivityPlan match the pipeline mapping topology?
+- Does each module's evaluate() implement the operations from the
+  decomposition?
+- Are payload types consistent with the data movement characterization?
+- Are there any custom implementations that deviate from Foundation
+  patterns (e.g., bypassing the port system, manual scheduling)?
+- Do all smoke tests pass?
+- Is the code organized per Foundation conventions (model/sim/test split)?
+
+Write findings to .sim-flow/critiques/DM2c-critique.md. Prefix unresolved
+issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
+```
+
+**Gate checks:**
+
+1. `src/model/` directory exists with module source files
+2. `Cargo.toml` exists with sim-foundation dependency
+3. `cargo build` succeeds
+4. `cargo test` passes (at minimum elaboration test)
+5. Source contains a ConnectivityPlan (grep for `connectivity_plan`)
+6. Source contains HasLogic implementations (grep for `impl HasLogic`)
+7. `.sim-flow/critiques/DM2c-critique.md` exists without blockers
+
+---
+
+### DM3a: Testbench Implementation
+
+**Purpose:** Implement the UVM-lite testbench from the requirements defined
+in DM1.
+
+**Prerequisites:** DM2c gate passed.
+
+**Instruction files:** `instructions/dm3a-testbench-impl.md`
+
+**Work prompt:**
+
+```text
+You are executing step DM3a (Testbench Implementation) of the Direct
+Modeling Flow.
+
+Read the step instructions provided. Read testbench.md for the testbench
+requirements defined in DM1.
+
+1. Implement UVM-lite testbench components: Sequencers, Drivers, Monitors,
+   and Scoreboards as specified in testbench.md.
+2. Wire the testbench to all model ports using SimEnvBuilder.
+3. Verify the testbench builds and can drive basic traffic through the
+   model.
+
+A separate critique session will review your output.
+```
+
+**Critique prompt (separate critique session):**
+
+```text
+You are a critique session reviewing the work produced by the DM3a work
+session. Read the testbench source and testbench.md and evaluate:
+- Are all components from testbench.md implemented?
+- Does the testbench connect to all model ports?
+- Can it drive traffic through the model without errors?
+- Are Scoreboard checks meaningful (not just checking for non-crash)?
+- Does it build cleanly?
+
+Write findings to .sim-flow/critiques/DM3a-critique.md. Prefix unresolved
+issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
+```
+
+**Gate checks:**
+
+1. Testbench source files exist (grep for `SimEnv` or `Sequencer` in tests/)
+2. `cargo build` succeeds
+3. `.sim-flow/critiques/DM3a-critique.md` exists without blockers
+
+---
+
+### DM3b: Test Plan Creation
+
+**Purpose:** Create a test plan that covers functional and performance
+verification.
+
+**Prerequisites:** DM3a gate passed.
+
+**Instruction files:** `instructions/dm3b-test-plan.md`
+
+**Work prompt:**
+
+```text
+You are executing step DM3b (Test Plan Creation) of the Direct Modeling
+Flow.
+
+Read the step instructions provided. Read spec.md and targets.md.
+
+1. Create a test plan that maps every functional requirement in spec.md
+   to at least one test.
+2. Create performance tests that cover every target in targets.md.
+3. Identify edge cases: empty pipeline, full buffers, backpressure,
+   stall-then-resume, single-element transit.
+4. Write the test plan to docs/test-plan.md with a checklist of tests.
+   Each test entry should have: name, purpose, requirement traced to,
+   pass criteria.
+
+Do not write test code in this step -- that is DM3c.
+
+A separate critique session will review your output.
+```
+
+**Critique prompt (separate critique session):**
+
+```text
+You are a critique session reviewing the work produced by the DM3b work
+session. Read docs/test-plan.md, spec.md, and targets.md and evaluate:
+- Does every functional requirement in spec.md have at least one test?
+- Do performance tests cover all targets in targets.md?
+- Are edge cases identified?
+- Is the plan achievable with the testbench implemented in DM3a?
+- Are pass criteria specific and measurable?
+
+Write findings to .sim-flow/critiques/DM3b-critique.md. Prefix unresolved
+issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
+```
+
+**Gate checks:**
+
+1. `docs/test-plan.md` exists with test entries
+2. Test entries reference spec.md requirements
+3. `.sim-flow/critiques/DM3b-critique.md` exists without blockers
+
+---
+
+### DM3c: Test Execution and Coverage
+
+**Purpose:** Write tests from the test plan, execute them, and achieve
+coverage targets.
+
+**Prerequisites:** DM3b gate passed.
+
+**Instruction files:** `instructions/dm3c-test-execution.md`
+
+**Work prompt:**
+
+```text
+You are executing step DM3c (Test Execution and Coverage) of the Direct
+Modeling Flow.
+
+Read the step instructions provided. Read docs/test-plan.md.
+
+1. Implement tests from the test plan using the UVM-lite testbench.
+2. Run each test and fix failures. If a test fails due to a design bug,
+   fix the design and re-run. If a test fails due to a test bug, fix
+   the test.
+3. Measure coverage. Target: 90%+ line coverage.
+4. If coverage is below target, identify uncovered code paths and write
+   additional tests or document exclusions (dead code, platform-gated).
+5. Update docs/test-plan.md checklist to mark completed tests.
+
+Stop when all tests pass and the coverage target is met. A separate critique
+session will review your output.
+```
+
+**Critique prompt (separate critique session):**
+
+```text
+You are a critique session reviewing the work produced by the DM3c work
+session. Read the test sources, coverage report, and docs/test-plan.md
+and evaluate:
+- Are all tests from the test plan implemented and passing?
+- If any tests fail, are the failures understood?
+- Is coverage at 90%+?
+- Are uncovered lines justified (dead code, platform-gated)?
+- Did any design bugs found during testing get properly fixed and
+  re-verified?
+
+Write findings to .sim-flow/critiques/DM3c-critique.md. Prefix unresolved
+issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
+```
+
+**Gate checks:**
+
+1. `cargo test` passes (all tests)
+2. Coverage measurement exists (coverage report file)
+3. Coverage >= 90% or documented exclusions
+4. `docs/test-plan.md` has completed checklist entries
+5. `.sim-flow/critiques/DM3c-critique.md` exists without blockers
+
+**Re-entry:** If the test plan is large, DM3c may need multiple sessions.
+The orchestrator detects "gate failed due to incomplete test plan coverage"
+and offers to re-enter DM3c. Each re-entry session picks up where the
+previous left off by reading the test plan checklist.
+
+---
+
+### DM4: Performance Analysis
+
+**Purpose:** Analyze design performance and identify bottlenecks.
+
+**Prerequisites:** DM3c gate passed.
+
+**Instruction files:** `instructions/dm4-performance-analysis.md`
+
+**Work prompt:**
+
+```text
+You are executing step DM4 (Performance Analysis) of the Direct Modeling
+Flow.
+
+Read the step instructions provided. Read targets.md for the performance
+targets.
+
+1. Run simulations with appropriate workloads to collect performance data.
+2. Analyze results: throughput, latency, memory and communication
+   bandwidth, utilization per module, pipeline bubbles, and bottlenecks.
+3. If the design is parameterizable, perform parameter sweeps.
+4. Report results using Foundation standard reporting mechanisms: obsv
+   artifacts, charts, and report templates.
+5. Write the analysis report to docs/analysis/.
+
+A separate critique session will review your output.
+```
+
+**Critique prompt (separate critique session):**
+
+```text
+You are a critique session reviewing the work produced by the DM4 work
+session. Read the analysis report in docs/analysis/ and evaluate:
+- Are all target metrics from targets.md measured?
+- Are bottlenecks identified with supporting evidence?
+- Do parameter sweep results make physical sense?
+- Are any results inconsistent with the spec or the model's intended
+  behavior?
+- Does the report use distributions (percentiles) rather than just
+  scalar summaries?
+
+Write findings to .sim-flow/critiques/DM4-critique.md. Prefix unresolved
+issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
+```
+
+**Gate checks:**
+
+1. At least one experiment run recorded in tracking
+2. Analysis report exists in `docs/analysis/`
+3. Report contains throughput and latency metrics
+4. `.sim-flow/critiques/DM4-critique.md` exists without blockers
+
+---
+
+### DM5: External PPA Analysis
+
+**Purpose:** Generate RTL and support external synthesis for PPA.
+
+**Prerequisites:** DM4 gate passed.
+
+**Instruction files:** `instructions/dm5-ppa-analysis.md`
+
+**Session structure:** TBD. Will be defined in collaboration with the PPA
+flow engineer. Expected sub-sessions:
+
+- DM5a: Level 1 analytical PPA estimation
+- DM5b: LLM-assisted SystemVerilog generation
+- DM5c: External synthesis flow guidance and result import
+
+---
+
+## Instruction File Location
+
+Step instruction files live in **sim-foundation**, alongside the orchestrator crate and the project templates:
+
+```text
+sim-foundation/
+    tools/sim-flow/
+    instructions/
+        dm0-specification.md
+        dm1-modeling-setup.md
+        dm2a-decomposition.md
+        dm2b-pipeline-mapping.md
+        dm2c-model-implementation.md
+        dm3a-testbench-impl.md
+        dm3b-test-plan.md
+        dm3c-test-execution.md
+        dm3-critique.md         # shared critique-session preamble, if any
+        dm4-performance-analysis.md
+        dm5-ppa-analysis.md
+```
+
+These files contain the detailed guidance for the AI -- more explicit and
+procedural than the architecture documents. They include:
+
+- Step-by-step instructions for what to do
+- Foundation framework patterns and APIs to use
+- File naming conventions and locations
+- Examples of expected output format
+- Common pitfalls and how to avoid them
+
+The orchestrator reads these files and passes them to the AI client as part
+of the system prompt or appended instructions. sim-models never edits these files -- they are owned by sim-foundation and are the framework's source of truth for step guidance. See [05-templates.md](05-templates.md) for the sim-foundation layout.
+
+## Critique and Gate Interaction
+
+Every step runs a critique as a separate AI session after the work session exits. The critique serves two purposes:
+
+1. **Independent review:** A fresh session with no context from the work session reduces self-bias. It reads the artifacts the work session produced and judges them against the step's critique prompt.
+
+2. **Input to gate validation:** The critique is written to `.sim-flow/critiques/<step>-critique.md`. The orchestrator scans this file after the critique session exits. If any line starts with `UNRESOLVED:` or `BLOCKER:`, the gate fails.
+
+### Critique File Format
+
+The critique file is free-form markdown. The only gate contract is line-prefixed issue markers:
+
+```markdown
+# DM2c Critique
+
+## Consistency
+- ConnectivityPlan matches pipeline-mapping.md: YES
+- Payload types match data-movement.md: YES
+
+## Completeness
+- All pipeline stages implemented: YES
+- All operations from decomposition covered: YES
+
+## Findings
+- RESOLVED: FetchModule needed settle() for redirect feedback
+- RESOLVED: Missing backpressure test for output port
+- UNRESOLVED: Pipeline bubble rate higher than estimated in DM2b
+- BLOCKER: Scoreboard does not verify output ordering
+```
+
+The orchestrator grep rule is strict: any line whose first non-whitespace token is `UNRESOLVED:` or `BLOCKER:` fails the gate. `RESOLVED:` lines are ignored. The content beyond the prefix is for humans; the orchestrator does not parse it.
+
+## Run Identification
+
+The orchestrator passes each simulation invocation a `--run-id <id>` CLI flag. Every model binary generated from the project templates (see [05-templates.md](05-templates.md)) must accept this flag and propagate it into Foundation's `RunManifest::new(run_id)` and `ObservabilityRunWriter::new(output_dir, run_id)`. This is how experiment tracking correlates a simulation's `.obsv` artifacts with its index row.
+
+## Orchestrator Crate
+
+The `sim-flow` orchestrator lives as a crate in the sim-foundation workspace:
+
+```text
+sim-foundation/
+    crates/
+        sim-flow/
+            Cargo.toml
+            src/
+                main.rs          # CLI entry point
+                state.rs         # State machine and persistence
+                gate.rs          # Gate validation logic
+                client.rs        # AI client abstraction
+                clients/
+                    claude.rs    # Claude Code invocation
+                    codex.rs     # Codex CLI invocation
+                    copilot.rs   # Copilot CLI invocation
+                steps/
+                    mod.rs       # Step registry
+                    dm.rs        # DM0-DM5 step definitions
+                    ds.rs        # DS0-DS9 step definitions
+                critique.rs      # Critique file parsing
+    instructions/                # Step prompts (dm0..., ds0..., critique prompts)
+    templates/                   # cargo-generate templates (see 05-templates.md)
+```
+
+### Dependencies
+
+- `clap` for CLI argument parsing
+- `toml` for state and config file parsing
+- `serde` for serialization
+- `std::process::Command` for AI client subprocess invocation
+- `regex` for gate validation checks (frequency, node patterns)
+- `rusqlite` for the experiments index (see [04-experiment-tracking.md](04-experiment-tracking.md))
+- No async runtime needed -- sessions are sequential

@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep"
+    ]
+  },
+  "project": {
+    "name": "{{project-name}}",
+    "managedBy": "sim-flow"
+  }
+}

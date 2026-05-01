@@ -1,0 +1,59 @@
+[package]
+name = "sim-flow"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "sim-flow"
+path = "src/main.rs"
+
+[dependencies]
+block-diagram = { path = "../../tools/block-diagram" }
+clap = { version = "4.5", features = ["derive"] }
+directories = "5"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+lopdf = "0.32"
+pdfium-render = "0.8"
+# Cross-platform PTY for the interactive Claude session driver
+# (`session::agent::interactive_pty`). Used to spawn `claude` as a
+# child on a pseudo-terminal so its TUI renders into the user's
+# terminal verbatim while the orchestrator gets a side channel to
+# inject prompts.
+portable-pty = "0.8"
+# Cross-platform Ctrl-C / SIGINT / SIGTERM handler so the interactive
+# PTY drivers can restore the user's terminal to cooked mode and
+# remove the control-socket file before exiting. Without this, killing
+# sim-flow with Ctrl-C leaves the terminal in raw mode and a stale
+# socket file the next dashboard click trips on.
+ctrlc = "3"
+regex = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+schemars = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+termimad = "0.31"
+thiserror = "2"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ureq = { version = "2", default-features = false, features = ["json", "tls"] }
+# Raw-mode termios on the controlling terminal so user keystrokes
+# pass through to the spawned PTY child unprocessed (no line
+# buffering, no echo, Ctrl-C as 0x03 byte). Same API on macOS and
+# Linux; Windows path uses `crossterm`'s internal console-mode
+# bits via the same crate.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+crossterm = { version = "0.28", default-features = false }
+
+# Direct libc bindings on Unix for `tcsetattr` on the PTY master fd.
+# We disable the slave's `ECHO`, `OPOST`, and `ONLCR` flags so the
+# line discipline doesn't (a) echo our injected prompt back to the
+# user's terminal and (b) double-translate `\n` into `\r\n` on the
+# child's output. Done via libc rather than nix to avoid pulling in
+# a heavier dependency for a few constants and one syscall.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

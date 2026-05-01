@@ -1,0 +1,20 @@
+# Template manifest for sim-flow.
+#
+# Placeholder tokens available in every file copied from this template:
+#   {{project-name}}            raw user-provided name
+#   {{crate_name}}              snake_case of project-name (valid cargo ident)
+#   {{foundation_path}}         absolute path to the sim-foundation repo
+#   {{library_path}}            relative path to sim-models/library (default: ../../library)
+#   {{timestamp}}               ISO-8601 generation timestamp
+#
+# Unknown placeholders are left untouched so downstream tools (cargo-generate,
+# hand edits) can resolve them later.
+
+[template]
+flow = "direct-modeling"
+initial_step = "DM0"
+
+[[placeholders]]
+name = "library_path"
+default = "../../library"
+description = "Relative path from the generated project to sim-models/library"

@@ -1,0 +1,27 @@
+digraph design_study_flow {
+    rankdir=LR;
+    node [shape=box, style="rounded,filled", fillcolor="#e8e8e8",
+          fontname="Helvetica", fontsize=10, margin="0.12,0.06"];
+    edge [arrowsize=0.7];
+
+    // Steps.
+    ds0 [label="DS0\nSpecification"];
+    ds1 [label="DS1\nStudy\nSetup"];
+    ds2 [label="DS2\nFunctional\nDecomposition"];
+    ds3 [label="DS3\nPipeline\nMapping"];
+    ds4 [label="DS4\nAnalytical\nScreening"];
+    ds5 [label="DS5\nCandidate\nPrototyping"];
+    ds6 [label="DS6\nComparison &\nNarrowing"];
+    ds7 [label="DS7\nDeep\nAnalysis"];
+    ds8 [label="DS8\nDecision"];
+    ds9 [label="DS9\nFormalize"];
+
+    // Gate markers between steps.
+    node [shape=diamond, style="filled", fillcolor="#ffd966", fontsize=8,
+          fixedsize=true, width=0.32, height=0.32, margin="0.01,0.01",
+          label="G"];
+    g01; g12; g23; g34; g45; g56; g67; g78; g89;
+
+    ds0 -> g01 -> ds1 -> g12 -> ds2 -> g23 -> ds3 -> g34 -> ds4
+        -> g45 -> ds5 -> g56 -> ds6 -> g67 -> ds7 -> g78 -> ds8 -> g89 -> ds9;
+}

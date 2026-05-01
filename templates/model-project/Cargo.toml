@@ -1,0 +1,22 @@
+[package]
+name = "{{crate_name}}"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "{{crate_name}}"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+foundation-framework = { path = "{{foundation_path}}/crates/framework" }
+
+# sim-models library modules (uncomment as needed).
+# soc               = { path = "{{library_path}}/soc" }
+# memory-controller = { path = "{{library_path}}/memory-controller" }
+# micron-lpddr5x    = { path = "{{library_path}}/micron-lpddr5x" }
+
+[dev-dependencies]

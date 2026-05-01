@@ -1,0 +1,13 @@
+[client]
+name = "claude"
+
+[claude]
+model = "sonnet"
+allowed_tools = ["Bash", "Read", "Edit", "Write", "Glob", "Grep"]
+
+[codex]
+sandbox = "workspace-write"
+approval = "never"
+
+[copilot]
+mode = "autopilot"

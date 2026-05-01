@@ -1,0 +1,27 @@
+.vscode/**
+.vscode-test/**
+src/**
+.gitignore
+.yarnrc
+vsc-extension-quickstart.md
+**/tsconfig.json
+**/.eslintrc*
+**/eslint.config.*
+**/.prettierrc*
+**/.prettierignore
+**/.editorconfig
+**/vitest.config.*
+**/*.test.ts
+**/*.map
+**/*.ts
+!dist/**
+!media/**
+!package.json
+!README.md
+!LICENSE
+node_modules/**
+!node_modules/better-sqlite3/**
+!node_modules/bindings/**
+!node_modules/file-uri-to-path/**
+# Build / package helpers that have no purpose at runtime.
+scripts/**
