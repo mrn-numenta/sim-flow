@@ -191,7 +191,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private async sendPrompt(promptRaw: string): Promise<void> {
     const prompt = promptRaw.trim();
-    if (prompt.length === 0 || this.inFlight) {
+    if (prompt.length === 0) {
+      return;
+    }
+    await this.reconcileModeSwitches();
+    if (this.inFlight) {
       return;
     }
     const context = await this.readPanelContext();

@@ -123,3 +123,22 @@ user-visible failures, root causes, and the tests that now guard
   - Guard: `does not append duplicate stop notes when stop is pressed
     repeatedly during a direct reply` in
     [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).
+
+### Round 6 - Immediate Re-Prompt Transition Regression Tests
+
+- [x] Immediate re-prompts after a project switch or LLM-source switch
+  could be dropped during direct replies.
+  - Symptom: if the user switched projects or changed the LLM source
+    and immediately sent another chat message, the new prompt could be
+    ignored and the panel would only show the stale-response stop note.
+  - Root cause: `sendPrompt()` rejected all prompts while any
+    direct-reply request was still marked `inFlight`, even if that
+    request had already become stale and should have been cancelled by
+    mode-switch reconciliation.
+  - Guard:
+    - `accepts a new prompt immediately after switching projects during
+      a direct reply`
+    - `accepts a new prompt immediately after switching llm sources
+      during a direct reply`
+    in
+    [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).
