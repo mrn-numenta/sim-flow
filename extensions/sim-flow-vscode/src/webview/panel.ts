@@ -861,9 +861,16 @@ function stepBox(data: DashboardState, step: StepDef): HTMLElement {
   const selected = ui.selectedStep === step.id;
   const selectable = isStepSelectableInRail(data, step.id);
   const ahead = isStepAheadOfCurrent(data, step.id);
+  const before = isStepBeforeCurrent(data, step.id);
+  // Subsequent steps that have never been visited render with the
+  // disabled-ahead theme. The current step gets the primary tint
+  // (handled by `.current`). Anything else preceding the current
+  // step is treated like a completed step in the rail (green) -- a
+  // rail position before `current_step` always means the user has
+  // moved past it, even if a gate wasn't formally marked passed.
   const disabledAhead = ahead && !selectable;
   const classes = ["step"];
-  if (passed) {
+  if (passed || before) {
     classes.push("passed");
   }
   if (current) {
@@ -916,6 +923,16 @@ function isStepAheadOfCurrent(data: DashboardState, stepId: string): boolean {
     return false;
   }
   return stepIndex > currentIndex;
+}
+
+function isStepBeforeCurrent(data: DashboardState, stepId: string): boolean {
+  const order = data.flow.flow === "direct-modeling" ? DM_STEPS : DS_STEPS;
+  const currentIndex = order.findIndex((step) => step.id === data.flow.current_step);
+  const stepIndex = order.findIndex((step) => step.id === stepId);
+  if (currentIndex === -1 || stepIndex === -1) {
+    return false;
+  }
+  return stepIndex < currentIndex;
 }
 
 function gateDiamond(data: DashboardState, step: StepDef): HTMLElement {
