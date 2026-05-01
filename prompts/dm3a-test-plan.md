@@ -45,15 +45,24 @@ Reference material (read on demand):
   `lib:examples/README.md` and pick at least two examples whose
   topology matches yours. Their `tests/` directories are the
   closest reference for what your testbench will look like.
-- **Foundation framework prelude** (`fw:src/prelude.rs`) for the
-  exact types: `SimEnv`, `SimEnvBuilder`, `Sequencer`, `Driver`,
-  `Monitor`, `Scoreboard`, `Port`. Use the prelude as the
-  canonical signature source -- do not browse internal helpers.
+- **Foundation framework** public API via the `fw:` prefix. Start with
+  `fw:api/toc.md`, then read only the specific
+  `fw:api/pages/.../*.md` files you need for types like `SimEnv`,
+  `SimEnvBuilder`, `Sequencer`, `Driver`, `Monitor`, `Scoreboard`,
+  and `Port`. Use `fw:src/prelude.rs` only as a secondary source when
+  you need exact signatures or source-level examples; do not browse
+  internal helpers.
 
 ## Procedure
 
 1. Read every input above.
-2. **Design the testbench(es)**. The plan must specify, before
+2. Check whether `docs/plan/test-plan.md` exists.
+   - If yes, review it against `docs/plan/test-plan.md.tmpl` and fill in
+     any missing or incomplete sections.
+   - If no, copy `docs/plan/test-plan.md.tmpl` to
+     `docs/plan/test-plan.md` and use that template as the required
+     structure for this step.
+3. **Design the testbench(es)**. The plan must specify, before
    listing any test:
    - Each Sequencer (one per stimulus class) -- name, payload
      type, what stimulus class it generates.
@@ -69,7 +78,7 @@ Reference material (read on demand):
    - References to specific modeling-guide chapters and example
      directories that the implementation will mirror. This is
      the UVM-lite contract for DM3b.
-3. **Enumerate tests by category**. For every test in every
+4. **Enumerate tests by category**. For every test in every
    category use this row format so DM3c can tick them off as
    it passes:
 
@@ -106,7 +115,7 @@ Reference material (read on demand):
      reproducible. Plan at least one random test per Sequencer
      and one "soak" (multiple seeds, statistical) entry.
 
-4. **Coverage strategy**. The plan must include:
+5. **Coverage strategy**. The plan must include:
    - Tool: `cargo-tarpaulin` (install once with
      `cargo install cargo-tarpaulin`).
    - Run command: `cargo tarpaulin --out Html --out Lcov
@@ -124,7 +133,7 @@ Reference material (read on demand):
      must be referenced from the test plan so the gate can find
      it.
 
-5. **Traceability**. Add a final section that maps:
+6. **Traceability**. Add a final section that maps:
    - Every functional requirement in `docs/spec.md` -> at least
      one test row above. Quote the requirement.
    - Every target in `docs/targets.md` -> at least one stress
@@ -133,6 +142,11 @@ Reference material (read on demand):
      least one smoke or edge test row.
    Reject vague mappings ("covered by overall flow"); each link
    must name a specific test from the enumeration above.
+
+7. Use the template headings as the required document structure, but use
+   engineering judgement about depth. Remove placeholder text as you
+   replace it with real content. If a section truly does not apply, say
+   so explicitly rather than leaving placeholder text in place.
 
 ## Output
 
@@ -152,7 +166,8 @@ contain (in this order, so the gate's regex checks pass):
 - DO NOT write any test code. No `tests/` edits, no test fixtures,
   no `#[test]` annotations. Plan markdown only.
 - DO NOT prescribe internal Foundation helpers (anything outside
-  `fw:src/prelude.rs`). The plan describes WHAT will be built and
+  the curated public API reachable via `fw:`). The plan describes WHAT
+  will be built and
   how it MAPS to spec requirements -- HOW each component is
   written is DM3b/DM3c's concern.
 - DO NOT collapse categories ("smoke + stress combined") or skip

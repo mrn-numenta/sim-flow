@@ -186,7 +186,7 @@ fn dm2c() -> StepDescriptor {
         id: "DM2c",
         flow: Flow::DirectModeling,
         prerequisite: Some("DM2b"),
-        instruction_slug: "dm2c-model-implementation",
+        instruction_slug: "dm2c-model-impl-plan",
         per_candidate: false,
         gate_checks: vec![
             file_exists("docs/plan/plan.md", "docs/plan/plan.md exists"),

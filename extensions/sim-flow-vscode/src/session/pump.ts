@@ -26,7 +26,7 @@ import { EventEmitter, once } from "node:events";
 
 import * as vscode from "vscode";
 
-import { bundledPdfiumLibPath } from "../cli";
+import { bundledFrameworkDocsRoot, bundledPdfiumLibPath } from "../cli";
 import {
   type LlmBackend,
   type LlmMessage as BackendLlmMessage,
@@ -154,12 +154,16 @@ export class SessionPump {
     this.lastUsedSource = llm.source;
     this.debugLog = DebugLog.fromTokens(llm.debugTokens, llm.projectDir);
     const pdfiumLib = bundledPdfiumLibPath();
+    const frameworkDocsRoot = bundledFrameworkDocsRoot();
     const env: NodeJS.ProcessEnv = {
       ...(options.env ?? process.env),
       SIM_FOUNDATION_DEBUG: llm.debugTokens,
     };
     if (pdfiumLib) {
       env.SIM_FLOW_PDFIUM_LIB_PATH = pdfiumLib;
+    }
+    if (frameworkDocsRoot) {
+      env.SIM_FLOW_FRAMEWORK_DOCS_ROOT = frameworkDocsRoot;
     }
     this.process = spawn(options.binary, options.args, {
       cwd: options.cwd,

@@ -76,7 +76,11 @@ orchestrator fails the DM3a gate on `BLOCKER:` lines only.
     least one smoke or edge test? Reject vague mappings
     ("covered by overall flow"); each link must name a specific
     test from the enumeration.
-11. **Scope**. Does the plan stay out of test-code territory? It
+11. **Template hygiene**. Does the document still contain placeholder
+    template text or empty sections that hide missing information rather
+    than stating something concrete or explicitly saying "not
+    applicable"?
+12. **Scope**. Does the plan stay out of test-code territory? It
     should describe WHAT and HOW MUCH, not HOW each test is
     implemented. Reject embedded code snippets, `#[test]`
     annotations, or implementation pseudocode.

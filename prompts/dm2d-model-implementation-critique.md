@@ -11,6 +11,8 @@ modify the implementation; evaluate it and write the critique file.
 
 - `docs/plan/plan.md`
 - `docs/plan/milestone-*.md`
+- `docs/targets.md`
+- `docs/testbench.md`
 - `docs/analysis/pipeline-mapping.md`
 - `docs/analysis/decomposition.md`
 - `docs/analysis/data-movement.md`
@@ -39,10 +41,20 @@ orchestrator fails the DM2d gate on `BLOCKER:` lines only.
    test split)?
 7. Are operation names from the decomposition reflected in module
    or type names?
-8. Does the implementation match the plan? Every milestone in
+8. Does the implementation preserve target-sensitive structural choices
+   implied by `docs/targets.md` and encoded in the plan / mapping
+   (for example stage boundaries, buffering, or other gate-budget-driven
+   decisions) rather than drifting away from them?
+9. Does the implementation provide the structural support needed for the
+   smoke-test and observability intent captured in `docs/testbench.md`
+   where that support had to be designed in during implementation?
+10. Does the implementation match the plan? Every milestone in
    `docs/plan/` should have its tasks all `[x]`. Flag tasks still
    `[ ]` (incomplete) and code that doesn't trace back to a plan
    task (out-of-scope drift).
+11. Did the implementation introduce major architectural structures or
+    boundaries that are not reflected in DM2c's plan or the DM2a/DM2b
+    artifacts?
 
 ## Output
 

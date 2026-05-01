@@ -23,7 +23,14 @@ plan and tests; DM4 will measure against the targets.
      not invent false precision.
    - If a target or strategy choice depends on an open question or
      non-trivial assumption, call that out explicitly.
-3. Create `docs/targets.md` as the target-and-metrics strategy document.
+3. Check whether `docs/targets.md` and `docs/testbench.md` exist.
+   - If yes, review them against `docs/targets.md.tmpl` and
+     `docs/testbench.md.tmpl` and fill in any missing or incomplete
+     sections.
+   - If no, copy `docs/targets.md.tmpl` to `docs/targets.md` and
+     `docs/testbench.md.tmpl` to `docs/testbench.md`, then use those
+     templates as the required structure for this step.
+4. Create `docs/targets.md` as the target-and-metrics strategy document.
    For each target, record:
    - **name**
    - **category**: throughput, latency, functional correctness,
@@ -35,7 +42,7 @@ plan and tests; DM4 will measure against the targets.
    - **source**: cite the relevant `docs/spec.md` section
    - **notes / rationale**: especially when the target is derived,
      inferred, unconstrained, or deferred
-4. `docs/targets.md` must include a gate-budget-per-cycle target or
+5. `docs/targets.md` must include a gate-budget-per-cycle target or
    estimate. This requirement is hard because DM2 uses it to reason
    about functional decomposition and pipeline staging.
    - If `docs/spec.md` gives an explicit gate budget per cycle, preserve
@@ -48,7 +55,7 @@ plan and tests; DM4 will measure against the targets.
      reasonable estimate, treat that as a blocker-level gap in the DM0
      output and say so in your rationale rather than inventing false
      precision.
-5. `docs/targets.md` should capture the modeling strategy, not just raw
+6. `docs/targets.md` should capture the modeling strategy, not just raw
    numbers.
    - Prefer quantitative targets when the spec supports them.
    - When the spec does not support a hard number, use a bounded or
@@ -58,11 +65,11 @@ plan and tests; DM4 will measure against the targets.
    - Add any design-specific targets the spec implies, such as
      injection rate, occupancy limits, fairness, ordering guarantees,
      deadlock freedom, or backpressure SLAs.
-6. Create `docs/testbench.md` as the verification-strategy and
+7. Create `docs/testbench.md` as the verification-strategy and
    testbench-architecture document. This file should describe what the
    eventual testbench must be capable of proving, not the detailed test
    plan.
-7. In `docs/testbench.md`, include:
+8. In `docs/testbench.md`, include:
    - **verification scope**: what behaviors and guarantees from the spec
      must be checked
    - **coverage intent**: what classes of behavior must be exercised
@@ -79,11 +86,15 @@ plan and tests; DM4 will measure against the targets.
      and behaviors in `docs/spec.md`
    - **target traceability**: which parts of the testbench strategy
      support which items in `docs/targets.md`
-8. Keep the two files distinct:
+9. Keep the two files distinct:
    - `docs/targets.md` explains what must be achieved or measured
    - `docs/testbench.md` explains how the later verification environment
      will be structured to validate those things
-9. Do not write detailed directed tests, sequence implementations, or
+10. Use the template headings as the required document structure, but use
+    engineering judgement about depth. Remove placeholder text as you
+    replace it with real content. If a section truly does not apply, say
+    so explicitly rather than leaving placeholder text in place.
+11. Do not write detailed directed tests, sequence implementations, or
    exhaustive test matrices here. That belongs in DM3.
 
 ## Output

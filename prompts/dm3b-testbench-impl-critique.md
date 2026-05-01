@@ -16,6 +16,13 @@ write the critique file.
 - `tests/` source tree (or the test module the work session used).
 - `src/` -- the model under test, for confirming Monitors observe
   the right ports.
+- Reference material on demand:
+  - `lib:docs/modeling-guide/04-testing-models.md` for canonical
+    UVM-lite structure and `SimEnvBuilder` patterns.
+  - The example directories cited by `docs/plan/test-plan.md`.
+  - `fw:api/toc.md`, then only the specific `fw:api/pages/...` files
+    needed to confirm public API usage. Use `fw:src/prelude.rs` only as
+    a secondary source if you need an exact source-level signature.
 
 ## Evaluation
 
@@ -43,10 +50,17 @@ orchestrator fails the DM3b gate on `BLOCKER:` lines only.
 6. **Build state**. Does `cargo build` succeed? Does
    `cargo test` succeed for the smoke test? (Confirm via the
    `run_cargo` tool; don't infer.)
-7. **Scope discipline**. Does DM3b stay out of DM3c territory?
+7. **Public API discipline**. Does the testbench stay within the
+   public framework surface reachable from `fw:`? Reject reliance on
+   internal helper modules or non-curated framework internals when a
+   public API page does not justify it.
+8. **Payload / port fidelity**. Do Drivers and Monitors use payload
+   types and port names that match `src/`, `docs/spec.md`, and
+   `docs/analysis/data-movement.md`? Flag mismatches explicitly.
+9. **Scope discipline**. Does DM3b stay out of DM3c territory?
    Reject edge / stress / random tests authored at this step --
    only the basic data-flow smoke is allowed.
-8. **Plan fidelity**. If the implementation deviated from
+10. **Plan fidelity**. If the implementation deviated from
    `docs/plan/test-plan.md` (renamed components, added ones not
    in the plan, skipped ones), flag every deviation. The plan
    is the contract; deviations belong as a `BLOCKER:` so DM3a

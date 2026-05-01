@@ -8,6 +8,7 @@ import * as vscode from "vscode";
 import { clearApiKey, setApiKey } from "./apiKey";
 import {
   bundledCandidates,
+  bundledFrameworkDocsRoot,
   resolveBinary,
   setBundledRoot,
   SimFlowCli,
@@ -34,14 +35,14 @@ export function activate(context: vscode.ExtensionContext): void {
       runStepCommand(step, "runCritique", asString(projectDir)),
     ),
     vscode.commands.registerCommand(
-      "sim-flow.runAuto",
+      "sim-flow.runFlow",
       (specPath?: unknown, projectDir?: unknown) =>
-        runAutoCommand(asString(specPath), asString(projectDir)),
+        runFlowChatCommand(asString(specPath), asString(projectDir)),
     ),
     vscode.commands.registerCommand(
-      "sim-flow.runAutoTerminal",
+      "sim-flow.runFlowTerminal",
       (backend?: unknown, specPath?: unknown, projectDir?: unknown) =>
-        runAutoInTerminal(asString(backend), asString(specPath), asString(projectDir)),
+        runFlowInTerminal(asString(backend), asString(specPath), asString(projectDir)),
     ),
     vscode.commands.registerCommand(
       "sim-flow.runAutoFullyAutomatedTerminal",
@@ -538,7 +539,16 @@ async function openChatForStep(
   await openChatWithQuery(query);
 }
 
-async function runAutoCommand(
+/**
+ * Hand the dashboard's Play click off to the chat participant for
+ * non-CLI LLM sources. Despite the underlying CLI subcommand being
+ * `sim-flow auto`, this is NOT specifically the "automated mode"
+ * red-Play path -- this is the general "drive the flow" launch.
+ * Whether the agent runs unattended or with the user in the loop is
+ * controlled by sim-flow's `auto` flag (set by the participant /
+ * orchestrator), independent of how the launch is named here.
+ */
+async function runFlowChatCommand(
   specPath: string | undefined,
   projectDirHint: string | undefined,
 ): Promise<void> {
@@ -551,14 +561,21 @@ async function runAutoCommand(
 
 /**
  * Launch `sim-flow auto --llm-backend <name>` in the project's
- * terminal. Used by the dashboard's Run/Resume button when the user
- * has picked a CLI-agent source (`claude-cli`, `codex-cli`,
- * `gh-copilot-cli`) — those don't have an HTTP backend the chat
+ * terminal. Used by the dashboard's Play button when the user has
+ * picked a CLI-agent source (`claude-cli`, `codex-cli`,
+ * `gh-copilot-cli`) -- those don't have an HTTP backend the chat
  * participant can drive, so we hand the work to the in-terminal
  * subprocess instead. Auth comes from the user's existing CLI
  * login (claude /login, codex login, gh auth login).
+ *
+ * Note: this is the **general** "run the flow" launch path. It is
+ * NOT specifically the fully-automated red-Play flow (which lives
+ * in `runFullyAutomatedInTerminal` and forces `--session-mode
+ * per-step` plus a required spec). The CLI subcommand happens to
+ * be named `sim-flow auto` because it drives the orchestrator, but
+ * the orchestrator's automated-vs-manual mode is set separately.
  */
-async function runAutoInTerminal(
+async function runFlowInTerminal(
   backend: string | undefined,
   specPath: string | undefined,
   projectDirHint: string | undefined,
@@ -701,9 +718,13 @@ async function runCliInTerminal(subcommand: string[], projectDirHint?: string): 
 function ensureTerminal(projectDir: string): SimFlowTerminal {
   let term = terminals.get(projectDir);
   if (!term) {
+    const frameworkDocsRoot = bundledFrameworkDocsRoot();
     term = new SimFlowTerminal({
       projectDir,
       name: terminalNameFor(projectDir),
+      env: frameworkDocsRoot
+        ? { SIM_FLOW_FRAMEWORK_DOCS_ROOT: frameworkDocsRoot }
+        : undefined,
     });
     terminals.set(projectDir, term);
   }

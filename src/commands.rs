@@ -388,18 +388,17 @@ fn auto_cmd(
     max_identical_responses: u32,
 ) -> sim_flow::Result<()> {
     let foundation = foundation_root::resolve(cli.foundation_root.as_deref())?;
-    if let Some(spec_path) = spec {
-        // Ingest before run_auto so the very first session's system
-        // prompt sees the TOC. Errors here propagate before any LLM
-        // turn so the user gets a clear message.
-        let summary = sim_flow::__internal::session::ingest_spec_file(spec_path, project)?;
-        eprintln!(
-            "sim-flow: ingested spec `{}` -> {} page(s) under `{}`",
-            spec_path.display(),
-            summary.page_count,
-            summary.pages_dir.display()
-        );
-    }
+    // Pre-DM0 ingestion hook: ensures `.sim-flow/source-spec*` is up
+    // to date before the first session's system stack is built. The
+    // helper resolves a spec from (1) the CLI `--spec` arg, or (2)
+    // `.sim-flow/config.toml::spec_path` when the CLI arg is absent,
+    // and skips re-ingestion when the source on disk hasn't changed
+    // (mtime comparison). Doing this here means every dashboard
+    // launch path -- manual Play, red Play, chat-participant -- gets
+    // the same idempotent ingest, regardless of whether the user
+    // typed the spec into the dashboard's Spec field or set it via
+    // `sim-flow ... --spec ...`.
+    ensure_source_spec_ingested(spec, project)?;
 
     // Interactive PTY path: when the user has chosen a CLI-agent
     // backend (currently only `claude`), spawn the agent on a PTY
@@ -438,6 +437,86 @@ fn auto_cmd(
     };
     let mut host = sim_flow::__internal::session::JsonlHost::stdio();
     sim_flow::__internal::session::run_auto(opts, &mut host)
+}
+
+/// Resolve the source-spec to ingest and run `ingest_spec_file` if
+/// needed. Resolution order:
+///
+/// 1. The explicit `--spec` CLI argument when present (overrides
+///    everything; treats the on-disk source as authoritative).
+/// 2. `.sim-flow/config.toml::spec_path` -- the dashboard's Spec
+///    field writes here, so the orchestrator finds the user's
+///    chosen spec regardless of which launch path is used.
+///
+/// When neither is set, the function emits a stderr line and
+/// returns Ok(()) -- DM0 will then prompt the user (manual mode)
+/// or auto-decide (automated mode) per the prompt instructions.
+///
+/// Idempotency: when the resolved spec already has a corresponding
+/// `.sim-flow/source-spec.<ext>` whose mtime is at least the source's,
+/// ingestion is skipped to avoid re-paginating large source specs.
+fn ensure_source_spec_ingested(cli_spec: Option<&Path>, project: &Path) -> sim_flow::Result<()> {
+    use sim_flow::__internal::session::ingest_spec_file;
+
+    let resolved: Option<PathBuf> = if let Some(p) = cli_spec {
+        Some(p.to_path_buf())
+    } else {
+        let dot = project.join(DOT_SIM_FLOW);
+        let cfg = Config::load(&dot)?;
+        cfg.spec_path
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+    };
+    let Some(spec_path) = resolved else {
+        eprintln!("sim-flow: no source spec configured; DM0 will prompt for one.",);
+        return Ok(());
+    };
+    if !spec_path.exists() {
+        eprintln!(
+            "sim-flow: configured spec `{}` does not exist; DM0 will prompt for one.",
+            spec_path.display(),
+        );
+        return Ok(());
+    }
+    if source_spec_up_to_date(&spec_path, project) {
+        eprintln!(
+            "sim-flow: source spec `{}` already ingested; skipping.",
+            spec_path.display(),
+        );
+        return Ok(());
+    }
+    let summary = ingest_spec_file(&spec_path, project)?;
+    eprintln!(
+        "sim-flow: ingested spec `{}` -> {} page(s) under `{}`",
+        spec_path.display(),
+        summary.page_count,
+        summary.pages_dir.display(),
+    );
+    Ok(())
+}
+
+/// True iff `.sim-flow/source-spec.<ext>` exists for the given
+/// source path and its mtime is at least as recent as the source.
+/// Conservative: any I/O error reading mtimes returns `false` so
+/// the caller falls through to a re-ingest.
+fn source_spec_up_to_date(spec_path: &Path, project: &Path) -> bool {
+    let dot = project.join(DOT_SIM_FLOW);
+    let ext = spec_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("md");
+    let dest = dot.join(format!("source-spec.{ext}"));
+    let Ok(dest_meta) = std::fs::metadata(&dest) else {
+        return false;
+    };
+    let Ok(src_meta) = std::fs::metadata(spec_path) else {
+        return false;
+    };
+    let (Ok(d), Ok(s)) = (dest_meta.modified(), src_meta.modified()) else {
+        return false;
+    };
+    d >= s
 }
 
 #[allow(clippy::too_many_arguments)]

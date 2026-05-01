@@ -1,0 +1,50 @@
+# Data Movement
+
+## Overview
+
+Summarize the major dataflow structure across the design.
+
+## Edge Summary
+
+| Edge | Producer | Consumer | Payload meaning | Width | Rate | Burst pattern | Fanout | Class | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `<edge>` | `<producer>` | `<consumer>` | `<meaning>` | `<bits>` | `<rate>` | `<burst>` | `<fanout>` | `<class>` | `<notes>` |
+
+## Edges
+
+Repeat this section for each important transfer edge, including external ports.
+
+### Edge: `<producer> -> <consumer>`
+
+- Producer:
+- Consumer:
+- Payload meaning:
+- Width:
+- Rate:
+- Burst pattern:
+- Fanout:
+- Class: payload | control | credit | response | mixed
+
+### Semantics
+
+- Ordering semantics:
+- Flow-control / backpressure notes:
+- CDC / clock-domain notes:
+- Error / exceptional notes:
+
+### Why this edge matters
+
+Explain why this transfer is important to later payload, port, or module
+design.
+
+## External Interface Transfers
+
+Document external ports using the same structure when they participate in the
+same dataflow story.
+
+## Open Questions
+
+List unresolved data-movement questions that later steps should not silently
+resolve.
+
+- `<question>`

@@ -16,17 +16,21 @@ export interface SimFlowTerminalOptions {
   projectDir: string;
   /** Label shown in the VS Code terminal dropdown. */
   name?: string;
+  /** Extra environment variables for the shell session. */
+  env?: Record<string, string>;
 }
 
 export class SimFlowTerminal {
   readonly projectDir: string;
   private readonly name: string;
+  private readonly env: Record<string, string> | undefined;
   private terminal: vscode.Terminal | undefined;
   private readonly closeSubscription: vscode.Disposable;
 
   constructor(options: SimFlowTerminalOptions) {
     this.projectDir = options.projectDir;
     this.name = options.name ?? "sim-flow";
+    this.env = options.env;
     this.closeSubscription = vscode.window.onDidCloseTerminal((t) => {
       if (t === this.terminal) {
         this.terminal = undefined;
@@ -65,6 +69,7 @@ export class SimFlowTerminal {
     this.terminal = vscode.window.createTerminal({
       name: this.name,
       cwd: this.projectDir,
+      env: this.env,
     });
     return this.terminal;
   }

@@ -25,6 +25,16 @@ pub struct Config {
     pub codex: CodexSettings,
     #[serde(default)]
     pub copilot: CopilotSettings,
+    /// Path to the user-supplied source spec the orchestrator should
+    /// ingest before DM0 starts. The dashboard writes this when the
+    /// user types into the Spec field; the pre-DM0 hook reads it and
+    /// runs `ingest_spec_file` if `.sim-flow/source-spec*` is missing
+    /// or out of date relative to this path. Empty / `None` means no
+    /// source spec is configured (DM0 then prompts the user
+    /// interactively in manual mode, or auto-decides in automated
+    /// mode).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec_path: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub steps: BTreeMap<String, StepOverride>,
 }

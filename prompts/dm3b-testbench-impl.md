@@ -37,10 +37,13 @@ cite specific chapters / examples to follow):
 - **Worked examples** with testbenches: each `lib:examples/`
   directory's `tests/` is a concrete reference; pick the
   example(s) the test plan named.
-- **Foundation framework prelude** (`fw:src/prelude.rs`) for the
-  exact types: `SimEnv`, `SimEnvBuilder`, `Sequencer`, `Driver`,
-  `Monitor`, `Scoreboard`, `Port`. Use the prelude as the
-  canonical signature source.
+- **Foundation framework** public API via the `fw:` prefix. Start with
+  `fw:api/toc.md`, then read only the specific
+  `fw:api/pages/.../*.md` files you need for exact types like
+  `SimEnv`, `SimEnvBuilder`, `Sequencer`, `Driver`, `Monitor`,
+  `Scoreboard`, and `Port`. Use `fw:src/prelude.rs` only as a
+  secondary source when you need exact source-level signatures or
+  examples.
 
 ## Procedure
 

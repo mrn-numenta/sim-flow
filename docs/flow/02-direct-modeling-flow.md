@@ -184,16 +184,17 @@ sim-flow config                          Show/edit client configuration
 
 ## Session Decomposition
 
-Each DM step is split into sub-steps where natural (DM2a, DM2b, DM2c). Every sub-step runs as a pair of sessions: one **work** session plus one **critique** session. The orchestrator treats each pair as a single gated unit.
+Each DM step is split into sub-steps where natural (DM2a, DM2b, DM2c, DM2d). Every sub-step runs as a pair of sessions: one **work** session plus one **critique** session. The orchestrator treats each pair as a single gated unit.
 
 ```text
 DM0    Specification                     (work + critique)
 DM1    Modeling Setup                    (work + critique)
 DM2a   Functional Decomposition          (work + critique)
 DM2b   Pipeline Mapping                  (work + critique)
-DM2c   Model Implementation              (work + critique)
-DM3a   Testbench Implementation          (work + critique)
-DM3b   Test Plan Creation                (work + critique)
+DM2c   Implementation Plan               (work + critique)
+DM2d   Model Implementation              (work + critique)
+DM3a   Test Plan                         (work + critique)
+DM3b   Testbench Implementation          (work + critique)
 DM3c   Test Execution and Coverage       (1+ work + critique pairs)
 DM4    Performance Analysis              (work + critique)
 DM5    External PPA Analysis             (TBD)
@@ -296,13 +297,15 @@ You are executing step DM1 (Modeling Setup) of the Direct Modeling Flow.
 Read the step instructions provided. Read spec.md and:
 
 1. Create `targets.md` as the target-and-metrics strategy document.
+   Start from `docs/targets.md.tmpl`.
    Capture explicit, derived, inferred, unconstrained, or deferred
    targets with provenance, rationale, and measurement method.
 2. Include a gate-budget-per-cycle target or estimate. If the spec gives
    one explicitly, preserve it. Otherwise derive it from the frequency
    and technology target and explain the basis.
 3. Create `testbench.md` as the verification-strategy and
-   testbench-architecture document. Describe what behaviors, guarantees,
+   testbench-architecture document. Start from `docs/testbench.md.tmpl`.
+   Describe what behaviors, guarantees,
    scenarios, observability, and checking strategies the later testbench
    must support, plus the likely UVM-lite structure.
 4. Do not write the detailed test plan or implement tests here; that
@@ -354,17 +357,26 @@ characterization.
 You are executing step DM2a (Functional Decomposition) of the Direct
 Modeling Flow.
 
-Read the step instructions provided. Read spec.md and:
+Read the step instructions provided. Read `spec.md` and `targets.md` and:
 
-1. Break the design into discrete functional units / operations.
-2. Identify data dependencies between operations.
-3. Characterize data movement between operations: data types, bit widths,
-   rates (items per cycle), burst patterns, fanout.
-4. Write the decomposition to analysis/decomposition.md.
-5. Write the data movement characterization to analysis/data-movement.md.
+1. Use the gate-budget-per-cycle target or estimate from DM1 as a hard
+   input to decomposition granularity.
+2. Break the design into discrete operations that are meaningful for both
+   architectural understanding and later stage mapping.
+3. For each operation, capture purpose, inputs, outputs, dominant cost,
+   statefulness / buffering / arbitration character, likely timing
+   pressure, and natural architectural boundaries.
+4. Write the decomposition to `analysis/decomposition.md`, starting from
+   `docs/analysis/decomposition.md.tmpl`, including a short summary of
+   the decomposition strategy and the gate budget used.
+5. Write the data movement characterization to
+   `analysis/data-movement.md`, including producer, consumer, payload
+   meaning, widths, rates, burst patterns, fanout, and relevant
+   ordering / flow-control / CDC notes, starting from
+   `docs/analysis/data-movement.md.tmpl`.
 
 The data movement characterization will become the payload types and port
-definitions for sim-foundation models in DM2c.
+definitions for sim-foundation models in DM2d.
 
 A separate critique session will review your output.
 ```
@@ -377,8 +389,12 @@ session. Read analysis/decomposition.md, analysis/data-movement.md, and
 spec.md and evaluate:
 - Are all functions in spec.md represented as operations?
 - Are there operations that are not in the spec (invented functionality)?
+- Is the decomposition clearly grounded in the gate-budget-per-cycle
+  target or estimate from DM1?
 - Are data dependencies correct and complete?
-- Is the data movement characterization complete (types, widths, rates)?
+- Is the data movement characterization complete and implementation-ready?
+- Are important state / buffering / arbitration / CDC boundaries
+  represented where they materially matter?
 - Is the decomposition at the right granularity -- not too fine (one gate
   per operation) and not too coarse (entire pipeline as one operation)?
 
@@ -409,15 +425,23 @@ technology node.
 You are executing step DM2b (Pipeline Mapping) of the Direct Modeling Flow.
 
 Read the step instructions provided. Read spec.md and
-analysis/decomposition.md and:
+targets.md, analysis/decomposition.md, and analysis/data-movement.md and:
 
-1. Using the target frequency and technology node from spec.md, estimate
-   the gate budget per cycle.
+1. Use the gate-budget-per-cycle target or estimate from DM1 as the
+   canonical budget for this step.
 2. Map operations from the decomposition to pipeline stages. Each stage
-   must fit within the gate budget.
-3. Verify there are no combinational loops in the pipeline.
-4. The mapping must respect the pipelining described in the spec.
-5. Write the pipeline mapping to analysis/pipeline-mapping.md.
+   must fit within the gate budget and form a sensible implementation
+   boundary.
+3. Preserve important DM2a boundaries such as buffering, arbitration,
+   queueing, storage, feedback, and CDC boundaries where they materially
+   matter.
+4. Write the mapping to `analysis/pipeline-mapping.md`, starting from
+   `docs/analysis/pipeline-mapping.md.tmpl`.
+5. For each stage, record purpose, operations, gate estimate, latency
+   contribution, buffering/register assumptions, and boundary rationale.
+6. Verify there are no combinational loops in the pipeline.
+7. The mapping must respect the pipelining and hierarchy described in the
+   spec.
 
 A separate critique session will review your output.
 ```
@@ -426,14 +450,17 @@ A separate critique session will review your output.
 
 ```text
 You are a critique session reviewing the work produced by the DM2b work
-session. Read analysis/pipeline-mapping.md and evaluate:
-- Does the mapping respect the target frequency and technology node?
-- Does each stage fit within the estimated gate budget per cycle?
+session. Read targets.md, analysis/decomposition.md,
+analysis/data-movement.md, and analysis/pipeline-mapping.md and evaluate:
+- Does the mapping use the canonical DM1 gate-budget-per-cycle target or
+  estimate?
+- Does each stage fit within that budget?
 - Are there combinational loops?
 - Does the mapping match the spec's prescribed pipelining and hierarchy?
 - Are all operations from the decomposition mapped to a stage?
-- Is anything split across stages that should not be, or combined that
-  should be split?
+- Are important DM2a boundaries preserved where they materially matter?
+- Is the stage rationale strong enough for DM2d to implement the intended
+  structure without rediscovering it?
 
 Write findings to .sim-flow/critiques/DM2b-critique.md. Prefix unresolved
 issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
@@ -448,55 +475,53 @@ issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
 
 ---
 
-### DM2c: Model Implementation
+### DM2c: Implementation Plan
 
-**Purpose:** Build the sim-foundation model from the pipeline mapping.
+**Purpose:** Produce the implementation plan that DM2d will execute.
 
 **Prerequisites:** DM2b gate passed.
 
-**Instruction files:** `instructions/dm2c-model-implementation.md`
+**Instruction files:** `instructions/dm2c-model-impl-plan.md`
 
 **Work prompt:**
 
 ```text
-You are executing step DM2c (Model Implementation) of the Direct Modeling
+You are executing step DM2c (Implementation Plan) of the Direct Modeling
 Flow.
 
-Read the step instructions provided. Read analysis/pipeline-mapping.md
+Read the step instructions provided. Read spec.md, targets.md,
+testbench.md, analysis/decomposition.md, analysis/pipeline-mapping.md,
 and analysis/data-movement.md and:
 
-1. If needed review sim-models/examples and sim-models/docs/modeling-guide
-2. Create payload types (Rust structs) from the data movement
-   characterization.
-3. Build a ConnectivityPlan that wires all pipeline stages.
-4. Implement each module using the Foundation Module, HasLogic, and
-   HasInstances traits. Each module has flopped inputs.
-5. For simple modules, implement logic directly in evaluate().
-   For complex modules, factor into helper functions called from
-   evaluate().
-6. Write smoke tests: elaboration, basic data flow, backpressure, idle.
-7. Run cargo build and cargo test after each module.
+1. Create an implementation plan under `docs/plan/` that breaks the work
+   into ordered milestones and concrete tasks.
+2. Trace every decomposition operation and every payload to at least one
+   task.
+3. Cover payload types, module skeletons + connectivity, per-stage logic,
+   and smoke / unit tests.
+4. Use `targets.md` and `testbench.md` where they materially affect the
+   implementation structure, but do not turn this into a full DM3
+   verification-plan step.
+5. Do not write code in this step.
 
-Do not attempt exhaustive testing -- that is DM3.
-
-Stop once the model builds, elaborates, and passes smoke tests. A separate
-critique session will review your output.
+A separate critique session will review your output.
 ```
 
 **Critique prompt (separate critique session):**
 
 ```text
 You are a critique session reviewing the work produced by the DM2c work
-session. Read the model source, ConnectivityPlan, and smoke tests and
+session. Read the plan files plus spec.md, targets.md, testbench.md,
+decomposition.md, pipeline-mapping.md, and data-movement.md and
 evaluate:
-- Does the ConnectivityPlan match the pipeline mapping topology?
-- Does each module's evaluate() implement the operations from the
-  decomposition?
-- Are payload types consistent with the data movement characterization?
-- Are there any custom implementations that deviate from Foundation
-  patterns (e.g., bypassing the port system, manual scheduling)?
-- Do all smoke tests pass?
-- Is the code organized per Foundation conventions (model/sim/test split)?
+- Does the plan follow the plan-management conventions?
+- Are tasks concrete and traceable to operations, payloads, and required
+  implementation artifacts?
+- Does the plan cover the required smoke tests without pre-empting DM3?
+- Does it account for target- and verification-sensitive implementation
+  concerns where they materially affect DM2d?
+- Are open implementation decisions called out explicitly rather than
+  silently deferred?
 
 Write findings to .sim-flow/critiques/DM2c-critique.md. Prefix unresolved
 issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
@@ -504,39 +529,104 @@ issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
 
 **Gate checks:**
 
-1. `src/model/` directory exists with module source files
-2. `Cargo.toml` exists with sim-foundation dependency
-3. `cargo build` succeeds
-4. `cargo test` passes (at minimum elaboration test)
-5. Source contains a ConnectivityPlan (grep for `connectivity_plan`)
-6. Source contains HasLogic implementations (grep for `impl HasLogic`)
-7. `.sim-flow/critiques/DM2c-critique.md` exists without blockers
+1. `docs/plan/plan.md` exists
+2. `docs/plan/milestone-*.md` exists
+3. Plan tasks trace to the decomposition / data-movement artifacts
+4. `.sim-flow/critiques/DM2c-critique.md` exists without blockers
 
 ---
 
-### DM3a: Testbench Implementation
+### DM2d: Model Implementation
 
-**Purpose:** Implement the UVM-lite testbench from the requirements defined
-in DM1.
+**Purpose:** Build the sim-foundation model from the implementation plan.
 
 **Prerequisites:** DM2c gate passed.
 
-**Instruction files:** `instructions/dm3a-testbench-impl.md`
+**Instruction files:** `instructions/dm2d-model-implementation.md`
 
 **Work prompt:**
 
 ```text
-You are executing step DM3a (Testbench Implementation) of the Direct
+You are executing step DM2d (Model Implementation) of the Direct
 Modeling Flow.
 
-Read the step instructions provided. Read testbench.md for the testbench
-requirements defined in DM1.
+Read the step instructions provided. Read the implementation plan in
+docs/plan/, plus spec.md, targets.md, testbench.md, decomposition.md,
+pipeline-mapping.md, and data-movement.md.
 
-1. Implement UVM-lite testbench components: Sequencers, Drivers, Monitors,
-   and Scoreboards as specified in testbench.md.
-2. Wire the testbench to all model ports using SimEnvBuilder.
-3. Verify the testbench builds and can drive basic traffic through the
-   model.
+1. Execute the plan milestone by milestone.
+2. If framework API guidance is needed, start with `fw:api/toc.md`,
+   then read only the specific `fw:api/pages/...` files you need.
+   Drop into `fw:src/...` only when exact signatures or source-level
+   examples are needed.
+3. Use `targets.md` and `testbench.md` where they materially affect
+   implementation structure, but do not turn this into a full DM3
+   verification step.
+4. Create payload types, connectivity, modules, smoke tests, and minimal
+   unit tests.
+5. Verify with cargo build and cargo test as you go.
+
+A separate critique session will review your output.
+```
+
+**Critique prompt (separate critique session):**
+
+```text
+You are a critique session reviewing the work produced by the DM2d work
+session. Read the model source, tests, plan files, targets.md,
+testbench.md, and analysis docs and
+evaluate:
+- Does the implementation match the pipeline mapping and decomposition?
+- Are payloads consistent with data-movement.md?
+- Are framework conventions respected?
+- Do smoke tests pass, and are they meaningful?
+- Does the implementation preserve target-sensitive and plan-sensitive
+  structural decisions rather than drifting away from them?
+- Does the implementation stay within the DM2d scope defined by the plan?
+
+Write findings to .sim-flow/critiques/DM2d-critique.md. Prefix unresolved
+issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
+```
+
+**Gate checks:**
+
+1. `src/model/` directory exists with module source files
+2. `cargo build` succeeds
+3. `cargo test` passes (at minimum elaboration test)
+4. Source contains a ConnectivityPlan
+5. `.sim-flow/critiques/DM2d-critique.md` exists without blockers
+
+---
+
+### DM3a: Test Plan
+
+**Purpose:** Produce the verification plan that DM3b and DM3c will
+execute.
+
+**Prerequisites:** DM2d gate passed.
+
+**Instruction files:** `instructions/dm3a-test-plan.md`
+
+**Work prompt:**
+
+```text
+You are executing step DM3a (Test Plan) of the Direct Modeling Flow.
+
+Read the step instructions provided. Start from
+`docs/plan/test-plan.md.tmpl`, then produce `docs/plan/test-plan.md`
+covering:
+
+1. Testbench architecture (Sequencers, Drivers, Monitors, Scoreboards,
+   and `SimEnvBuilder` wiring).
+2. If framework API guidance is needed, start with `fw:api/toc.md`,
+   then read only the specific `fw:api/pages/...` files you need.
+   Use `fw:src/...` only as a secondary source for exact signatures.
+3. Test enumeration across Smoke, Edge, Stress, and Random categories.
+4. Coverage strategy using `cargo-tarpaulin`.
+5. Traceability from tests back to spec requirements, targets, and
+   decomposition operations.
+
+Do not write test code in this step.
 
 A separate critique session will review your output.
 ```
@@ -545,52 +635,50 @@ A separate critique session will review your output.
 
 ```text
 You are a critique session reviewing the work produced by the DM3a work
-session. Read the testbench source and testbench.md and evaluate:
-- Are all components from testbench.md implemented?
-- Does the testbench connect to all model ports?
-- Can it drive traffic through the model without errors?
-- Are Scoreboard checks meaningful (not just checking for non-crash)?
-- Does it build cleanly?
-
-Write findings to .sim-flow/critiques/DM3a-critique.md. Prefix unresolved
-issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
+session. Read `docs/plan/test-plan.md` plus the spec, targets, and
+analysis docs and evaluate:
+- Is the testbench architecture concrete enough for DM3b?
+- Are all four test categories present with concrete pass criteria?
+- Is the coverage strategy explicit and measurable?
+- Is traceability complete and specific?
+- Does the plan stay out of test-code territory?
 ```
 
 **Gate checks:**
 
-1. Testbench source files exist (grep for `SimEnv` or `Sequencer` in tests/)
-2. `cargo build` succeeds
+1. `docs/plan/test-plan.md` exists
+2. The plan contains `## Testbench`, `## Smoke`, `## Edge`,
+   `## Stress`, `## Random`, `## Coverage`, and `## Traceability`
+   sections
 3. `.sim-flow/critiques/DM3a-critique.md` exists without blockers
 
 ---
 
-### DM3b: Test Plan Creation
+### DM3b: Testbench Implementation
 
-**Purpose:** Create a test plan that covers functional and performance
-verification.
+**Purpose:** Implement the UVM-lite testbench scaffolding from DM3a's
+test plan.
 
 **Prerequisites:** DM3a gate passed.
 
-**Instruction files:** `instructions/dm3b-test-plan.md`
+**Instruction files:** `instructions/dm3b-testbench-impl.md`
 
 **Work prompt:**
 
 ```text
-You are executing step DM3b (Test Plan Creation) of the Direct Modeling
+You are executing step DM3b (Testbench Implementation) of the Direct Modeling
 Flow.
 
-Read the step instructions provided. Read spec.md and targets.md.
+Read the step instructions provided. Read `docs/plan/test-plan.md`.
 
-1. Create a test plan that maps every functional requirement in spec.md
-   to at least one test.
-2. Create performance tests that cover every target in targets.md.
-3. Identify edge cases: empty pipeline, full buffers, backpressure,
-   stall-then-resume, single-element transit.
-4. Write the test plan to docs/test-plan.md with a checklist of tests.
-   Each test entry should have: name, purpose, requirement traced to,
-   pass criteria.
+1. Implement the named testbench components and `SimEnvBuilder` wiring.
+2. If framework API guidance is needed, start with `fw:api/toc.md`,
+   then read only the specific `fw:api/pages/...` files you need.
+   Use `fw:src/...` only as a secondary source for exact signatures.
+3. Add only the basic data-flow smoke test.
+4. Confirm the scaffolding builds and the smoke test passes.
 
-Do not write test code in this step -- that is DM3c.
+Do not implement the full test suite in this step.
 
 A separate critique session will review your output.
 ```
@@ -599,12 +687,17 @@ A separate critique session will review your output.
 
 ```text
 You are a critique session reviewing the work produced by the DM3b work
-session. Read docs/test-plan.md, spec.md, and targets.md and evaluate:
-- Does every functional requirement in spec.md have at least one test?
-- Do performance tests cover all targets in targets.md?
-- Are edge cases identified?
-- Is the plan achievable with the testbench implemented in DM3a?
-- Are pass criteria specific and measurable?
+session. Read the testbench source plus `docs/plan/test-plan.md`,
+consult `fw:api/toc.md` / specific `fw:api/pages/...` files as needed,
+and
+evaluate:
+- Are all planned testbench components implemented?
+- Is the UVM-lite topology intact?
+- Is the `SimEnvBuilder` wiring complete?
+- Is the basic smoke test meaningful and passing?
+- Does the testbench stay within the public framework API surface?
+- Do payload and port usages match the model and analysis docs?
+- Did DM3b stay out of DM3c territory?
 
 Write findings to .sim-flow/critiques/DM3b-critique.md. Prefix unresolved
 issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
@@ -612,9 +705,10 @@ issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
 
 **Gate checks:**
 
-1. `docs/test-plan.md` exists with test entries
-2. Test entries reference spec.md requirements
-3. `.sim-flow/critiques/DM3b-critique.md` exists without blockers
+1. Testbench source files exist
+2. `cargo build` succeeds
+3. The basic smoke test exists and passes
+4. `.sim-flow/critiques/DM3b-critique.md` exists without blockers
 
 ---
 
@@ -635,17 +729,19 @@ Modeling Flow.
 
 Read the step instructions provided. Read docs/test-plan.md.
 
-1. Implement tests from the test plan using the UVM-lite testbench.
-2. Run each test and fix failures. If a test fails due to a design bug,
-   fix the design and re-run. If a test fails due to a test bug, fix
-   the test.
-3. Measure coverage. Target: 90%+ line coverage.
-4. If coverage is below target, identify uncovered code paths and write
-   additional tests or document exclusions (dead code, platform-gated).
-5. Update docs/test-plan.md checklist to mark completed tests.
+1. Implement planned tests category by category: Smoke, then Edge, then
+   Stress, then Random.
+2. Use the DM3b testbench scaffolding; if the scaffolding is wrong, flag
+   it rather than silently redesigning it here.
+3. Run tests, fix design or test bugs as needed, and mark completed rows
+   in docs/test-plan.md.
+4. Measure coverage with the plan's `cargo-tarpaulin` strategy and meet
+   the declared threshold.
+5. If coverage is below threshold, add tests or document concrete
+   exclusions in the plan.
 
-Stop when all tests pass and the coverage target is met. A separate critique
-session will review your output.
+Stop when all planned tests are resolved and the coverage target is met. A
+separate critique session will review your output.
 ```
 
 **Critique prompt (separate critique session):**
@@ -654,10 +750,11 @@ session will review your output.
 You are a critique session reviewing the work produced by the DM3c work
 session. Read the test sources, coverage report, and docs/test-plan.md
 and evaluate:
-- Are all tests from the test plan implemented and passing?
-- If any tests fail, are the failures understood?
-- Is coverage at 90%+?
-- Are uncovered lines justified (dead code, platform-gated)?
+- Are all plan rows resolved or explicitly excluded?
+- Are all four categories represented in the implemented suite?
+- Do tests pass end-to-end, and are random tests reproducible?
+- Is coverage at or above the plan's threshold?
+- Are uncovered lines justified with concrete exclusions?
 - Did any design bugs found during testing get properly fixed and
   re-verified?
 
@@ -763,9 +860,10 @@ sim-foundation/
         dm1-modeling-setup.md
         dm2a-decomposition.md
         dm2b-pipeline-mapping.md
-        dm2c-model-implementation.md
-        dm3a-testbench-impl.md
-        dm3b-test-plan.md
+        dm2c-model-impl-plan.md
+        dm2d-model-implementation.md
+        dm3a-test-plan.md
+        dm3b-testbench-impl.md
         dm3c-test-execution.md
         dm3-critique.md         # shared critique-session preamble, if any
         dm4-performance-analysis.md

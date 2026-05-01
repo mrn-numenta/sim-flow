@@ -1,0 +1,57 @@
+# Functional Decomposition
+
+## Overview
+
+Summarize the decomposition at a high level.
+
+## Decomposition Strategy
+
+- Gate budget per cycle used:
+- Source of gate budget:
+- Granularity rationale:
+- Alternative decompositions considered:
+
+Describe why the chosen operation granularity is appropriate for both
+architectural understanding and later pipeline mapping.
+
+## Operation Summary
+
+| Operation | Purpose | Inputs | Outputs | Dominant cost | Character | Timing pressure | Important boundaries |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `<name>` | `<purpose>` | `<inputs>` | `<outputs>` | `<cost>` | `<character>` | `<pressure>` | `<boundaries>` |
+
+## Operations
+
+Repeat this section once per operation using a stable heading.
+
+## Operation: `<name>`
+
+- Purpose:
+- Data inputs:
+- Data outputs:
+- Dominant cost:
+- Character: combinational | stateful | buffering | arbitration | CDC | mixed
+- Timing pressure:
+- Important boundaries:
+
+### Why this is a distinct operation
+
+Explain why this operation is a useful unit for later stage mapping and
+implementation.
+
+### Implementation notes
+
+Describe any state, storage, arbitration, buffering, or CDC implications that
+matter later.
+
+### Ambiguities or alternatives
+
+Describe any plausible alternative boundary choices that were considered.
+
+## Open Questions
+
+List unresolved decomposition questions that later steps should not silently
+resolve.
+
+- `<question>`
+

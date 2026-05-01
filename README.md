@@ -55,6 +55,30 @@ Detailed design and workflow docs live under `tools/sim-flow/docs/flow/`.
 - `08-orchestrator-tools.md`: tool-call contract
 - `cli-json.md`: machine-readable CLI output
 
+## VS Code Extension
+
+`sim-flow` also ships with an internal VS Code extension under:
+
+`tools/sim-flow/extensions/sim-flow-vscode/`
+
+Useful entrypoints:
+
+```sh
+# build + install the extension locally
+./scripts/install-vscode-extension.sh
+```
+
+- Extension README:
+  `tools/sim-flow/extensions/sim-flow-vscode/README.md`
+- Extension architecture notes:
+  `tools/sim-flow/docs/flow/06-vscode-extension.md`
+
+The dashboard's `Spec:` field is a spec path field, not a raw text box. The
+extension persists the typed path per project, passes it to `sim-flow auto`
+as `--spec <path>`, and `sim-flow` ingests that file into
+`.sim-flow/source-spec.*`, `.sim-flow/source-spec-toc.md`, and
+`.sim-flow/spec-pages/` before the first DM0 turn.
+
 ## Internal Binaries
 
 The package also contains a few internal developer utilities under

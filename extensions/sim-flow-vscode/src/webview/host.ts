@@ -185,9 +185,13 @@ export class DashboardHost {
         // terminal. Their auth comes from the user's existing CLI
         // login (claude /login, codex login, gh auth login). Other
         // sources continue to route through the chat pane via
-        // `sim-flow.runAuto` so the orchestrator can render
+        // `sim-flow.runFlow` so the orchestrator can render
         // streaming chunks, tool invocations, and gate results in
-        // the same participant.
+        // the same participant. The webview message is still named
+        // `run-auto` (matching the underlying `sim-flow auto` CLI
+        // subcommand), but it drives the general "run the flow"
+        // launch -- not specifically the automated red-Play path,
+        // which has its own `run-auto-end-to-end` message.
         const config = vscode.workspace.getConfiguration("sim-flow");
         const source = (config.get<string>("llm.source") ?? "vscode") as LlmSourceTag;
         if (isTerminalLlmSource(source)) {
@@ -215,14 +219,14 @@ export class DashboardHost {
             // a fresh launch.
           }
           await vscode.commands.executeCommand(
-            "sim-flow.runAutoTerminal",
+            "sim-flow.runFlowTerminal",
             cliBackendArgFor(source),
             msg.specPath ?? "",
             this.options.projectDir,
           );
         } else {
           await vscode.commands.executeCommand(
-            "sim-flow.runAuto",
+            "sim-flow.runFlow",
             msg.specPath ?? "",
             this.options.projectDir,
           );
@@ -463,7 +467,7 @@ export class DashboardHost {
       );
     } else {
       await vscode.commands.executeCommand(
-        "sim-flow.runAuto",
+        "sim-flow.runFlow",
         trimmed,
         this.options.projectDir,
       );
@@ -781,8 +785,35 @@ export class DashboardHost {
     return this.options.workspaceState.get<string>(this.specPathKey()) ?? "";
   }
 
+  /**
+   * Persist the user's Spec field input. Two stores:
+   *
+   * - VS Code `workspaceState`, keyed per-project, so the dashboard's
+   *   own UI seed (the value the field shows on first render after a
+   *   reload) survives a window reload without depending on the
+   *   project's on-disk state.
+   * - `.sim-flow/config.toml::spec_path`, so the orchestrator's
+   *   pre-DM0 ingestion hook can find the spec regardless of which
+   *   launch path the user uses (Play, red Play, chat-participant,
+   *   or a future `sim-flow run DM0`).
+   *
+   * The two stores are kept in sync best-effort. Failures to write
+   * the project config are surfaced via an error post but do not
+   * block the workspaceState write -- typing in the field stays
+   * responsive even when `.sim-flow/` is read-only or missing.
+   */
   private async writeSpecPath(value: string): Promise<void> {
     await this.options.workspaceState.update(this.specPathKey(), value);
+    try {
+      const { writeSpecPath } = await import("../state/projectConfig");
+      await writeSpecPath(this.options.projectDir, value);
+    } catch (err) {
+      await this.post({
+        type: "error",
+        message: "Failed to persist spec path to .sim-flow/config.toml",
+        detail: String((err as Error).message ?? err),
+      });
+    }
   }
 
   private async loadRuns(): Promise<DashboardState["runs"]> {

@@ -1,0 +1,81 @@
+# Verification Strategy And Testbench Architecture
+
+## Overview
+
+Summarize the verification strategy for the design and the role of the future
+testbench.
+
+## Verification Scope
+
+List the major behaviors, guarantees, and failure modes that the testbench must
+eventually verify.
+
+- `<behavior or guarantee>`
+
+## Coverage Intent
+
+Describe the major scenario classes that later DM3 steps must exercise.
+
+- Normal / steady-state behavior:
+- Reset / initialization behavior:
+- Flow-control / backpressure behavior:
+- Arbitration / fairness behavior:
+- Error / exceptional behavior:
+- Performance-oriented scenarios:
+- Any other important scenario classes:
+
+## Stimulus Strategy
+
+Describe the traffic or stimulus families the future testbench will need.
+
+### Stimulus class: `<name>`
+
+- Purpose:
+- Interfaces driven:
+- Typical scenarios:
+- Corner cases:
+
+## Observability Strategy
+
+Describe what must be observed to determine correctness.
+
+- External observability:
+- Internal observability:
+- Required counters / traces / invariants:
+
+## Checking Strategy
+
+Describe how correctness will be judged.
+
+- Scoreboards:
+- Assertions / invariants:
+- Reference-model checks:
+- Ordering checks:
+- Error checks:
+
+## Testbench Architecture
+
+Describe the likely high-level UVM-lite structure.
+
+### Interface / behavior: `<name>`
+
+- Sequencer(s):
+- Driver(s):
+- Monitor(s):
+- Agent(s):
+- Env responsibilities:
+- Scoreboard / checker responsibilities:
+
+## Target Traceability
+
+Map the verification strategy back to `docs/targets.md`.
+
+| Target | Verification strategy | Planned observability | Planned checking |
+| --- | --- | --- | --- |
+| `<target>` | `<strategy>` | `<observability>` | `<checking>` |
+
+## Risks And Open Questions
+
+List verification-strategy risks, observability gaps, or unresolved questions.
+
+- `<risk or question>`

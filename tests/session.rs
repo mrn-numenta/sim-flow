@@ -93,13 +93,19 @@ fn handshake_emits_hello_ack_and_phase_changed() {
         } => {
             // System (convention + instructions), System (tool catalog),
             // System (current artifact state — spec.md is "not yet on
-            // disk" for a fresh DM0 init), User (opening prompt).
-            assert_eq!(messages.len(), 4);
+            // disk" for a fresh DM0 init), optional System (framework
+            // API TOC when bundled docs are available), User (opening
+            // prompt).
+            assert!(messages.len() == 4 || messages.len() == 5);
             assert!(messages[0].content.contains("Artifact-write convention"));
             assert!(messages[1].content.contains("Tool catalog"));
             assert!(messages[2].content.contains("docs/spec.md"));
             assert!(messages[2].content.contains("not yet on disk"));
-            assert!(messages[3].content.contains("DM0 work session"));
+            let opening_idx = messages.len() - 1;
+            assert!(messages[opening_idx].content.contains("DM0 work session"));
+            if messages.len() == 5 {
+                assert!(messages[3].content.contains("Framework API TOC"));
+            }
             // Tool catalog also surfaces as a structured field for
             // backends that support native tool-use. Every step now
             // gets the same universal set.

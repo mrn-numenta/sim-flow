@@ -22,13 +22,22 @@ Read these before writing the plan:
   (`plan.md` index + per-milestone files, milestone / task numbering,
   `[ ]` checkbox format).
 - `docs/spec.md` -- the specification.
+- `docs/targets.md` -- modeling targets, including the gate-budget target
+  and any target-sensitive architectural constraints.
+- `docs/testbench.md` -- verification strategy and planned testbench
+  architecture from DM1.
 - `docs/analysis/decomposition.md` -- operations and the
   decomposition into modules.
 - `docs/analysis/pipeline-mapping.md` -- the pipeline topology.
 - `docs/analysis/data-movement.md` -- payload widths and dataflow.
 
 You do NOT need to read framework or library reference material here.
-That belongs in DM2d when the agent actually writes code.
+That belongs primarily in DM2d when the agent actually writes code.
+If you need to sanity-check that a planned artifact maps onto an
+existing public framework surface, consult `fw:api/toc.md` and only
+the specific `fw:api/pages/...` files you need. Do not bulk-read the
+framework API and do not turn DM2c into an implementation-spelunking
+step.
 
 ## Procedure
 
@@ -61,7 +70,16 @@ That belongs in DM2d when the agent actually writes code.
    "decide the buffer depth for stage X" -- belong in the plan as
    explicit decision tasks (or are flagged `OPEN:` for DM3 to
    resolve).
-5. Order milestones so that each one's tasks have all their
+5. Make sure the plan accounts for target- and verification-sensitive
+   implementation work where it materially affects DM2d:
+   - gate-budget-sensitive stage structure or buffering decisions
+   - smoke tests that exercise the critical liveness / backpressure /
+     idle behavior implied by DM1
+   - any observability or structural hooks DM3 will rely on later,
+     when those hooks must be designed in during implementation
+   Do not pre-empt full DM3 verification planning, but do not ignore
+   DM1's strategy artifacts either.
+6. Order milestones so that each one's tasks have all their
    dependencies in earlier milestones (payload types before modules,
    skeletons + connectivity before per-stage logic, logic before
    tests).
@@ -90,6 +108,9 @@ order.
 - DO NOT pre-empt DV scope. If the analysis suggests a verification
   concern, leave it for DM3 (a single bullet noting "covered in DM3"
   is fine).
+- Use `docs/targets.md` and `docs/testbench.md` to shape the plan where
+  they affect implementation structure, but do not turn this into a
+  full verification-plan step.
 
 When the artifacts above are complete, stop. Do not write
 `docs/critiques/DM2c-critique.md`; the critique is a distinct task.

@@ -38,21 +38,25 @@ pub use write_file::WriteFileTool;
 /// sim-models repo containing `docs/`, `examples/`, and `library/`.
 /// `framework_root` (also read-only) points at the
 /// `<foundation>/crates/framework/` crate so the agent can read the
-/// framework's public API surface (the traits and types models
-/// implement against). Tools accept paths in three forms:
+/// framework's source-level API surface when needed.
+/// `framework_docs_root` (also read-only) points at the normalized API
+/// docs root (the directory that contains `toc.md` and `pages/`).
+/// Tools accept paths in three forms:
 ///
 /// - bare relative path -- resolves under `project_dir` (existing
 ///   behavior; what `write_file` and the artifact-write convention use).
 /// - `lib:<rel>` prefix -- resolves under `library_root`. Tools that
 ///   only read (`read_file`, `list_dir`, `search`) honor this prefix;
 ///   `write_file` rejects it.
-/// - `fw:<rel>` prefix -- resolves under `framework_root`. Read-only
-///   like `lib:`. Use this to read the foundation framework's public
-///   API (start with `fw:src/lib.rs` and `fw:src/prelude.rs`).
+/// - `fw:<rel>` prefix -- resolves under the framework assets. Read-only
+///   like `lib:`. `fw:api/...` reads normalized API docs (start with
+///   `fw:api/toc.md`); other `fw:` paths read the framework source tree
+///   (for example `fw:src/prelude.rs`).
 pub struct ToolContext<'a> {
     pub project_dir: &'a Path,
     pub library_root: Option<&'a Path>,
     pub framework_root: Option<&'a Path>,
+    pub framework_docs_root: Option<&'a Path>,
 }
 
 impl<'a> ToolContext<'a> {
@@ -60,11 +64,13 @@ impl<'a> ToolContext<'a> {
         project_dir: &'a Path,
         library_root: Option<&'a Path>,
         framework_root: Option<&'a Path>,
+        framework_docs_root: Option<&'a Path>,
     ) -> Self {
         Self {
             project_dir,
             library_root,
             framework_root,
+            framework_docs_root,
         }
     }
 }
@@ -216,15 +222,29 @@ pub fn resolve_safe_path(project_dir: &Path, rel: &str) -> Result<PathBuf> {
 
 /// Read-side resolver. Accepts either a bare project-relative path,
 /// a `lib:<rel>` prefix (library root), or an `fw:<rel>` prefix
-/// (framework root). Returns `Ok(Some(abs))` when the input names a
-/// real path inside one of the allowed roots, `Ok(None)` when a
-/// prefix is used but the corresponding root is not configured, and
-/// `Err` when the path fails the safety check.
+/// (framework assets). `fw:api/...` resolves under the normalized API-doc root;
+/// other `fw:` paths resolve under the framework source root. Returns
+/// `Ok(Some(abs))` when the input names a real path inside one of the
+/// allowed roots, `Ok(None)` when a prefix is used but the corresponding
+/// root is not configured, and `Err` when the path fails the safety
+/// check.
 pub fn resolve_read_path(ctx: &ToolContext, raw: &str) -> Result<Option<PathBuf>> {
     if let Some(rel) = raw.strip_prefix("lib:") {
         return resolve_under(ctx.library_root, "lib", rel);
     }
     if let Some(rel) = raw.strip_prefix("fw:") {
+        if rel == "api" {
+            return resolve_under(ctx.framework_docs_root, "fw", "");
+        }
+        if let Some(api_rel) = rel.strip_prefix("api/") {
+            return resolve_under(ctx.framework_docs_root, "fw", api_rel);
+        }
+        if rel.is_empty() {
+            if let Some(root) = ctx.framework_root {
+                return Ok(Some(root.to_path_buf()));
+            }
+            return Ok(ctx.framework_docs_root.map(Path::to_path_buf));
+        }
         return resolve_under(ctx.framework_root, "fw", rel);
     }
     Ok(Some(resolve_safe_path(ctx.project_dir, raw)?))

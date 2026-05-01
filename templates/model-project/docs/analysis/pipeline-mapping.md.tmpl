@@ -1,0 +1,70 @@
+# Pipeline Mapping
+
+## Overview
+
+Summarize the pipeline architecture at a high level.
+
+## Mapping Strategy
+
+- Gate budget per cycle used:
+- Source of gate budget:
+- Clock frequency target:
+- Technology target:
+- Pipeline intent from spec:
+- Mapping rationale:
+
+Describe why the chosen stage structure is appropriate for the target
+frequency, technology, decomposition, and design intent.
+
+## Stage Summary
+
+| Stage | Purpose | Operations | Gate estimate | Latency contribution | Important boundaries | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| `<stage>` | `<purpose>` | `<operations>` | `<estimate>` | `<latency>` | `<boundaries>` | `<notes>` |
+
+## Stages
+
+Repeat this section once per stage using a stable heading.
+
+## Stage: `<name>`
+
+- Purpose:
+- Operations assigned:
+- Gate-count estimate:
+- Latency contribution:
+- Register / buffering assumptions:
+- Important boundaries:
+
+### Why these operations belong together
+
+Explain why this stage grouping is appropriate under the current gate budget.
+
+### Timing and implementation notes
+
+Describe timing pressure, critical paths, state updates, buffering, or
+arbitration considerations that matter later.
+
+### Feedback / CDC notes
+
+Describe any feedback-path or clock-domain considerations relevant to this
+stage.
+
+## Operation-To-Stage Traceability
+
+| Operation | Assigned stage(s) | Rationale |
+| --- | --- | --- |
+| `<operation>` | `<stage>` | `<why>` |
+
+## End-To-End Latency Summary
+
+- Pipeline depth:
+- Total latency:
+- Notes:
+
+## Alternatives And Open Questions
+
+Describe plausible alternative stage cuts, unresolved mapping questions, or
+assumptions that later steps should not silently change.
+
+- `<question or alternative>`
+

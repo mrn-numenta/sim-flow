@@ -288,7 +288,7 @@ pub(crate) enum PromptsAction {
     /// Print the resolved content of a prompt.
     Show {
         /// Slug + kind, e.g. `dm0-specification.work` or
-        /// `dm2c-model-implementation.critique`.
+        /// `dm2c-model-impl-plan.critique`.
         slug_kind: String,
     },
     /// Persist an override at the chosen scope. Reads new content

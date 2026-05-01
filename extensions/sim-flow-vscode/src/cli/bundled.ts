@@ -6,6 +6,10 @@
 // libpdfium ships in `<extensionRoot>/bin/<platform>-<arch>/<libname>`
 // alongside sim-flow; `bundledPdfiumLibPath()` returns the path so the
 // extension can set `SIM_FLOW_PDFIUM_LIB_PATH` when spawning the CLI.
+//
+// Normalized framework API docs ship under
+// `<extensionRoot>/foundation-docs/api/`; `bundledFrameworkDocsRoot()`
+// returns that root so the orchestrator can expose them via `fw:api/...`.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -63,6 +67,20 @@ export function bundledPdfiumLibPath(): string | undefined {
         : "libpdfium.so";
   const candidate = path.join(bundledRoot, "bin", dir, libname);
   return fs.existsSync(candidate) ? candidate : undefined;
+}
+
+/**
+ * Path to the bundled normalized framework API docs root, or
+ * `undefined` when the extension root is unknown or the packaged docs
+ * are missing.
+ */
+export function bundledFrameworkDocsRoot(): string | undefined {
+  if (!bundledRoot) {
+    return undefined;
+  }
+  const candidate = path.join(bundledRoot, "foundation-docs", "api");
+  const toc = path.join(candidate, "toc.md");
+  return fs.existsSync(toc) ? candidate : undefined;
 }
 
 /**

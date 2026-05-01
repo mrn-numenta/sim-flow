@@ -3,6 +3,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 interface FakeTerminal {
   name: string;
   cwd: string;
+  env: Record<string, string> | undefined;
   shown: boolean;
   preserveFocus: boolean | undefined;
   sent: Array<{ text: string; newline: boolean }>;
@@ -16,10 +17,15 @@ interface FakeTerminal {
 const created: FakeTerminal[] = [];
 let closeHandlers: Array<(t: FakeTerminal) => void> = [];
 
-function makeFakeTerminal(name: string, cwd: string): FakeTerminal {
+function makeFakeTerminal(
+  name: string,
+  cwd: string,
+  env: Record<string, string> | undefined,
+): FakeTerminal {
   const t: FakeTerminal = {
     name,
     cwd,
+    env,
     shown: false,
     preserveFocus: undefined,
     sent: [],
@@ -45,8 +51,8 @@ function makeFakeTerminal(name: string, cwd: string): FakeTerminal {
 
 vi.mock("vscode", () => ({
   window: {
-    createTerminal: (opts: { name: string; cwd: string }) => {
-      const t = makeFakeTerminal(opts.name, opts.cwd);
+    createTerminal: (opts: { name: string; cwd: string; env?: Record<string, string> }) => {
+      const t = makeFakeTerminal(opts.name, opts.cwd, opts.env);
       created.push(t);
       return t;
     },
@@ -90,6 +96,17 @@ describe("SimFlowTerminal", () => {
     const term = new SimFlowTerminal({ projectDir: "/p", name: "sim-flow: steps" });
     term.run("sim-flow status");
     expect(created[0].name).toBe("sim-flow: steps");
+  });
+
+  it("passes through terminal environment overrides", () => {
+    const term = new SimFlowTerminal({
+      projectDir: "/tmp/project",
+      env: { SIM_FLOW_FRAMEWORK_DOCS_ROOT: "/ext/foundation-docs/rustdoc" },
+    });
+    term.run("sim-flow status");
+    expect(created[0].env).toEqual({
+      SIM_FLOW_FRAMEWORK_DOCS_ROOT: "/ext/foundation-docs/rustdoc",
+    });
   });
 
   it("recreates the terminal after the user closes it", () => {

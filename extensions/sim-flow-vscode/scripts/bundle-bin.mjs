@@ -10,7 +10,7 @@
 //   bin/<platform-arch>/sim-flow[.exe]
 //   bin/<platform-arch>/libpdfium.{dylib,so} | pdfium.dll
 
-import { copyFileSync, existsSync, mkdirSync, statSync, chmodSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, statSync, chmodSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -18,6 +18,8 @@ import { extDir, repoRoot } from "./paths.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = process.argv[2] ? resolve(process.argv[2]) : extDir;
+const apiDocsSourceDir = join(repoRoot, "target", "sim-flow-vscode-api-docs");
+const apiDocsDestDir = join(packageRoot, "foundation-docs", "api");
 
 // platform/arch keys must match `cli/bundled.ts::platformDir`.
 const PLATFORM_DIR = (() => {
@@ -77,7 +79,7 @@ mkdirSync(destDir, { recursive: true });
 if (!existsSync(sourceBin)) {
   console.error(
     `bundle-bin: ${sourceBin} not found.\n` +
-      `  Build with \`cargo build -p sim-flow --release\` first.`,
+      `  Build with \`npm run compile:cargo\` first.`,
   );
   process.exit(1);
 }
@@ -101,6 +103,17 @@ if (!existsSync(sourcePdfium)) {
   copyFileSync(sourcePdfium, destPdfium);
   console.log(`copied ${sourcePdfium} -> ${destPdfium} (${prettyBytes(destPdfium)})`);
 }
+
+if (!existsSync(join(apiDocsSourceDir, "toc.md"))) {
+  console.error(
+    `bundle-bin: ${apiDocsSourceDir} is missing normalized foundation API docs.\n` +
+      `  Build with \`npm run compile:cargo\` first.`,
+  );
+  process.exit(1);
+}
+mkdirSync(join(packageRoot, "foundation-docs"), { recursive: true });
+cpSync(apiDocsSourceDir, apiDocsDestDir, { recursive: true });
+console.log(`copied ${apiDocsSourceDir} -> ${apiDocsDestDir}`);
 
 function prettyBytes(path) {
   const size = statSync(path).size;

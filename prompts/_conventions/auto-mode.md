@@ -3,9 +3,20 @@
 AUTOMATED mode is ACTIVE for this session. The user will not respond.
 Do NOT ask questions; the chat will not loop back to you with
 answers. When you would normally ask a clarifying question, decide
-using prior-step artifacts (fetch via `read_file`), the modeling
-guide (under `lib:`), and any source-spec pages you fetch via
-`read_file` / `search`.
+using:
+
+- prior-step artifacts under `docs/` (fetch via `read_file`),
+- the modeling guide (under `lib:`),
+- the **user-supplied source spec** when ingestion produced one --
+  available at `.sim-flow/source-spec.md` (or `.sim-flow/source-spec.<ext>`
+  for paginated PDF / TXT inputs) and per-page at
+  `.sim-flow/spec-pages/<NNN>.md`. The orchestrator may have inlined a
+  TOC into this system stack; if it didn't, read
+  `.sim-flow/source-spec-toc.md` first and fetch only the pages you
+  need (don't request the whole spec at once). For DM0 specifically,
+  the source spec is the authoritative input you derive `docs/spec.md`
+  from; for later steps it is reference material when `docs/spec.md`
+  is ambiguous.
 
 Document each non-trivial decision in an `## Auto-decisions`
 subsection of the artifact you are producing. One bullet per

@@ -1,4 +1,5 @@
-//! `list_dir(path: string)` - list a project or library directory.
+//! `list_dir(path: string)` - list a project, library, or framework
+//! directory.
 
 use serde_json::json;
 
@@ -21,7 +22,7 @@ impl Tool for ListDirTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Project-relative directory path (use `.` for the project root), `lib:` / `lib:<rel>` to list the library root, or `fw:` / `fw:<rel>` to list the foundation framework root (e.g. `fw:src/`)."
+                    "description": "Project-relative directory path (use `.` for the project root), `lib:` / `lib:<rel>` to list the library root, or `fw:` / `fw:<rel>` to list framework assets. Use `fw:api/` for normalized API docs and `fw:src/` for the framework source tree."
                 }
             }
         })
@@ -32,6 +33,9 @@ impl Tool for ListDirTool {
             Some(s) => s.to_string(),
             None => return Ok(ToolResult::err("list_dir: missing `path` arg")),
         };
+        if path == "fw:" || path == "fw" {
+            return Ok(list_framework_roots(ctx));
+        }
         // Allow "." as the project root and "lib:" as the library root.
         let abs = if path == "." || path == "./" {
             ctx.project_dir.to_path_buf()
@@ -40,7 +44,7 @@ impl Tool for ListDirTool {
                 Ok(Some(p)) => p,
                 Ok(None) => {
                     return Ok(ToolResult::err(
-                        "list_dir: `lib:` prefix used but no library root is configured for this project",
+                        "list_dir: requested `lib:` / `fw:` root is not configured for this project",
                     ));
                 }
                 Err(e) => {
@@ -75,4 +79,24 @@ impl Tool for ListDirTool {
             rows.join("\n")
         )))
     }
+}
+
+fn list_framework_roots(ctx: &ToolContext) -> ToolResult {
+    let mut rows: Vec<String> = Vec::new();
+    if let Some(root) = ctx.framework_root {
+        rows.push("- [dir] src".into());
+        if root.join("Cargo.toml").is_file() {
+            rows.push("- [file] Cargo.toml".into());
+        }
+    }
+    if ctx.framework_docs_root.is_some() {
+        rows.push("- [dir] api".into());
+    }
+    if rows.is_empty() {
+        return ToolResult::err(
+            "list_dir: requested `fw:` root is not configured for this project",
+        );
+    }
+    rows.sort();
+    ToolResult::ok(format!("[list_dir `fw:`]\n\n{}", rows.join("\n")))
 }

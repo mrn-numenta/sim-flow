@@ -1,5 +1,5 @@
-//! `read_file(path: string)` - read a project file or a library file
-//! (when prefixed with `lib:`).
+//! `read_file(path: string)` - read a project file, library file, or
+//! framework API asset (when prefixed with `lib:` / `fw:`).
 
 use serde_json::json;
 
@@ -24,7 +24,7 @@ impl Tool for ReadFileTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Project-relative file path, `lib:<rel>` to read from the library root (sim-models docs / examples / library), or `fw:<rel>` to read from the foundation framework root (e.g. `fw:src/prelude.rs` for the model-author API surface). Absolute paths and `..` traversal are rejected."
+                    "description": "Project-relative file path, `lib:<rel>` to read from the library root (sim-models docs / examples / library), or `fw:<rel>` to read framework assets. Prefer `fw:api/toc.md` plus specific `fw:api/pages/...md` files for curated API docs; use `fw:src/prelude.rs` when you need source-level signatures. Absolute paths and `..` traversal are rejected."
                 }
             }
         })
@@ -39,7 +39,7 @@ impl Tool for ReadFileTool {
             Ok(Some(p)) => p,
             Ok(None) => {
                 return Ok(ToolResult::err(
-                    "read_file: `lib:` prefix used but no library root is configured for this project",
+                    "read_file: requested `lib:` / `fw:` root is not configured for this project",
                 ));
             }
             Err(e) => return Ok(ToolResult::err(format!("{e}"))),

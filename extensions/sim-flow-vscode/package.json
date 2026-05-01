@@ -87,12 +87,12 @@
         "title": "sim-flow: Run Critique"
       },
       {
-        "command": "sim-flow.runAuto",
-        "title": "sim-flow: Run Automated Flow"
+        "command": "sim-flow.runFlow",
+        "title": "sim-flow: Run Flow (chat participant)"
       },
       {
-        "command": "sim-flow.runAutoTerminal",
-        "title": "sim-flow: Run Automated Flow (CLI agent in terminal)"
+        "command": "sim-flow.runFlowTerminal",
+        "title": "sim-flow: Run Flow (CLI agent in terminal)"
       },
       {
         "command": "sim-flow.dumpAvailableLmModels",

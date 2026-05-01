@@ -27,6 +27,8 @@ use crate::state::State;
 use crate::steps::{StepDescriptor, registry_for};
 use crate::{Error, Result};
 
+const FRAMEWORK_DOCS_ROOT_ENV: &str = "SIM_FLOW_FRAMEWORK_DOCS_ROOT";
+
 /// Inputs the caller (CLI dispatch) passes to `run_session`.
 pub struct OrchestratorOptions {
     pub project_dir: PathBuf,
@@ -181,6 +183,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
     let dispatcher = tools::build_dispatcher(crate::steps::UNIVERSAL_TOOLS);
     let library_root = detect_library_root(&opts.project_dir);
     let framework_root = detect_framework_root(&opts.foundation_root);
+    let framework_docs_root = detect_framework_docs_root(&opts.foundation_root);
 
     // 4b. Build the message stack + LLM-side tool descriptors via the
     //     shared helper so the interactive PTY driver can produce the
@@ -484,6 +487,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         &opts.project_dir,
                         library_root.as_deref(),
                         framework_root.as_deref(),
+                        framework_docs_root.as_deref(),
                     );
                     let outcome = invoke_tool(&dispatcher, &ctx, call);
                     let status = if outcome.ok { "ok" } else { "error" };
@@ -707,6 +711,7 @@ fn build_tool_notice(
     dispatcher: &[Box<dyn Tool>],
     library_root: Option<&Path>,
     framework_root: Option<&Path>,
+    framework_docs_root: Option<&Path>,
 ) -> String {
     let mut out = String::from("Tool catalog (orchestrator-mediated):\n\n");
     for t in dispatcher {
@@ -724,12 +729,18 @@ fn build_tool_notice(
     }
     if let Some(root) = framework_root {
         out.push_str(&format!(
-            "\nFramework root (read-only): `{}`. Reads can target it via the `fw:` prefix to consult the foundation framework's public API. Start with `fw:src/lib.rs` (module structure + re-exports) and `fw:src/prelude.rs` (the canonical model-author surface: `Module`, `HasLogic`, `HasInstances`, `ConnectivityPlan`, `Port`, `SimEnv`, etc.). You may follow into individual submodules under `fw:src/` for type / trait signatures. Treat the framework as a stable API -- do NOT browse internal helpers; if a behavior isn't in the prelude or a directly-re-exported module, ask rather than reverse-engineering it.\n",
+            "\nFramework source root (read-only): `{}`. Reads can target it via the `fw:` prefix for source-level signatures and crate layout. Prefer the curated rustdoc under `fw:api/...` for API discovery; use `fw:src/prelude.rs` or individual `fw:src/...` files only when you need exact signatures or source examples. Treat the framework as a stable API -- do NOT browse internal helpers; if a behavior isn't in the prelude or a directly-re-exported module, ask rather than reverse-engineering it.\n",
+            root.display()
+        ));
+    }
+    if let Some(root) = framework_docs_root {
+        out.push_str(&format!(
+            "\nFramework API docs root (read-only): `{}`. A curated framework API TOC is provided separately in this prompt. Use that TOC to choose specific `fw:api/pages/...md` files, then read only those pages on demand.\n",
             root.display()
         ));
     }
     out.push_str(
-        "\nNative tool-use is preferred; clients without it can emit a fenced block whose info-string is `tool:<name>` and whose body is the argument payload. Examples:\n\n```tool:read_file\nsrc/lib.rs\n```\n\n```tool:list_dir\nsrc/\n```\n\n```tool:read_file\nfw:src/prelude.rs\n```\n\n```tool:search\nConnectivityPlan\n```\n\nThe `edit_file` tool's fenced-block body is a JSON object (its three args -- `path`, `old_string`, `new_string` -- can be multi-line, so a JSON body is the only unambiguous form):\n\n```tool:edit_file\n{\"path\": \"spec.md\", \"old_string\": \"## Pipelining\", \"new_string\": \"## Pipelining and Hierarchy\"}\n```\n\n## Choosing between edit_file and the artifact-write convention\n\nPrefer `edit_file` for SMALL, TARGETED CHANGES against a file already on disk: rename a header, fix a typo, change a single value, add or delete a paragraph. `old_string` must appear EXACTLY ONCE in the current file -- include enough surrounding context to make the substring unique, and read the file first if you don't already have its current text in this turn. Use the artifact-write convention (full-file fenced block whose info-string is the path) only when creating a new file or when the change touches most of the file.\n\nThe orchestrator runs the tool, emits a `ToolInvoked` event for the host, and feeds the tool's output back as the next user message.",
+        "\nNative tool-use is preferred; clients without it can emit a fenced block whose info-string is `tool:<name>` and whose body is the argument payload. Examples:\n\n```tool:read_file\nsrc/lib.rs\n```\n\n```tool:list_dir\nfw:\n```\n\n```tool:read_file\nfw:api/toc.md\n```\n\n```tool:read_file\nfw:api/pages/foundation_framework/prelude/index.md\n```\n\n```tool:read_file\nfw:src/prelude.rs\n```\n\n```tool:search\n{\"pattern\":\"ConnectivityPlan\",\"path\":\"fw:api/pages\"}\n```\n\nThe `edit_file` tool's fenced-block body is a JSON object (its three args -- `path`, `old_string`, `new_string` -- can be multi-line, so a JSON body is the only unambiguous form):\n\n```tool:edit_file\n{\"path\": \"spec.md\", \"old_string\": \"## Pipelining\", \"new_string\": \"## Pipelining and Hierarchy\"}\n```\n\n## Choosing between edit_file and the artifact-write convention\n\nPrefer `edit_file` for SMALL, TARGETED CHANGES against a file already on disk: rename a header, fix a typo, change a single value, add or delete a paragraph. `old_string` must appear EXACTLY ONCE in the current file -- include enough surrounding context to make the substring unique, and read the file first if you don't already have its current text in this turn. Use the artifact-write convention (full-file fenced block whose info-string is the path) only when creating a new file or when the change touches most of the file.\n\nThe orchestrator runs the tool, emits a `ToolInvoked` event for the host, and feeds the tool's output back as the next user message.",
     );
     out
 }
@@ -745,6 +756,26 @@ fn detect_framework_root(foundation_root: &Path) -> Option<std::path::PathBuf> {
     } else {
         None
     }
+}
+
+fn detect_framework_docs_root(foundation_root: &Path) -> Option<std::path::PathBuf> {
+    if let Some(candidate) = std::env::var_os(FRAMEWORK_DOCS_ROOT_ENV).map(PathBuf::from)
+        && is_framework_docs_root(&candidate)
+    {
+        return Some(candidate);
+    }
+    let candidate = foundation_root
+        .join("target")
+        .join("sim-flow-vscode-api-docs");
+    if is_framework_docs_root(&candidate) {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+fn is_framework_docs_root(candidate: &Path) -> bool {
+    candidate.join("toc.md").is_file() && candidate.join("pages").is_dir()
 }
 
 /// Walk up from `project_dir` looking for a directory that contains
@@ -964,6 +995,7 @@ pub fn build_initial_messages(
     let dispatcher = tools::build_dispatcher(tool_names);
     let library_root = detect_library_root(&opts.project_dir);
     let framework_root = detect_framework_root(&opts.foundation_root);
+    let framework_docs_root = detect_framework_docs_root(&opts.foundation_root);
     let llm_tools: Vec<LlmTool> = dispatcher
         .iter()
         .map(|t| LlmTool {
@@ -1037,6 +1069,7 @@ pub fn build_initial_messages(
                 &dispatcher,
                 library_root.as_deref(),
                 framework_root.as_deref(),
+                framework_docs_root.as_deref(),
             ),
             attachments: Vec::new(),
         });
@@ -1049,6 +1082,15 @@ pub fn build_initial_messages(
         });
     }
     if let Some(toc) = build_spec_toc_message(&opts.project_dir) {
+        messages.push(LlmMessage {
+            role: LlmRole::System,
+            content: toc,
+            attachments: Vec::new(),
+        });
+    }
+    if let Some(root) = framework_docs_root.as_deref()
+        && let Some(toc) = build_framework_api_toc_message(root)
+    {
         messages.push(LlmMessage {
             role: LlmRole::System,
             content: toc,
@@ -1179,6 +1221,18 @@ fn build_spec_toc_message(project_dir: &Path) -> Option<String> {
          `.sim-flow/spec-pages/<NNN>.md` to read individual pages on demand. \
          Do NOT request the full spec at once; consult the TOC below and \
          fetch only what you need.\n\n{body}"
+    ))
+}
+
+/// If normalized framework API docs are available, return the bundled
+/// TOC as a system message. The TOC points at `fw:api/pages/...` files
+/// so the agent fetches only the specific API pages it needs.
+fn build_framework_api_toc_message(framework_docs_root: &Path) -> Option<String> {
+    let body = std::fs::read_to_string(framework_docs_root.join("toc.md")).ok()?;
+    Some(format!(
+        "Framework API docs are available under the `fw:api/` prefix. \
+         Do NOT read the full API surface at once. Read the TOC below, then fetch only the \
+         specific `fw:api/pages/...` files you need.\n\n{body}"
     ))
 }
 

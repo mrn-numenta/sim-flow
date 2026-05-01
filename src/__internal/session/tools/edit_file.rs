@@ -139,7 +139,7 @@ mod tests {
     use super::*;
 
     fn ctx<'a>(dir: &'a std::path::Path) -> ToolContext<'a> {
-        ToolContext::new(dir, None, None)
+        ToolContext::new(dir, None, None, None)
     }
 
     #[test]

@@ -31,7 +31,7 @@ impl Tool for SearchTool {
                 "pattern": { "type": "string", "description": "Regex pattern (Rust regex flavor)." },
                 "path": {
                     "type": "string",
-                    "description": "Optional project-relative directory or file to limit the search. Use `lib:` (or `lib:<rel>`) to search the library root, or `fw:` (or `fw:<rel>`) to search the foundation framework. Defaults to the project root."
+                    "description": "Optional project-relative directory or file to limit the search. Use `lib:` (or `lib:<rel>`) to search the library root, or `fw:` / `fw:api` to search framework source or normalized API docs. Defaults to the project root."
                 }
             }
         })
@@ -61,6 +61,15 @@ impl Tool for SearchTool {
                 Ok(Some(p)) => {
                     let strip = if scope.starts_with("lib:") {
                         ctx.library_root.unwrap_or(ctx.project_dir)
+                    } else if scope == "fw:api"
+                        || scope == "fw:api/"
+                        || scope.starts_with("fw:api/")
+                    {
+                        ctx.framework_docs_root.unwrap_or(ctx.project_dir)
+                    } else if scope.starts_with("fw:") {
+                        ctx.framework_root
+                            .or(ctx.framework_docs_root)
+                            .unwrap_or(ctx.project_dir)
                     } else {
                         ctx.project_dir
                     };
@@ -68,7 +77,7 @@ impl Tool for SearchTool {
                 }
                 Ok(None) => {
                     return Ok(ToolResult::err(
-                        "search: `lib:` prefix used but no library root is configured for this project",
+                        "search: requested `lib:` / `fw:` root is not configured for this project",
                     ));
                 }
                 Err(err) => {

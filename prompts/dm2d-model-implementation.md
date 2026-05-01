@@ -19,6 +19,8 @@ Read these before starting:
   is your source of truth for what to build and in what order;
   follow it task by task.
 - `docs/spec.md`
+- `docs/targets.md`
+- `docs/testbench.md`
 - `docs/analysis/decomposition.md`
 - `docs/analysis/pipeline-mapping.md`
 - `docs/analysis/data-movement.md`
@@ -27,15 +29,13 @@ Reference material (read on demand; do NOT bulk-read upfront):
 
 - **sim-models** repo via the `lib:` prefix (modeling guide, worked
   examples, library models, prior user projects).
-- **foundation framework** crate via the `fw:` prefix
-  (`fw:src/lib.rs` for the module structure and re-exports;
-  `fw:src/prelude.rs` for the canonical model-author API: `Module`,
-  `HasLogic`, `HasInstances`, `ConnectivityPlan`, `Port`, `SimEnv`,
-  etc.). Use `fw:` as a reference, NOT a starting point -- read
-  prelude / re-exports first, follow into specific modules only when
-  you need a signature or trait method. Do not read internal
-  helpers; treat anything outside the prelude (or directly
-  re-exported from `lib.rs`) as implementation detail.
+- **foundation framework** public API via the `fw:` prefix. Start with
+  `fw:api/toc.md`, then read only the specific
+  `fw:api/pages/.../*.md` files you need. Use `fw:src/prelude.rs` or
+  other `fw:src/...` files only as a secondary source when you need
+  exact signatures or source-level examples. Do not browse internal
+  helpers; treat anything outside the curated public API surface as
+  implementation detail.
 
 Each top-level `lib:` directory has a `README.md` that indexes its
 contents -- start there before diving into individual files. Consult
@@ -62,14 +62,27 @@ contents -- start there before diving into individual files. Consult
   guide / examples / library when they conflict.
 
 You MAY consult the foundation framework's public API via `fw:`
-(start with `fw:src/prelude.rs`); do NOT browse other sim-foundation
-crates or the framework crate's internal helper modules.
+(start with `fw:api/toc.md`); do NOT browse other sim-foundation
+crates or the framework crate's internal helper modules. Use `fw:` and
+`lib:` to answer "how do I express this in the framework?", not
+"what should I build?" The DM2c plan remains the source of truth for
+scope and structure.
 
 ## Procedure
 
 1. Read `docs/plan/plan.md` to orient. Then process each milestone
    in order from `docs/plan/milestone-*.md`.
-2. For each milestone:
+2. Read `docs/targets.md` and `docs/testbench.md` before starting
+   implementation.
+   - Use `docs/targets.md` to preserve target-sensitive structural
+     choices such as gate-budget-driven stage boundaries, buffering, or
+     other performance-sensitive implementation decisions already baked
+     into the plan and mapping.
+   - Use `docs/testbench.md` to notice observability or smoke-test needs
+     that must be supported structurally during implementation.
+   - Do not turn DM2d into a full verification-implementation step;
+     DM3 still owns the full testbench and verification suite.
+3. For each milestone:
    - Read its `milestone-NN-<name>.md` file.
    - Work through tasks in the order they're listed. See "Order,
      jumping, and deferring" below before deviating.
@@ -95,19 +108,21 @@ out-of-order work (`order swap:` sub-bullet documenting why),
 and how to add work the plan missed (`added:` sub-bullet on a
 new `- [ ]` / `- [x]` row). Read it before starting; follow it
 strictly.
-3. **Payload types**: create Rust structs in `src/model/` derived
+4. **Payload types**: create Rust structs in `src/model/` derived
    from `data-movement.md`. Payload types live alongside the
    modules that produce and consume them.
-4. **Connectivity**: build a `ConnectivityPlan` that wires every
+5. **Connectivity**: build a `ConnectivityPlan` that wires every
    pipeline stage. Name modules after operations from
    `decomposition.md` so future readers can trace
    spec -> decomposition -> code.
-5. **Modules**: implement each module using the Foundation
+6. **Modules**: implement each module using the Foundation
    `Module`, `HasLogic`, and `HasInstances` traits. Every module
-   has flopped inputs (framework invariant). For simple modules,
-   implement logic directly in `evaluate()`. For complex modules,
-   factor helpers called from `evaluate()`.
-6. **Cargo verification**: after each module lands, invoke the
+   must respect framework invariants and the structure established by
+   the plan and pipeline mapping. For simple modules, implementing logic
+   directly in `evaluate()` may be fine; for complex modules, factor
+   helpers when that improves clarity. Do not treat those style notes as
+   permission to ignore the plan's intended architecture.
+7. **Cargo verification**: after each module lands, invoke the
    `run_cargo` tool to verify it compiles / passes:
    - `run_cargo({"command": "check"})` for the cheap type-only
      pass while iterating.
@@ -118,7 +133,7 @@ strictly.
    Read the returned stdout / stderr; if there are real errors,
    fix them and re-run. Do NOT guess at build errors from source
    -- always confirm with `run_cargo` output.
-7. **Tests**: write **only** unit tests and smoke tests at this
+8. **Tests**: write **only** unit tests and smoke tests at this
    step. Exhaustive verification (directed sequences, coverage
    targets, randomized stimulus, scoreboards) belongs to **DM3** --
    do not pre-empt that scope here. Cover:
@@ -144,6 +159,9 @@ strictly.
   or impossible, flag the issue (in auto mode, document the
   decision in the milestone file's `## Auto-decisions` section)
   rather than silently deviating.
+- References do not override the plan. If examples or public framework
+  APIs suggest a different structure than the plan, prefer the plan and
+  document the tension rather than drifting silently.
 
 ## Output
 
@@ -153,7 +171,14 @@ strictly.
 - Every milestone file's tasks marked `[x]`.
 - `cargo build` and `cargo test` both succeed.
 
-When the artifacts above are complete, stop. Do not write
+Milestone completion and step completion are different:
+
+- After each milestone is complete, stop and wait for user review before
+  starting the next milestone.
+- After the final milestone is complete and the build/tests are green,
+  stop the step.
+
+Do not write
 `docs/critiques/DM2d-critique.md`; the critique is a distinct task.
 Do not `/exit` on your own -- the user and the orchestrator control
 session boundaries.

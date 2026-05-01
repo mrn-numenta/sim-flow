@@ -14,6 +14,8 @@ Do not modify the plan; evaluate it and write the critique file.
 - `docs/plan/plan.md` -- plan index + TOC.
 - `docs/plan/milestone-*.md` -- per-milestone task lists.
 - `docs/spec.md`
+- `docs/targets.md`
+- `docs/testbench.md`
 - `docs/analysis/decomposition.md`
 - `docs/analysis/pipeline-mapping.md`
 - `docs/analysis/data-movement.md`
@@ -44,14 +46,18 @@ orchestrator fails the DM2c gate on `BLOCKER:` lines only.
 7. Does the plan cover the four required smoke tests (elaboration,
    data flow, backpressure, idle cycles) and at least one unit test
    per non-trivial module?
-8. Does the plan stay within DM2d scope? Reject tasks that pre-empt
+8. Does the plan account for target-sensitive and verification-sensitive
+   implementation concerns from `docs/targets.md` and `docs/testbench.md`
+   where they materially affect DM2d structure, without turning DM2c
+   into a full DM3 verification-plan step?
+9. Does the plan stay within DM2d scope? Reject tasks that pre-empt
    DM3 (directed verification suites, coverage targets,
    scoreboards, randomized stimulus).
-9. Does the plan avoid prescribing specific framework APIs? It
+10. Does the plan avoid prescribing specific framework APIs? It
    should describe WHAT will be built and IN WHAT ORDER, not HOW
    each module's `evaluate()` is implemented -- those decisions
    belong to DM2d.
-10. Are open decisions (e.g. buffer depths, fanouts not pinned by
+11. Are open decisions (e.g. buffer depths, fanouts not pinned by
     analysis) called out as explicit decision-tasks rather than
     silently deferred?
 

@@ -147,7 +147,7 @@ session it is hosting:
 {
   "step": "DM2c",
   "kind": "work",
-  "instructionPath": "/abs/path/to/dm2c-model-implementation.md",
+  "instructionPath": "/abs/path/to/dm2c-model-impl-plan.md",
   "phases": ["author", "build", "test"],
   "tools": ["read_file", "list_dir", "write_file", "search"],
   "expectedArtifacts": ["src/model/", "tests/"],
