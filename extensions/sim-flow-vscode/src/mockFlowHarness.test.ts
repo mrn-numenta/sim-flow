@@ -703,6 +703,73 @@ describe("mocked dashboard/chat harness", () => {
     );
   });
 
+  it("keeps the chat panel usable when reading flow state fails for the active project", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    mock.state.projectStates.delete(exampleDir);
+    mock.state.directReplies.set(exampleDir, ["Reply despite missing flow state."]);
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+    mock.state.currentProjectDir = exampleDir;
+
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      new mock.FakeMemento() as never,
+      { get: async () => undefined },
+    );
+    const view = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(view as never, {} as never, {} as never);
+
+    let state = latestState(view);
+    expect(state?.projectLabel).toBe("example");
+    expect(state?.currentStep).toBeNull();
+
+    await view.webview.emit({
+      type: "send-prompt",
+      prompt: "Summarize the example project.",
+    });
+    await flushAsyncWork();
+
+    state = latestState(view);
+    expect(transcriptBodies(state!)).toContain("Reply despite missing flow state.");
+  });
+
+  it("shows a dashboard error when fully automated run is requested without a spec path", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+
+    const dashboardHost = new DashboardHost({
+      extensionUri: { fsPath: "/extension" } as never,
+      projectDir: exampleDir,
+      cli: {} as never,
+      workspaceState: new mock.FakeMemento() as never,
+    });
+    await dashboardHost.open();
+
+    await mock.state.lastDashboardPanel!.webview.emit({
+      type: "run-auto-end-to-end",
+      specPath: "   ",
+    });
+    await flushAsyncWork();
+
+    expect(mock.state.executedCommands).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ command: "sim-flow.runFlow" }),
+      ]),
+    );
+    expect(mock.state.lastDashboardPanel!.webview.posted).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "error",
+          message: "Fully-automated flow needs a spec path.",
+        }),
+      ]),
+    );
+  });
+
   it("switches chat panel state between projects without mixing transcripts", async () => {
     const exampleDir = createProjectFromFixture(tmpRoot, "example");
     const secondDir = createProjectFromFixture(tmpRoot, "other-project");
@@ -2074,6 +2141,60 @@ describe("mocked dashboard/chat harness", () => {
     expect(state?.canStop).toBe(false);
     expect(transcriptBodies(state!)).toContain("Started sim-flow auto");
     expect(transcriptBodies(state!)).toContain("Mock session ended without model output.");
+  });
+
+  it("keeps unexpected orchestrator markdown visible without corrupting header state", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const specPath = path.join(exampleDir, "docs", "spec.md");
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("Unexpected orchestrator blob: <<phase=??? tool=???>>\n");
+          renderer.markdown("More raw text that should remain visible.\n");
+        },
+        result: {
+          status: "ended",
+          endReason: "completed",
+          endMessage: "Unexpected markdown handled.",
+        },
+      },
+    ]);
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    mock.state.chatProvider = provider as never;
+    const chatView = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(chatView as never, {} as never, {} as never);
+
+    const dashboardHost = new DashboardHost({
+      extensionUri: { fsPath: "/extension" } as never,
+      projectDir: exampleDir,
+      cli: {} as never,
+      workspaceState: workspaceState as never,
+    });
+    await dashboardHost.open();
+
+    await mock.state.lastDashboardPanel!.webview.emit({
+      type: "run-auto",
+      specPath,
+    });
+    await flushAsyncWork();
+
+    const state = latestState(chatView);
+    expect(state?.currentPhase).toBeNull();
+    expect(state?.currentTool).toBeNull();
+    expect(state?.currentArtifact).toBeNull();
+    expect(transcriptBodies(state!)).toContain("Unexpected orchestrator blob");
+    expect(transcriptBodies(state!)).toContain("More raw text that should remain visible.");
   });
 
   it("restores the latest visible direct-reply transcript after provider reload", async () => {
