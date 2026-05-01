@@ -1288,6 +1288,171 @@ describe("mocked dashboard/chat harness", () => {
     expect(transcriptBodies(state!)).toContain("reloaded or closed");
   });
 
+  it("routes an immediate reply back into the relaunched auto session after an llm source switch from awaiting-input", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const specPath = path.join(exampleDir, "docs", "spec.md");
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+    mock.state.config.set("llm.source", "vscode");
+
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("Please choose the grayscale coefficients before continuing.\n");
+        },
+        result: {
+          status: "awaiting-input",
+        },
+      },
+    ]);
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    mock.state.chatProvider = provider as never;
+    const chatView = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(chatView as never, {} as never, {} as never);
+
+    const dashboardHost = new DashboardHost({
+      extensionUri: { fsPath: "/extension" } as never,
+      projectDir: exampleDir,
+      cli: {} as never,
+      workspaceState: workspaceState as never,
+    });
+    await dashboardHost.open();
+
+    await mock.state.lastDashboardPanel!.webview.emit({
+      type: "run-auto",
+      specPath,
+    });
+    await flushAsyncWork();
+
+    let state = latestState(chatView);
+    expect(state?.notice).toContain("waiting for your next reply");
+
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("Relaunched session is ready for your reply.\n");
+        },
+        result: {
+          status: "awaiting-input",
+        },
+      },
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("Thanks. I'll use Rec. 601 after the source switch.\n");
+        },
+        result: {
+          status: "ended",
+          endReason: "completed",
+          endMessage: "Resumed after the source switch.",
+        },
+      },
+    ]);
+    mock.state.config.set("llm.source", "ollama");
+    mock.state.config.set("llm.model", "llama3.1");
+
+    const sourceSwitch = mock.fireConfigurationChange("llm.source", "llm.model");
+    const reply = chatView.webview.emit({
+      type: "send-prompt",
+      prompt: "Use Rec. 601.",
+    });
+    await sourceSwitch;
+    await reply;
+    await flushAsyncWork();
+
+    state = latestState(chatView);
+    expect(mock.state.directReplyRequests).toEqual([]);
+    expect(mock.state.pumpLaunches).toHaveLength(2);
+    expect(mock.state.pumpLaunches[1]?.llmSource).toBe("ollama");
+    expect(mock.state.pumpInstances.get(exampleDir)?.sentMessages).toEqual(["Use Rec. 601."]);
+    expect(transcriptBodies(state!)).toContain("Thanks. I'll use Rec. 601 after the source switch.");
+  });
+
+  it("restores the newly active project and source after reload instead of resurfacing the old auto session context", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const secondDir = createProjectFromFixture(tmpRoot, "other-project");
+    const specPath = path.join(exampleDir, "docs", "spec.md");
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+      { uri: { fsPath: secondDir }, name: "other-project", index: 1 },
+    ];
+    mock.state.config.set("llm.source", "vscode");
+
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("Example auto-session output before reload.\n");
+        },
+        waitForCancel: true,
+        result: {
+          status: "ended",
+        },
+      },
+    ]);
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    mock.state.chatProvider = provider as never;
+    const chatView = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(chatView as never, {} as never, {} as never);
+
+    const dashboardHost = new DashboardHost({
+      extensionUri: { fsPath: "/extension" } as never,
+      projectDir: exampleDir,
+      cli: {} as never,
+      workspaceState: workspaceState as never,
+    });
+    await dashboardHost.open();
+
+    await mock.state.lastDashboardPanel!.webview.emit({
+      type: "run-auto",
+      specPath,
+    });
+    await flushAsyncWork();
+
+    provider.dispose();
+    await flushAsyncWork();
+
+    mock.state.currentProjectDir = secondDir;
+    mock.state.config.set("llm.source", "ollama");
+    mock.state.config.set("llm.model", "llama3.1");
+
+    const restoredProvider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    const restoredView = new mock.FakeWebviewView();
+    await restoredProvider.resolveWebviewView(restoredView as never, {} as never, {} as never);
+    await flushAsyncWork();
+
+    let state = latestState(restoredView);
+    expect(state?.projectLabel).toBe("other-project");
+    expect(state?.sourceLabel).toContain("Ollama");
+    expect(state?.transcript).toEqual([]);
+
+    mock.state.currentProjectDir = exampleDir;
+    await mock.fireActiveEditorChange();
+    await flushAsyncWork();
+
+    state = latestState(restoredView);
+    expect(state?.projectLabel).toBe("example");
+    expect(transcriptBodies(state!)).toContain("Example auto-session output before reload.");
+    expect(transcriptBodies(state!)).toContain("reloaded or closed");
+  });
+
   it("restores project-specific transcripts across reload after switching projects", async () => {
     const exampleDir = createProjectFromFixture(tmpRoot, "example");
     const secondDir = createProjectFromFixture(tmpRoot, "other-project");
