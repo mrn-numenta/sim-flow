@@ -2835,6 +2835,64 @@ describe("mocked dashboard/chat harness", () => {
     expect(transcriptBodies(state!)).toContain("Thanks. I'll use Rec. 601 luma coefficients");
   });
 
+  it("does not start direct chat when a prompt arrives during an active auto session", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const specPath = path.join(exampleDir, "docs", "spec.md");
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+    mock.state.directReplies.set(exampleDir, ["This direct reply should never start."]);
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("**Step `DM0` auto session** — mock orchestrator.\n\n");
+          renderer.markdown("Still working through the initial decomposition.\n");
+        },
+        waitForCancel: true,
+        result: {
+          status: "ended",
+        },
+      },
+    ]);
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    mock.state.chatProvider = provider as never;
+    const chatView = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(chatView as never, {} as never, {} as never);
+
+    const dashboardHost = new DashboardHost({
+      extensionUri: { fsPath: "/extension" } as never,
+      projectDir: exampleDir,
+      cli: {} as never,
+      workspaceState: workspaceState as never,
+    });
+    await dashboardHost.open();
+
+    await mock.state.lastDashboardPanel!.webview.emit({
+      type: "run-auto",
+      specPath,
+    });
+    await flushAsyncWork();
+
+    await chatView.webview.emit({
+      type: "send-prompt",
+      prompt: "This should be blocked while the session is still running.",
+    });
+    await flushAsyncWork();
+
+    const state = latestState(chatView);
+    expect(mock.state.directReplyRequests).toEqual([]);
+    expect(mock.state.pumpInstances.get(exampleDir)?.sentMessages).toEqual([]);
+    expect(transcriptBodies(state!)).not.toContain("This direct reply should never start.");
+    expect(transcriptBodies(state!)).toContain("Still working through the initial decomposition.");
+  });
+
   it("stops a running auto session and relaunches it cleanly", async () => {
     const exampleDir = createProjectFromFixture(tmpRoot, "example");
     const specPath = path.join(exampleDir, "docs", "spec.md");
@@ -2922,6 +2980,60 @@ describe("mocked dashboard/chat harness", () => {
     expect(transcriptBodies(state!)).not.toContain(
       "Working through the initial grayscale decomposition.",
     );
+  });
+
+  it("does not clear the transcript while an auto session is active", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const specPath = path.join(exampleDir, "docs", "spec.md");
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("**Step `DM0` auto session** — mock orchestrator.\n\n");
+          renderer.markdown("Working through the initial grayscale decomposition.\n");
+        },
+        waitForCancel: true,
+        result: {
+          status: "ended",
+        },
+      },
+    ]);
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    mock.state.chatProvider = provider as never;
+    const chatView = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(chatView as never, {} as never, {} as never);
+
+    const dashboardHost = new DashboardHost({
+      extensionUri: { fsPath: "/extension" } as never,
+      projectDir: exampleDir,
+      cli: {} as never,
+      workspaceState: workspaceState as never,
+    });
+    await dashboardHost.open();
+
+    await mock.state.lastDashboardPanel!.webview.emit({
+      type: "run-auto",
+      specPath,
+    });
+    await flushAsyncWork();
+
+    await chatView.webview.emit({ type: "clear-transcript" });
+    await flushAsyncWork();
+
+    const state = latestState(chatView);
+    expect(state?.canStop).toBe(true);
+    expect(transcriptBodies(state!)).toContain("Working through the initial grayscale decomposition.");
+    expect(transcriptBodies(state!)).toContain("Started sim-flow auto for `example`");
   });
 
   it("does not append duplicate stop notes when stop is pressed repeatedly during an auto session", async () => {
@@ -3023,5 +3135,44 @@ describe("mocked dashboard/chat harness", () => {
     expect(state?.canStop).toBe(false);
     expect(transcriptBodies(state!)).toContain("Cancellation requested for the current model response.");
     expect(transcriptBodies(state!)).not.toContain("Second chunk that should never be rendered.");
+  });
+
+  it("does not clear the transcript while a direct reply is active", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+    mock.state.directReplies.set(exampleDir, [
+      "First chunk.",
+      {
+        text: " Second chunk after blocked clear.",
+        waitForSignal: "release-direct-clear",
+      },
+    ]);
+
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      new mock.FakeMemento() as never,
+      { get: async () => undefined },
+    );
+    const view = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(view as never, {} as never, {} as never);
+
+    const sendPromise = view.webview.emit({
+      type: "send-prompt",
+      prompt: "Summarize the example project.",
+    });
+    await flushAsyncWork();
+
+    await view.webview.emit({ type: "clear-transcript" });
+    await flushAsyncWork();
+    mock.resolveSignal("release-direct-clear");
+    await sendPromise;
+    await flushAsyncWork();
+
+    const state = latestState(view);
+    expect(transcriptBodies(state!)).toContain("First chunk. Second chunk after blocked clear.");
+    expect(transcriptBodies(state!)).not.toContain("No messages yet.");
   });
 });
