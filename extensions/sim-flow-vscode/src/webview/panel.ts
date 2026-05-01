@@ -715,7 +715,7 @@ function renderFlowTab(data: DashboardState): Node[] {
     ),
     el("div", { class: "flow-detail-column" }, renderSelectedStepDetail(data)),
   );
-  return [renderAutoFlowRow(), layout];
+  return [renderAutoFlowRow(), el("hr", { class: "flow-row-divider" }), layout];
 }
 
 function renderAutoFlowRow(): HTMLElement {
@@ -743,6 +743,13 @@ function renderAutoFlowRow(): HTMLElement {
     "Play / Resume the automated flow. Picks up at `current_step` from state.toml. " +
     "After clicking Play the step rail and per-step buttons become active.";
   playBtn.classList.add("auto-run-btn", "auto-icon-btn");
+  applyButtonState(
+    playBtn,
+    !ui.autoRunning,
+    ui.autoRunning
+      ? "Play is disabled while a session is already running."
+      : playBtn.title,
+  );
 
   const stopBtn = actionButton(
     "■", // ■
@@ -759,6 +766,13 @@ function renderAutoFlowRow(): HTMLElement {
     "The running claude TUI exits cleanly; the orchestrator parks waiting for the next command. " +
     "After Stop the step rail re-locks until you click Play again.";
   stopBtn.classList.add("auto-stop-btn", "auto-icon-btn");
+  applyButtonState(
+    stopBtn,
+    ui.autoRunning,
+    ui.autoRunning
+      ? stopBtn.title
+      : "Stop is disabled because there is no active session.",
+  );
 
   // End-to-end "automated" red play. Hidden unless the user has
   // explicitly enabled it via the Settings tab checkbox -- it kicks
@@ -788,7 +802,11 @@ function renderAutoFlowRow(): HTMLElement {
   }
   buttonRowChildren.push(playBtn, stopBtn);
 
-  const specLabel = el("label", { class: "auto-spec-label", for: "auto-spec-input" }, "Spec:");
+  const specLabel = el(
+    "label",
+    { class: "auto-spec-label", for: "auto-spec-input" },
+    "Specification:",
+  );
   const input = document.createElement("input");
   input.type = "text";
   input.id = "auto-spec-input";
@@ -842,6 +860,8 @@ function stepBox(data: DashboardState, step: StepDef): HTMLElement {
   const current = data.flow.current_step === step.id;
   const selected = ui.selectedStep === step.id;
   const selectable = isStepSelectableInRail(data, step.id);
+  const ahead = isStepAheadOfCurrent(data, step.id);
+  const disabledAhead = ahead && !selectable;
   const classes = ["step"];
   if (passed) {
     classes.push("passed");
@@ -849,8 +869,8 @@ function stepBox(data: DashboardState, step: StepDef): HTMLElement {
   if (current) {
     classes.push("current");
   }
-  if (!passed && !current) {
-    classes.push("locked");
+  if (disabledAhead) {
+    classes.push("disabled-ahead");
   }
   if (selected) {
     classes.push("selected");
@@ -864,7 +884,7 @@ function stepBox(data: DashboardState, step: StepDef): HTMLElement {
       "aria-disabled": selectable ? "false" : "true",
       title: selectable
         ? `Select ${step.id}`
-        : "You can only jump ahead to a step if it has already been entered before.",
+        : "This step is ahead of the current step and has not been visited yet.",
     },
     el("span", { class: "step-id" }, step.id),
     el("span", { class: "step-label" }, step.label),
@@ -886,6 +906,16 @@ function stepBox(data: DashboardState, step: StepDef): HTMLElement {
     box.click();
   });
   return box;
+}
+
+function isStepAheadOfCurrent(data: DashboardState, stepId: string): boolean {
+  const order = data.flow.flow === "direct-modeling" ? DM_STEPS : DS_STEPS;
+  const currentIndex = order.findIndex((step) => step.id === data.flow.current_step);
+  const stepIndex = order.findIndex((step) => step.id === stepId);
+  if (currentIndex === -1 || stepIndex === -1) {
+    return false;
+  }
+  return stepIndex > currentIndex;
 }
 
 function gateDiamond(data: DashboardState, step: StepDef): HTMLElement {
