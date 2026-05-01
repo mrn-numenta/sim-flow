@@ -1178,6 +1178,124 @@ describe("mocked dashboard/chat harness", () => {
     expect(transcriptBodies(state!)).not.toContain("Other persistent reply.");
   });
 
+  it("switches projects during a direct panel reply and drops stale response context", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const secondDir = createProjectFromFixture(tmpRoot, "other-project");
+    mock.state.directReplies.set(exampleDir, [
+      "Example first chunk.",
+      {
+        text: " Example second chunk should be dropped.",
+        waitForSignal: "release-project-switch-direct",
+      },
+    ]);
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+      { uri: { fsPath: secondDir }, name: "other-project", index: 1 },
+    ];
+    mock.state.currentProjectDir = exampleDir;
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    const view = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(view as never, {} as never, {} as never);
+
+    const sendPromise = view.webview.emit({
+      type: "send-prompt",
+      prompt: "Summarize example.",
+    });
+    await flushAsyncWork();
+
+    let state = latestState(view);
+    expect(state?.projectLabel).toBe("example");
+    expect(transcriptBodies(state!)).toContain("Example first chunk.");
+
+    mock.state.currentProjectDir = secondDir;
+    await mock.fireActiveEditorChange();
+    await flushAsyncWork();
+    mock.resolveSignal("release-project-switch-direct");
+    await sendPromise;
+    await flushAsyncWork();
+
+    state = latestState(view);
+    expect(state?.projectLabel).toBe("other-project");
+    expect(state?.transcript).toEqual([]);
+
+    mock.state.currentProjectDir = exampleDir;
+    await mock.fireActiveEditorChange();
+    await flushAsyncWork();
+
+    state = latestState(view);
+    expect(state?.projectLabel).toBe("example");
+    expect(transcriptBodies(state!)).toContain("active project changed");
+    expect(transcriptBodies(state!)).toContain("Example first chunk.");
+    expect(transcriptBodies(state!)).not.toContain("Example second chunk should be dropped.");
+  });
+
+  it("switches llm source during a direct panel reply and stops the stale response", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    mock.state.directReplies.set(exampleDir, [
+      "Direct first chunk.",
+      {
+        text: " Direct second chunk should be dropped after source change.",
+        waitForSignal: "release-source-switch-direct",
+      },
+    ]);
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.config.set("llm.source", "vscode");
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    const view = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(view as never, {} as never, {} as never);
+
+    const sendPromise = view.webview.emit({
+      type: "send-prompt",
+      prompt: "Summarize example.",
+    });
+    await flushAsyncWork();
+
+    let state = latestState(view);
+    expect(state?.sourceLabel).toContain("VS Code");
+    expect(transcriptBodies(state!)).toContain("Direct first chunk.");
+
+    mock.state.config.set("llm.source", "ollama");
+    mock.state.config.set("llm.model", "llama3.1");
+    await mock.fireConfigurationChange("llm.source", "llm.model");
+    await flushAsyncWork();
+    mock.resolveSignal("release-source-switch-direct");
+    await sendPromise;
+    await flushAsyncWork();
+
+    state = latestState(view);
+    expect(state?.sourceLabel).toContain("Ollama");
+    expect(transcriptBodies(state!)).toContain("LLM source changed");
+    expect(transcriptBodies(state!)).not.toContain(
+      "Direct second chunk should be dropped after source change.",
+    );
+
+    mock.state.directReplies.set(exampleDir, ["Reply from Ollama."]);
+    await view.webview.emit({
+      type: "send-prompt",
+      prompt: "Summarize again.",
+    });
+    await flushAsyncWork();
+
+    state = latestState(view);
+    expect(mock.state.directReplyRequests.at(-1)?.source).toBe("ollama");
+    expect(transcriptBodies(state!)).toContain("Reply from Ollama.");
+  });
+
   it("resumes a mocked auto session after the orchestrator asks for input", async () => {
     const exampleDir = createProjectFromFixture(tmpRoot, "example");
     const specPath = path.join(exampleDir, "docs", "spec.md");
