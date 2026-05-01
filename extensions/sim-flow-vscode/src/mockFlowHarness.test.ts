@@ -1401,6 +1401,164 @@ describe("mocked dashboard/chat harness", () => {
     expect(transcriptBodies(state!)).not.toContain("Direct trailing chunk should be dropped.");
   });
 
+  it("switches project and source together during a direct reply without restoring stale context", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const secondDir = createProjectFromFixture(tmpRoot, "other-project");
+    mock.state.directReplies.set(exampleDir, [
+      "Example first chunk.",
+      {
+        text: " Example trailing chunk should be dropped.",
+        waitForSignal: "release-project-source-switch-direct",
+      },
+    ]);
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+      { uri: { fsPath: secondDir }, name: "other-project", index: 1 },
+    ];
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.config.set("llm.source", "vscode");
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    const view = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(view as never, {} as never, {} as never);
+
+    const sendPromise = view.webview.emit({
+      type: "send-prompt",
+      prompt: "Summarize example.",
+    });
+    await flushAsyncWork();
+
+    mock.state.currentProjectDir = secondDir;
+    mock.state.config.set("llm.source", "ollama");
+    mock.state.config.set("llm.model", "llama3.1");
+    await mock.fireActiveEditorChange();
+    await mock.fireConfigurationChange("llm.source", "llm.model");
+    await flushAsyncWork();
+    mock.resolveSignal("release-project-source-switch-direct");
+    await sendPromise;
+    await flushAsyncWork();
+
+    const state = latestState(view);
+    expect(state?.projectLabel).toBe("other-project");
+    expect(state?.sourceLabel).toContain("Ollama");
+    expect(state?.transcript).toEqual([]);
+
+    mock.state.currentProjectDir = exampleDir;
+    await mock.fireActiveEditorChange();
+    await flushAsyncWork();
+
+    const exampleState = latestState(view);
+    expect(exampleState?.projectLabel).toBe("example");
+    expect(transcriptBodies(exampleState!)).toContain("active project changed");
+    expect(transcriptBodies(exampleState!)).not.toContain("Example trailing chunk should be dropped.");
+  });
+
+  it("keeps token totals across direct replies when the llm source changes", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.config.set("llm.source", "vscode");
+    mock.state.directReplies.set(exampleDir, ["First reply."]);
+
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      new mock.FakeMemento() as never,
+      { get: async () => undefined },
+    );
+    const view = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(view as never, {} as never, {} as never);
+
+    await view.webview.emit({
+      type: "send-prompt",
+      prompt: "First prompt.",
+    });
+    await flushAsyncWork();
+
+    let state = latestState(view);
+    const firstInputTotal = state?.totalInputTokensEstimate ?? 0;
+    const firstOutputTotal = state?.totalOutputTokensEstimate ?? 0;
+    expect(firstInputTotal).toBeGreaterThan(0);
+    expect(firstOutputTotal).toBeGreaterThan(0);
+
+    mock.state.config.set("llm.source", "ollama");
+    mock.state.config.set("llm.model", "llama3.1");
+    await mock.fireConfigurationChange("llm.source", "llm.model");
+    await flushAsyncWork();
+
+    mock.state.directReplies.set(exampleDir, ["Second reply from Ollama."]);
+    await view.webview.emit({
+      type: "send-prompt",
+      prompt: "Second prompt.",
+    });
+    await flushAsyncWork();
+
+    state = latestState(view);
+    expect(state?.sourceLabel).toContain("Ollama");
+    expect((state?.totalInputTokensEstimate ?? 0)).toBeGreaterThan(firstInputTotal);
+    expect((state?.totalOutputTokensEstimate ?? 0)).toBeGreaterThan(firstOutputTotal);
+  });
+
+  it("allows clearing a restored interrupted direct-reply transcript", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    mock.state.directReplies.set(exampleDir, [
+      "Interrupted direct reply.",
+      {
+        text: " Trailing chunk should be dropped after reload.",
+        waitForSignal: "release-clear-restored-direct",
+      },
+    ]);
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+    mock.state.currentProjectDir = exampleDir;
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    const view = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(view as never, {} as never, {} as never);
+
+    const sendPromise = view.webview.emit({
+      type: "send-prompt",
+      prompt: "Summarize example.",
+    });
+    await flushAsyncWork();
+
+    provider.dispose();
+    await flushAsyncWork();
+    mock.resolveSignal("release-clear-restored-direct");
+    await sendPromise;
+    await flushAsyncWork();
+
+    const restoredProvider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    const restoredView = new mock.FakeWebviewView();
+    await restoredProvider.resolveWebviewView(restoredView as never, {} as never, {} as never);
+    await flushAsyncWork();
+
+    let state = latestState(restoredView);
+    expect(transcriptBodies(state!)).toContain("Interrupted direct reply.");
+
+    await restoredView.webview.emit({ type: "clear-transcript" });
+    await flushAsyncWork();
+
+    state = latestState(restoredView);
+    expect(state?.transcript).toEqual([]);
+  });
+
   it("resumes a mocked auto session after the orchestrator asks for input", async () => {
     const exampleDir = createProjectFromFixture(tmpRoot, "example");
     const specPath = path.join(exampleDir, "docs", "spec.md");
