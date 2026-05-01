@@ -9,6 +9,8 @@ between extension surfaces.
 
 The mode-switching product decisions that this test plan depends on are
 recorded separately in [mode-switching.md](./mode-switching.md).
+The lifecycle/state-machine view of those decisions is captured in
+[transition-graph.md](./transition-graph.md).
 
 The core principle is that the most expensive bugs are not simple
 rendering issues. They appear when ownership, project context, session
@@ -88,6 +90,12 @@ Current covered scenarios:
 - [x] Resume after orchestrator `awaiting-input`
 - [x] Stop and relaunch of a running auto session
 - [x] Stop of an in-flight direct panel response
+- [x] Repeated Stop / duplicate Play idempotency checks
+- [x] Project/source switch races during direct replies and auto
+  sessions
+- [x] Reload / restore of direct replies, auto sessions, and
+  `awaiting-input` sessions
+- [x] Dead-session restore recovery, including clear-to-reset behavior
 
 Current emphasis:
 
@@ -125,7 +133,7 @@ reproduce and extend.
 
 ### Milestone 1 - Active Project Synchronization
 
-- [ ] Switching projects updates both dashboard and chat panel to the
+- [x] Switching projects updates both dashboard and chat panel to the
   same project in the same refresh cycle.
 - [ ] Dashboard Play for project B while project A is visible switches
   the chat panel to project B immediately.
@@ -139,41 +147,41 @@ reproduce and extend.
 
 - [ ] Prompt construction for project B never includes messages from
   project A.
-- [ ] Persisted workspace state remains keyed per project.
-- [ ] Switching away from a project hides its transcript immediately.
+- [x] Persisted workspace state remains keyed per project.
+- [x] Switching away from a project hides its transcript immediately.
 - [ ] Returning to a project restores only that project's transcript and
   derived header state.
 - [ ] Project-specific token totals do not leak across projects.
 
 ### Milestone 3 - Inconvenient Project Switches
 
-- [ ] Switch project while direct panel response is streaming.
-- [ ] Switch project while orchestrated auto session is streaming.
-- [ ] Switch project while the orchestrator is awaiting input.
+- [x] Switch project while direct panel response is streaming.
+- [x] Switch project while orchestrated auto session is streaming.
+- [x] Switch project while the orchestrator is awaiting input.
 - [ ] Switch project while the final chunk or completion note is being
   posted.
-- [ ] Verify that switching projects implicitly stops the old session.
+- [x] Verify that switching projects implicitly stops the old session.
 
 ## Phase 2 - Session Lifecycle And Handoffs
 
 ### Milestone 1 - Core State Machine
 
 - [ ] Cover all panel lifecycle transitions:
-  - `idle -> streaming`
-  - `streaming -> awaiting-input`
-  - `awaiting-input -> streaming`
-  - `streaming -> ended`
-  - `streaming -> cancelled`
-  - `awaiting-input -> cancelled`
-  - `ended -> relaunched`
+  - [x] `idle -> streaming`
+  - [x] `streaming -> awaiting-input`
+  - [x] `awaiting-input -> streaming`
+  - [x] `streaming -> ended`
+  - [x] `streaming -> cancelled`
+  - [x] `awaiting-input -> cancelled`
+  - [x] `ended -> relaunched`
 - [ ] Verify `canStop`, notice text, prompt enablement, and session
   label in each state.
 
 ### Milestone 2 - Duplicate Or Redundant User Actions
 
-- [ ] Duplicate Play in the same effective session is ignored.
-- [ ] Rapid repeated Play clicks do not create duplicate sessions.
-- [ ] Repeated Stop clicks do not corrupt transcript state or append
+- [x] Duplicate Play in the same effective session is ignored.
+- [x] Rapid repeated Play clicks do not create duplicate sessions.
+- [x] Repeated Stop clicks do not corrupt transcript state or append
   duplicate terminal notes.
 - [ ] Send prompt while already streaming is ignored or blocked
   cleanly.
@@ -193,11 +201,11 @@ reproduce and extend.
 
 ### Milestone 1 - API Source Switching
 
-- [ ] Switch API source while idle and verify the next prompt uses the
+- [x] Switch API source while idle and verify the next prompt uses the
   new source.
-- [ ] Switch API source while direct response is streaming; old session
+- [x] Switch API source while direct response is streaming; old session
   stops and the next prompt runs on the new source.
-- [ ] Switch API source while orchestrated auto session is running; old
+- [x] Switch API source while orchestrated auto session is running; old
   session stops and transparently relaunches from the current step on
   the new source.
 - [ ] Header source label and backend-specific notice text update
@@ -205,10 +213,10 @@ reproduce and extend.
 
 ### Milestone 2 - CLI Compatibility And Routing
 
-- [ ] API-backed sources route dashboard Play into the chat panel.
-- [ ] CLI-backed sources route dashboard Play into the existing
+- [x] API-backed sources route dashboard Play into the chat panel.
+- [x] CLI-backed sources route dashboard Play into the existing
   terminal flow.
-- [ ] Switching from API -> CLI reverts Play to terminal routing and
+- [x] Switching from API -> CLI reverts Play to terminal routing and
   adjusts panel prompt-entry behavior coherently.
 - [ ] Switching from CLI -> API restores panel-driven chat and Play
   routing.
@@ -224,11 +232,11 @@ Scope note:
 
 ### Milestone 3 - Duplicate Session Detection
 
-- [ ] If Play is pressed for the same project and same effective
+- [x] If Play is pressed for the same project and same effective
   session, ignore the request.
-- [ ] If Play is pressed for a different project while one session is
+- [x] If Play is pressed for a different project while one session is
   active, the old session stops and the new project becomes active.
-- [ ] If Play is pressed after a source switch, ensure relaunch occurs
+- [x] If Play is pressed after a source switch, ensure relaunch occurs
   on the new source, not the stale one.
 
 ## Phase 4 - Reload, Restore, And Persistence
@@ -237,15 +245,15 @@ Scope note:
 
 - [ ] Reload with no active session restores the correct project's
   transcript, token counts, and header pills.
-- [ ] Switching projects after reload restores isolated state for each
+- [x] Switching projects after reload restores isolated state for each
   project.
 - [ ] Legacy presentation-only notes remain filtered after reload.
 
 ### Milestone 2 - Restoring Active State
 
-- [ ] Reload during direct-response streaming.
-- [ ] Reload during orchestrated session streaming.
-- [ ] Reload during orchestrator `awaiting-input`.
+- [x] Reload during direct-response streaming.
+- [x] Reload during orchestrated session streaming.
+- [x] Reload during orchestrator `awaiting-input`.
 - [ ] Document current behavior for each case and promote tests to
   assert exact reattach once reconnectable sessions are implemented.
 
@@ -305,14 +313,16 @@ Scope note:
 
 The next highest-value additions are:
 
-- [ ] Project switch during active streaming
-- [ ] Project switch during `awaiting-input`
-- [ ] Duplicate Play no-op for same project/session
-- [ ] API -> API source switch during active use
-- [ ] API -> CLI and CLI -> API routing regressions
-- [ ] Reload / restore per-project transcript state
-- [ ] Reload during active session, with current-vs-target behavior
-  captured explicitly
+- [ ] Header-state consistency through rapid project/source churn
+- [ ] Token-total consistency through project switches, stops, relaunches,
+  clears, and reloads
+- [ ] Send-prompt and clear-transcript blocking behavior while a session
+  is actively running
+- [ ] Missing-context and invalid-spec-path error cases
+- [ ] Backend failure cases, including missing auth and connection
+  failures
+- [ ] Malformed/unexpected orchestrator output and gate/step-transition
+  interruption behavior
 
 Near-term focus note:
 
