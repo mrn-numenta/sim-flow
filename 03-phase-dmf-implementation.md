@@ -131,3 +131,14 @@ prior tests (total 57 tests across sim-flow). DM5 remains explicitly
 deferred. Real end-to-end validation against a reference project in
 sim-models is left for adoption; the gate descriptors are now the
 authoritative contract between orchestrator and AI.
+
+Prompt and contract refinements since the initial implementation:
+
+- DM0 is now template-driven via `docs/spec.md.tmpl` and is explicitly
+  judged on whether it is model-ready for a competent frontier LLM, not
+  whether it is exhaustively specified down to every minute detail.
+- DM0 and DM1 now treat a gate-budget-per-cycle target or derivable
+  estimate as a hard prerequisite for DM2 decomposition and pipeline
+  mapping.
+- DM1 is now framed as modeling targets plus verification strategy,
+  rather than detailed testbench or test-plan authoring.
