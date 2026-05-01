@@ -24,6 +24,11 @@ The test plan therefore prioritizes:
 The extension must preserve the existing working CLI flow while adding
 the panel-driven flow for API-backed backends.
 
+For now, the primary regression focus is the chat-panel-backed API
+path. CLI-backed terminal flow is documented as a separate test track so
+we do not accidentally apply panel-specific expectations to terminal
+ownership and reload behavior.
+
 ## Behavioral Contract
 
 The tests in this plan assume the following user-visible behavior:
@@ -83,6 +88,13 @@ Current covered scenarios:
 - [x] Resume after orchestrator `awaiting-input`
 - [x] Stop and relaunch of a running auto session
 - [x] Stop of an in-flight direct panel response
+
+Current emphasis:
+
+- [x] Chat-panel-backed API session lifecycle
+- [/] API <-> CLI routing boundaries where they affect panel behavior
+- [ ] Full CLI-mode lifecycle contract, to be covered as a separate
+  follow-on track
 
 ### Manual Smoke Tests
 
@@ -203,6 +215,13 @@ reproduce and extend.
 - [ ] Existing terminal/control-socket flow continues to work without
   regression.
 
+Scope note:
+
+- The near-term goal here is to verify correct routing boundaries and
+  safe handoff between panel mode and CLI mode.
+- Deep CLI lifecycle expectations should be tested in a separate CLI
+  track rather than inferred from panel-mode tests.
+
 ### Milestone 3 - Duplicate Session Detection
 
 - [ ] If Play is pressed for the same project and same effective
@@ -294,6 +313,13 @@ The next highest-value additions are:
 - [ ] Reload / restore per-project transcript state
 - [ ] Reload during active session, with current-vs-target behavior
   captured explicitly
+
+Near-term focus note:
+
+- Continue driving these priorities through the chat-panel-backed API
+  path first.
+- Return to the CLI-specific lifecycle track after the panel-mode
+  contract is better covered.
 
 ## Notes
 

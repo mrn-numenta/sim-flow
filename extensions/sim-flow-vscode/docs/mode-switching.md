@@ -115,6 +115,35 @@ Implications:
 - The old session is stopped as part of the switch, consistent with the
   project-switch rule above.
 
+### CLI Mode Contract
+
+Decision:
+
+- CLI-backed sources are a separate operating mode with different
+  constraints from the chat-panel-backed API mode.
+- The extension should share project-selection and routing behavior
+  across both modes, but should not force panel-specific lifecycle
+  assumptions onto terminal-backed sessions.
+
+Implications:
+
+- Shared rules still apply:
+  - dashboard and chat panel stay in sync on the active project
+  - project context remains project-specific
+  - API <-> CLI source switches must route to the correct surface
+- CLI-specific behavior is allowed to differ in:
+  - rendering and visibility
+  - reload continuity
+  - terminal ownership and focus
+  - control-socket and external CLI-auth interaction
+
+Current testing stance:
+
+- Chat-panel-backed API sessions remain the primary focus of the
+  current regression work.
+- CLI-mode expectations should be documented and tested separately so
+  we do not accidentally encode panel assumptions as the CLI contract.
+
 ## Rationale
 
 These decisions favor:
@@ -124,6 +153,8 @@ These decisions favor:
 - predictable interruption behavior
 - minimal user friction when changing backend configuration
 - compatibility with the existing CLI flow while the panel flow evolves
+- explicit separation between panel-mode and CLI-mode lifecycle
+  expectations
 
 They intentionally reject:
 
@@ -131,6 +162,7 @@ They intentionally reject:
 - background hidden sessions continuing after a project switch
 - duplicate sessions from repeated Play actions
 - backend switching that leaves ownership unclear
+- treating terminal-backed sessions as if they were fully panel-owned
 
 ## Testing Consequences
 
@@ -143,6 +175,9 @@ should continue to assert these decisions explicitly, especially for:
 - backend switch during active work
 - duplicate Play behavior
 - reload and restore continuity
+
+It should also keep panel-mode and CLI-mode assertions separate where
+their lifecycle expectations differ.
 
 ## Revision Notes
 
