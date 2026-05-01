@@ -191,6 +191,12 @@ pub(crate) enum Command {
         /// is Phase 5 and currently errors with a clear message.
         #[arg(long)]
         spec: Option<PathBuf>,
+        /// Speak the session protocol over a reconnectable Unix
+        /// socket at the provided path instead of stdio. Used by the
+        /// VS Code chat panel so a live auto session can survive
+        /// extension reloads and later reattach.
+        #[arg(long)]
+        transport_socket: Option<PathBuf>,
         /// Lifecycle for interactive CLI-agent backends (currently
         /// only `claude`). `per-step` (default) spawns a fresh agent
         /// per step. `single` (Pass 2) keeps one agent across the
@@ -218,6 +224,10 @@ pub(crate) enum Command {
         /// IDE hosts.
         #[arg(long)]
         jsonl: bool,
+        /// Speak the session protocol over a reconnectable Unix
+        /// socket at the provided path instead of stdio.
+        #[arg(long)]
+        transport_socket: Option<PathBuf>,
         /// LLM backend. With `--jsonl`: opaque label echoed back to
         /// the host. Without `--jsonl`: selects the built-in
         /// CliAgent (`claude`, `codex`, `gh-copilot`, `ollama`,

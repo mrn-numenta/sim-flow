@@ -1,11 +1,17 @@
 import * as vscode from "vscode";
 
-import { type PumpSettleResult, type PumpRenderer, SessionPump } from "../session/pump";
+import {
+  type LiveSessionTransport,
+  type PumpRenderer,
+  type PumpSettleResult,
+} from "../session/pump";
 import type { LlmSourceTag } from "../webview/messages";
 
 export interface ManagedAutoSessionState {
+  sessionId: string;
+  socketPath: string;
   projectDir: string;
-  pump: SessionPump;
+  pump: LiveSessionTransport;
   awaitingInput: boolean;
   stopRequested: boolean;
   drivePromise: Promise<void> | null;
@@ -21,6 +27,8 @@ export interface ManagedAutoSessionState {
 }
 
 export interface StoredAutoSessionRecord {
+  sessionId: string;
+  socketPath: string;
   projectDir: string;
   awaitingInput: boolean;
   sourceTag: LlmSourceTag;
@@ -57,8 +65,10 @@ export class AutoSessionManager implements vscode.Disposable {
 
   async launch(
     options: {
+      sessionId: string;
+      socketPath: string;
       projectDir: string;
-      pump: SessionPump;
+      pump: LiveSessionTransport;
       sourceTag: LlmSourceTag;
       model: string;
       launchSpecPath: string | undefined;
@@ -66,6 +76,8 @@ export class AutoSessionManager implements vscode.Disposable {
     delegate: AutoSessionDriveDelegate,
   ): Promise<ManagedAutoSessionState> {
     const session: ManagedAutoSessionState = {
+      sessionId: options.sessionId,
+      socketPath: options.socketPath,
       projectDir: options.projectDir,
       pump: options.pump,
       awaitingInput: false,
@@ -138,6 +150,42 @@ export class AutoSessionManager implements vscode.Disposable {
     return this.workspaceState.get<StoredAutoSessionRecord>(recordKey(projectDir));
   }
 
+  async attach(
+    record: StoredAutoSessionRecord,
+    pump: LiveSessionTransport,
+    delegate: AutoSessionDriveDelegate,
+  ): Promise<ManagedAutoSessionState> {
+    const session: ManagedAutoSessionState = {
+      sessionId: record.sessionId,
+      socketPath: record.socketPath,
+      projectDir: record.projectDir,
+      pump,
+      awaitingInput: record.awaitingInput,
+      stopRequested: false,
+      drivePromise: null,
+      assistantId: null,
+      pendingPromptEntryId: null,
+      pendingRequestTokensEstimate: null,
+      currentPhase: null,
+      currentTool: null,
+      currentArtifact: null,
+      sourceTag: record.sourceTag,
+      model: record.model,
+      launchSpecPath: record.launchSpecPath,
+    };
+    this.activeSession = session;
+    await this.persistRecord(session);
+    this.startDrive(session, delegate);
+    return session;
+  }
+
+  async forgetStoredRecord(projectDir: string): Promise<void> {
+    if (this.activeSession?.projectDir === projectDir) {
+      this.activeSession = undefined;
+    }
+    await this.clearRecord(projectDir);
+  }
+
   dispose(): void {
     this.activeSession?.pump.dispose();
     this.activeSession = undefined;
@@ -176,6 +224,8 @@ export class AutoSessionManager implements vscode.Disposable {
 
   private async persistRecord(session: ManagedAutoSessionState): Promise<void> {
     const record: StoredAutoSessionRecord = {
+      sessionId: session.sessionId,
+      socketPath: session.socketPath,
       projectDir: session.projectDir,
       awaitingInput: session.awaitingInput,
       sourceTag: session.sourceTag,

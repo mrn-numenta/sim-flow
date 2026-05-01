@@ -19,6 +19,7 @@ pub mod pdfium_loader;
 pub mod protocol;
 pub mod runners;
 pub mod signal_cleanup;
+pub mod socket_host;
 pub mod spec_ingest;
 pub mod tools;
 
@@ -37,3 +38,4 @@ pub use protocol::{
     DiagnosticLevel, Event, GateFailureOut, HostEvent, HostInfo, LlmMessage, LlmRole, LlmTool,
     PROTOCOL_VERSION, SessionKindOut, SessionTag, StepDescriptorOut,
 };
+pub use socket_host::SocketHost;

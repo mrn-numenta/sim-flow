@@ -89,6 +89,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
         Command::Session {
             step_kind,
             jsonl,
+            transport_socket,
             llm_backend,
             llm_model,
             ollama_base_url,
@@ -99,6 +100,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             &project_dir,
             step_kind,
             *jsonl,
+            transport_socket.as_deref(),
             llm_backend,
             llm_model.as_deref(),
             ollama_base_url.as_deref(),
@@ -112,6 +114,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             max_critique_iters,
             dm0_interactive,
             spec,
+            transport_socket,
             session_mode,
             max_llm_requests,
             max_identical_responses,
@@ -124,6 +127,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             *max_critique_iters,
             *dm0_interactive,
             spec.as_deref(),
+            transport_socket.as_deref(),
             *session_mode,
             *max_llm_requests,
             *max_identical_responses,
@@ -383,6 +387,7 @@ fn auto_cmd(
     max_critique_iters: u32,
     dm0_interactive: bool,
     spec: Option<&Path>,
+    transport_socket: Option<&Path>,
     session_mode: SessionMode,
     max_llm_requests: u32,
     max_identical_responses: u32,
@@ -435,8 +440,13 @@ fn auto_cmd(
         max_llm_requests,
         max_identical_responses,
     };
-    let mut host = sim_flow::__internal::session::JsonlHost::stdio();
-    sim_flow::__internal::session::run_auto(opts, &mut host)
+    if let Some(socket_path) = transport_socket {
+        let mut host = sim_flow::__internal::session::SocketHost::bind(socket_path.to_path_buf())?;
+        sim_flow::__internal::session::run_auto(opts, &mut host)
+    } else {
+        let mut host = sim_flow::__internal::session::JsonlHost::stdio();
+        sim_flow::__internal::session::run_auto(opts, &mut host)
+    }
 }
 
 /// Resolve the source-spec to ingest and run `ingest_spec_file` if
@@ -525,6 +535,7 @@ fn session_cmd(
     project: &Path,
     step_kind: &str,
     jsonl: bool,
+    transport_socket: Option<&Path>,
     llm_backend: &str,
     llm_model: Option<&str>,
     ollama_base_url: Option<&str>,
@@ -556,7 +567,10 @@ fn session_cmd(
         llm_model: llm_model.map(String::from),
         ..Default::default()
     };
-    if jsonl {
+    if let Some(socket_path) = transport_socket {
+        let mut host = sim_flow::__internal::session::SocketHost::bind(socket_path.to_path_buf())?;
+        sim_flow::__internal::session::run_session(opts, &mut host)
+    } else if jsonl {
         let mut host = sim_flow::__internal::session::JsonlHost::stdio();
         sim_flow::__internal::session::run_session(opts, &mut host)
     } else {

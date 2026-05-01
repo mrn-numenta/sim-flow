@@ -97,6 +97,15 @@ export interface PumpRenderer {
   requestTokensEstimate?(tokens: number): void;
 }
 
+export interface LiveSessionTransport {
+  readonly session: SessionTag | null;
+  readonly descriptor: StepDescriptorOut | null;
+  settle(renderer: PumpRenderer): Promise<PumpSettleResult>;
+  sendUserMessage(text: string): void;
+  cancel(): void;
+  dispose(): void;
+}
+
 /**
  * System message slipped into LLM requests when `sim-flow.llm.verbose`
  * is OFF. Kept short and explicit because long brevity directives

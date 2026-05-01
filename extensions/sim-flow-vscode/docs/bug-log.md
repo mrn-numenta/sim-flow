@@ -229,3 +229,38 @@ user-visible failures, root causes, and the tests that now guard
       after an llm source switch from awaiting-input`
     in
     [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).
+
+### Round 11 - Reconnectable Transport Integration
+
+- [x] Reattached sessions could hang if replayed `RequestUserInput`
+  arrived before the transport registered its waiter.
+  - Symptom: a reattached live session could replay its transcript and
+    still leave the panel spinning instead of surfacing the restored
+    awaiting-input state.
+  - Root cause: `SocketSessionPump.settle()` flushed queued replay
+    events before subscribing to the settle bus, so a replayed
+    `request-user-input` could be emitted and dropped before the
+    promise listener existed.
+  - Guard:
+    - `replays queued events and resumes over the reconnectable
+      transport`
+    in
+    [src/session/socketPump.test.ts](../src/session/socketPump.test.ts).
+
+- [x] Source-switch reconciliation could relaunch the same
+  reconnectable auto session twice.
+  - Symptom: when a source/model switch and a user reply arrived at
+    nearly the same time, the panel could launch the replacement auto
+    session twice before the new socket-backed session had fully
+    attached.
+  - Root cause: reconnectable launches only became "active" after the
+    socket client finished its initial attach, which left a race where
+    concurrent reconciliation paths both observed no active session and
+    each decided to relaunch.
+  - Guard:
+    - `does not duplicate relaunch when llm source changes and play is
+      pressed immediately`
+    - `routes an immediate reply back into the relaunched auto session
+      after an llm source switch from awaiting-input`
+    in
+    [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).

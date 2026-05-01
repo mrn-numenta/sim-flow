@@ -1,11 +1,14 @@
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
+import * as os from "node:os";
 
 import * as vscode from "vscode";
 
 import { findProjectCandidates, resolveContext, resolveProjectDir } from "../context";
 import { LlmError, type LlmSource, type SecretStorage } from "../llm";
 import { estimateMessagesTokens } from "../llm/tokenEstimate";
-import { type PumpLlmConfig, SessionPump } from "../session/pump";
+import { type PumpLlmConfig } from "../session/pump";
+import { SocketSessionPump } from "../session/socketPump";
 import { readFlowState } from "../state/flowState";
 import {
   cliBackendArgFor,
@@ -23,6 +26,7 @@ import {
   AutoSessionManager,
   type AutoSessionDriveDelegate,
   type ManagedAutoSessionState,
+  type StoredAutoSessionRecord,
 } from "./autoSessionManager";
 import {
   appendAssistantChunk,
@@ -54,14 +58,23 @@ interface DirectResponseState {
   stopRequested: boolean;
 }
 
+interface PendingAutoLaunchState {
+  projectDir: string;
+  launchSpecPath: string | undefined;
+  sourceTag: LlmSourceTag;
+  model: string;
+}
+
 export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private view: vscode.WebviewView | undefined;
   private readonly disposables: vscode.Disposable[] = [];
   private readonly conversations = new Map<string, ChatConversationState>();
   private inFlight: DirectResponseState | undefined;
+  private pendingAutoLaunch: PendingAutoLaunchState | undefined;
   private disposed = false;
   private refreshing = false;
   private refreshQueued = false;
+  private reconcilePromise: Promise<void> | undefined;
   private postChain: Promise<void> = Promise.resolve();
 
   private get activePump(): ManagedAutoSessionState | undefined {
@@ -104,16 +117,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         this.readConversation(projectDir),
         "Session interrupted",
         "Stopped the current response because the chat panel was reloaded or closed.",
-      );
-      void this.persistConversation(projectDir, conversation);
-    }
-    const activeSession = this.autoSessions.getActiveSession();
-    if (activeSession) {
-      const projectDir = activeSession.projectDir;
-      const conversation = appendNote(
-        this.readConversation(projectDir),
-        "Session interrupted",
-        "Stopped the running sim-flow session because the chat panel was reloaded or closed.",
       );
       void this.persistConversation(projectDir, conversation);
     }
@@ -195,6 +198,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       if (!this.view || this.disposed) {
         return;
       }
+      await this.restoreActiveAutoSessionIfNeeded();
       await this.reconcileModeSwitches();
       const context = await this.readPanelContext();
       await this.postState(context, this.readConversation(context.projectDir));
@@ -217,6 +221,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
     const context = await this.readPanelContext();
+    if (
+      this.pendingAutoLaunch &&
+      this.pendingAutoLaunch.projectDir === context.projectDir
+    ) {
+      return;
+    }
     if (this.activePump) {
       if (
         this.activePump.projectDir === context.projectDir &&
@@ -439,6 +449,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     ) {
       return;
     }
+    if (
+      this.pendingAutoLaunch &&
+      this.pendingAutoLaunch.projectDir === ctx.projectDir &&
+      this.pendingAutoLaunch.launchSpecPath === trimmedSpec &&
+      this.pendingAutoLaunch.sourceTag === settings.source &&
+      this.pendingAutoLaunch.model === settings.model
+    ) {
+      return;
+    }
 
     if (this.inFlight) {
       await this.stopDirectResponse(
@@ -472,7 +491,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     const maxWorkIters = config.get<number>("auto.maxWorkIterations") ?? 3;
     const maxCritiqueIters = config.get<number>("auto.maxCritiqueIterations") ?? 3;
 
-    const args = ["auto"];
+    const sessionId = randomUUID();
+    const socketPath = reconnectableSocketPath(sessionId);
+    const args = ["auto", "--transport-socket", socketPath];
     if (ctx.cli.foundationRoot) {
       args.push("--foundation-root", ctx.cli.foundationRoot);
     }
@@ -504,23 +525,46 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     await this.persistConversation(ctx.projectDir, conversation);
     await this.postState(context, conversation);
 
-    await this.autoSessions.launch(
-      {
-        projectDir: ctx.projectDir,
-        pump: new SessionPump(
-          {
+    this.pendingAutoLaunch = {
+      projectDir: ctx.projectDir,
+      launchSpecPath: trimmedSpec,
+      sourceTag: llmConfig.source as LlmSourceTag,
+      model: llmConfig.model ?? "",
+    };
+    try {
+      const pump = new SocketSessionPump(
+        {
+          sessionId,
+          socketPath,
+          launch: {
             binary: ctx.cli.binary,
             args,
             cwd: ctx.projectDir,
           },
-          llmConfig,
-        ),
-        sourceTag: llmConfig.source as LlmSourceTag,
-        model: llmConfig.model ?? "",
-        launchSpecPath: trimmedSpec,
-      },
-      this.autoSessionDelegate(),
-    );
+        },
+        llmConfig,
+      );
+      await pump.ready();
+      await this.autoSessions.launch(
+        {
+          sessionId,
+          socketPath,
+          projectDir: ctx.projectDir,
+          pump,
+          sourceTag: llmConfig.source as LlmSourceTag,
+          model: llmConfig.model ?? "",
+          launchSpecPath: trimmedSpec,
+        },
+        this.autoSessionDelegate(),
+      );
+    } finally {
+      if (
+        this.pendingAutoLaunch?.projectDir === ctx.projectDir &&
+        this.pendingAutoLaunch.launchSpecPath === trimmedSpec
+      ) {
+        this.pendingAutoLaunch = undefined;
+      }
+    }
   }
 
   private buildState(
@@ -537,6 +581,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.activePump.awaitingInput;
     const isStreaming =
       this.inFlight?.projectDir === context.projectDir ||
+      (!!this.pendingAutoLaunch &&
+        this.pendingAutoLaunch.projectDir === context.projectDir) ||
       (!!this.activePump &&
         this.activePump.projectDir === context.projectDir &&
         !this.activePump.awaitingInput);
@@ -578,7 +624,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       transcript: filterPresentationEntries(conversation.transcript),
       isStreaming,
       supportsPromptEntry,
-      canStop: !!this.inFlight || !!this.activePump,
+      canStop:
+        !!this.inFlight ||
+        !!this.activePump ||
+        (!!this.pendingAutoLaunch &&
+          this.pendingAutoLaunch.projectDir === context.projectDir),
     };
   }
 
@@ -839,7 +889,69 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     await this.postState(await this.readPanelContextForProject(projectDir), conversation);
   }
 
+  private async restoreActiveAutoSessionIfNeeded(): Promise<void> {
+    if (this.activePump || this.pendingAutoLaunch) {
+      return;
+    }
+    const projectDir = await resolveProjectDirForPanel();
+    if (!projectDir) {
+      return;
+    }
+    const record = this.autoSessions.readStoredRecord(projectDir);
+    if (!record || isTerminalLlmSource(record.sourceTag)) {
+      return;
+    }
+    const ctx = await resolveContext({
+      projectDir,
+      showErrors: false,
+    });
+    if (!ctx) {
+      await this.autoSessions.forgetStoredRecord(projectDir);
+      return;
+    }
+    const priorConversation = this.readConversation(projectDir);
+    const pump = new SocketSessionPump(
+      {
+        sessionId: record.sessionId,
+        socketPath: record.socketPath,
+      },
+      buildReconnectableLlmConfig(ctx, this.secrets, vscode.workspace.getConfiguration("sim-flow"), record),
+    );
+    try {
+      await pump.ready();
+    } catch {
+      const conversation = appendNote(
+        priorConversation,
+        "Session no longer live",
+        "The previous sim-flow session could not be reattached. Relaunch it from the dashboard to continue.",
+      );
+      await this.autoSessions.forgetStoredRecord(projectDir);
+      await this.persistConversation(projectDir, conversation);
+      return;
+    }
+    await this.persistConversation(projectDir, clearConversationState());
+    await this.autoSessions.attach(
+      record,
+      pump,
+      this.autoSessionDelegate(),
+    );
+  }
+
   private async reconcileModeSwitches(): Promise<void> {
+    if (this.reconcilePromise) {
+      await this.reconcilePromise;
+      return;
+    }
+    const reconcile = this.reconcileModeSwitchesInner().finally(() => {
+      if (this.reconcilePromise === reconcile) {
+        this.reconcilePromise = undefined;
+      }
+    });
+    this.reconcilePromise = reconcile;
+    await reconcile;
+  }
+
+  private async reconcileModeSwitchesInner(): Promise<void> {
     const requestedProjectDir = await resolveProjectDirForPanel();
     const settings = readPanelSettings();
 
@@ -862,6 +974,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         "LLM source switched",
         `Stopped the current response because the LLM source changed to \`${settings.sourceLabel}\`.`,
       );
+    }
+
+    if (
+      this.pendingAutoLaunch &&
+      requestedProjectDir === this.pendingAutoLaunch.projectDir &&
+      this.pendingAutoLaunch.sourceTag === settings.source &&
+      this.pendingAutoLaunch.model === settings.model
+    ) {
+      return;
     }
 
     if (
@@ -1253,6 +1374,31 @@ function buildPumpLlmConfig(
 ): PumpLlmConfig {
   const source = (config.get<LlmSource>("llm.source") ?? "vscode") as LlmSource;
   const model = (config.get<string>("llm.model") ?? "").trim() || undefined;
+  return buildResolvedPumpLlmConfig(ctx, secrets, config, source, model);
+}
+
+function buildReconnectableLlmConfig(
+  ctx: { projectDir: string; cli: { binary: string } },
+  secrets: SecretStorage,
+  config: vscode.WorkspaceConfiguration,
+  record: StoredAutoSessionRecord,
+): PumpLlmConfig {
+  return buildResolvedPumpLlmConfig(
+    ctx,
+    secrets,
+    config,
+    record.sourceTag as LlmSource,
+    record.model.trim() || undefined,
+  );
+}
+
+function buildResolvedPumpLlmConfig(
+  ctx: { projectDir: string; cli: { binary: string } },
+  secrets: SecretStorage,
+  config: vscode.WorkspaceConfiguration,
+  source: LlmSource,
+  model: string | undefined,
+): PumpLlmConfig {
   const ollamaBaseUrl = (config.get<string>("llm.ollama.baseUrl") ?? "").trim() || undefined;
   const lmstudioBaseUrl =
     (config.get<string>("llm.lmstudio.baseUrl") ?? "").trim() || undefined;
@@ -1269,6 +1415,10 @@ function buildPumpLlmConfig(
     binary: ctx.cli.binary,
     debugTokens,
   };
+}
+
+function reconnectableSocketPath(sessionId: string): string {
+  return path.join(os.tmpdir(), `sim-flow-${sessionId}.sock`);
 }
 
 function randomNonce(): string {

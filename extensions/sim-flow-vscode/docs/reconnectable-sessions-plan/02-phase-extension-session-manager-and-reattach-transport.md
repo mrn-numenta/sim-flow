@@ -8,28 +8,28 @@
 - [x] Define the manager’s public API:
   launch, attach, observe state, send user input, stop, dispose, and
   forget dead sessions.
-- [/] Persist a reconnectable session record per project in
+- [x] Persist a reconnectable session record per project in
   `workspaceState`:
   session id, project dir, spec path, source, model, launch mode,
   last-known live status, and any attach metadata needed on restore.
-  Current implementation persists project, source, model, spec path,
-  awaiting-input status, and update time; stable session identity and
-  attach metadata are still pending.
+  Current implementation persists stable session identity, socket-path
+  attach metadata, project/source/model/spec context, and
+  last-known awaiting-input state.
 - [x] Ensure the manager, not the webview provider, is the single owner
   of live session state and attach status.
 
 ## Milestone 2 - Implement The Reattach Transport
 
-- [ ] Add an extension-side client for the runtime’s reconnectable
+- [x] Add an extension-side client for the runtime’s reconnectable
   socket or equivalent transport.
-- [ ] Support first attach and later reattach through the same client
+- [x] Support first attach and later reattach through the same client
   abstraction.
-- [ ] Route orchestrator events, awaiting-input prompts, session-end
+- [x] Route orchestrator events, awaiting-input prompts, session-end
   notices, and host-mediated LLM requests through the manager instead
   of directly through `ChatPanelProvider`.
-- [ ] Ensure only one active extension attachment owns a reconnectable
+- [x] Ensure only one active extension attachment owns a reconnectable
   session at a time.
-- [ ] Ensure attach failures downgrade cleanly to “session no longer
+- [x] Ensure attach failures downgrade cleanly to “session no longer
   live” rather than hanging the panel.
 
 ## Milestone 3 - Preserve Existing Reconciliation Rules
