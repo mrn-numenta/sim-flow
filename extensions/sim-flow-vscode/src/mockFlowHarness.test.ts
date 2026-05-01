@@ -554,6 +554,8 @@ function latestState(view: InstanceType<typeof mock.FakeWebviewView>) {
         currentStep: string | null;
         notice: string;
         canStop: boolean;
+        supportsPromptEntry: boolean;
+        sourceLabel: string;
         transcript: Array<{ kind: string; title?: string; body?: string }>;
       }
     | undefined;
@@ -916,6 +918,137 @@ describe("mocked dashboard/chat harness", () => {
     expect(transcriptBodies(state!)).toContain("new source");
     expect(transcriptBodies(state!)).toContain("Relaunched on Ollama.");
     expect(state?.canStop).toBe(false);
+  });
+
+  it("switches from an api source to a cli source by stopping the panel session and routing to terminal", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const specPath = path.join(exampleDir, "docs", "spec.md");
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+    mock.state.config.set("llm.source", "vscode");
+
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("Active API-backed session.\n");
+        },
+        waitForCancel: true,
+        result: {
+          status: "ended",
+        },
+      },
+    ]);
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    mock.state.chatProvider = provider as never;
+    const chatView = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(chatView as never, {} as never, {} as never);
+
+    const dashboardHost = new DashboardHost({
+      extensionUri: { fsPath: "/extension" } as never,
+      projectDir: exampleDir,
+      cli: {} as never,
+      workspaceState: workspaceState as never,
+    });
+    await dashboardHost.open();
+
+    await mock.state.lastDashboardPanel!.webview.emit({
+      type: "run-auto",
+      specPath,
+    });
+    await flushAsyncWork();
+
+    mock.state.config.set("llm.source", "claude-cli");
+    mock.state.config.set("llm.model", "sonnet");
+    await mock.fireConfigurationChange("llm.source", "llm.model");
+    await flushAsyncWork();
+
+    const state = latestState(chatView);
+    expect(mock.state.pumpLaunches).toHaveLength(1);
+    expect(mock.state.executedCommands).toEqual(
+      expect.arrayContaining([
+        {
+          command: "sim-flow.runFlowTerminal",
+          args: ["claude", specPath, exampleDir],
+        },
+      ]),
+    );
+    expect(state?.sourceLabel).toContain("Claude CLI");
+    expect(state?.supportsPromptEntry).toBe(false);
+    expect(transcriptBodies(state!)).toContain("terminal");
+  });
+
+  it("restores the latest visible auto-session transcript after provider reload", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const specPath = path.join(exampleDir, "docs", "spec.md");
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("Partial auto-session output before reload.\n");
+        },
+        waitForCancel: true,
+        result: {
+          status: "ended",
+        },
+      },
+    ]);
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    mock.state.chatProvider = provider as never;
+    const chatView = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(chatView as never, {} as never, {} as never);
+
+    const dashboardHost = new DashboardHost({
+      extensionUri: { fsPath: "/extension" } as never,
+      projectDir: exampleDir,
+      cli: {} as never,
+      workspaceState: workspaceState as never,
+    });
+    await dashboardHost.open();
+
+    await mock.state.lastDashboardPanel!.webview.emit({
+      type: "run-auto",
+      specPath,
+    });
+    await flushAsyncWork();
+
+    let state = latestState(chatView);
+    expect(transcriptBodies(state!)).toContain("Partial auto-session output before reload.");
+    expect(state?.canStop).toBe(true);
+
+    provider.dispose();
+    await flushAsyncWork();
+
+    const restoredProvider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    const restoredView = new mock.FakeWebviewView();
+    await restoredProvider.resolveWebviewView(restoredView as never, {} as never, {} as never);
+    await flushAsyncWork();
+
+    state = latestState(restoredView);
+    expect(state?.projectLabel).toBe("example");
+    expect(state?.canStop).toBe(false);
+    expect(transcriptBodies(state!)).toContain("Partial auto-session output before reload.");
   });
 
   it("resumes a mocked auto session after the orchestrator asks for input", async () => {
