@@ -63,3 +63,30 @@ user-visible failures, root causes, and the tests that now guard
     same-source, same-spec sessions.
   - Guard: `ignores duplicate Play for the same active auto session` in
     [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).
+
+### Round 3 - Reload And CLI-Routing Regression Tests
+
+- [x] API -> CLI source switch relaunched a panel session instead of
+  moving the flow to the terminal path.
+  - Symptom: changing `sim-flow.llm.source` from an API backend to a
+    CLI backend during an active auto session spawned a second panel
+    pump instead of transparently handing control to the terminal-based
+    flow.
+  - Root cause: source-switch reconciliation treated every backend
+    change as another panel-session relaunch and did not branch to
+    `sim-flow.runFlowTerminal` for terminal-only backends.
+  - Guard: `switches from an api source to a cli source by stopping the
+    panel session and routing to terminal` in
+    [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).
+
+- [x] In-progress auto-session transcript output was lost after panel
+  reload.
+  - Symptom: reloading or closing the chat panel during an active
+    orchestrated session restored only the initial launch note instead
+    of the latest visible assistant output.
+  - Root cause: incremental auto-session transcript updates were kept in
+    memory but not persisted before provider disposal canceled the live
+    pump.
+  - Guard: `restores the latest visible auto-session transcript after
+    provider reload` in
+    [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).

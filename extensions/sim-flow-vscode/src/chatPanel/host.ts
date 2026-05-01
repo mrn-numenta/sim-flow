@@ -8,6 +8,7 @@ import { estimateMessagesTokens } from "../llm/tokenEstimate";
 import { type PumpLlmConfig, SessionPump } from "../session/pump";
 import { readFlowState } from "../state/flowState";
 import {
+  cliBackendArgFor,
   isTerminalLlmSource,
   LLM_SOURCE_LABELS,
   type LlmSourceTag,
@@ -94,6 +95,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   dispose(): void {
+    if (this.inFlight) {
+      const projectDir = this.inFlight.projectDir;
+      const conversation = appendNote(
+        this.readConversation(projectDir),
+        "Session interrupted",
+        "Stopped the current response because the chat panel was reloaded or closed.",
+      );
+      void this.persistConversation(projectDir, conversation);
+    }
+    if (this.activePump) {
+      const projectDir = this.activePump.projectDir;
+      const conversation = appendNote(
+        this.readConversation(projectDir),
+        "Session interrupted",
+        "Stopped the running sim-flow session because the chat panel was reloaded or closed.",
+      );
+      void this.persistConversation(projectDir, conversation);
+    }
     if (this.inFlight) {
       this.inFlight.source.cancel();
       this.inFlight = undefined;
@@ -832,6 +851,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         "LLM source switched",
         `Stopped the running sim-flow session because the LLM source changed to \`${settings.sourceLabel}\`. Relaunching on the new source.`,
       );
+      if (isTerminalLlmSource(settings.source)) {
+        const conversation = appendNote(
+          this.readConversation(relaunch.projectDir),
+          "LLM source switched",
+          `Relaunched sim-flow auto in the terminal on the new source \`${settings.sourceLabel}\`.`,
+        );
+        await this.persistConversation(relaunch.projectDir, conversation);
+        await vscode.commands.executeCommand(
+          "sim-flow.runFlowTerminal",
+          cliBackendArgFor(settings.source),
+          relaunch.launchSpecPath ?? "",
+          relaunch.projectDir,
+        );
+        return;
+      }
       const ctx = await resolveContext({
         projectDir: relaunch.projectDir,
         showErrors: true,
