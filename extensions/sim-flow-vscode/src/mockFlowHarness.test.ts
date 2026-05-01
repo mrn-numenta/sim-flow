@@ -52,6 +52,7 @@ const mock = vi.hoisted(() => {
 
   class FakeMemento {
     private readonly values = new Map<string, unknown>();
+    private nextUpdateSignal: string | undefined;
 
     get<T>(key: string, defaultValue?: T): T | undefined {
       if (this.values.has(key)) {
@@ -60,7 +61,16 @@ const mock = vi.hoisted(() => {
       return defaultValue;
     }
 
+    blockNextUpdate(signal: string): void {
+      this.nextUpdateSignal = signal;
+    }
+
     async update(key: string, value: unknown): Promise<void> {
+      const signal = this.nextUpdateSignal;
+      this.nextUpdateSignal = undefined;
+      if (signal) {
+        await waitForSignal(signal);
+      }
       if (value === undefined) {
         this.values.delete(key);
       } else {
@@ -1557,6 +1567,69 @@ describe("mocked dashboard/chat harness", () => {
 
     state = latestState(restoredView);
     expect(state?.transcript).toEqual([]);
+  });
+
+  it("waits for pending conversation persistence before restoring after reload", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    mock.state.directReplies.set(exampleDir, [
+      "Interrupted direct reply.",
+      {
+        text: " Trailing chunk should be dropped after reload.",
+        waitForSignal: "release-delayed-persist-direct",
+      },
+    ]);
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+    mock.state.currentProjectDir = exampleDir;
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    const view = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(view as never, {} as never, {} as never);
+
+    const sendPromise = view.webview.emit({
+      type: "send-prompt",
+      prompt: "Summarize example.",
+    });
+    await flushAsyncWork();
+
+    workspaceState.blockNextUpdate("release-delayed-reload-persist");
+    provider.dispose();
+    await flushAsyncWork();
+    mock.resolveSignal("release-delayed-persist-direct");
+    await sendPromise;
+    await flushAsyncWork();
+
+    const restoredProvider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    const restoredView = new mock.FakeWebviewView();
+    let resolved = false;
+    const resolvePromise = restoredProvider
+      .resolveWebviewView(restoredView as never, {} as never, {} as never)
+      .then(() => {
+        resolved = true;
+      });
+
+    await flushAsyncWork();
+    expect(resolved).toBe(false);
+
+    mock.resolveSignal("release-delayed-reload-persist");
+    await resolvePromise;
+    await flushAsyncWork();
+
+    const state = latestState(restoredView);
+    expect(transcriptBodies(state!)).toContain("Interrupted direct reply.");
+    expect(transcriptBodies(state!)).toContain(
+      "Stopped the current response because the chat panel was reloaded or closed.",
+    );
   });
 
   it("accepts a new prompt immediately after switching projects during a direct reply", async () => {
