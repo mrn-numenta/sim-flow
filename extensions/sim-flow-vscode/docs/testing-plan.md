@@ -11,6 +11,8 @@ The mode-switching product decisions that this test plan depends on are
 recorded separately in [mode-switching.md](./mode-switching.md).
 The lifecycle/state-machine view of those decisions is captured in
 [transition-graph.md](./transition-graph.md).
+The implementation roadmap for true live reattachment is tracked in
+[reconnectable-sessions-plan/plan.md](./reconnectable-sessions-plan/plan.md).
 
 The core principle is that the most expensive bugs are not simple
 rendering issues. They appear when ownership, project context, session

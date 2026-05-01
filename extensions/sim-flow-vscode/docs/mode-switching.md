@@ -88,6 +88,8 @@ Implications:
 - Persisted transcript restore is necessary but not sufficient.
 - The longer-term target is true session reattachment for active work,
   not merely restoring static history.
+- The current implementation plan for that work lives in
+  [reconnectable-sessions-plan/plan.md](./reconnectable-sessions-plan/plan.md).
 
 ### Duplicate Play
 
