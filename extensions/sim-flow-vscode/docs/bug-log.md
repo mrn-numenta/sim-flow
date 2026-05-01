@@ -90,3 +90,22 @@ user-visible failures, root causes, and the tests that now guard
   - Guard: `restores the latest visible auto-session transcript after
     provider reload` in
     [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).
+
+### Round 4 - Direct Reply Transition Regression Tests
+
+- [x] Direct panel replies could restore stale project/source context
+  after a project switch or LLM-source switch.
+  - Symptom: after canceling a live direct reply because the active
+    project or LLM source changed, the panel could snap back to the old
+    project's label or the old source label once the canceled request
+    unwound.
+  - Root cause: the direct-response `finally` path always posted the
+    original request context instead of re-reading the current active
+    panel context after reconciliation.
+  - Guard:
+    - `switches projects during a direct panel reply and drops stale
+      response context`
+    - `switches llm source during a direct panel reply and stops the
+      stale response`
+    in
+    [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).

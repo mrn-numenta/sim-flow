@@ -298,9 +298,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         );
       }
     } finally {
+      const settledProjectDir = context.projectDir;
       this.inFlight = undefined;
-      await this.persistConversation(context.projectDir, conversation);
-      await this.postState(context, conversation);
+      await this.persistConversation(settledProjectDir, conversation);
+      const latestContext = await this.readPanelContext();
+      await this.postState(latestContext, this.readConversation(latestContext.projectDir));
     }
   }
 
