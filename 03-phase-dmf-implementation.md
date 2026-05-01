@@ -38,7 +38,7 @@ stubs DM4 with tracking-dependent checks marked as blocked until Phase 4.
 ## Milestone 2 - Step Descriptors And Gate Checks (DM0-DM3)
 
 - [x] Register DM0-DM3 step descriptors in
-  `crates/sim-flow/src/steps/dm.rs`.
+  `tools/sim-flow/src/steps/dm.rs`.
 - [x] Implement DM0 gate: `spec.md` exists, frequency + node regex
   checks, critique file scan.
 - [x] Implement DM1 gate: `targets.md` and `testbench.md` exist with
@@ -89,7 +89,7 @@ stubs DM4 with tracking-dependent checks marked as blocked until Phase 4.
   `sim-models/users/_testflow/models/reference-pipeline/` suitable for
   exercising DM0-DM3c. Deferred: sim-models is a separate repo and this
   reference exercise belongs there. Phase 3 ships staged-artifact gate
-  integration tests in `crates/sim-flow/tests/dm_gates.rs` which
+  integration tests in `tools/sim-flow/tests/dm_gates.rs` which
   exercise every DM0-DM4 gate's pass and fail paths without consuming
   real LLM turns.
 - [ ] Run `sim-flow run DM0` through `sim-flow run DM3c` against the

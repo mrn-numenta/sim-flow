@@ -40,7 +40,7 @@ second `cargo generate`.
 ## Milestone 3 - Step Descriptors And Gate Checks (DS0-DS4)
 
 - [ ] Register DS0-DS4 step descriptors in
-  `crates/sim-flow/src/steps/ds.rs`.
+  `tools/sim-flow/src/steps/ds.rs`.
 - [ ] DS0 gate: `spec.md` exists with frequency and node, critique
   scan, critique flags no premature design decisions (heuristic check
   -- look for `BLOCKER:` lines specifically about closed design space).

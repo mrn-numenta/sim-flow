@@ -70,7 +70,7 @@ extension reads structured data.
   [cli-json.md](../../architecture/ai-flow/cli-json.md) so the
   extension can pin against stable output.
 - [x] Add integration tests for the JSON writer paths in
-  `crates/sim-flow/tests/cli_json.rs` covering status, runs, gate,
+  `tools/sim-flow/tests/cli_json.rs` covering status, runs, gate,
   baseline list, baseline compare, and new model.
 
 ## Milestone 2 - Extension Scaffolding
@@ -144,7 +144,7 @@ extension reads structured data.
   per-candidate gate subtables, and archived_gates.
 - [x] Implement `src/state/critiques.ts`: list + read
   `.sim-flow/critiques/*.md`. The parser follows the same rule as
-  `crates/sim-flow/src/critique.rs` -- any line whose first
+  `tools/sim-flow/src/critique.rs` -- any line whose first
   non-whitespace token (after stripping leading `-` or `*` list
   markers) is `UNRESOLVED:` / `BLOCKER:` / `RESOLVED:` becomes a
   Finding.
@@ -422,7 +422,7 @@ In progress. Milestones 1 through 11 are complete:
 
 - M1 shipped the `--json` flag on every subcommand the extension
   consumes, the [cli-json.md](../../architecture/ai-flow/cli-json.md)
-  schema, and `crates/sim-flow/tests/cli_json.rs` regression coverage.
+  schema, and `tools/sim-flow/tests/cli_json.rs` regression coverage.
 - M2 scaffolded `extensions/sim-flow-vscode/` with package.json,
   tsconfig, ESLint/Prettier/.editorconfig, a minimal extension.ts
   that registers every planned command as a "not yet implemented"
@@ -487,7 +487,7 @@ In progress. Milestones 1 through 11 are complete:
   collide with another and `/reset DM0 --project /repo/model-b`
   does the expected thing in a multi-project workspace.
 - M11 made the extension installable as an internal VSIX. The
-  README covers `cargo install --path crates/sim-flow`,
+  README covers `cargo install --path tools/sim-flow`,
   `npm run package`, `code --install-extension ...`, settings,
   slash commands, and LLM backends. `src/cli/bundled.ts` adds a
   platform-aware lookup for `bin/<os>-<arch>/sim-flow[.exe]`

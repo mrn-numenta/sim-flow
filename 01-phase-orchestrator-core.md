@@ -15,7 +15,7 @@ are layered on top in Phases 3 and 6.
 
 ## Milestone 1 - Crate Skeleton And CLI
 
-- [/] Add `crates/sim-flow/` to the workspace with `clap`, `toml`, `serde`,
+- [/] Add `tools/sim-flow/` to the workspace with `clap`, `toml`, `serde`,
   `regex`, and `rusqlite` dependencies. rusqlite deferred to Phase 4.
 - [/] Implement the top-level CLI with subcommands: `init`, `status`, `run`,
   `gate`, `reset`, `config`, `new`. `new` deferred to Phase 2.

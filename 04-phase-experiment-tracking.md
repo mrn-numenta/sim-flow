@@ -48,7 +48,7 @@ the standard metrics set defined in
   `CREATE TABLE IF NOT EXISTS` idempotently. Breaking migrations will
   bump `SCHEMA_VERSION`.
 - [x] Implement insert / query APIs in
-  `crates/sim-flow/src/tracking/index.rs` (`ExperimentIndex`).
+  `tools/sim-flow/src/tracking/index.rs` (`ExperimentIndex`).
 - [/] Ensure `sim-flow new model` initializes an empty `experiments.db`
   during post-generation (tie to Phase 2 Milestone 4). Not wired into
   `sim-flow new model` yet; the first `record-run` call creates it. A
@@ -82,7 +82,7 @@ the standard metrics set defined in
 
 ## Milestone 4 - Metrics Extraction
 
-- [x] Implement `crates/sim-flow/src/tracking/metrics.rs`. Phase 4 uses a
+- [x] Implement `tools/sim-flow/src/tracking/metrics.rs`. Phase 4 uses a
   graceful-fallback design: if the model writes `metrics.json` into its
   `.experiments/<run-id>/` directory, that file is the metrics summary.
   Foundation-side named-metric accessors remain a follow-up per

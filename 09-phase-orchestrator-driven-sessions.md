@@ -73,7 +73,7 @@ immediately to eliminate duplicated step knowledge while the rest
 of Phase 9 is in flight.
 
 - [x] `Command::Advance { step: Option<String>, json: bool }` in
-  `crates/sim-flow/src/main.rs`. Loads state, evaluates the gate,
+  `tools/sim-flow/src/main.rs`. Loads state, evaluates the gate,
   and on a clean result calls `state.mark_passed(step, now)` plus
   `state.save()` plus `state.current_step = next_step()`. Emits
   JSON when `--json` is set. Tests for clean and dirty paths.
@@ -101,7 +101,7 @@ core that drives it.
   `serde_json` + `schemars` derive. Covers every event in
   [07-session-protocol.md](../../architecture/ai-flow/07-session-protocol.md).
 - [x] CI build emits
-  `docs/architecture/ai-flow/session-protocol.schema.json` from the
+  `tools/sim-flow/docs/flow/session-protocol.schema.json` from the
   Rust definitions. The schema is the cross-host contract.
 - [x] Rust trait `sim_flow::session::Host` with the methods needed
   to render text, request user input, request LLM responses, emit
