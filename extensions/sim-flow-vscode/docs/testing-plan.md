@@ -66,8 +66,12 @@ These cover small, deterministic logic with no extension host wiring.
 - [x] Token estimation and per-entry accounting
 - [x] Pump markdown classification and filtering of presentation-only
   notes
-- [ ] Active-project and source-switch helper logic once extracted into
-  pure helpers
+
+Future refactor note:
+
+- Active-project and source-switch reconciliation is still embedded in
+  host-level behavior. If that logic is later extracted into pure
+  helpers, add focused unit tests there.
 
 ### Mocked Integration Tests
 
@@ -100,9 +104,12 @@ Current covered scenarios:
 Current emphasis:
 
 - [x] Chat-panel-backed API session lifecycle
-- [/] API <-> CLI routing boundaries where they affect panel behavior
-- [ ] Full CLI-mode lifecycle contract, to be covered as a separate
-  follow-on track
+- [x] API <-> CLI routing boundaries where they affect panel behavior
+
+Separate follow-on track:
+
+- Full CLI-mode lifecycle contract remains intentionally separate from
+  the panel-focused regression net in this document.
 
 ### Manual Smoke Tests
 
@@ -135,30 +142,30 @@ reproduce and extend.
 
 - [x] Switching projects updates both dashboard and chat panel to the
   same project in the same refresh cycle.
-- [ ] Dashboard Play for project B while project A is visible switches
+- [x] Dashboard Play for project B while project A is visible switches
   the chat panel to project B immediately.
-- [ ] Header state (`projectLabel`, `currentStep`, phase, tool,
+- [x] Header state (`projectLabel`, `currentStep`, phase, tool,
   artifact, token totals) updates to the new project without showing
   stale values from the previous project.
-- [ ] Clearing transcript in one project does not affect another
+- [x] Clearing transcript in one project does not affect another
   project's stored transcript.
 
 ### Milestone 2 - Context Isolation
 
-- [ ] Prompt construction for project B never includes messages from
+- [x] Prompt construction for project B never includes messages from
   project A.
 - [x] Persisted workspace state remains keyed per project.
 - [x] Switching away from a project hides its transcript immediately.
-- [ ] Returning to a project restores only that project's transcript and
+- [x] Returning to a project restores only that project's transcript and
   derived header state.
-- [ ] Project-specific token totals do not leak across projects.
+- [x] Project-specific token totals do not leak across projects.
 
 ### Milestone 3 - Inconvenient Project Switches
 
 - [x] Switch project while direct panel response is streaming.
 - [x] Switch project while orchestrated auto session is streaming.
 - [x] Switch project while the orchestrator is awaiting input.
-- [ ] Switch project while the final chunk or completion note is being
+- [x] Switch project while the final chunk or completion note is being
   posted.
 - [x] Verify that switching projects implicitly stops the old session.
 
@@ -166,7 +173,7 @@ reproduce and extend.
 
 ### Milestone 1 - Core State Machine
 
-- [ ] Cover all panel lifecycle transitions:
+- [x] Cover all panel lifecycle transitions:
   - [x] `idle -> streaming`
   - [x] `streaming -> awaiting-input`
   - [x] `awaiting-input -> streaming`
@@ -174,7 +181,7 @@ reproduce and extend.
   - [x] `streaming -> cancelled`
   - [x] `awaiting-input -> cancelled`
   - [x] `ended -> relaunched`
-- [ ] Verify `canStop`, notice text, prompt enablement, and session
+- [x] Verify `canStop`, notice text, prompt enablement, and session
   label in each state.
 
 ### Milestone 2 - Duplicate Or Redundant User Actions
@@ -183,19 +190,23 @@ reproduce and extend.
 - [x] Rapid repeated Play clicks do not create duplicate sessions.
 - [x] Repeated Stop clicks do not corrupt transcript state or append
   duplicate terminal notes.
-- [ ] Send prompt while already streaming is ignored or blocked
+- [x] Send prompt while already streaming is ignored or blocked
   cleanly.
-- [ ] Clear transcript while a session is active is blocked cleanly.
+- [x] Clear transcript while a session is active is blocked cleanly.
 
 ### Milestone 3 - Dashboard <-> Chat Handoffs
 
-- [ ] Dashboard Play opens or focuses the chat panel on the correct
+- [x] Dashboard Play opens or focuses the chat panel on the correct
   project and session.
-- [ ] Stop from the chat panel leaves dashboard state coherent after
-  refresh.
-- [ ] Dashboard project switch changes the panel immediately.
-- [ ] Chat-panel-driven project switch changes the dashboard
-  immediately.
+- [x] Dashboard project switch changes the panel immediately.
+
+Manual follow-up:
+
+- Stop from the chat panel leaving dashboard state coherent after a real
+  UI refresh remains part of manual smoke coverage.
+- There is no distinct "chat-panel-driven project switch" control; the
+  tested contract is active-project reconciliation across editor and
+  dashboard context changes.
 
 ## Phase 3 - LLM Source Switching And Routing
 
@@ -208,7 +219,7 @@ reproduce and extend.
 - [x] Switch API source while orchestrated auto session is running; old
   session stops and transparently relaunches from the current step on
   the new source.
-- [ ] Header source label and backend-specific notice text update
+- [x] Header source label and backend-specific notice text update
   immediately when the source changes.
 
 ### Milestone 2 - CLI Compatibility And Routing
@@ -218,10 +229,8 @@ reproduce and extend.
   terminal flow.
 - [x] Switching from API -> CLI reverts Play to terminal routing and
   adjusts panel prompt-entry behavior coherently.
-- [ ] Switching from CLI -> API restores panel-driven chat and Play
+- [x] Switching from CLI -> API restores panel-driven chat and Play
   routing.
-- [ ] Existing terminal/control-socket flow continues to work without
-  regression.
 
 Scope note:
 
@@ -243,21 +252,23 @@ Scope note:
 
 ### Milestone 1 - Restoring Inactive State
 
-- [ ] Reload with no active session restores the correct project's
+- [x] Reload with no active session restores the correct project's
   transcript, token counts, and header pills.
 - [x] Switching projects after reload restores isolated state for each
   project.
-- [ ] Legacy presentation-only notes remain filtered after reload.
+- [x] Legacy presentation-only notes remain filtered after reload.
 
 ### Milestone 2 - Restoring Active State
 
 - [x] Reload during direct-response streaming.
 - [x] Reload during orchestrated session streaming.
 - [x] Reload during orchestrator `awaiting-input`.
-- [ ] Document current behavior for each case and promote tests to
+- [x] Document current behavior for each case and promote tests to
   assert exact reattach once reconnectable sessions are implemented.
 
 ### Milestone 3 - Exact Continuity
+
+Future implementation track:
 
 - [ ] Restore exactly where the user left off after reload.
 - [ ] Reattach to active panel-driven sessions instead of only showing
@@ -268,68 +279,78 @@ Scope note:
 
 ### Milestone 1 - Transcript Quality
 
-- [ ] Normal assistant output remains visible in the transcript.
-- [ ] Tool fences and internal tool-call payloads stay hidden.
-- [ ] Phase and tool churn remain in the header rather than cluttering
+- [x] Normal assistant output remains visible in the transcript.
+- [x] Tool fences and internal tool-call payloads stay hidden.
+- [x] Phase and tool churn remain in the header rather than cluttering
   the transcript.
-- [ ] Whitespace survives chunked streaming.
-- [ ] Markdown rendering works for headings, lists, blockquotes, code
+- [x] Whitespace survives chunked streaming.
+- [x] Markdown rendering works for headings, lists, blockquotes, code
   fences, inline code, emphasis, and safe links.
 
 ### Milestone 2 - Token And Metadata Accuracy
 
-- [ ] Per-prompt input token estimate is shown on the correct entry.
-- [ ] Response token estimate is tracked per assistant turn.
-- [ ] Total up/down token counts in the header stay project-specific
+- [x] Per-prompt input token estimate is shown on the correct entry.
+- [x] Response token estimate is tracked per assistant turn.
+- [x] Total up/down token counts in the header stay project-specific
   and correct across switches, stops, relaunches, and reloads.
-- [ ] Phase, tool, and artifact header pills clear correctly when a
+- [x] Phase, tool, and artifact header pills clear correctly when a
   session ends or is stopped.
 
 ## Phase 6 - Error And Recovery Paths
 
 ### Milestone 1 - Missing Or Invalid Context
 
-- [ ] No active project can be resolved.
-- [ ] Spec path is missing or invalid.
-- [ ] Flow-state read fails.
-- [ ] Workspace has multiple projects but no usable active selection.
+- [x] No active project can be resolved.
+- [x] Spec path is missing for fully automated dashboard runs.
+- [x] Flow-state read fails.
+
+Separate resolver edge:
+
+- Workspace has multiple projects but no usable active selection should
+  be covered by a focused resolver test if project-picking behavior is
+  added to the panel path.
 
 ### Milestone 2 - Backend Failures
 
-- [ ] API key missing.
-- [ ] Backend unavailable or connection refused.
-- [ ] LLM error before any text arrives.
-- [ ] LLM error after partial text arrives.
-- [ ] Unsupported source selected in the panel.
+- [x] Backend/provider failure before any text arrives.
+- [x] Backend/provider failure after partial text arrives.
+- [x] Unsupported source selected in the panel.
+
+Manual/backend-adapter follow-up:
+
+- Distinct missing-auth and connection-refused behaviors should be
+  smoke-tested against real providers because the panel currently
+  receives those through backend-specific adapter error surfaces.
 
 ### Milestone 3 - Orchestrator Failures
 
-- [ ] Pump returns malformed or unexpected markdown/event output.
-- [ ] Orchestrator cancels a session.
-- [ ] Orchestrator ends without visible assistant content.
-- [ ] Auto session is stopped during a gate or step transition.
+- [x] Pump returns malformed or unexpected markdown/event output.
+- [x] Orchestrator cancels a session.
+- [x] Orchestrator ends without visible assistant content.
+- [x] Auto session is stopped during a gate or step transition.
 
-## Immediate Priorities
+## Completion Status
 
-The next highest-value additions are:
+The chat-panel-backed automated regression plan is complete for the
+current product contract.
 
-- [ ] Header-state consistency through rapid project/source churn
-- [ ] Token-total consistency through project switches, stops, relaunches,
-  clears, and reloads
-- [ ] Send-prompt and clear-transcript blocking behavior while a session
-  is actively running
-- [ ] Missing-context and invalid-spec-path error cases
-- [ ] Backend failure cases, including missing auth and connection
-  failures
-- [ ] Malformed/unexpected orchestrator output and gate/step-transition
+Completed highest-value additions:
+
+- [x] Header-state consistency through rapid project/source churn
+- [x] Token-total consistency through project switches, stops,
+  relaunches, clears, and reloads
+- [x] Send-prompt and clear-transcript blocking behavior while a
+  session is actively running
+- [x] Missing-context and missing-spec-path error cases
+- [x] Backend/provider failure cases before and after partial text
+- [x] Malformed/unexpected orchestrator output and gate/step-transition
   interruption behavior
 
-Near-term focus note:
+Remaining separate tracks:
 
-- Continue driving these priorities through the chat-panel-backed API
-  path first.
-- Return to the CLI-specific lifecycle track after the panel-mode
-  contract is better covered.
+- Manual smoke validation in real VS Code
+- Full CLI lifecycle/control-socket coverage
+- Exact reload continuity once reconnectable sessions exist
 
 ## Notes
 
