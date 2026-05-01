@@ -556,6 +556,8 @@ function latestState(view: InstanceType<typeof mock.FakeWebviewView>) {
         canStop: boolean;
         supportsPromptEntry: boolean;
         sourceLabel: string;
+        totalInputTokensEstimate: number;
+        totalOutputTokensEstimate: number;
         transcript: Array<{ kind: string; title?: string; body?: string }>;
       }
     | undefined;
@@ -1294,6 +1296,109 @@ describe("mocked dashboard/chat harness", () => {
     state = latestState(view);
     expect(mock.state.directReplyRequests.at(-1)?.source).toBe("ollama");
     expect(transcriptBodies(state!)).toContain("Reply from Ollama.");
+  });
+
+  it("restores the latest visible direct-reply transcript after provider reload", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    mock.state.directReplies.set(exampleDir, [
+      "Direct first chunk before reload.",
+      {
+        text: " Direct second chunk should not survive reload.",
+        waitForSignal: "release-direct-reload",
+      },
+    ]);
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+    mock.state.currentProjectDir = exampleDir;
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    const view = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(view as never, {} as never, {} as never);
+
+    const sendPromise = view.webview.emit({
+      type: "send-prompt",
+      prompt: "Summarize example.",
+    });
+    await flushAsyncWork();
+
+    let state = latestState(view);
+    expect(transcriptBodies(state!)).toContain("Direct first chunk before reload.");
+    expect(state?.canStop).toBe(true);
+
+    provider.dispose();
+    await flushAsyncWork();
+    mock.resolveSignal("release-direct-reload");
+    await sendPromise;
+    await flushAsyncWork();
+
+    const restoredProvider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    const restoredView = new mock.FakeWebviewView();
+    await restoredProvider.resolveWebviewView(restoredView as never, {} as never, {} as never);
+    await flushAsyncWork();
+
+    state = latestState(restoredView);
+    expect(state?.projectLabel).toBe("example");
+    expect(state?.canStop).toBe(false);
+    expect(transcriptBodies(state!)).toContain("Direct first chunk before reload.");
+    expect(transcriptBodies(state!)).toContain("reloaded or closed");
+    expect(transcriptBodies(state!)).not.toContain("Direct second chunk should not survive reload.");
+  });
+
+  it("does not append duplicate stop notes when stop is pressed repeatedly during a direct reply", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    mock.state.directReplies.set(exampleDir, [
+      "Direct first chunk.",
+      {
+        text: " Direct trailing chunk should be dropped.",
+        waitForSignal: "release-direct-double-stop",
+      },
+    ]);
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+    mock.state.currentProjectDir = exampleDir;
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    const view = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(view as never, {} as never, {} as never);
+
+    const sendPromise = view.webview.emit({
+      type: "send-prompt",
+      prompt: "Summarize example.",
+    });
+    await flushAsyncWork();
+
+    await view.webview.emit({ type: "stop-conversation" });
+    await view.webview.emit({ type: "stop-conversation" });
+    await view.webview.emit({ type: "refresh" });
+    await flushAsyncWork();
+    mock.resolveSignal("release-direct-double-stop");
+    await sendPromise;
+    await flushAsyncWork();
+
+    const state = latestState(view);
+    const stopNotes = state?.transcript.filter(
+      (entry) =>
+        entry.kind === "note" &&
+        entry.body === "Cancellation requested for the current model response.",
+    ) ?? [];
+    expect(stopNotes).toHaveLength(1);
+    expect(transcriptBodies(state!)).not.toContain("Direct trailing chunk should be dropped.");
   });
 
   it("resumes a mocked auto session after the orchestrator asks for input", async () => {
