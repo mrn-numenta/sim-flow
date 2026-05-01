@@ -35,11 +35,13 @@ declared).
    Treat each `## <Category>` as a milestone. When every `- [ ]`
    row in a category is resolved (`- [x]` done OR `- [-]`
    deferred), **STOP**. Surface a clear notice -- `<Category>
-   tests complete; ready for review.` followed by a one-line
+   tests complete; ready for critique.` followed by a one-line
    summary (count of new tests, design fixes that landed, any
    deferred items) -- and wait for user input before starting the
-   next category. Do NOT chain categories. The user reviews the
-   test results between categories.
+   paired critique session before starting the next category. Do
+   NOT chain categories. The critique is the primary correctness
+   check for each category; user review may happen around it, but
+   you should assume advancement depends on the critique passing.
 
    See "Order, jumping, and deferring" below for what to do when
    a test row depends on another row's fix, when you discover a
@@ -110,10 +112,22 @@ category that still has open rows.
 - `cargo test` passes (every implemented test).
 - `cargo tarpaulin` reports line coverage at or above the plan's
   threshold.
-- Every row in `docs/plan/test-plan.md` is `- [x]` or recorded
-  as an exclusion.
+- Every row in `docs/plan/test-plan.md` is `- [x]` or `- [-]`
+  with a specific `defer reason:`.
 - The coverage report path + measured percentage is recorded in
   the plan's `## Coverage` section.
+- Any uncovered lines that are intentionally left below direct test
+  coverage are recorded in `## Coverage > Exclusions` with a
+  concrete reason.
+
+Category completion and step completion are different:
+
+- After each category is complete, stop and wait for the paired
+  category critique before starting the next category.
+- After the final category, the full-suite rerun, and coverage work are
+  complete, stop for the final DM3c critique. That final critique is the
+  end-to-end regression/coverage pass, not the first time the tests are
+  being reviewed.
 
 When the artifacts above are complete, stop. Do not write
 `docs/critiques/DM3c-critique.md`; the critique is a distinct task.

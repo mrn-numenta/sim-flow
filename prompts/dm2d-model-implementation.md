@@ -92,12 +92,15 @@ scope and structure.
      compilation / tests as you land artifacts.
    - When the LAST `- [ ]` in the milestone is resolved (`- [x]`
      done OR `- [-]` deferred), **STOP**. Surface a clear notice
-     -- `Milestone NN: <name> complete; ready for review.`
+     -- `Milestone NN: <name> complete; ready for critique.`
      followed by a one-line summary of what landed (and any
      deferred items, with a single sentence each) -- and wait for
-     user input before starting the next milestone. Do NOT chain
-     milestones. The user reviews the code / tests / build state
-     between milestones.
+     the paired critique session before starting the next
+     milestone. Do NOT chain milestones. The critique is the
+     primary correctness check for the milestone; user review may
+     happen around it, but you should assume advancement depends on
+     the critique passing, not just on the milestone file being
+     checked off.
 
 ### Order, jumping, and deferring
 
@@ -173,10 +176,12 @@ strictly.
 
 Milestone completion and step completion are different:
 
-- After each milestone is complete, stop and wait for user review before
-  starting the next milestone.
+- After each milestone is complete, stop and wait for the paired
+  milestone critique before starting the next milestone.
 - After the final milestone is complete and the build/tests are green,
-  stop the step.
+  stop for the final DM2d critique. That final critique is the
+  end-to-end integration/regression pass across the full
+  implementation, not the first time the work is being reviewed.
 
 Do not write
 `docs/critiques/DM2d-critique.md`; the critique is a distinct task.

@@ -7,10 +7,22 @@ property depends on you bracketing any prior reasoning rather than
 leaning on it. Do not modify the test artifacts; evaluate them and
 write the critique file.
 
+This critique runs more than once:
+
+- after each category-complete checkpoint (`Smoke`, `Edge`,
+  `Stress`, `Random`) before the next category begins
+- once after the final category and coverage pass, as the final
+  DM3c integration/regression review
+
+Determine which category was just completed from the plan state,
+review that category in detail, and also sanity-check that the new
+tests did not regress earlier categories. On the final review,
+evaluate the full plan, full suite, and coverage outcome.
+
 ## Inputs
 
 - `docs/plan/test-plan.md` -- the plan; check that every `- [ ]`
-  is now `- [x]` or recorded as an exclusion, and that the
+  is now `- [x]` or `- [-]` with a `defer reason:`, and that the
   `## Coverage` section names a measured percentage + report path.
 - `tests/` source tree.
 - Coverage report (path recorded in `docs/plan/test-plan.md`'s
@@ -23,9 +35,8 @@ until fixed). Prefix informational notes with `UNRESOLVED:`. The
 orchestrator fails the DM3c gate on `BLOCKER:` lines only.
 
 1. **Plan completion**. Is every row in
-   `docs/plan/test-plan.md` either `- [x]` or recorded in the
-   `## Coverage > Exclusions` list with a specific reason? Reject
-   silently-skipped rows.
+   `docs/plan/test-plan.md` either `- [x]` or `- [-]` with a
+   specific `defer reason:`? Reject silently-skipped rows.
 2. **Category coverage**. Are all four categories (smoke, edge,
    stress, random) represented in the implemented suite, with at
    least the test counts the plan declared? The four categories
@@ -53,9 +64,19 @@ orchestrator fails the DM3c gate on `BLOCKER:` lines only.
    running the failing test? Reject "test was wrong" rationales
    that turn out to mask real bugs.
 8. **Scaffolding integrity**. Did DM3c add tests using DM3b's
-   testbench helpers, or did it grow the scaffolding? Growing
-   scaffolding here is a `BLOCKER:` -- the testbench architecture
-   is owned by DM3b's gate.
+   testbench helpers, or did it modify or grow the scaffolding?
+   Scaffolding changes here are a `BLOCKER:` -- the testbench
+   architecture is owned by DM3b's gate.
+9. **Deferred-row discipline**. Is there any category where every
+   planned row was deferred? That is a `BLOCKER:` -- a fully
+   deferred category means the flow has no meaningful execution
+   signal for that class of behavior.
+10. **Checkpoint discipline**. If this is a category checkpoint
+    rather than the final DM3c review, is the just-completed
+    category solid enough that the next category can build on it?
+    If this is the final review, do the category-local test
+    additions compose into a clean end-to-end suite and coverage
+    result without regression?
 
 ## Output
 

@@ -7,6 +7,17 @@ conversation -- the independent-review property depends on you
 bracketing any prior reasoning rather than leaning on it. Do not
 modify the implementation; evaluate it and write the critique file.
 
+This critique runs more than once:
+
+- after each milestone-complete checkpoint, to validate the newly
+  landed implementation slice before the next milestone begins
+- once after the final milestone, as a lighter end-to-end
+  integration/regression check
+
+Determine which milestone was just completed from the plan files,
+review that milestone in detail, and also sanity-check that the new
+work did not regress earlier milestones.
+
 ## Inputs
 
 - `docs/plan/plan.md`
@@ -55,6 +66,11 @@ orchestrator fails the DM2d gate on `BLOCKER:` lines only.
 11. Did the implementation introduce major architectural structures or
     boundaries that are not reflected in DM2c's plan or the DM2a/DM2b
     artifacts?
+12. If this is a milestone critique rather than the final DM2d review,
+    is the just-completed milestone solid enough that the next
+    milestone can safely build on it? If this is the final review,
+    do the milestone-local decisions still compose cleanly
+    end-to-end without regression?
 
 ## Output
 

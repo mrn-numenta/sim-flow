@@ -566,7 +566,10 @@ pipeline-mapping.md, and data-movement.md.
    unit tests.
 5. Verify with cargo build and cargo test as you go.
 
-A separate critique session will review your output.
+Stop after each completed milestone for a paired critique before moving
+to the next milestone. After the final milestone, stop for a final DM2d
+critique that checks end-to-end integration/regression rather than
+acting as the first serious review.
 ```
 
 **Critique prompt (separate critique session):**
@@ -583,8 +586,11 @@ evaluate:
 - Does the implementation preserve target-sensitive and plan-sensitive
   structural decisions rather than drifting away from them?
 - Does the implementation stay within the DM2d scope defined by the plan?
+- Is the just-completed milestone sound enough to support the next one,
+  or, on the final critique, do the milestone-local decisions compose
+  cleanly end-to-end?
 
-Write findings to .sim-flow/critiques/DM2d-critique.md. Prefix unresolved
+Write findings to docs/critiques/DM2d-critique.md. Prefix unresolved
 issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
 ```
 
@@ -594,7 +600,13 @@ issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
 2. `cargo build` succeeds
 3. `cargo test` passes (at minimum elaboration test)
 4. Source contains a ConnectivityPlan
-5. `.sim-flow/critiques/DM2d-critique.md` exists without blockers
+5. `docs/critiques/DM2d-critique.md` exists without blockers
+
+**Re-entry / cadence:** DM2d is intentionally iterative. After each
+milestone-complete checkpoint, the orchestrator should run the critique
+before allowing the next milestone to begin. After the final milestone,
+run one last DM2d critique as the end-to-end integration/regression
+gate.
 
 ---
 
@@ -650,7 +662,7 @@ analysis docs and evaluate:
 2. The plan contains `## Testbench`, `## Smoke`, `## Edge`,
    `## Stress`, `## Random`, `## Coverage`, and `## Traceability`
    sections
-3. `.sim-flow/critiques/DM3a-critique.md` exists without blockers
+3. `docs/critiques/DM3a-critique.md` exists without blockers
 
 ---
 
@@ -699,7 +711,7 @@ evaluate:
 - Do payload and port usages match the model and analysis docs?
 - Did DM3b stay out of DM3c territory?
 
-Write findings to .sim-flow/critiques/DM3b-critique.md. Prefix unresolved
+Write findings to docs/critiques/DM3b-critique.md. Prefix unresolved
 issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
 ```
 
@@ -708,7 +720,7 @@ issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
 1. Testbench source files exist
 2. `cargo build` succeeds
 3. The basic smoke test exists and passes
-4. `.sim-flow/critiques/DM3b-critique.md` exists without blockers
+4. `docs/critiques/DM3b-critique.md` exists without blockers
 
 ---
 
@@ -727,38 +739,47 @@ coverage targets.
 You are executing step DM3c (Test Execution and Coverage) of the Direct
 Modeling Flow.
 
-Read the step instructions provided. Read docs/test-plan.md.
+Read the step instructions provided. Read docs/plan/test-plan.md.
 
 1. Implement planned tests category by category: Smoke, then Edge, then
    Stress, then Random.
 2. Use the DM3b testbench scaffolding; if the scaffolding is wrong, flag
    it rather than silently redesigning it here.
 3. Run tests, fix design or test bugs as needed, and mark completed rows
-   in docs/test-plan.md.
+   in docs/plan/test-plan.md.
 4. Measure coverage with the plan's `cargo-tarpaulin` strategy and meet
    the declared threshold.
 5. If coverage is below threshold, add tests or document concrete
    exclusions in the plan.
 
-Stop when all planned tests are resolved and the coverage target is met. A
-separate critique session will review your output.
+Stop after each completed category for a paired critique before moving
+to the next category. After the final category, full-suite rerun, and
+coverage pass, stop for a final DM3c critique that checks end-to-end
+regression and coverage closure rather than acting as the first serious
+review.
 ```
 
 **Critique prompt (separate critique session):**
 
 ```text
 You are a critique session reviewing the work produced by the DM3c work
-session. Read the test sources, coverage report, and docs/test-plan.md
+session. Read the test sources, coverage report, and
+docs/plan/test-plan.md
 and evaluate:
-- Are all plan rows resolved or explicitly excluded?
+- Are all plan rows resolved or explicitly deferred with a concrete
+  `defer reason:`?
 - Are all four categories represented in the implemented suite?
 - Do tests pass end-to-end, and are random tests reproducible?
 - Is coverage at or above the plan's threshold?
 - Are uncovered lines justified with concrete exclusions?
 - Did any design bugs found during testing get properly fixed and
   re-verified?
+- Were the DM3b testbench helpers preserved rather than modified here?
+- Is the just-completed category sound enough to support the next one,
+  or, on the final critique, do the category-local additions compose
+  cleanly end-to-end?
 
-Write findings to .sim-flow/critiques/DM3c-critique.md. Prefix unresolved
+Write findings to docs/critiques/DM3c-critique.md. Prefix unresolved
 issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
 ```
 
@@ -766,14 +787,18 @@ issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
 
 1. `cargo test` passes (all tests)
 2. Coverage measurement exists (coverage report file)
-3. Coverage >= 90% or documented exclusions
-4. `docs/test-plan.md` has completed checklist entries
-5. `.sim-flow/critiques/DM3c-critique.md` exists without blockers
+3. Coverage meets the plan's declared threshold, with any uncovered lines
+   either tested or documented in `## Coverage > Exclusions`
+4. `docs/plan/test-plan.md` has completed or explicitly deferred
+   checklist entries
+5. `docs/critiques/DM3c-critique.md` exists without blockers
 
 **Re-entry:** If the test plan is large, DM3c may need multiple sessions.
-The orchestrator detects "gate failed due to incomplete test plan coverage"
-and offers to re-enter DM3c. Each re-entry session picks up where the
-previous left off by reading the test plan checklist.
+The orchestrator should run a critique after each completed category
+before allowing the next category to begin. Each re-entry session picks
+up where the previous left off by reading the test plan checklist. After
+the final category, run one last DM3c critique as the end-to-end
+coverage/regression gate.
 
 ---
 
