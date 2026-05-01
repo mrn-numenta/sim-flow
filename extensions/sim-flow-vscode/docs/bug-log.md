@@ -157,3 +157,23 @@ user-visible failures, root causes, and the tests that now guard
   - Guard: `waits for pending conversation persistence before restoring
     after reload` in
     [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).
+
+### Round 8 - Dead Awaiting-Input Restore Regression Tests
+
+- [x] Replies to restored dead auto sessions could be misrouted as
+  direct chat.
+  - Symptom: after reloading the panel while an auto session was
+    waiting for input, the restored transcript still allowed prompt
+    entry and a "continue the flow" reply was sent as unrelated direct
+    panel chat instead of being blocked or routed back to a live
+    session.
+  - Root cause: once the live pump was gone, restored interrupted
+    auto-session transcripts were treated like ordinary API-chat
+    transcripts because prompt-entry gating only checked backend type
+    and live `activePump` ownership.
+  - Guard:
+    - `restores awaiting-input transcript state after provider reload`
+    - `does not treat a reply to a restored dead awaiting-input session
+      as direct chat`
+    in
+    [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).

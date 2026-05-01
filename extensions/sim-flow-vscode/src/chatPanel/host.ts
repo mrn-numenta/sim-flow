@@ -233,6 +233,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
     let conversation = this.readConversation(context.projectDir);
+    if (hasInterruptedAutoSessionTranscript(conversation.transcript)) {
+      conversation = appendNote(
+        conversation,
+        "Session no longer live",
+        "Relaunch the flow from the dashboard or clear the transcript to start a fresh direct chat.",
+      );
+      await this.persistConversation(context.projectDir, conversation);
+      await this.postState(context, conversation);
+      return;
+    }
 
     if (!supportsPanelTransport(context.source)) {
       conversation = appendNote(
@@ -526,6 +536,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     conversation: ChatConversationState,
   ): ChatPanelState {
     const tokenTotals = summarizeTokenEstimates(conversation.transcript);
+    const hasInterruptedAutoSession =
+      this.activePump?.projectDir !== context.projectDir &&
+      hasInterruptedAutoSessionTranscript(conversation.transcript);
     const awaitingPumpInput =
       !!this.activePump &&
       this.activePump.projectDir === context.projectDir &&
@@ -539,7 +552,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       (!!this.activePump &&
         this.activePump.projectDir === context.projectDir &&
         this.activePump.awaitingInput) ||
-      !isTerminalLlmSource(context.source);
+      (!isTerminalLlmSource(context.source) && !hasInterruptedAutoSession);
     return {
       mode: "live",
       projectLabel: context.projectLabel,
@@ -565,7 +578,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       statusLine: context.statusLine,
       notice: awaitingPumpInput
         ? "sim-flow is waiting for your next reply in this session."
-        : buildNotice(context, isStreaming),
+        : hasInterruptedAutoSession
+          ? "This restored sim-flow session is no longer live. Relaunch the flow from the dashboard or clear the transcript to start a fresh direct chat."
+          : buildNotice(context, isStreaming),
       totalInputTokensEstimate: tokenTotals.input,
       totalOutputTokensEstimate: tokenTotals.output,
       transcript: filterPresentationEntries(conversation.transcript),
@@ -1084,6 +1099,18 @@ function buildNotice(context: PanelContext, isStreaming: boolean): string {
     return `Ollama chat is ready at \`${baseUrl}\`.`;
   }
   return `${context.sourceLabel} chat is ready. Enter a prompt below to start the conversation.`;
+}
+
+function hasInterruptedAutoSessionTranscript(
+  transcript: ChatConversationState["transcript"],
+): boolean {
+  return transcript.some(
+    (entry) =>
+      entry.kind === "note" &&
+      entry.body.includes(
+        "Stopped the running sim-flow session because the chat panel was reloaded or closed.",
+      ),
+  );
 }
 
 type PumpChunk =

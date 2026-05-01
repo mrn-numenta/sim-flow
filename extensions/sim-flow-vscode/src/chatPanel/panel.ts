@@ -180,6 +180,7 @@ function transcript(entries: ChatTranscriptEntry[]): HTMLElement {
 
 function composer(state: ChatPanelState): HTMLElement {
   const root = section("composer");
+  const interruptedSession = isInterruptedSessionRestore(state);
   const label = section(
     "composer-header",
     el("div", { class: "composer-title" }, "Message"),
@@ -188,7 +189,9 @@ function composer(state: ChatPanelState): HTMLElement {
       { class: "composer-subtitle" },
       state.supportsPromptEntry
         ? `Target: ${state.sessionLabel}`
-        : "Switch to an API backend to enable direct chat here.",
+        : interruptedSession
+          ? "Relaunch the flow or clear the transcript to start a fresh direct chat."
+          : "Switch to an API backend to enable direct chat here.",
     ),
   );
 
@@ -196,7 +199,9 @@ function composer(state: ChatPanelState): HTMLElement {
   area.className = "composer-input";
   area.placeholder = state.supportsPromptEntry
     ? "Ask a question about the current project, request a code change, or continue the conversation here."
-    : "This backend runs in a terminal, not in the panel chat.";
+    : interruptedSession
+      ? "This restored flow session is no longer live."
+      : "This backend runs in a terminal, not in the panel chat.";
   area.value = ui.draft;
   area.disabled = !state.supportsPromptEntry || state.isStreaming;
   area.addEventListener("input", () => {
@@ -280,6 +285,10 @@ function isNearBottom(node: HTMLElement): boolean {
 
 function canSend(state: ChatPanelState): boolean {
   return state.supportsPromptEntry && !state.isStreaming && ui.draft.trim().length > 0;
+}
+
+function isInterruptedSessionRestore(state: ChatPanelState): boolean {
+  return state.notice.includes("Relaunch the flow from the dashboard");
 }
 
 function titleBlock(title: string, subtitle: string): HTMLElement {
