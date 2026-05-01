@@ -51,8 +51,21 @@ function stageFilter(src) {
   return basename(src).endsWith(".vsix") ? false : true;
 }
 
-function linkNodeModules() {
-  fs.symlinkSync(join(extDir, "node_modules"), join(stageDir, "node_modules"), "junction");
+function stageRuntimeNodeModules() {
+  const runtimePackages = ["better-sqlite3", "bindings", "file-uri-to-path", "smol-toml"];
+  const stageNodeModules = join(stageDir, "node_modules");
+  fs.mkdirSync(stageNodeModules, { recursive: true });
+  for (const pkg of runtimePackages) {
+    fs.cpSync(join(extDir, "node_modules", pkg), join(stageNodeModules, pkg), {
+      recursive: true,
+    });
+  }
+  const betterSqlitePkgPath = join(stageNodeModules, "better-sqlite3", "package.json");
+  const betterSqlitePkg = JSON.parse(fs.readFileSync(betterSqlitePkgPath, "utf8"));
+  if (betterSqlitePkg.dependencies) {
+    delete betterSqlitePkg.dependencies["prebuild-install"];
+  }
+  writePkg(betterSqlitePkgPath, betterSqlitePkg);
 }
 
 function prepareStage() {
@@ -66,7 +79,7 @@ function prepareStage() {
     }
     fs.cpSync(src, join(stageDir, entry), { recursive: true, filter: stageFilter });
   }
-  linkNodeModules();
+  stageRuntimeNodeModules();
 }
 
 function vsceExecutable() {
@@ -112,14 +125,18 @@ if (bundle.status !== 0) {
 
 fs.rmSync(outputPath, { force: true });
 
-const result = spawnSync(vsceExecutable(), ["package", "--out", outputPath], {
+const result = spawnSync(
+  vsceExecutable(),
+  ["package", "--follow-symlinks", "--out", outputPath],
+  {
   cwd: stageDir,
   env: {
     ...process.env,
     SIM_FOUNDATION_ROOT: repoRoot,
   },
   stdio: "inherit",
-});
+  },
+);
 if (result.status !== 0) {
   process.exit(result.status ?? 1);
 }

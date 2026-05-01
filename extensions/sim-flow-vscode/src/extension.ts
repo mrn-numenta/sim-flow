@@ -17,16 +17,30 @@ import {
 import { findProjectCandidates, pickProject, resolveProjectDir } from "./context";
 import { registerChatParticipant } from "./participant";
 import { SimFlowTerminal } from "./terminal";
+import {
+  CHAT_PANEL_CONTAINER_ID,
+  CHAT_PANEL_VIEW_ID,
+  ChatPanelProvider,
+} from "./chatPanel/host";
 import { DashboardHost } from "./webview/host";
 
 const dashboardHosts = new Map<string, DashboardHost>();
 const terminals = new Map<string, SimFlowTerminal>();
+let chatPanelProvider: ChatPanelProvider | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   console.log("sim-flow: extension activated");
   setBundledRoot(context.extensionUri.fsPath);
+  chatPanelProvider = new ChatPanelProvider(
+    context.extensionUri,
+    context.workspaceState,
+    context.secrets,
+  );
 
   context.subscriptions.push(
+    chatPanelProvider,
+    vscode.window.registerWebviewViewProvider(CHAT_PANEL_VIEW_ID, chatPanelProvider),
+    vscode.commands.registerCommand("sim-flow.openChatPanel", () => openChatPanel()),
     vscode.commands.registerCommand("sim-flow.openDashboard", () => openDashboard(context)),
     vscode.commands.registerCommand("sim-flow.runStep", (step: unknown, projectDir?: unknown) =>
       runStepCommand(step, "runStep", asString(projectDir)),
@@ -86,6 +100,18 @@ export function activate(context: vscode.ExtensionContext): void {
 export function deactivate(): void {
   disposeAllResources();
   console.log("sim-flow: extension deactivated");
+}
+
+async function openChatPanel(): Promise<void> {
+  const commandId = `workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`;
+  try {
+    await vscode.commands.executeCommand(commandId);
+  } catch (error) {
+    console.warn(`sim-flow: failed to reveal chat panel via ${commandId}`, error);
+    void vscode.window.showErrorMessage(
+      'sim-flow: unable to reveal the chat panel automatically. Try "View: Open View" and select "sim-flow Chat".',
+    );
+  }
 }
 
 function disposeAllResources(): void {
@@ -552,11 +578,13 @@ async function runFlowChatCommand(
   specPath: string | undefined,
   projectDirHint: string | undefined,
 ): Promise<void> {
-  const projectFlag = projectDirHint ? ` --project ${shellQuote(projectDirHint)}` : "";
-  const trimmedSpec = specPath?.trim() ?? "";
-  const specFlag = trimmedSpec.length > 0 ? ` --spec ${shellQuote(trimmedSpec)}` : "";
-  const query = `@sim-flow /auto${projectFlag}${specFlag}`;
-  await openChatWithQuery(query);
+  if (!chatPanelProvider) {
+    await vscode.window.showErrorMessage(
+      "sim-flow: chat panel is not available yet. Reload the window and try again.",
+    );
+    return;
+  }
+  await chatPanelProvider.launchAutoSession(specPath, projectDirHint);
 }
 
 /**

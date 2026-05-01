@@ -35,6 +35,7 @@ import {
   LlmError,
   type LlmSource,
 } from "../llm";
+import { estimateMessagesTokens } from "../llm/tokenEstimate";
 import type {
   Event as ProtocolEvent,
   HostEvent,
@@ -93,6 +94,7 @@ export interface PumpSettleResult {
 export interface PumpRenderer {
   markdown(text: string): void;
   reference?(uri: vscode.Uri, label?: string): void;
+  requestTokensEstimate?(tokens: number): void;
 }
 
 /**
@@ -497,6 +499,7 @@ export class SessionPump {
         content: BREVITY_DIRECTIVE,
       });
     }
+    this.currentRenderer?.requestTokensEstimate?.(estimateMessagesTokens(messages));
     const tools = event.tools?.map((t) => ({
       name: t.name,
       description: t.description,

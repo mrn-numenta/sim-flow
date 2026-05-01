@@ -1,0 +1,65 @@
+# sim-flow VS Code Bug Log
+
+## Overview
+
+This log tracks bugs found during dashboard/chat-panel testing and the
+corresponding fixes. It is intentionally short and focused on
+user-visible failures, root causes, and the tests that now guard
+ against regression.
+
+## 2026-05-01
+
+### Round 1 - Stop/Resume Harness
+
+- [x] Direct-response stop note could be lost after cancellation.
+  - Symptom: stopping an in-flight direct panel reply could drop the
+    "Stopping response" note from the persisted conversation.
+  - Root cause: the direct-response path persisted a stale local
+    conversation snapshot in `finally`, overwriting the stop note added
+    concurrently.
+  - Guard: `stops an in-flight direct panel reply without losing the
+    stop note` in
+    [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).
+
+- [x] `canStop` stayed true after a session had already ended or been
+  stopped.
+  - Symptom: the panel header and stop affordance still behaved as if a
+    session were running after completion/cancellation.
+  - Root cause: `activePump` was cleared only after posting the final
+    state update.
+  - Guard: stop/relaunch and resume scenarios in
+    [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).
+
+### Round 2 - Mode-Switching Regression Tests
+
+- [x] The chat panel stayed pinned to the old project during an active
+  auto session.
+  - Symptom: switching the active project while auto was running kept
+    the panel on the old project's transcript and header state.
+  - Root cause: panel context resolution preferred `activePump` project
+    ownership over the current active project and did not reconcile
+    project switches as explicit transitions.
+  - Guard: `switches projects during an active auto session and stops
+    the old session` in
+    [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).
+
+- [x] LLM source changes did not stop and relaunch active auto
+  sessions.
+  - Symptom: changing `sim-flow.llm.source` during an active session
+    left the old backend running instead of switching over.
+  - Root cause: configuration change listeners only refreshed rendered
+    state; they did not reconcile active session ownership or relaunch
+    with the new backend settings.
+  - Guard: `switches llm source by stopping and relaunching the active
+    auto session` in
+    [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).
+
+- [x] Duplicate Play in the same effective session surfaced an error
+  instead of acting as a no-op.
+  - Symptom: pressing Play again during the same active auto session
+    produced a "Session already active" transcript error.
+  - Root cause: duplicate launches were treated the same as conflicting
+    launches; there was no equivalence check for same-project,
+    same-source, same-spec sessions.
+  - Guard: `ignores duplicate Play for the same active auto session` in
+    [src/mockFlowHarness.test.ts](../src/mockFlowHarness.test.ts).

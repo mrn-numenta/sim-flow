@@ -19,5 +19,13 @@
     "resolveJsonModule": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "out", "src/**/*.test.ts", "src/webview/panel.ts"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "out",
+    "src/**/*.test.ts",
+    "src/webview/panel.ts",
+    "src/chatPanel/panel.ts",
+    "src/chatPanel/renderMarkdown.ts"
+  ]
 }

@@ -94,13 +94,31 @@ export class OpenAiCompatibleBackend implements LlmBackend {
     }
 
     const controller = new AbortController();
-    const res = await doFetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-      signal: controller.signal,
+    const cancelSubscription = token.onCancellationRequested?.(() => {
+      controller.abort();
     });
+    let res: Response;
+    try {
+      res = await doFetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      cancelSubscription?.dispose();
+      if (token.isCancellationRequested || isAbortError(err)) {
+        throw new LlmError("cancelled", `${this.options.name} request cancelled.`);
+      }
+      throw new LlmError(
+        "http",
+        `${this.options.name} request failed: ${(err as Error).message ?? String(err)}`,
+        undefined,
+        err,
+      );
+    }
     if (!res.ok) {
+      cancelSubscription?.dispose();
       const detail = await safeText(res);
       throw new LlmError(
         "http",
@@ -180,12 +198,17 @@ export class OpenAiCompatibleBackend implements LlmBackend {
       if (err instanceof LlmError) {
         throw err;
       }
+      if (token.isCancellationRequested || isAbortError(err)) {
+        throw new LlmError("cancelled", `${this.options.name} stream cancelled.`);
+      }
       throw new LlmError(
         "http",
         `${this.options.name} stream error: ${(err as Error).message ?? String(err)}`,
         undefined,
         err,
       );
+    } finally {
+      cancelSubscription?.dispose();
     }
   }
 
@@ -207,6 +230,10 @@ export class OpenAiCompatibleBackend implements LlmBackend {
     }
     return key;
   }
+}
+
+function isAbortError(err: unknown): boolean {
+  return !!err && typeof err === "object" && (err as { name?: unknown }).name === "AbortError";
 }
 
 export function extractOpenAiText(json: unknown): string {

@@ -99,6 +99,7 @@ export interface LlmTool {
 /** Abstract cancellation token compatible with vscode.CancellationToken. */
 export interface CancellationLike {
   isCancellationRequested: boolean;
+  onCancellationRequested?(listener: () => void): { dispose(): void } | void;
 }
 
 export interface LlmBackend {

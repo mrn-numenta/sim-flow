@@ -96,6 +96,7 @@ export function enumerateProjectDocuments(input: EnumerateInput): DocumentEntry[
               category: "work-artifact",
               step: stepId,
               bytes: stats?.size ?? null,
+              modifiedAt: stats?.mtime.toISOString() ?? null,
               exists: stats !== null,
             });
             added++;
@@ -108,6 +109,7 @@ export function enumerateProjectDocuments(input: EnumerateInput): DocumentEntry[
             category: "work-artifact",
             step: stepId,
             bytes: null,
+            modifiedAt: null,
             exists: false,
           });
         }
@@ -121,6 +123,7 @@ export function enumerateProjectDocuments(input: EnumerateInput): DocumentEntry[
         category: "work-artifact",
         step: stepId,
         bytes: stats?.size ?? null,
+        modifiedAt: stats?.mtime.toISOString() ?? null,
         exists: stats !== null,
       });
     }
@@ -135,6 +138,7 @@ export function enumerateProjectDocuments(input: EnumerateInput): DocumentEntry[
         category: "critique",
         step: stepId,
         bytes: critiqueStats.size,
+        modifiedAt: critiqueStats.mtime.toISOString(),
         exists: true,
       });
     }
@@ -153,6 +157,7 @@ export function enumerateProjectDocuments(input: EnumerateInput): DocumentEntry[
         relPath: ".sim-flow/source-spec-toc.md",
         category: "source-spec",
         bytes: tocStats.size,
+        modifiedAt: tocStats.mtime.toISOString(),
         exists: true,
       });
     }
@@ -165,6 +170,7 @@ export function enumerateProjectDocuments(input: EnumerateInput): DocumentEntry[
           relPath: `.sim-flow/source-spec.${ext}`,
           category: "source-spec",
           bytes: stats.size,
+          modifiedAt: stats.mtime.toISOString(),
           exists: true,
         });
       }

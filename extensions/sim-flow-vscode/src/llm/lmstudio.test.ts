@@ -8,6 +8,29 @@ function noCancel() {
   return { isCancellationRequested: false };
 }
 
+function cancellableToken() {
+  const listeners = new Set<() => void>();
+  return {
+    token: {
+      isCancellationRequested: false,
+      onCancellationRequested(listener: () => void) {
+        listeners.add(listener);
+        return {
+          dispose() {
+            listeners.delete(listener);
+          },
+        };
+      },
+    },
+    cancel() {
+      this.token.isCancellationRequested = true;
+      for (const listener of Array.from(listeners)) {
+        listener();
+      }
+    },
+  };
+}
+
 describe("LMStudioBackend", () => {
   it("posts to the default local endpoint without an Authorization header", async () => {
     let seenUrl: string | undefined;
@@ -220,5 +243,29 @@ describe("LMStudioBackend", () => {
       expect(err).toBeInstanceOf(LlmError);
       expect((err as LlmError).detail).toContain("context length");
     }
+  });
+
+  it("aborts an in-flight fetch when cancelled", async () => {
+    const fakeFetch = (async (_url: string, init: RequestInit) =>
+      await new Promise<Response>((_resolve, reject) => {
+        const signal = init.signal as AbortSignal;
+        signal.addEventListener("abort", () => {
+          reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+        }, { once: true });
+      })) as unknown as typeof fetch;
+
+    const backend = new LMStudioBackend({ fetchImpl: fakeFetch });
+    const cancellation = cancellableToken();
+    const pending = (async () => {
+      for await (const _ of backend.stream([{ role: "user", content: "hi" }], cancellation.token)) {
+        // drain
+      }
+    })();
+    await Promise.resolve();
+    cancellation.cancel();
+
+    await expect(pending).rejects.toMatchObject({
+      kind: "cancelled",
+    });
   });
 });

@@ -87,6 +87,8 @@ export interface DocumentEntry {
   step?: string;
   /** File size in bytes, or null when the file does not exist on disk. */
   bytes: number | null;
+  /** Last modification time in ISO-8601 UTC, or null when missing. */
+  modifiedAt: string | null;
   /** True if the file is on disk; false rows are placeholders for expected outputs. */
   exists: boolean;
 }

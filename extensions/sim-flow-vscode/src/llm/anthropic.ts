@@ -60,20 +60,41 @@ export class AnthropicBackend implements LlmBackend {
       );
     }
 
-    const res = await doFetch(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify(body),
+    const controller = new AbortController();
+    const cancelSubscription = token.onCancellationRequested?.(() => {
+      controller.abort();
     });
+    let res: Response;
+    try {
+      res = await doFetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      cancelSubscription?.dispose();
+      if (token.isCancellationRequested || isAbortError(err)) {
+        throw new LlmError("cancelled", "Anthropic request cancelled.");
+      }
+      throw new LlmError(
+        "http",
+        `Anthropic request failed: ${(err as Error).message ?? String(err)}`,
+        undefined,
+        err,
+      );
+    }
     if (!res.ok) {
+      cancelSubscription?.dispose();
       const detail = await safeText(res);
       throw new LlmError("http", `Anthropic API returned ${res.status} ${res.statusText}`, detail);
     }
     const json = (await res.json()) as unknown;
+    cancelSubscription?.dispose();
     const text = extractAnthropicText(json);
     if (text.length > 0) {
       yield { text };
@@ -179,4 +200,8 @@ async function safeText(res: Response): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+function isAbortError(err: unknown): boolean {
+  return !!err && typeof err === "object" && (err as { name?: unknown }).name === "AbortError";
 }

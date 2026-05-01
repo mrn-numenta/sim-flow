@@ -27,9 +27,31 @@
   "main": "./dist/extension.js",
   "activationEvents": [
     "workspaceContains:**/.sim-flow/state.toml",
-    "onChatParticipant:sim-flow"
+    "onChatParticipant:sim-flow",
+    "onView:simFlow.chatPanel"
   ],
   "contributes": {
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "sim-flow-chat-panel",
+          "title": "sim-flow Chat",
+          "icon": "media/sim-flow-chat-panel.svg"
+        }
+      ]
+    },
+    "views": {
+      "sim-flow-chat-panel": [
+        {
+          "type": "webview",
+          "id": "simFlow.chatPanel",
+          "name": "sim-flow Chat",
+          "icon": "media/sim-flow-chat-panel.svg",
+          "contextualTitle": "sim-flow Chat",
+          "visibility": "visible"
+        }
+      ]
+    },
     "chatParticipants": [
       {
         "id": "sim-flow",
@@ -74,6 +96,10 @@
       }
     ],
     "commands": [
+      {
+        "command": "sim-flow.openChatPanel",
+        "title": "sim-flow: Open Chat Panel"
+      },
       {
         "command": "sim-flow.openDashboard",
         "title": "sim-flow: Open Flow Dashboard"
@@ -264,8 +290,8 @@
     "typecheck:extension": "tsc -p ./ --noEmit",
     "codegen:protocol": "node --import tsx scripts/generate-protocol-types.ts",
     "compile:extension": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --external:better-sqlite3 --outfile=dist/extension.js --log-level=warning",
-    "compile:webview": "esbuild src/webview/panel.ts --bundle --format=iife --outfile=dist/webview/panel.js --target=es2022 --log-level=warning",
-    "compile:webview-types": "tsc -p src/webview/tsconfig.json",
+    "compile:webview": "esbuild src/webview/panel.ts --bundle --format=iife --outfile=dist/webview/panel.js --target=es2022 --log-level=warning && esbuild src/chatPanel/panel.ts --bundle --format=iife --outfile=dist/webview/chatPanel/panel.js --target=es2022 --log-level=warning",
+    "compile:webview-types": "tsc -p src/webview/tsconfig.json && tsc -p src/chatPanel/tsconfig.json",
     "compile": "npm run codegen:protocol && npm run typecheck:extension && npm run compile:extension && npm run compile:webview-types && npm run compile:webview",
     "compile:cargo": "node scripts/compile-cargo.mjs",
     "watch": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --external:better-sqlite3 --outfile=dist/extension.js --watch",
@@ -274,6 +300,8 @@
     "format:check": "prettier --check \"src/**/*.ts\" \"*.json\" \"*.md\"",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:mock-flow": "vitest run src/mockFlowHarness.test.ts",
+    "test:mock-flow:watch": "vitest src/mockFlowHarness.test.ts",
     "package": "node scripts/package-dev.mjs",
     "reload": "node scripts/reload.mjs",
     "vscode:prepublish": "npm run compile",
@@ -292,6 +320,7 @@
     "esbuild": "^0.24.0",
     "eslint": "^9.8.0",
     "json-schema-to-typescript": "^15.0.4",
+    "markdown-it": "^14.1.1",
     "prettier": "^3.3.0",
     "tsx": "^4.21.0",
     "typescript": "^5.5.0",

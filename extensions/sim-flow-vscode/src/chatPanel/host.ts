@@ -1,0 +1,1175 @@
+import * as path from "node:path";
+
+import * as vscode from "vscode";
+
+import { findProjectCandidates, resolveContext, resolveProjectDir } from "../context";
+import { LlmError, type LlmSource, type SecretStorage } from "../llm";
+import { estimateMessagesTokens } from "../llm/tokenEstimate";
+import { type PumpLlmConfig, SessionPump } from "../session/pump";
+import { readFlowState } from "../state/flowState";
+import {
+  isTerminalLlmSource,
+  LLM_SOURCE_LABELS,
+  type LlmSourceTag,
+} from "../webview/messages";
+
+import type {
+  ChatPanelState,
+  HostMessage,
+  WebviewMessage,
+} from "./messages";
+import {
+  appendAssistantChunk,
+  appendAssistantPlaceholder,
+  appendNote,
+  appendUserPrompt,
+  clearConversationState,
+  completeAssistantTurn,
+  createConversationState,
+  filterPresentationEntries,
+  setEntryRequestTokensEstimate,
+  stripToolCallFencesForStreaming,
+  summarizeTokenEstimates,
+  toStoredConversation,
+  type ChatConversationState,
+} from "./state";
+import { buildPanelMessages, streamPanelReply, supportsPanelTransport } from "./session";
+
+export const CHAT_PANEL_VIEW_ID = "simFlow.chatPanel";
+export const CHAT_PANEL_CONTAINER_ID = "sim-flow-chat-panel";
+
+interface DirectResponseState {
+  projectDir: string | null;
+  source: vscode.CancellationTokenSource;
+  sourceTag: LlmSourceTag;
+  model: string;
+}
+
+interface ActivePumpState {
+  projectDir: string;
+  pump: SessionPump;
+  awaitingInput: boolean;
+  assistantId: string | null;
+  pendingPromptEntryId: string | null;
+  pendingRequestTokensEstimate: number | null;
+  currentPhase: string | null;
+  currentTool: string | null;
+  currentArtifact: string | null;
+  sourceTag: LlmSourceTag;
+  model: string;
+  launchSpecPath: string | undefined;
+}
+
+export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable {
+  private view: vscode.WebviewView | undefined;
+  private readonly disposables: vscode.Disposable[] = [];
+  private readonly conversations = new Map<string, ChatConversationState>();
+  private inFlight: DirectResponseState | undefined;
+  private activePump: ActivePumpState | undefined;
+
+  constructor(
+    private readonly extensionUri: vscode.Uri,
+    private readonly workspaceState: vscode.Memento,
+    private readonly secrets: SecretStorage,
+  ) {
+    this.disposables.push(
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (
+          event.affectsConfiguration("sim-flow.llm.source") ||
+          event.affectsConfiguration("sim-flow.llm.model") ||
+          event.affectsConfiguration("sim-flow.llm.verbose") ||
+          event.affectsConfiguration("sim-flow.llm.ollama.baseUrl") ||
+          event.affectsConfiguration("sim-flow.llm.lmstudio.baseUrl")
+        ) {
+          void this.refresh();
+        }
+      }),
+      vscode.window.onDidChangeActiveTextEditor(() => {
+        void this.refresh();
+      }),
+      vscode.workspace.onDidChangeWorkspaceFolders(() => {
+        void this.refresh();
+      }),
+    );
+  }
+
+  dispose(): void {
+    if (this.inFlight) {
+      this.inFlight.source.cancel();
+      this.inFlight = undefined;
+    }
+    this.activePump?.pump.dispose();
+    this.activePump = undefined;
+    this.view = undefined;
+    for (const d of this.disposables) {
+      d.dispose();
+    }
+    this.disposables.length = 0;
+  }
+
+  async resolveWebviewView(
+    webviewView: vscode.WebviewView,
+    _context: vscode.WebviewViewResolveContext<unknown>,
+    _token: vscode.CancellationToken,
+  ): Promise<void> {
+    this.view = webviewView;
+    webviewView.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [
+        vscode.Uri.joinPath(this.extensionUri, "dist", "webview"),
+        vscode.Uri.joinPath(this.extensionUri, "media"),
+      ],
+    };
+    webviewView.webview.html = this.renderHtml(webviewView.webview);
+    webviewView.webview.onDidReceiveMessage(
+      (msg: WebviewMessage) => {
+        void this.onMessage(msg);
+      },
+      undefined,
+      this.disposables,
+    );
+    webviewView.onDidChangeVisibility(
+      () => {
+        if (webviewView.visible) {
+          void this.refresh();
+        }
+      },
+      undefined,
+      this.disposables,
+    );
+    await this.refresh();
+  }
+
+  private async onMessage(msg: WebviewMessage): Promise<void> {
+    switch (msg.type) {
+      case "ready":
+      case "refresh":
+        await this.refresh();
+        return;
+      case "send-prompt":
+        await this.sendPrompt(msg.prompt);
+        return;
+      case "clear-transcript":
+        await this.clearTranscript();
+        return;
+      case "stop-conversation":
+        await this.stopConversation();
+        return;
+      default:
+        return;
+    }
+  }
+
+  private async refresh(): Promise<void> {
+    if (!this.view) {
+      return;
+    }
+    await this.reconcileModeSwitches();
+    const context = await this.readPanelContext();
+    await this.postState(context, this.readConversation(context.projectDir));
+  }
+
+  private async sendPrompt(promptRaw: string): Promise<void> {
+    const prompt = promptRaw.trim();
+    if (prompt.length === 0 || this.inFlight) {
+      return;
+    }
+    const context = await this.readPanelContext();
+    if (
+      this.activePump &&
+      this.activePump.projectDir === context.projectDir &&
+      this.activePump.awaitingInput
+    ) {
+      await this.sendPumpPrompt(context, prompt);
+      return;
+    }
+    let conversation = this.readConversation(context.projectDir);
+
+    if (!supportsPanelTransport(context.source)) {
+      conversation = appendNote(
+        conversation,
+        "Unsupported source",
+        'This panel only drives API backends. Switch `sim-flow.llm.source` to `lmstudio`, `ollama`, `openai`, `anthropic`, or `vscode` to send prompts here.',
+        "error",
+      );
+      await this.persistConversation(context.projectDir, conversation);
+      await this.postState(context, conversation);
+      return;
+    }
+
+    const requestTokensEstimate = estimateMessagesTokens(
+      buildPanelMessages(
+        context,
+        [
+          ...conversation.transcript,
+          {
+            id: "preview-user",
+            kind: "user",
+            title: "You",
+            body: prompt,
+            meta: userMeta(context),
+          },
+        ],
+        context.verbose,
+      ),
+    );
+    const { state: started, assistantId } = appendUserPrompt(
+      conversation,
+      prompt,
+      userMeta(context),
+      assistantMeta(context),
+      requestTokensEstimate,
+    );
+    conversation = started;
+    await this.persistConversation(context.projectDir, conversation);
+
+    const source = new vscode.CancellationTokenSource();
+    this.inFlight = {
+      projectDir: context.projectDir,
+      source,
+      sourceTag: context.source,
+      model: context.model,
+    };
+    await this.postState(context, conversation);
+
+    try {
+      for await (const chunk of streamPanelReply(
+        {
+          source: context.source,
+          model: context.model,
+          verbose: context.verbose,
+          ollamaBaseUrl: context.ollamaBaseUrl,
+          lmstudioBaseUrl: context.lmstudioBaseUrl,
+          secrets: this.secrets,
+        },
+        {
+          projectDir: context.projectDir,
+          currentStep: context.currentStep,
+          transcript: conversation.transcript,
+        },
+        source.token,
+      )) {
+        conversation = appendAssistantChunk(conversation, assistantId, chunk);
+        this.rememberConversation(context.projectDir, conversation);
+        await this.postState(context, conversation);
+      }
+      conversation = completeAssistantTurn(
+        this.readConversation(context.projectDir),
+        assistantId,
+      );
+    } catch (error) {
+      conversation = this.readConversation(context.projectDir);
+      conversation = completeAssistantTurn(
+        conversation,
+        assistantId,
+        "The request failed before the model returned any text.",
+      );
+      if (error instanceof LlmError && error.kind === "cancelled") {
+        conversation = appendNote(
+          conversation,
+          "Response stopped",
+          "Stopped the current response at the user's request.",
+        );
+      } else {
+        conversation = appendNote(
+          conversation,
+          `${context.sourceLabel} error`,
+          formatChatError(error),
+          "error",
+        );
+      }
+    } finally {
+      this.inFlight = undefined;
+      await this.persistConversation(context.projectDir, conversation);
+      await this.postState(context, conversation);
+    }
+  }
+
+  private async clearTranscript(): Promise<void> {
+    if (this.inFlight || this.activePump) {
+      return;
+    }
+    const context = await this.readPanelContext();
+    const conversation = clearConversationState();
+    await this.persistConversation(context.projectDir, conversation);
+    await this.postState(context, conversation);
+  }
+
+  private async stopConversation(): Promise<void> {
+    const context = await this.readPanelContext();
+    let conversation = this.readConversation(context.projectDir);
+
+    if (this.inFlight?.projectDir === context.projectDir) {
+      this.inFlight.source.cancel();
+      conversation = appendNote(
+        conversation,
+        "Stopping response",
+        "Cancellation requested for the current model response.",
+      );
+      await this.persistConversation(context.projectDir, conversation);
+      await this.postState(context, conversation);
+      return;
+    }
+
+    if (this.activePump?.projectDir === context.projectDir) {
+      this.activePump.awaitingInput = false;
+      this.activePump.pump.cancel();
+      conversation = appendNote(
+        conversation,
+        "Stopping session",
+        "Cancellation requested for the running sim-flow session.",
+      );
+      await this.persistConversation(context.projectDir, conversation);
+      await this.postState(context, conversation);
+    }
+  }
+
+  private async readPanelContext(): Promise<PanelContext> {
+    const projectDir = await resolveProjectDirForPanel();
+    const settings = readPanelSettings();
+    const currentStep = projectDir ? await readCurrentStepSafe(projectDir) : null;
+    const projectLabel =
+      projectDir !== null
+        ? path.basename(projectDir)
+        : vscode.workspace.workspaceFolders?.[0]?.name ?? "No project selected";
+
+    return {
+      projectLabel,
+      projectDir,
+      currentStep,
+      source: settings.source,
+      sourceLabel: settings.sourceLabel,
+      model: settings.model,
+      verbose: settings.verbose,
+      ollamaBaseUrl: settings.ollamaBaseUrl,
+      lmstudioBaseUrl: settings.lmstudioBaseUrl,
+      sessionLabel: currentStep ? `${currentStep}.work` : "General chat",
+      statusLine: currentStep
+        ? `Chat with ${settings.sourceLabel} while working on ${currentStep}.`
+        : `Direct chat panel backed by ${settings.sourceLabel}.`,
+    };
+  }
+
+  async launchAutoSession(
+    specPath: string | undefined,
+    projectDirHint: string | undefined,
+  ): Promise<void> {
+    await vscode.commands.executeCommand(
+      `workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`,
+    );
+    const ctx = await resolveContext({
+      projectDir: projectDirHint,
+      showErrors: true,
+    });
+    if (!ctx) {
+      return;
+    }
+
+    const settings = readPanelSettings();
+    const trimmedSpec = normalizeSpecPath(specPath);
+    if (
+      this.activePump &&
+      this.activePump.projectDir === ctx.projectDir &&
+      this.activePump.launchSpecPath === trimmedSpec &&
+      this.activePump.sourceTag === settings.source &&
+      this.activePump.model === settings.model
+    ) {
+      return;
+    }
+
+    if (this.inFlight) {
+      await this.stopDirectResponse(
+        this.inFlight,
+        "Launching flow",
+        "Stopped the current response to launch a sim-flow session from the dashboard.",
+      );
+    }
+    if (this.activePump) {
+      await this.stopActivePumpSession(
+        this.activePump,
+        "Launching new flow",
+        "Stopped the running sim-flow session to launch a new flow.",
+      );
+    }
+
+    await this.startAutoSession(
+      ctx,
+      trimmedSpec,
+      { resetConversation: true },
+    );
+  }
+
+  private async startAutoSession(
+    ctx: { projectDir: string; cli: { binary: string; foundationRoot?: string } },
+    trimmedSpec: string | undefined,
+    options: { resetConversation: boolean; launchTitle?: string; launchBody?: string },
+  ): Promise<void> {
+    const config = vscode.workspace.getConfiguration("sim-flow");
+    const llmConfig = buildPumpLlmConfig(ctx, this.secrets, config);
+    const maxWorkIters = config.get<number>("auto.maxWorkIterations") ?? 3;
+    const maxCritiqueIters = config.get<number>("auto.maxCritiqueIterations") ?? 3;
+
+    const args = ["auto"];
+    if (ctx.cli.foundationRoot) {
+      args.push("--foundation-root", ctx.cli.foundationRoot);
+    }
+    args.push("--project", ctx.projectDir);
+    args.push("--llm-backend", llmConfig.source);
+    if (llmConfig.model) {
+      args.push("--llm-model", llmConfig.model);
+    }
+    args.push("--max-auto-iters", String(maxWorkIters));
+    args.push("--max-critique-iters", String(maxCritiqueIters));
+    if (trimmedSpec) {
+      args.push("--spec", trimmedSpec);
+    } else {
+      args.push("--dm0-interactive");
+    }
+
+    const context = await this.readPanelContextForProject(ctx.projectDir);
+    let conversation = options.resetConversation
+      ? clearConversationState()
+      : this.readConversation(ctx.projectDir);
+    conversation = appendNote(
+      conversation,
+      options.launchTitle ?? "Flow launched from dashboard",
+      options.launchBody ??
+        (trimmedSpec
+          ? `Started sim-flow auto for \`${path.basename(ctx.projectDir)}\` with spec \`${trimmedSpec}\`.`
+          : "Started sim-flow auto without a spec; DM0 will stop for input before the rest of the flow continues."),
+    );
+    await this.persistConversation(ctx.projectDir, conversation);
+    await this.postState(context, conversation);
+
+    this.activePump = {
+      projectDir: ctx.projectDir,
+      pump: new SessionPump(
+        {
+          binary: ctx.cli.binary,
+          args,
+          cwd: ctx.projectDir,
+        },
+        llmConfig,
+      ),
+      awaitingInput: false,
+      assistantId: null,
+      pendingPromptEntryId: null,
+      pendingRequestTokensEstimate: null,
+      currentPhase: null,
+      currentTool: null,
+      currentArtifact: null,
+      sourceTag: llmConfig.source as LlmSourceTag,
+      model: llmConfig.model ?? "",
+      launchSpecPath: trimmedSpec,
+    };
+    void this.drivePumpSession(this.activePump);
+  }
+
+  private buildState(
+    context: PanelContext,
+    conversation: ChatConversationState,
+  ): ChatPanelState {
+    const tokenTotals = summarizeTokenEstimates(conversation.transcript);
+    const awaitingPumpInput =
+      !!this.activePump &&
+      this.activePump.projectDir === context.projectDir &&
+      this.activePump.awaitingInput;
+    const isStreaming =
+      this.inFlight?.projectDir === context.projectDir ||
+      (!!this.activePump &&
+        this.activePump.projectDir === context.projectDir &&
+        !this.activePump.awaitingInput);
+    const supportsPromptEntry =
+      (!!this.activePump &&
+        this.activePump.projectDir === context.projectDir &&
+        this.activePump.awaitingInput) ||
+      !isTerminalLlmSource(context.source);
+    return {
+      mode: "live",
+      projectLabel: context.projectLabel,
+      projectDir: context.projectDir,
+      currentStep: context.currentStep,
+      currentPhase:
+        this.activePump?.projectDir === context.projectDir
+          ? this.activePump.currentPhase
+          : null,
+      currentTool:
+        this.activePump?.projectDir === context.projectDir
+          ? this.activePump.currentTool
+          : null,
+      currentArtifact:
+        this.activePump?.projectDir === context.projectDir
+          ? this.activePump.currentArtifact
+          : null,
+      source: context.source,
+      sourceLabel: context.sourceLabel,
+      model: context.model,
+      verbose: context.verbose,
+      sessionLabel: context.sessionLabel,
+      statusLine: context.statusLine,
+      notice: awaitingPumpInput
+        ? "sim-flow is waiting for your next reply in this session."
+        : buildNotice(context, isStreaming),
+      totalInputTokensEstimate: tokenTotals.input,
+      totalOutputTokensEstimate: tokenTotals.output,
+      transcript: filterPresentationEntries(conversation.transcript),
+      isStreaming,
+      supportsPromptEntry,
+      canStop: !!this.inFlight || !!this.activePump,
+    };
+  }
+
+  private readConversation(projectDir: string | null): ChatConversationState {
+    const key = conversationStorageKey(projectDir);
+    const cached = this.conversations.get(key);
+    if (cached) {
+      return cached;
+    }
+    const stored = this.workspaceState.get<ReturnType<typeof toStoredConversation>>(key);
+    const conversation = createConversationState(stored);
+    this.conversations.set(key, conversation);
+    return conversation;
+  }
+
+  private rememberConversation(
+    projectDir: string | null,
+    conversation: ChatConversationState,
+  ): void {
+    this.conversations.set(conversationStorageKey(projectDir), conversation);
+  }
+
+  private async persistConversation(
+    projectDir: string | null,
+    conversation: ChatConversationState,
+  ): Promise<void> {
+    this.rememberConversation(projectDir, conversation);
+    await this.workspaceState.update(
+      conversationStorageKey(projectDir),
+      toStoredConversation(conversation),
+    );
+  }
+
+  private async postState(
+    context: PanelContext,
+    conversation: ChatConversationState,
+  ): Promise<void> {
+    await this.post({
+      type: "state-update",
+      state: this.buildState(context, conversation),
+    });
+  }
+
+  private async post(message: HostMessage): Promise<void> {
+    await this.view?.webview.postMessage(message);
+  }
+
+  private async sendPumpPrompt(
+    context: PanelContext,
+    prompt: string,
+  ): Promise<void> {
+    if (!this.activePump || this.activePump.projectDir !== context.projectDir) {
+      return;
+    }
+    const started = appendUserPrompt(
+      this.readConversation(context.projectDir),
+      prompt,
+      userMeta(context),
+      assistantMeta(context),
+    );
+    this.activePump.assistantId = started.assistantId;
+    this.activePump.pendingPromptEntryId = started.userId;
+    this.activePump.pendingRequestTokensEstimate = null;
+    this.activePump.awaitingInput = false;
+    await this.persistConversation(context.projectDir, started.state);
+    await this.postState(context, started.state);
+    this.activePump.pump.sendUserMessage(prompt);
+    void this.drivePumpSession(this.activePump);
+  }
+
+  private async drivePumpSession(session: {
+    projectDir: string;
+    pump: SessionPump;
+    awaitingInput: boolean;
+    assistantId: string | null;
+    pendingPromptEntryId: string | null;
+    pendingRequestTokensEstimate: number | null;
+    currentPhase: string | null;
+    currentTool: string | null;
+    currentArtifact: string | null;
+  }): Promise<void> {
+    const renderer = {
+      markdown: (text: string) => {
+        this.appendPumpMarkdown(session, text);
+      },
+      requestTokensEstimate: (tokens: number) => {
+        this.recordPumpRequestTokensEstimate(session, tokens);
+      },
+    };
+    const result = await session.pump.settle(renderer);
+    if (this.activePump !== session) {
+      return;
+    }
+
+    let conversation = this.readConversation(session.projectDir);
+    if (session.assistantId) {
+      conversation = completeAssistantTurn(
+        conversation,
+        session.assistantId,
+        "No response received.",
+      );
+      session.assistantId = null;
+      session.pendingRequestTokensEstimate = null;
+    }
+
+    if (result.status === "awaiting-input") {
+      session.awaitingInput = true;
+      session.pendingPromptEntryId = null;
+      await this.persistConversation(session.projectDir, conversation);
+      await this.postState(await this.readPanelContextForProject(session.projectDir), conversation);
+      return;
+    }
+
+    session.awaitingInput = false;
+    session.pendingPromptEntryId = null;
+    session.pendingRequestTokensEstimate = null;
+    session.currentTool = null;
+    session.currentArtifact = null;
+    if (result.endReason === "cancelled") {
+      conversation = appendNote(
+        conversation,
+        "Session stopped",
+        "Stopped the running sim-flow session.",
+      );
+    } else if (result.endMessage && result.endMessage.trim().length > 0) {
+      conversation = appendNote(
+        conversation,
+        "Session ended",
+        result.endMessage,
+      );
+    }
+    this.activePump = undefined;
+    await this.persistConversation(session.projectDir, conversation);
+    await this.postState(await this.readPanelContextForProject(session.projectDir), conversation);
+  }
+
+  private appendPumpMarkdown(
+    session: {
+      projectDir: string;
+      assistantId: string | null;
+      pendingRequestTokensEstimate: number | null;
+      currentPhase: string | null;
+      currentTool: string | null;
+      currentArtifact: string | null;
+    },
+    text: string,
+  ): void {
+    if (!this.activePump || this.activePump !== session || text.length === 0) {
+      return;
+    }
+    let conversation = this.readConversation(session.projectDir);
+    const classified = classifyPumpMarkdown(text);
+    if (classified.kind === "ignore") {
+      return;
+    }
+    if (classified.kind === "phase-sequence") {
+      session.currentPhase = classified.currentPhase;
+      void this.postStateForProject(session.projectDir, conversation);
+      return;
+    }
+    if (classified.kind === "phase-changed") {
+      session.currentPhase = classified.currentPhase;
+      void this.postStateForProject(session.projectDir, conversation);
+      return;
+    }
+    if (classified.kind === "tool-activity") {
+      session.currentTool = classified.summary;
+      void this.postStateForProject(session.projectDir, conversation);
+      return;
+    }
+    if (classified.kind === "artifact-activity") {
+      session.currentArtifact = classified.summary;
+      void this.postStateForProject(session.projectDir, conversation);
+      return;
+    }
+    if (classified.kind === "note") {
+      conversation = appendNote(
+        conversation,
+        classified.title,
+        classified.body,
+        classified.tone,
+      );
+      this.rememberConversation(session.projectDir, conversation);
+      void this.postStateForProject(session.projectDir, conversation);
+      return;
+    }
+    if (!session.assistantId) {
+      const started = appendAssistantPlaceholder(
+        conversation,
+        "sim-flow",
+        "orchestrator",
+        session.pendingRequestTokensEstimate ?? undefined,
+      );
+      session.assistantId = started.assistantId;
+      session.pendingRequestTokensEstimate = null;
+      conversation = started.state;
+    }
+    conversation = appendAssistantChunk(
+      conversation,
+      session.assistantId,
+      classified.text,
+    );
+    this.rememberConversation(session.projectDir, conversation);
+    void this.postStateForProject(session.projectDir, conversation);
+  }
+
+  private recordPumpRequestTokensEstimate(
+    session: {
+      projectDir: string;
+      assistantId: string | null;
+      pendingPromptEntryId: string | null;
+      pendingRequestTokensEstimate: number | null;
+    },
+    tokens: number,
+  ): void {
+    if (!this.activePump || this.activePump !== session) {
+      return;
+    }
+    let conversation = this.readConversation(session.projectDir);
+    if (session.pendingPromptEntryId) {
+      conversation = setEntryRequestTokensEstimate(
+        conversation,
+        session.pendingPromptEntryId,
+        tokens,
+      );
+      session.pendingPromptEntryId = null;
+    } else if (session.assistantId) {
+      conversation = setEntryRequestTokensEstimate(
+        conversation,
+        session.assistantId,
+        tokens,
+      );
+    } else {
+      session.pendingRequestTokensEstimate = tokens;
+      return;
+    }
+    this.rememberConversation(session.projectDir, conversation);
+    void this.postStateForProject(session.projectDir, conversation);
+  }
+
+  private async readPanelContextForProject(projectDir: string): Promise<PanelContext> {
+    const base = await this.readPanelContext();
+    if (base.projectDir === projectDir) {
+      return base;
+    }
+    const currentStep = await readCurrentStepSafe(projectDir);
+    return {
+      ...base,
+      projectDir,
+      projectLabel: path.basename(projectDir),
+      currentStep,
+      sessionLabel: currentStep ? `${currentStep}.work` : "General chat",
+      statusLine: currentStep
+        ? `Chat with ${base.sourceLabel} while working on ${currentStep}.`
+        : `Direct chat panel backed by ${base.sourceLabel}.`,
+    };
+  }
+
+  private async postStateForProject(
+    projectDir: string,
+    conversation: ChatConversationState,
+  ): Promise<void> {
+    await this.postState(await this.readPanelContextForProject(projectDir), conversation);
+  }
+
+  private async reconcileModeSwitches(): Promise<void> {
+    const requestedProjectDir = await resolveProjectDirForPanel();
+    const settings = readPanelSettings();
+
+    if (
+      this.inFlight &&
+      requestedProjectDir !== this.inFlight.projectDir
+    ) {
+      await this.stopDirectResponse(
+        this.inFlight,
+        "Project switched",
+        `Stopped the current response because the active project changed${requestedProjectDir ? ` to \`${path.basename(requestedProjectDir)}\`` : ""}.`,
+      );
+    } else if (
+      this.inFlight &&
+      requestedProjectDir === this.inFlight.projectDir &&
+      (this.inFlight.sourceTag !== settings.source || this.inFlight.model !== settings.model)
+    ) {
+      await this.stopDirectResponse(
+        this.inFlight,
+        "LLM source switched",
+        `Stopped the current response because the LLM source changed to \`${settings.sourceLabel}\`.`,
+      );
+    }
+
+    if (
+      this.activePump &&
+      requestedProjectDir !== this.activePump.projectDir
+    ) {
+      await this.stopActivePumpSession(
+        this.activePump,
+        "Project switched",
+        `Stopped the running sim-flow session because the active project changed${requestedProjectDir ? ` to \`${path.basename(requestedProjectDir)}\`` : ""}.`,
+      );
+      return;
+    }
+
+    if (
+      this.activePump &&
+      requestedProjectDir === this.activePump.projectDir &&
+      (this.activePump.sourceTag !== settings.source || this.activePump.model !== settings.model)
+    ) {
+      const relaunch = {
+        projectDir: this.activePump.projectDir,
+        launchSpecPath: this.activePump.launchSpecPath,
+      };
+      await this.stopActivePumpSession(
+        this.activePump,
+        "LLM source switched",
+        `Stopped the running sim-flow session because the LLM source changed to \`${settings.sourceLabel}\`. Relaunching on the new source.`,
+      );
+      const ctx = await resolveContext({
+        projectDir: relaunch.projectDir,
+        showErrors: true,
+      });
+      if (!ctx) {
+        return;
+      }
+      await this.startAutoSession(
+        ctx,
+        relaunch.launchSpecPath,
+        {
+          resetConversation: false,
+          launchTitle: "LLM source switched",
+          launchBody: `Relaunched sim-flow auto on the new source \`${settings.sourceLabel}\`.`,
+        },
+      );
+    }
+  }
+
+  private async stopDirectResponse(
+    inFlight: DirectResponseState,
+    title: string,
+    body: string,
+  ): Promise<void> {
+    inFlight.source.cancel();
+    this.inFlight = undefined;
+    const conversation = appendNote(
+      this.readConversation(inFlight.projectDir),
+      title,
+      body,
+    );
+    await this.persistConversation(inFlight.projectDir, conversation);
+  }
+
+  private async stopActivePumpSession(
+    session: ActivePumpState,
+    title: string,
+    body: string,
+  ): Promise<void> {
+    session.awaitingInput = false;
+    session.pump.cancel();
+    this.activePump = undefined;
+    const conversation = appendNote(
+      this.readConversation(session.projectDir),
+      title,
+      body,
+    );
+    await this.persistConversation(session.projectDir, conversation);
+  }
+
+  private renderHtml(webview: vscode.Webview): string {
+    const nonce = randomNonce();
+    const scriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "dist", "webview", "chatPanel", "panel.js"),
+    );
+    const styleUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "chat-panel.css"),
+    );
+    const csp = [
+      "default-src 'none'",
+      `img-src ${webview.cspSource} data:`,
+      `style-src ${webview.cspSource} 'unsafe-inline'`,
+      `script-src 'nonce-${nonce}'`,
+      `font-src ${webview.cspSource}`,
+    ].join("; ");
+
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="${csp}" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="${styleUri}" />
+    <title>sim-flow Chat</title>
+  </head>
+  <body>
+    <main id="app"></main>
+    <script nonce="${nonce}" src="${scriptUri}"></script>
+  </body>
+</html>`;
+  }
+}
+
+interface PanelContext {
+  projectLabel: string;
+  projectDir: string | null;
+  currentStep: string | null;
+  source: LlmSourceTag;
+  sourceLabel: string;
+  model: string;
+  verbose: boolean;
+  ollamaBaseUrl: string;
+  lmstudioBaseUrl: string;
+  sessionLabel: string;
+  statusLine: string;
+}
+
+function readPanelSettings(): {
+  source: LlmSourceTag;
+  sourceLabel: string;
+  model: string;
+  verbose: boolean;
+  ollamaBaseUrl: string;
+  lmstudioBaseUrl: string;
+} {
+  const config = vscode.workspace.getConfiguration("sim-flow");
+  const source = (config.get<string>("llm.source") ?? "vscode") as LlmSourceTag;
+  return {
+    source,
+    sourceLabel: LLM_SOURCE_LABELS[source] ?? source,
+    model: (config.get<string>("llm.model") ?? "").trim(),
+    verbose: config.get<boolean>("llm.verbose") ?? true,
+    ollamaBaseUrl: (config.get<string>("llm.ollama.baseUrl") ?? "").trim(),
+    lmstudioBaseUrl: (config.get<string>("llm.lmstudio.baseUrl") ?? "").trim(),
+  };
+}
+
+function normalizeSpecPath(specPath: string | undefined): string | undefined {
+  const trimmed = specPath?.trim() ?? "";
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+async function resolveProjectDirForPanel(): Promise<string | null> {
+  const direct = resolveProjectDir();
+  if (direct) {
+    return direct;
+  }
+  const candidates = await findProjectCandidates();
+  return candidates[0] ?? null;
+}
+
+async function readCurrentStepSafe(projectDir: string): Promise<string | null> {
+  try {
+    const state = await readFlowState(projectDir);
+    return state.current_step;
+  } catch {
+    return null;
+  }
+}
+
+function buildNotice(context: PanelContext, isStreaming: boolean): string {
+  if (isStreaming) {
+    return `${context.sourceLabel} is responding. The transcript updates in place as chunks arrive.`;
+  }
+  if (isTerminalLlmSource(context.source)) {
+    return 'This panel does not drive terminal-only backends. Switch `sim-flow.llm.source` to `lmstudio` or another API backend to chat here.';
+  }
+  if (context.source === "lmstudio") {
+    const modelDetail = context.model.length > 0 ? `model \`${context.model}\`` : "the currently loaded model";
+    const baseUrl = context.lmstudioBaseUrl || "http://localhost:1234/v1";
+    return `LM Studio chat is ready at \`${baseUrl}\`, using ${modelDetail}.`;
+  }
+  if (context.source === "ollama") {
+    const baseUrl = context.ollamaBaseUrl || "http://localhost:11434/v1";
+    return `Ollama chat is ready at \`${baseUrl}\`.`;
+  }
+  return `${context.sourceLabel} chat is ready. Enter a prompt below to start the conversation.`;
+}
+
+type PumpChunk =
+  | { kind: "assistant"; text: string }
+  | { kind: "note"; title: string; body: string; tone: "info" | "error" }
+  | { kind: "phase-sequence"; currentPhase: string | null }
+  | { kind: "phase-changed"; currentPhase: string }
+  | { kind: "tool-activity"; summary: string }
+  | { kind: "artifact-activity"; summary: string }
+  | { kind: "ignore" };
+
+function classifyPumpMarkdown(text: string): PumpChunk {
+  const trimmed = text.trim();
+  const lines = trimmed.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+  if (trimmed.length === 0) {
+    return { kind: "ignore" };
+  }
+  if (
+    trimmed === "<details>" ||
+    trimmed === "</details>" ||
+    trimmed.startsWith("<summary>")
+  ) {
+    return { kind: "ignore" };
+  }
+  if (lines.length === 1 && trimmed.startsWith("**Step `")) {
+    return noteChunk("Session started", trimmed);
+  }
+  if (lines.length === 1 && trimmed.startsWith("_Phases:_")) {
+    return {
+      kind: "phase-sequence",
+      currentPhase: firstPhaseFromSequence(trimmed),
+    };
+  }
+  if (lines.length === 1 && trimmed.startsWith("_Tool `") && trimmed.endsWith("._")) {
+    return {
+      kind: "tool-activity",
+      summary: toolSummary(trimmed),
+    };
+  }
+  if (lines.length === 1 && trimmed.startsWith("_Wrote `") && trimmed.endsWith("._")) {
+    return {
+      kind: "artifact-activity",
+      summary: artifactSummary(trimmed),
+    };
+  }
+  if (lines.length === 1 && trimmed.startsWith("**Phase:**")) {
+    const currentPhase = phaseFromPhaseChanged(trimmed);
+    return currentPhase
+      ? { kind: "phase-changed", currentPhase }
+      : { kind: "ignore" };
+  }
+  if (lines.length === 1 && /^\*\*`.+`\*\* exited with status /.test(trimmed)) {
+    return noteChunk("Build output", trimmed);
+  }
+  if (
+    trimmed.startsWith("**Gate `") &&
+    lines.slice(1).every((line) => line.startsWith("- "))
+  ) {
+    return noteChunk("Gate result", trimmed);
+  }
+  if (lines.length === 1 && trimmed.startsWith("**Advanced past `")) {
+    return noteChunk("State advanced", trimmed);
+  }
+  if (lines.length === 1 && trimmed.startsWith("_Suggested next:")) {
+    return noteChunk("Suggested next", trimmed);
+  }
+  if (lines.length === 1 && trimmed.startsWith("_LLM source switched:")) {
+    return noteChunk("LLM source switched", trimmed);
+  }
+  if (lines.length === 1 && trimmed.startsWith("**Error**:")) {
+    return noteChunk("Session error", trimmed, "error");
+  }
+  if (lines.length === 1 && trimmed.startsWith("**Warning**:")) {
+    return noteChunk("Session warning", trimmed);
+  }
+  if (lines.length === 1 && trimmed.startsWith("**Info**:")) {
+    return noteChunk("Session info", trimmed);
+  }
+  const visible = stripToolCallFencesForStreaming(text);
+  if (visible.length === 0) {
+    return { kind: "ignore" };
+  }
+  return { kind: "assistant", text: visible };
+}
+
+function noteChunk(
+  title: string,
+  body: string,
+  tone: "info" | "error" = "info",
+): PumpChunk {
+  return { kind: "note", title, body, tone };
+}
+
+function firstPhaseFromSequence(text: string): string | null {
+  const matches = Array.from(text.matchAll(/`([^`]+)`/g));
+  return matches.length > 0 ? matches[0]?.[1] ?? null : null;
+}
+
+function phaseFromPhaseChanged(text: string): string | null {
+  const match = /\*\*Phase:\*\*\s*`([^`]+)`/.exec(text);
+  return match?.[1] ?? null;
+}
+
+function toolSummary(text: string): string {
+  const match = /^_Tool `([^`]+)`(?: \(([^)]+)\))? -> ([^ ]+) \((\d+) ms\)\._$/.exec(text);
+  if (!match) {
+    return text.replace(/^_+|_+$/g, "");
+  }
+  const [, name, argsSummary, status, durationMs] = match;
+  const detail = argsSummary ? ` ${argsSummary}` : "";
+  return `${name}${detail} -> ${status} (${durationMs} ms)`;
+}
+
+function artifactSummary(text: string): string {
+  const match = /^_Wrote `([^`]+)` \((\d+) bytes\)\._$/.exec(text);
+  if (!match) {
+    return text.replace(/^_+|_+$/g, "");
+  }
+  const [, artifactPath, bytes] = match;
+  return `${artifactPath} (${bytes} bytes)`;
+}
+
+function conversationStorageKey(projectDir: string | null): string {
+  return `sim-flow.chatPanel.conversation.${projectDir ?? "__workspace__"}`;
+}
+
+function userMeta(context: PanelContext): string | undefined {
+  if (context.currentStep) {
+    return `${context.projectLabel} • ${context.currentStep}`;
+  }
+  if (context.projectLabel.length > 0) {
+    return context.projectLabel;
+  }
+  return undefined;
+}
+
+function assistantMeta(context: PanelContext): string {
+  return context.model.length > 0
+    ? `${context.sourceLabel} • ${context.model}`
+    : context.sourceLabel;
+}
+
+function formatChatError(error: unknown): string {
+  const baseMessage = error instanceof Error ? error.message : String(error);
+  if (error instanceof LlmError && error.detail && error.detail.length > 0) {
+    return `${baseMessage}\n\n${error.detail.slice(0, 512)}`;
+  }
+  return baseMessage;
+}
+
+function buildPumpLlmConfig(
+  ctx: { projectDir: string; cli: { binary: string } },
+  secrets: SecretStorage,
+  config: vscode.WorkspaceConfiguration,
+): PumpLlmConfig {
+  const source = (config.get<LlmSource>("llm.source") ?? "vscode") as LlmSource;
+  const model = (config.get<string>("llm.model") ?? "").trim() || undefined;
+  const ollamaBaseUrl = (config.get<string>("llm.ollama.baseUrl") ?? "").trim() || undefined;
+  const lmstudioBaseUrl =
+    (config.get<string>("llm.lmstudio.baseUrl") ?? "").trim() || undefined;
+  const settingTokens = (config.get<string[]>("debug") ?? []).join(",");
+  const envTokens = (process.env["SIM_FOUNDATION_DEBUG"] ?? "").trim();
+  const debugTokens = settingTokens.length > 0 ? settingTokens : envTokens;
+  return {
+    source,
+    model,
+    ollamaBaseUrl,
+    lmstudioBaseUrl,
+    secrets,
+    projectDir: ctx.projectDir,
+    binary: ctx.cli.binary,
+    debugTokens,
+  };
+}
+
+function randomNonce(): string {
+  const alphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let out = "";
+  for (let i = 0; i < 16; i += 1) {
+    out += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return out;
+}

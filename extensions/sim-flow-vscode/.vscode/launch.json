@@ -12,6 +12,19 @@
         "${workspaceFolder}/dist/**/*.js"
       ],
       "preLaunchTask": "npm: compile"
+    },
+    {
+      "name": "Run Extension (sim-foundation workspace)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "${workspaceFolder}/../../../../../sim-foundation.code-workspace"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/dist/**/*.js"
+      ],
+      "preLaunchTask": "npm: compile"
     }
   ]
 }

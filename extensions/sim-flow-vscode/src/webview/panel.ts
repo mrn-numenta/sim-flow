@@ -15,6 +15,7 @@ import {
   type LlmSourceTag,
   type PromptListEntry,
 } from "./messages";
+import { deriveStepActionState, isStepSelectableInRail } from "./stepActions";
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: WebviewMessage): void;
@@ -111,6 +112,9 @@ const ui: UiState = {
   autoRunning: false,
   specPathInitialized: false,
 };
+
+const FLOW_LOCKED_REASON =
+  "Click Play / Resume first to unlock the step controls for this dashboard session.";
 
 // --------------------------------------------------------------
 // Message wiring
@@ -363,19 +367,12 @@ function renderProjectsTab(data: DashboardState): Node[] {
 
   return [
     el("h2", {}, "Projects"),
+    el("p", { class: "muted" }, `Active: ${shortPath(data.projectDir)}.`),
     el(
-      "p",
-      { class: "muted" },
-      `Active: ${shortPath(data.projectDir)}.`,
-    ),
-    el("div", { class: "settings-section" },
+      "div",
+      { class: "settings-section" },
       el("h3", {}, "Active project"),
-      el(
-        "div",
-        { class: "settings-row" },
-        switchBtn,
-        renameBtn,
-      ),
+      el("div", { class: "settings-row" }, switchBtn, renameBtn),
     ),
     el(
       "div",
@@ -386,12 +383,7 @@ function renderProjectsTab(data: DashboardState): Node[] {
         { class: "muted" },
         "Scaffolds a new project under the workspace's sim-models root (`<sim-models>/users/<USER>/<name>`).",
       ),
-      el(
-        "div",
-        { class: "settings-row" },
-        nameInput,
-        createBtn,
-      ),
+      el("div", { class: "settings-row" }, nameInput, createBtn),
     ),
   ];
 }
@@ -412,22 +404,13 @@ function renderSettingsTab(): Node[] {
       "div",
       { class: "settings-section" },
       el("h3", {}, "Language model"),
-      el(
-        "div",
-        { class: "settings-row" },
-        renderLlmSourcePicker(),
-        renderLlmModelPicker(),
-      ),
+      el("div", { class: "settings-row" }, renderLlmSourcePicker(), renderLlmModelPicker()),
     ),
     el(
       "div",
       { class: "settings-section" },
       el("h3", {}, "Output style"),
-      el(
-        "div",
-        { class: "settings-row" },
-        renderVerboseToggle(),
-      ),
+      el("div", { class: "settings-row" }, renderVerboseToggle()),
     ),
     el(
       "div",
@@ -772,24 +755,20 @@ function renderAutoFlowRow(): HTMLElement {
   // to start one.
   const buttonRowChildren: HTMLElement[] = [];
   if (ui.data?.fullyAutomatedEnabled) {
-    const fullyAutoBtn = actionButton(
-      "▶",
-      "run-auto-end-to-end",
-      () => {
-        const spec = ui.specPath.trim();
-        if (!spec) {
-          ui.lastError = {
-            message: "Fully-automated flow needs a spec path.",
-            detail: "Type or browse to a spec file in the Spec field above, then click the red play.",
-          };
-          render();
-          return;
-        }
-        ui.autoRunning = true;
-        send({ type: "run-auto-end-to-end", specPath: spec });
+    const fullyAutoBtn = actionButton("▶", "run-auto-end-to-end", () => {
+      const spec = ui.specPath.trim();
+      if (!spec) {
+        ui.lastError = {
+          message: "Fully-automated flow needs a spec path.",
+          detail: "Type or browse to a spec file in the Spec field above, then click the red play.",
+        };
         render();
-      },
-    );
+        return;
+      }
+      ui.autoRunning = true;
+      send({ type: "run-auto-end-to-end", specPath: spec });
+      render();
+    });
     fullyAutoBtn.title =
       "Fully automated: walk every step (DM0 → DM4b) without stopping for review. " +
       "Requires a spec. Long-running and burns LLM credits; the host shows a confirm modal first.";
@@ -851,6 +830,7 @@ function stepBox(data: DashboardState, step: StepDef): HTMLElement {
   const passed = gate?.passed === true;
   const current = data.flow.current_step === step.id;
   const selected = ui.selectedStep === step.id;
+  const selectable = isStepSelectableInRail(data, step.id);
   const classes = ["step"];
   if (passed) {
     classes.push("passed");
@@ -866,15 +846,33 @@ function stepBox(data: DashboardState, step: StepDef): HTMLElement {
   }
   const box = el(
     "div",
-    { class: classes.join(" "), role: "button", tabindex: "0" },
+    {
+      class: classes.join(" "),
+      role: "button",
+      tabindex: selectable ? "0" : "-1",
+      "aria-disabled": selectable ? "false" : "true",
+      title: selectable
+        ? `Select ${step.id}`
+        : "You can only jump ahead to a step if it has already been entered before.",
+    },
     el("span", { class: "step-id" }, step.id),
     el("span", { class: "step-label" }, step.label),
   );
   box.addEventListener("click", () => {
+    if (!selectable) {
+      return;
+    }
     ui.selectedStep = step.id;
     ui.gateReport = null;
     send({ type: "select-step", step: step.id });
     render();
+  });
+  box.addEventListener("keydown", (event) => {
+    if (!selectable || (event.key !== "Enter" && event.key !== " ")) {
+      return;
+    }
+    event.preventDefault();
+    box.click();
   });
   return box;
 }
@@ -891,51 +889,72 @@ function renderSelectedStepDetail(data: DashboardState): HTMLElement {
   if (!stepId) {
     return el("div", { class: "detail" }, el("p", { class: "empty" }, "Select a step above."));
   }
-  const dm2dPassed = data.flow.gates?.["DM2d"]?.passed === true;
-  const verilogBtn = actionButton(
-    "Generate Verilog",
-    `generate-verilog-${stepId}`,
-    () => send({ type: "generate-verilog" }),
+  const flowUnlocked = ui.autoRunning;
+  const actions = deriveStepActionState({
+    data,
+    stepId,
+    gateReport: ui.gateReport,
+  });
+  const runStepBtn = actionButton("Run Step", `run-step-${stepId}`, () =>
+    send({ type: "run-step", step: stepId }),
+  );
+  applyButtonState(
+    runStepBtn,
+    flowUnlocked && actions.runStepEnabled,
+    flowUnlocked ? actions.runStepReason : FLOW_LOCKED_REASON,
+  );
+  const runCritiqueBtn = actionButton("Run Critique", `run-critique-${stepId}`, () =>
+    send({ type: "run-critique", step: stepId }),
+  );
+  applyButtonState(
+    runCritiqueBtn,
+    flowUnlocked && actions.runCritiqueEnabled,
+    flowUnlocked ? actions.runCritiqueReason : FLOW_LOCKED_REASON,
+  );
+  const runGateBtn = actionButton(
+    "Run Gate",
+    `gate-${stepId}`,
+    () => send({ type: "gate-step", step: stepId }),
     "secondary",
   );
-  verilogBtn.classList.add("generate-verilog-btn");
-  if (!dm2dPassed) {
-    verilogBtn.disabled = true;
-    verilogBtn.title =
-      "Disabled until DM2d (Model) passes -- the SystemVerilog emission " +
-      "needs the Foundation model to build and pass tests first.";
-  } else {
-    verilogBtn.title =
-      "Emit synthesizable SystemVerilog RTL + UVM testbench from the " +
-      "current Foundation model into the project's `generated/` directory.";
-  }
+  applyButtonState(
+    runGateBtn,
+    flowUnlocked && actions.runGateEnabled,
+    flowUnlocked ? actions.runGateReason : FLOW_LOCKED_REASON,
+  );
+  const advanceBtn = actionButton("Advance", `advance-${stepId}`, () =>
+    send({ type: "advance-step", step: stepId }),
+  );
+  applyButtonState(
+    advanceBtn,
+    flowUnlocked && actions.advanceEnabled,
+    flowUnlocked ? actions.advanceReason : FLOW_LOCKED_REASON,
+  );
+  const resetBtn = actionButton(
+    "Reset",
+    `reset-${stepId}`,
+    () => send({ type: "reset-step", step: stepId }),
+    "secondary",
+  );
+  applyButtonState(
+    resetBtn,
+    flowUnlocked && actions.resetEnabled,
+    flowUnlocked ? actions.resetReason : FLOW_LOCKED_REASON,
+  );
+  const generateVerilogBtn = actions.showGenerateVerilog
+    ? buildGenerateVerilogButton(stepId, flowUnlocked)
+    : null;
   const children: Node[] = [
     el("h3", {}, stepId),
     el(
       "div",
       { class: "actions" },
-      actionButton("Run Step", `run-step-${stepId}`, () =>
-        send({ type: "run-step", step: stepId }),
-      ),
-      actionButton("Run Critique", `run-critique-${stepId}`, () =>
-        send({ type: "run-critique", step: stepId }),
-      ),
-      actionButton(
-        "Run Gate",
-        `gate-${stepId}`,
-        () => send({ type: "gate-step", step: stepId }),
-        "secondary",
-      ),
-      actionButton("Advance", `advance-${stepId}`, () =>
-        send({ type: "advance-step", step: stepId }),
-      ),
-      actionButton(
-        "Reset",
-        `reset-${stepId}`,
-        () => send({ type: "reset-step", step: stepId }),
-        "secondary",
-      ),
-      verilogBtn,
+      runStepBtn,
+      runCritiqueBtn,
+      runGateBtn,
+      advanceBtn,
+      resetBtn,
+      ...(generateVerilogBtn ? [generateVerilogBtn] : []),
     ),
   ];
   // Plan-execution progress (DM2d / DM3c / DM4b only). For other
@@ -1037,10 +1056,14 @@ function renderPlanProgress(progress: import("./messages").PlanProgress): HTMLEl
   if (progress.currentTask) {
     const taskLine = el("p", { class: "plan-progress-current" });
     taskLine.appendChild(el("span", { class: "muted" }, "Current task (best guess): "));
-    const taskBtn = el("button", {
-      class: "linkish",
-      title: "Click to open the plan file at this row",
-    }, progress.currentTask) as HTMLButtonElement;
+    const taskBtn = el(
+      "button",
+      {
+        class: "linkish",
+        title: "Click to open the plan file at this row",
+      },
+      progress.currentTask,
+    ) as HTMLButtonElement;
     taskBtn.addEventListener("click", () => {
       if (progress.currentTaskFilePath) {
         send({ type: "open-document", path: progress.currentTaskFilePath });
@@ -1332,17 +1355,14 @@ function renderPromptsTab(): Node[] {
   // Lazy fetch on first render of this tab.
   if (ui.prompts === null) {
     send({ type: "prompts-list" });
-    return [
-      el("h2", {}, "Prompts"),
-      el("p", { class: "empty" }, "Loading prompts..."),
-    ];
+    return [el("h2", {}, "Prompts"), el("p", { class: "empty" }, "Loading prompts...")];
   }
   return [
     el("h2", {}, "Prompts"),
     el(
       "p",
       { class: "muted" },
-      "Per-step instruction prompts. Resolution order: project > global > foundation default. Click \"Edit (project)\" or \"Edit (global)\" to open the corresponding override in a regular editor tab. The foundation default is never opened, so it cannot be saved over -- only project / global overrides accept writes. \"Reset\" deletes the override at that scope.",
+      'Per-step instruction prompts. Resolution order: project > global > foundation default. Click "Edit (project)" or "Edit (global)" to open the corresponding override in a regular editor tab. The foundation default is never opened, so it cannot be saved over -- only project / global overrides accept writes. "Reset" deletes the override at that scope.',
     ),
     renderPromptsTable(ui.prompts),
   ];
@@ -1373,8 +1393,18 @@ function renderPromptsTable(entries: PromptListEntry[]): HTMLElement {
       el("td", {}, el("code", {}, e.slug)),
       el("td", {}, e.kind),
       el("td", { class: `scope ${e.active_scope}` }, e.active_scope),
-      el("td", {}, e.project_present ? el("span", { class: "ok" }, "yes") : el("span", { class: "muted" }, "—")),
-      el("td", {}, e.global_present ? el("span", { class: "ok" }, "yes") : el("span", { class: "muted" }, "—")),
+      el(
+        "td",
+        {},
+        e.project_present
+          ? el("span", { class: "ok" }, "yes")
+          : el("span", { class: "muted" }, "—"),
+      ),
+      el(
+        "td",
+        {},
+        e.global_present ? el("span", { class: "ok" }, "yes") : el("span", { class: "muted" }, "—"),
+      ),
       el("td", { class: "actions" }, ...rowActions(e)),
     );
     body.appendChild(row);
@@ -1394,16 +1424,13 @@ function rowActions(entry: PromptListEntry): HTMLButtonElement[] {
   const id = `${entry.slug}-${entry.kind}`;
   const buttons: HTMLButtonElement[] = [];
   buttons.push(
-    actionButton(
-      "Edit (project)",
-      `prompt-open-project-${id}`,
-      () =>
-        send({
-          type: "prompt-open-in-editor",
-          slug: entry.slug,
-          kind: entry.kind,
-          scope: "project",
-        }),
+    actionButton("Edit (project)", `prompt-open-project-${id}`, () =>
+      send({
+        type: "prompt-open-in-editor",
+        slug: entry.slug,
+        kind: entry.kind,
+        scope: "project",
+      }),
     ),
   );
   buttons.push(
@@ -1502,6 +1529,31 @@ function shortPath(full: string): string {
     return full;
   }
   return `.../${parts.slice(-2).join("/")}`;
+}
+
+function buildGenerateVerilogButton(stepId: string, enabled: boolean): HTMLButtonElement {
+  const verilogBtn = actionButton(
+    "Generate Verilog",
+    `generate-verilog-${stepId}`,
+    () => send({ type: "generate-verilog" }),
+    "secondary",
+  );
+  verilogBtn.classList.add("generate-verilog-btn");
+  applyButtonState(
+    verilogBtn,
+    enabled,
+    enabled
+      ? "Emit synthesizable SystemVerilog RTL + UVM testbench from the current Foundation model into the project's `generated/` directory."
+      : FLOW_LOCKED_REASON,
+  );
+  return verilogBtn;
+}
+
+function applyButtonState(button: HTMLButtonElement, enabled: boolean, title: string): void {
+  button.title = title;
+  if (!enabled) {
+    button.disabled = true;
+  }
 }
 
 function sep(): HTMLElement {
