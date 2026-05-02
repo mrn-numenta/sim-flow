@@ -835,16 +835,32 @@ function ensureTerminal(projectDir: string): SimFlowTerminal {
   let term = terminals.get(projectDir);
   if (!term) {
     const frameworkDocsRoot = bundledFrameworkDocsRoot();
+    const debugTokens = resolveDebugTokens();
+    const env: Record<string, string> = {};
+    if (frameworkDocsRoot) {
+      env.SIM_FLOW_FRAMEWORK_DOCS_ROOT = frameworkDocsRoot;
+    }
+    if (debugTokens.length > 0) {
+      env.SIM_FOUNDATION_DEBUG = debugTokens;
+    }
     term = new SimFlowTerminal({
       projectDir,
       name: terminalNameFor(projectDir),
-      env: frameworkDocsRoot
-        ? { SIM_FLOW_FRAMEWORK_DOCS_ROOT: frameworkDocsRoot }
-        : undefined,
+      env: Object.keys(env).length > 0 ? env : undefined,
     });
     terminals.set(projectDir, term);
   }
   return term;
+}
+
+function resolveDebugTokens(): string {
+  const settingTokens = (
+    vscode.workspace.getConfiguration("sim-flow").get<string[]>("debug") ?? []
+  ).join(",");
+  if (settingTokens.length > 0) {
+    return settingTokens;
+  }
+  return (process.env["SIM_FOUNDATION_DEBUG"] ?? "").trim();
 }
 
 function terminalNameFor(projectDir: string): string {

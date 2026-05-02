@@ -66,9 +66,20 @@ export class SocketSessionPump implements LiveSessionTransport {
     this.debugLog = DebugLog.fromTokens(llm.debugTokens, llm.projectDir);
     this.attachTimeoutMs = options.attachTimeoutMs ?? 5000;
     if (options.launch) {
+      // Mirror SessionPump's env wiring so the spawned `sim-flow auto`
+      // process sees the same `SIM_FOUNDATION_DEBUG` value that drives
+      // the extension-side DebugLog. Without this the orchestrator's
+      // own DebugLog::open sees no env var and never writes
+      // `<project>/.sim-flow/logs/sim-flow-chat.log` even when the
+      // user has `sim-flow.debug` set in settings.
+      const baseEnv = options.launch.env ?? process.env;
+      const env: NodeJS.ProcessEnv = {
+        ...baseEnv,
+        SIM_FOUNDATION_DEBUG: llm.debugTokens,
+      };
       const child = spawn(options.launch.binary, options.launch.args, {
         cwd: options.launch.cwd,
-        env: options.launch.env ?? process.env,
+        env,
         stdio: ["ignore", "ignore", "ignore"],
       });
       this.debugLog.logProcessSpawn(
