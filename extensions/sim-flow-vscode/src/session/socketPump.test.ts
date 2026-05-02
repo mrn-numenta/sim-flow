@@ -218,4 +218,105 @@ describe("session/socketPump", () => {
 
     pump.dispose();
   });
+
+  it("dispatches manual-mode commands as line-delimited host events", async () => {
+    // The dashboard's per-step buttons route through `runStep` /
+    // `runCritique` / etc. when an orchestrator is attached. Each
+    // invocation writes one HostEvent JSON object to the transport
+    // socket. The orchestrator's response (Diagnostic / GateResult /
+    // SessionEnd / StepModeChanged) flows back through the existing
+    // settle path; here we just assert the dispatch shape.
+    mock.reset();
+
+    const pump = new SocketSessionPump(
+      {
+        sessionId: "session-2",
+        socketPath: "/tmp/session-2.sock",
+      },
+      {
+        source: "ollama",
+        model: "llama3.1",
+        projectDir: "/tmp/example",
+        binary: "sim-flow",
+        debugTokens: "",
+      },
+    );
+    await pump.ready();
+    // Settle through the initial Hello/HelloAck handshake so we know
+    // the socket is wired up before the manual-mode dispatches go out.
+    const renderer = new RecordingRenderer();
+    await pump.settle(renderer);
+
+    pump.runStep("DM1a", "work");
+    pump.runCritique("DM1a");
+    pump.runGate("DM1a");
+    pump.advance("DM1a");
+    pump.reset("DM0");
+    pump.setStepMode("auto");
+    pump.shutdown();
+    // sendHostEventAfterReady awaits the connectionReady promise via
+    // a microtask before writing; flush so the test sees the writes.
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+
+    const writes = mock.state.sockets[0]?.writes ?? [];
+    const events = writes.map((line) => JSON.parse(line.trim()) as { event: string });
+    const eventNames = events.map((e) => e.event);
+    // Hello (handshake) precedes the manual-mode dispatches; assert
+    // the manual-mode tail rather than the full sequence so adding
+    // events to the handshake later doesn't break the test.
+    expect(eventNames).toContain("run-step");
+    expect(eventNames).toContain("run-critique");
+    expect(eventNames).toContain("run-gate");
+    expect(eventNames).toContain("advance");
+    expect(eventNames).toContain("reset");
+    expect(eventNames).toContain("set-step-mode");
+    expect(eventNames).toContain("shutdown");
+    const setStepMode = events.find((e) => e.event === "set-step-mode");
+    expect(setStepMode).toMatchObject({ mode: "auto" });
+
+    pump.dispose();
+  });
+
+  it("notifies subscribers when StepModeChanged arrives from the orchestrator", async () => {
+    mock.reset();
+
+    const pump = new SocketSessionPump(
+      {
+        sessionId: "session-3",
+        socketPath: "/tmp/session-3.sock",
+      },
+      {
+        source: "ollama",
+        model: "llama3.1",
+        projectDir: "/tmp/example",
+        binary: "sim-flow",
+        debugTokens: "",
+      },
+    );
+    await pump.ready();
+
+    const observed: string[] = [];
+    const dispose = pump.onStepModeChanged((mode) => {
+      observed.push(mode);
+    });
+
+    // Inject a StepModeChanged event over the socket as if the
+    // orchestrator had emitted it. The pump tracks the latest mode
+    // and notifies subscribers.
+    const socket = mock.state.sockets[0];
+    socket?.emit(
+      "data",
+      `${JSON.stringify({ event: "step-mode-changed", mode: "manual" })}\n`,
+    );
+    socket?.emit(
+      "data",
+      `${JSON.stringify({ event: "step-mode-changed", mode: "auto" })}\n`,
+    );
+
+    expect(observed).toEqual(["manual", "auto"]);
+    expect(pump.stepMode).toBe("auto");
+
+    dispose();
+    pump.dispose();
+  });
 });

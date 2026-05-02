@@ -41,8 +41,10 @@ import type {
   HostEvent,
   HostInfo,
   LlmMessage as ProtocolLlmMessage,
+  SessionKindOut,
   SessionTag,
   StepDescriptorOut,
+  StepMode,
 } from "./protocol-types";
 import { DebugLog } from "./debug-log";
 
@@ -104,6 +106,22 @@ export interface LiveSessionTransport {
   sendUserMessage(text: string): void;
   cancel(): void;
   dispose(): void;
+  /**
+   * Manual step-mode capabilities. Only the JSONL transport
+   * (`SocketSessionPump`) implements these today; the PTY transport
+   * uses a different control socket and the per-step protocol there
+   * is a follow-up. Call sites use optional chaining and fall back to
+   * the legacy chat-tab path when these are absent.
+   */
+  readonly stepMode?: StepMode | null;
+  onStepModeChanged?(listener: (mode: StepMode) => void): () => void;
+  setStepMode?(mode: StepMode): void;
+  runStep?(step: string, kind: SessionKindOut): void;
+  runCritique?(step: string): void;
+  runGate?(step: string): void;
+  advance?(step: string): void;
+  reset?(step: string): void;
+  shutdown?(): void;
 }
 
 /**

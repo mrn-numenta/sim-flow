@@ -25,11 +25,15 @@ import type {
   HostEvent,
   HostInfo,
   LlmMessage as ProtocolLlmMessage,
+  SessionKindOut,
   SessionTag,
   StepDescriptorOut,
+  StepMode,
 } from "./protocol-types";
 
-type SocketPumpBusEvent = { type: "settled"; result: PumpSettleResult };
+type SocketPumpBusEvent =
+  | { type: "settled"; result: PumpSettleResult }
+  | { type: "step-mode"; mode: StepMode };
 
 export interface SocketSessionPumpOptions {
   sessionId: string;
@@ -57,6 +61,14 @@ export class SocketSessionPump implements LiveSessionTransport {
   private sessionTag: SessionTag | null = null;
   private stepDescriptor: StepDescriptorOut | null = null;
   private lastUsedSource: LlmSource | null = null;
+  /**
+   * Last `StepModeChanged` value the orchestrator emitted. The
+   * orchestrator echoes the initial mode as soon as it's spawned and
+   * re-emits on every flip (user toggle, cap exceeded, gate failure
+   * on advance), so this is the truth the dashboard's toggle should
+   * reflect. `null` until the first echo arrives.
+   */
+  private currentStepMode: StepMode | null = null;
 
   constructor(
     private readonly options: SocketSessionPumpOptions,
@@ -137,6 +149,9 @@ export class SocketSessionPump implements LiveSessionTransport {
     this.currentRenderer = renderer;
     return new Promise<PumpSettleResult>((resolve) => {
       const onSettled = (msg: SocketPumpBusEvent) => {
+        if (msg.type !== "settled") {
+          return; // step-mode notifications flow on the same bus
+        }
         this.bus.off("msg", onSettled);
         this.currentRenderer = null;
         resolve(msg.result);
@@ -174,6 +189,75 @@ export class SocketSessionPump implements LiveSessionTransport {
       })
       .catch(() => {
         // ignore; caller will observe the terminal state
+      });
+  }
+
+  /**
+   * Last step-mode the orchestrator confirmed via `StepModeChanged`.
+   * `null` means the pump hasn't received the initial echo yet — the
+   * dashboard reflects the persisted setting in that case.
+   */
+  get stepMode(): StepMode | null {
+    return this.currentStepMode;
+  }
+
+  /**
+   * Subscribe to `StepModeChanged` events from the orchestrator.
+   * Returns a disposer. The dashboard registers one listener per
+   * panel; the chat host can register another to refresh state.
+   */
+  onStepModeChanged(listener: (mode: StepMode) => void): () => void {
+    const wrapped = (msg: SocketPumpBusEvent) => {
+      if (msg.type === "step-mode") {
+        listener(msg.mode);
+      }
+    };
+    this.bus.on("msg", wrapped);
+    return () => this.bus.off("msg", wrapped);
+  }
+
+  /**
+   * Manual-mode host commands. Each one fires-and-forgets — the
+   * orchestrator emits `Diagnostic` if the command is rejected (auto
+   * mode owns step execution, sub-session in flight, etc.) and that
+   * surfaces to the user via the existing diagnostic renderer.
+   */
+  setStepMode(mode: StepMode): void {
+    this.sendHostEventAfterReady({ event: "set-step-mode", mode });
+  }
+
+  runStep(step: string, kind: SessionKindOut): void {
+    this.sendHostEventAfterReady({ event: "run-step", step, kind });
+  }
+
+  runCritique(step: string): void {
+    this.sendHostEventAfterReady({ event: "run-critique", step });
+  }
+
+  runGate(step: string): void {
+    this.sendHostEventAfterReady({ event: "run-gate", step });
+  }
+
+  advance(step: string): void {
+    this.sendHostEventAfterReady({ event: "advance", step });
+  }
+
+  reset(step: string): void {
+    this.sendHostEventAfterReady({ event: "reset", step });
+  }
+
+  shutdown(): void {
+    this.sendHostEventAfterReady({ event: "shutdown" });
+  }
+
+  private sendHostEventAfterReady(event: HostEvent): void {
+    void this.connectionReady
+      .then(() => {
+        this.sendHostEvent(event);
+      })
+      .catch(() => {
+        // Pump never attached; the caller will observe the terminal
+        // state via the existing settle promise.
       });
   }
 
@@ -274,7 +358,17 @@ export class SocketSessionPump implements LiveSessionTransport {
       return;
     }
     this.debugLog.logEventIn(event);
-    if (this.currentRenderer === null && event.event !== "session-end") {
+    if (
+      this.currentRenderer === null &&
+      event.event !== "session-end" &&
+      event.event !== "step-mode-changed"
+    ) {
+      // Defer most events until the next `settle()`; the renderer
+      // is gone right now and we'd lose the markdown context. But
+      // session-end and step-mode-changed are pure state — the
+      // dashboard's toggle subscribes to step-mode-changed and
+      // would otherwise miss the orchestrator's initial echo when
+      // it lands between settles.
       this.queuedEvents.push(event);
       return;
     }
@@ -367,9 +461,16 @@ export class SocketSessionPump implements LiveSessionTransport {
         });
         break;
       case "step-mode-changed":
-        // Step-axis mode flipped (manual <-> auto). Dashboard wiring
-        // for the toggle UI lands in the extension-side PR; the
-        // event is already logged at the transport layer.
+        // Track the orchestrator's truth and notify subscribers (the
+        // dashboard's toggle UI listens via `onStepModeChanged`). The
+        // event also fires at session start as the orchestrator
+        // echoes the initial `--step-mode` flag, so the toggle
+        // matches reality before the user touches anything.
+        this.currentStepMode = event.mode;
+        this.bus.emit("msg", {
+          type: "step-mode",
+          mode: event.mode,
+        } as SocketPumpBusEvent);
         break;
       default: {
         const exhaustive: never = event;
