@@ -4,6 +4,7 @@
 // webview.
 
 import type { BaselineRecord, RunRow } from "../cli/types";
+import type { StepMode } from "../session/protocol-types";
 import type { CritiqueFile, FlowState, PlanProgress } from "../state/types";
 import type { DashboardState, DocumentEntry } from "./messages";
 
@@ -23,6 +24,14 @@ export interface AggregateInput {
   verilogSimEnabled?: boolean;
   /** Mirrors `sim-flow.dashboard.verilogSimulatorPath`. Defaults to "". */
   verilogSimulatorPath?: string;
+  /**
+   * Resolved step-axis mode: orchestrator's last `StepModeChanged`
+   * truth when a session is attached, otherwise the persisted
+   * `sim-flow.flow.stepMode` setting. Defaults to `"manual"`.
+   */
+  stepMode?: StepMode;
+  /** True when a `SocketSessionPump` is alive for this project. */
+  sessionActive?: boolean;
   generatedAt?: string;
   cliVersion?: string;
   maxRuns?: number;
@@ -47,6 +56,8 @@ export function aggregateDashboardState(input: AggregateInput): DashboardState {
     fullyAutomatedEnabled: input.fullyAutomatedEnabled ?? false,
     verilogSimEnabled: input.verilogSimEnabled ?? false,
     verilogSimulatorPath: input.verilogSimulatorPath ?? "",
+    stepMode: input.stepMode ?? "manual",
+    sessionActive: input.sessionActive ?? false,
     generatedAt: input.generatedAt ?? new Date().toISOString(),
     cliVersion: input.cliVersion,
   };

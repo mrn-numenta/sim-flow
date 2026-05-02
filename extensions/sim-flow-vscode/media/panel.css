@@ -269,6 +269,66 @@ main {
   filter: brightness(0.85);
 }
 
+/* Step-axis mode toggle (Manual ⇄ Auto). Sits between Play and Stop
+   in the auto-flow row. The active option renders inset / disabled;
+   the inactive one is clickable and posts `set-step-mode`. The small
+   "live" / "setting" indicator tells the user whether the mode
+   reflects the orchestrator's truth (a session is attached) or just
+   the persisted setting (no session, used at next launch). */
+.step-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 4px;
+  background: var(--vscode-editor-background, transparent);
+}
+.step-mode-toggle-label {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.step-mode-indicator {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 0 4px;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+.step-mode-indicator-live {
+  background: var(--vscode-charts-green, #2e8b57);
+  color: var(--vscode-editor-background, #fff);
+}
+.step-mode-indicator-setting {
+  background: var(--vscode-input-placeholderForeground, #888);
+  color: var(--vscode-editor-background, #fff);
+}
+.step-mode-option {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.2;
+  border-radius: 3px;
+  border: 1px solid var(--vscode-input-border, transparent);
+  background: var(--vscode-button-secondaryBackground, transparent);
+  color: var(--vscode-button-secondaryForeground, inherit);
+  cursor: pointer;
+}
+.step-mode-option:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+.step-mode-option-active {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border-color: var(--vscode-button-border, transparent);
+  cursor: default;
+}
+
 .auto-spec-label {
   flex: 0 0 auto;
   font-weight: 600;

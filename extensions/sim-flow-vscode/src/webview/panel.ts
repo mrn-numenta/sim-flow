@@ -114,7 +114,7 @@ const ui: UiState = {
 };
 
 const FLOW_LOCKED_REASON =
-  "Click Connect first to unlock the step controls for this dashboard session.";
+  "Click Play / Resume first to unlock the step controls for this dashboard session.";
 
 // --------------------------------------------------------------
 // Message wiring
@@ -419,7 +419,7 @@ function renderSettingsTab(): Node[] {
       el(
         "p",
         { class: "muted" },
-        "Show the red end-to-end automated-flow button next to Connect / Disconnect on the Flow tab. Hidden by default because the automated flow walks every step without stopping for review and can burn meaningful LLM credits.",
+        "Show the red end-to-end automated-flow button next to Play / Stop on the Flow tab. Hidden by default because the automated flow walks every step without stopping for review and can burn meaningful LLM credits.",
       ),
       el("div", { class: "settings-row" }, renderFullyAutomatedToggle()),
     ),
@@ -720,16 +720,16 @@ function renderFlowTab(data: DashboardState): Node[] {
 
 function renderAutoFlowRow(): HTMLElement {
   // Two-row control panel:
-  //   row 1: Connect (🔌) / Disconnect (⏻) icon buttons.
+  //   row 1: Play (▶) / Stop (■) icon buttons.
   //   row 2: `Spec:` label + path input + Browse... button.
-  // Connect launches a sim-flow session (or no-ops if one is already
-  // up); it does NOT start running a step on its own -- the user
-  // drives the step rail explicitly. Disconnect injects `/exit` over
-  // the single-session control socket, telling the running claude
-  // TUI to leave; the orchestrator then parks at "waiting for the
-  // next dashboard command".
-  const connectBtn = actionButton(
-    "\u{1F50C}", // 🔌
+  // The CLI driver reads `state.current_step` and proceeds from there,
+  // so Play is also "resume": clicking it after a run that hit a cap /
+  // dropped to interactive picks up where the last run left off. Stop
+  // injects `/exit` over the single-session control socket, which
+  // tells the running claude TUI to leave; the orchestrator then
+  // parks at "waiting for the next dashboard command".
+  const playBtn = actionButton(
+    "▶", // ▶
     "run-auto",
     () => {
       ui.autoRunning = true;
@@ -739,20 +739,20 @@ function renderAutoFlowRow(): HTMLElement {
       render();
     },
   );
-  connectBtn.title =
-    "Connect to a sim-flow session. Launches the flow if none is running. " +
-    "After connecting, the step rail and per-step buttons become active so you can drive each step explicitly.";
-  connectBtn.classList.add("auto-run-btn", "auto-connect-btn", "auto-icon-btn");
+  playBtn.title =
+    "Play / Resume the automated flow. Picks up at `current_step` from state.toml. " +
+    "After clicking Play the step rail and per-step buttons become active.";
+  playBtn.classList.add("auto-run-btn", "auto-icon-btn");
   applyButtonState(
-    connectBtn,
+    playBtn,
     !ui.autoRunning,
     ui.autoRunning
-      ? "Connect is disabled while a session is already attached."
-      : connectBtn.title,
+      ? "Play is disabled while a session is already running."
+      : playBtn.title,
   );
 
-  const disconnectBtn = actionButton(
-    "\u{23FB}", // ⏻
+  const stopBtn = actionButton(
+    "■", // ■
     "stop-auto",
     () => {
       ui.autoRunning = false;
@@ -761,17 +761,17 @@ function renderAutoFlowRow(): HTMLElement {
     },
     "secondary",
   );
-  disconnectBtn.title =
-    "Disconnect from the sim-flow session by injecting `/exit` over the control socket. " +
+  stopBtn.title =
+    "Stop the automated flow by injecting `/exit` over the control socket. " +
     "The running claude TUI exits cleanly; the orchestrator parks waiting for the next command. " +
-    "After Disconnect the step rail re-locks until you Connect again.";
-  disconnectBtn.classList.add("auto-stop-btn", "auto-disconnect-btn", "auto-icon-btn");
+    "After Stop the step rail re-locks until you click Play again.";
+  stopBtn.classList.add("auto-stop-btn", "auto-icon-btn");
   applyButtonState(
-    disconnectBtn,
+    stopBtn,
     ui.autoRunning,
     ui.autoRunning
-      ? disconnectBtn.title
-      : "Disconnect is disabled because there is no active session.",
+      ? stopBtn.title
+      : "Stop is disabled because there is no active session.",
   );
 
   // End-to-end "automated" red play. Hidden unless the user has
@@ -800,7 +800,7 @@ function renderAutoFlowRow(): HTMLElement {
     fullyAutoBtn.classList.add("auto-fully-automated-btn", "auto-icon-btn");
     buttonRowChildren.push(fullyAutoBtn);
   }
-  buttonRowChildren.push(connectBtn, disconnectBtn);
+  buttonRowChildren.push(playBtn, renderStepModeToggle(), stopBtn);
 
   const specLabel = el(
     "label",
@@ -832,7 +832,7 @@ function renderAutoFlowRow(): HTMLElement {
   const specHelp = el(
     "p",
     { class: "auto-flow-spec-help" },
-    "User-provided specification that drives the flow toward a Foundation model. If left empty, the agent will prompt you for what to model when DM0 starts. After entering the path to your spec (or leaving it blank) click the Connect button to launch the session, then drive each step from the rail.",
+    "User-provided specification that drives the flow toward a Foundation model. If left empty, the agent will prompt you for what to model when DM0 starts. After entering the path to your spec (or leaving it blank) click the Play button to proceed.",
   );
 
   // Stack the help line directly on top of the input within its own
@@ -840,10 +840,10 @@ function renderAutoFlowRow(): HTMLElement {
   // Spec: label or Browse... button to either side.
   const specInputCol = el("div", { class: "auto-spec-input-col" }, specHelp, input);
 
-  // Single row: [Spec:] [help+input column] [Browse...] [▶?] [🔌] [⏻].
+  // Single row: [Spec:] [help+input column] [Browse...] [▶?] [▶] [■].
   // The user reads the inline description, enters a spec (or
-  // browses to one), then clicks Connect; Disconnect sits at the
-  // right edge of the same row so it's always reachable.
+  // browses to one), then clicks Play; Stop sits at the right edge
+  // of the same row so it's always reachable.
   return el(
     "div",
     { class: "auto-flow-row" },
@@ -854,6 +854,65 @@ function renderAutoFlowRow(): HTMLElement {
   );
 }
 
+/**
+ * Step-axis mode toggle (Manual ⇄ Auto). Always visible, always
+ * live: clicking the inactive label posts a `set-step-mode` message
+ * which the host either persists to settings (no live session) or
+ * forwards to the orchestrator as a `SetStepMode` host event (live
+ * session). The orchestrator echoes `StepModeChanged` and the
+ * dashboard refreshes with the new mode reflected here.
+ */
+function renderStepModeToggle(): HTMLElement {
+  const current = ui.data?.stepMode ?? "manual";
+  const sessionActive = ui.data?.sessionActive ?? false;
+  const indicator = sessionActive ? "live" : "setting";
+  const indicatorTitle = sessionActive
+    ? "An orchestrator is attached; the toggle reflects its current mode."
+    : "No live session; the toggle reflects the persisted setting (used at next launch).";
+
+  const toggle = el(
+    "div",
+    {
+      class: "step-mode-toggle",
+      role: "group",
+      "aria-label": "Step mode",
+      title: indicatorTitle,
+    },
+    el(
+      "span",
+      { class: "step-mode-toggle-label" },
+      "Step mode",
+      el("span", { class: `step-mode-indicator step-mode-indicator-${indicator}` }, indicator),
+    ),
+    renderStepModeOption("manual", current),
+    renderStepModeOption("auto", current),
+  );
+  return toggle;
+}
+
+function renderStepModeOption(mode: "manual" | "auto", current: string): HTMLButtonElement {
+  const isActive = mode === current;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = isActive
+    ? "step-mode-option step-mode-option-active"
+    : "step-mode-option";
+  btn.textContent = mode === "manual" ? "Manual" : "Auto";
+  btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+  btn.title =
+    mode === "manual"
+      ? "Park between sub-sessions; per-step buttons drive the flow."
+      : "Walk current_step through end of flow without user input.";
+  if (isActive) {
+    btn.disabled = true;
+  } else {
+    btn.addEventListener("click", () => {
+      send({ type: "set-step-mode", mode });
+    });
+  }
+  return btn;
+}
+
 function stepBox(data: DashboardState, step: StepDef): HTMLElement {
   const gate = data.flow.gates[step.id];
   const passed = gate?.passed === true;
@@ -861,16 +920,9 @@ function stepBox(data: DashboardState, step: StepDef): HTMLElement {
   const selected = ui.selectedStep === step.id;
   const selectable = isStepSelectableInRail(data, step.id);
   const ahead = isStepAheadOfCurrent(data, step.id);
-  const before = isStepBeforeCurrent(data, step.id);
-  // Subsequent steps that have never been visited render with the
-  // disabled-ahead theme. The current step gets the primary tint
-  // (handled by `.current`). Anything else preceding the current
-  // step is treated like a completed step in the rail (green) -- a
-  // rail position before `current_step` always means the user has
-  // moved past it, even if a gate wasn't formally marked passed.
   const disabledAhead = ahead && !selectable;
   const classes = ["step"];
-  if (passed || before) {
+  if (passed) {
     classes.push("passed");
   }
   if (current) {
@@ -925,16 +977,6 @@ function isStepAheadOfCurrent(data: DashboardState, stepId: string): boolean {
   return stepIndex > currentIndex;
 }
 
-function isStepBeforeCurrent(data: DashboardState, stepId: string): boolean {
-  const order = data.flow.flow === "direct-modeling" ? DM_STEPS : DS_STEPS;
-  const currentIndex = order.findIndex((step) => step.id === data.flow.current_step);
-  const stepIndex = order.findIndex((step) => step.id === stepId);
-  if (currentIndex === -1 || stepIndex === -1) {
-    return false;
-  }
-  return stepIndex < currentIndex;
-}
-
 function gateDiamond(data: DashboardState, step: StepDef): HTMLElement {
   const gate = data.flow.gates[step.id];
   const passed = gate?.passed === true;
@@ -953,52 +995,62 @@ function renderSelectedStepDetail(data: DashboardState): HTMLElement {
     stepId,
     gateReport: ui.gateReport,
   });
+  // Per-step buttons (Run Step / Run Critique / Run Gate / Advance /
+  // Reset) only fire in manual step mode. In auto mode the
+  // orchestrator owns step execution and rejects these commands with
+  // a Diagnostic; disabling here surfaces that ownership clearly so
+  // the user toggles to manual first.
+  const manualMode = (data.stepMode ?? "manual") === "manual";
+  const autoModeReason =
+    "Per-step controls are disabled while step mode is `auto`. " +
+    "Toggle Step mode to `Manual` (between Play and Stop) to drive each step explicitly.";
+  const stepGate = (enabled: boolean, reason: string): { enabled: boolean; reason: string } =>
+    !flowUnlocked
+      ? { enabled: false, reason: FLOW_LOCKED_REASON }
+      : !manualMode
+        ? { enabled: false, reason: autoModeReason }
+        : { enabled, reason };
   const runStepBtn = actionButton("Run Step", `run-step-${stepId}`, () =>
     send({ type: "run-step", step: stepId }),
   );
-  applyButtonState(
-    runStepBtn,
-    flowUnlocked && actions.runStepEnabled,
-    flowUnlocked ? actions.runStepReason : FLOW_LOCKED_REASON,
-  );
+  {
+    const g = stepGate(actions.runStepEnabled, actions.runStepReason);
+    applyButtonState(runStepBtn, g.enabled, g.reason);
+  }
   const runCritiqueBtn = actionButton("Run Critique", `run-critique-${stepId}`, () =>
     send({ type: "run-critique", step: stepId }),
   );
-  applyButtonState(
-    runCritiqueBtn,
-    flowUnlocked && actions.runCritiqueEnabled,
-    flowUnlocked ? actions.runCritiqueReason : FLOW_LOCKED_REASON,
-  );
+  {
+    const g = stepGate(actions.runCritiqueEnabled, actions.runCritiqueReason);
+    applyButtonState(runCritiqueBtn, g.enabled, g.reason);
+  }
   const runGateBtn = actionButton(
     "Run Gate",
     `gate-${stepId}`,
     () => send({ type: "gate-step", step: stepId }),
     "secondary",
   );
-  applyButtonState(
-    runGateBtn,
-    flowUnlocked && actions.runGateEnabled,
-    flowUnlocked ? actions.runGateReason : FLOW_LOCKED_REASON,
-  );
+  {
+    const g = stepGate(actions.runGateEnabled, actions.runGateReason);
+    applyButtonState(runGateBtn, g.enabled, g.reason);
+  }
   const advanceBtn = actionButton("Advance", `advance-${stepId}`, () =>
     send({ type: "advance-step", step: stepId }),
   );
-  applyButtonState(
-    advanceBtn,
-    flowUnlocked && actions.advanceEnabled,
-    flowUnlocked ? actions.advanceReason : FLOW_LOCKED_REASON,
-  );
+  {
+    const g = stepGate(actions.advanceEnabled, actions.advanceReason);
+    applyButtonState(advanceBtn, g.enabled, g.reason);
+  }
   const resetBtn = actionButton(
     "Reset",
     `reset-${stepId}`,
     () => send({ type: "reset-step", step: stepId }),
     "secondary",
   );
-  applyButtonState(
-    resetBtn,
-    flowUnlocked && actions.resetEnabled,
-    flowUnlocked ? actions.resetReason : FLOW_LOCKED_REASON,
-  );
+  {
+    const g = stepGate(actions.resetEnabled, actions.resetReason);
+    applyButtonState(resetBtn, g.enabled, g.reason);
+  }
   const generateVerilogBtn = actions.showGenerateVerilog
     ? buildGenerateVerilogButton(stepId, flowUnlocked)
     : null;

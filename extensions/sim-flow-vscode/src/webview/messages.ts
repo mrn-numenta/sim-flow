@@ -6,7 +6,10 @@
 // - WebviewMessage: webview -> host
 
 import type { BaselineRecord, GateResult, RunRow } from "../cli/types";
+import type { StepMode } from "../session/protocol-types";
 import type { CritiqueFile, FlowState, PlanProgress } from "../state/types";
+
+export type { StepMode } from "../session/protocol-types";
 
 export type { PlanMilestone, PlanProgress } from "../state/types";
 
@@ -64,6 +67,21 @@ export interface DashboardState {
   verilogSimEnabled: boolean;
   /** Mirrors `sim-flow.dashboard.verilogSimulatorPath`; empty when unset. */
   verilogSimulatorPath: string;
+  /**
+   * Current step-axis mode. When a manual-mode pump is attached this
+   * is the orchestrator's truth (last `StepModeChanged` echo);
+   * otherwise it falls back to the `sim-flow.flow.stepMode` setting.
+   * The dashboard's toggle between Connect and Disconnect reads this
+   * and emits a `set-step-mode` webview message on click.
+   */
+  stepMode: StepMode;
+  /**
+   * True when a `SocketSessionPump` is alive for this project. When
+   * false, toggle changes only update the persisted setting (no
+   * `SetStepMode` round-trip is possible) and the per-step buttons
+   * fall back to their legacy chat-tab spawn path.
+   */
+  sessionActive: boolean;
   /** Timestamp of this snapshot (ISO-8601 UTC). */
   generatedAt: string;
   /** Sim-flow CLI version, if resolvable. */
@@ -236,4 +254,5 @@ export type WebviewMessage =
     }
   | { type: "open-critique"; step: string }
   | { type: "open-analysis-report" }
-  | { type: "generate-verilog" };
+  | { type: "generate-verilog" }
+  | { type: "set-step-mode"; mode: StepMode };

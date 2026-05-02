@@ -23,6 +23,9 @@ import {
   sendCommand as sendControlCommand,
 } from "../session/control-client";
 
+import type { AutoSessionManager, ManagedAutoSessionState } from "../chatPanel/autoSessionManager";
+import type { StepMode } from "../session/protocol-types";
+
 import { aggregateDashboardState } from "./aggregate";
 import {
   cliBackendArgFor,
@@ -50,6 +53,19 @@ export interface DashboardHostOptions {
    * own spec independently.
    */
   workspaceState: vscode.Memento;
+  /**
+   * The chat panel's session registry. The dashboard reads
+   * `getActiveSession()` to find the live `SocketSessionPump` for
+   * this project — when one exists and is in manual step mode, the
+   * per-step buttons (Run Step / Critique / Gate / Advance / Reset)
+   * dispatch as `RunStep` / `RunCritique` / `RunGate` / `Advance` /
+   * `Reset` host events over the transport socket instead of
+   * spawning side `sim-flow session ...` processes.
+   *
+   * Optional so tests / older entry points that don't construct one
+   * still work; absence falls through to the legacy chat-tab path.
+   */
+  autoSessions?: AutoSessionManager;
 }
 
 /**
@@ -62,6 +78,15 @@ export class DashboardHost {
   private readonly disposables: vscode.Disposable[] = [];
   private refreshing = false;
   private refreshQueued = false;
+  /**
+   * Bookkeeping for the active pump's `StepModeChanged` listener.
+   * The pump can change between refreshes (Connect → Disconnect →
+   * Connect with different settings); we re-subscribe each time
+   * `refresh()` runs and `disposeStepModeListener` cleans up the old
+   * subscription. `null` means we have no current subscription.
+   */
+  private stepModeListenerDispose: (() => void) | null = null;
+  private stepModeListenerSession: ManagedAutoSessionState | null = null;
 
   constructor(private readonly options: DashboardHostOptions) {}
 
@@ -117,11 +142,45 @@ export class DashboardHost {
   dispose(): void {
     this.watcher?.dispose();
     this.watcher = undefined;
+    this.disposeStepModeListener();
     for (const d of this.disposables) {
       d.dispose();
     }
     this.disposables.length = 0;
     this.panel = undefined;
+  }
+
+  private disposeStepModeListener(): void {
+    if (this.stepModeListenerDispose) {
+      this.stepModeListenerDispose();
+      this.stepModeListenerDispose = null;
+    }
+    this.stepModeListenerSession = null;
+  }
+
+  /**
+   * Resubscribe to the live pump's `StepModeChanged` events. Called
+   * after each `refresh()` because the active pump may have rotated
+   * (Connect → Disconnect → Connect with different LLM settings will
+   * spin up a new pump). Safe to call when no pump is attached.
+   */
+  private syncStepModeListener(): void {
+    const session = this.activeSession();
+    if (this.stepModeListenerSession === session) {
+      return; // already subscribed (or already idle)
+    }
+    this.disposeStepModeListener();
+    if (!session || typeof session.pump.onStepModeChanged !== "function") {
+      return;
+    }
+    this.stepModeListenerSession = session;
+    this.stepModeListenerDispose = session.pump.onStepModeChanged(() => {
+      // The orchestrator's truth changed (user toggle, cap exceeded,
+      // gate failure, …). Refresh so the dashboard's toggle UI
+      // matches it. Refresh is idempotent and serializes via
+      // `refreshing` / `refreshQueued`.
+      void this.refresh();
+    });
   }
 
   // -------------------------------------------------------------
@@ -145,18 +204,32 @@ export class DashboardHost {
         await this.refresh();
         return;
       case "run-step":
-        // Single-session interactive mode: a `claude` PTY is already
-        // running with the orchestrator, listening on the project's
-        // control socket. Send the step's prompt over the socket so
-        // the running claude sees it immediately, no fresh chat tab.
-        // Falls through to the legacy chat-tab path when the socket
-        // isn't there (per-step mode, sim-flow not running, etc.).
+        // Routing order:
+        // 1. JSONL transport socket — when the chat panel is running
+        //    a manual-mode `SocketSessionPump` for this project, the
+        //    dashboard's per-step buttons dispatch as `RunStep` host
+        //    events over the same transport. Auto mode rejects the
+        //    command with a Diagnostic on the orchestrator side; the
+        //    dashboard prevents that by disabling the buttons (see
+        //    `panel.ts::stepBox`), but if a misbehaving client still
+        //    sends one, the user sees a clear warning rather than a
+        //    silently-dropped click.
+        // 2. PTY control socket — single-session CLI-agent mode
+        //    where a `claude` PTY is listening; falls through.
+        // 3. Legacy chat-tab spawn — `sim-flow.runStep` opens a
+        //    fresh chat tab and runs the step there.
+        if (this.routeManualCommand((pump) => pump.runStep?.(msg.step, "work"))) {
+          return;
+        }
         if (await this.tryControlSocketRunStep(msg.step, "work")) {
           return;
         }
         await vscode.commands.executeCommand("sim-flow.runStep", msg.step, this.options.projectDir);
         return;
       case "run-critique":
+        if (this.routeManualCommand((pump) => pump.runCritique?.(msg.step))) {
+          return;
+        }
         if (await this.tryControlSocketRunStep(msg.step, "critique")) {
           return;
         }
@@ -167,12 +240,18 @@ export class DashboardHost {
         );
         return;
       case "gate-step":
+        if (this.routeManualCommand((pump) => pump.runGate?.(msg.step))) {
+          return;
+        }
         if (await this.tryControlSocketRunGate(msg.step)) {
           return;
         }
         await this.sendGateForStep(msg.step);
         return;
       case "advance-step":
+        if (this.routeManualCommand((pump) => pump.advance?.(msg.step))) {
+          return;
+        }
         if (await this.tryControlSocketAdvance(msg.step)) {
           return;
         }
@@ -316,6 +395,9 @@ export class DashboardHost {
         await this.resetPromptOverride(msg.slug, msg.kind, msg.scope);
         return;
       case "reset-step":
+        if (this.routeManualCommand((pump) => pump.reset?.(msg.step))) {
+          return;
+        }
         if (await this.tryControlSocketReset(msg.step)) {
           return;
         }
@@ -340,12 +422,43 @@ export class DashboardHost {
       case "generate-verilog":
         await this.generateVerilog();
         return;
+      case "set-step-mode":
+        await this.handleSetStepMode(msg.mode);
+        return;
       default:
         // Exhaustive-check guard: unknown messages are silently ignored
         // rather than throwing, to avoid crashing the panel during
         // development.
         return;
     }
+  }
+
+  /**
+   * Toggle change from the dashboard. When a manual-mode pump is live
+   * for this project, fire `SetStepMode` over the transport socket so
+   * the orchestrator flips its flag and emits `StepModeChanged` (which
+   * we'll observe via the pump's listener and refresh the dashboard).
+   * When no pump is alive, just persist the setting — the next launch
+   * will read it.
+   *
+   * Either way, persist the setting so it sticks across sessions. The
+   * orchestrator's truth wins for the live UI, the setting wins for
+   * the next launch.
+   */
+  private async handleSetStepMode(mode: StepMode): Promise<void> {
+    await vscode.workspace
+      .getConfiguration("sim-flow")
+      .update("flow.stepMode", mode, vscode.ConfigurationTarget.Workspace);
+    const session = this.activeSession();
+    if (session && typeof session.pump.setStepMode === "function") {
+      session.pump.setStepMode(mode);
+      // The orchestrator will echo `StepModeChanged` and our pump
+      // listener will refresh the dashboard once that arrives.
+      return;
+    }
+    // No live session: optimistic refresh so the toggle visually
+    // reflects the new persisted value immediately.
+    await this.refresh();
   }
 
   /**
@@ -364,6 +477,10 @@ export class DashboardHost {
     this.refreshing = true;
     try {
       const state = await this.buildState();
+      // Re-subscribe to the (possibly rotated) pump's
+      // `StepModeChanged` channel so the toggle reflects the
+      // orchestrator's truth between refreshes.
+      this.syncStepModeListener();
       await this.post({ type: "state-update", state });
       await this.postLlmConfig();
       await this.postBlockDiagram();
@@ -743,6 +860,15 @@ export class DashboardHost {
     const verilogSimulatorPath = (
       cfg.get<string>("dashboard.verilogSimulatorPath") ?? ""
     ).trim();
+    // Resolve the step-axis mode: orchestrator's truth when a pump is
+    // attached for this project, otherwise the persisted setting. The
+    // pump echoes `StepModeChanged` on connect, so once the dashboard
+    // has refreshed after the first echo the toggle matches reality
+    // even if the user changed the setting after launch.
+    const session = this.activeSession();
+    const stepMode: StepMode =
+      session?.pump.stepMode ?? readStepModeSetting(cfg);
+    const sessionActive = !!session;
     return aggregateDashboardState({
       projectDir: this.options.projectDir,
       flow,
@@ -755,8 +881,55 @@ export class DashboardHost {
       fullyAutomatedEnabled,
       verilogSimEnabled,
       verilogSimulatorPath,
+      stepMode,
+      sessionActive,
       maxRuns: MAX_DASHBOARD_RUNS,
     });
+  }
+
+  /**
+   * Active orchestrator pump for the dashboard's project, or
+   * undefined when none is attached. Used by the per-step button
+   * dispatcher and the step-mode toggle to decide whether to send a
+   * host event over the transport socket or fall back to the legacy
+   * chat-tab path.
+   */
+  private activeSession(): ManagedAutoSessionState | undefined {
+    const session = this.options.autoSessions?.getActiveSession();
+    if (!session || session.projectDir !== this.options.projectDir) {
+      return undefined;
+    }
+    return session;
+  }
+
+  /**
+   * Dispatch a manual-mode command over the live pump's transport
+   * socket. Returns true when a pump was found and the dispatcher
+   * was invoked; returns false when no pump is attached so the
+   * caller can fall back to the legacy paths (PTY control socket or
+   * chat-tab spawn).
+   *
+   * The dispatcher takes the pump itself so each call site picks the
+   * specific method (`runStep`, `runCritique`, …). Methods are
+   * declared optional on `LiveSessionTransport` to keep the PTY
+   * transport — which doesn't speak this protocol — out of scope; we
+   * verify presence here so a stray call against the wrong transport
+   * still falls through cleanly.
+   */
+  private routeManualCommand(
+    dispatch: (pump: ManagedAutoSessionState["pump"]) => void,
+  ): boolean {
+    const session = this.activeSession();
+    if (!session) {
+      return false;
+    }
+    if (typeof session.pump.setStepMode !== "function") {
+      // Wrong transport (PTY-mode pump, or a mock without these
+      // methods). Fall through.
+      return false;
+    }
+    dispatch(session.pump);
+    return true;
   }
 
   /**
@@ -1200,4 +1373,9 @@ function randomNonce(): string {
     out += chars[Math.floor(Math.random() * chars.length)];
   }
   return out;
+}
+
+function readStepModeSetting(config: vscode.WorkspaceConfiguration): StepMode {
+  const raw = (config.get<string>("flow.stepMode") ?? "manual").trim();
+  return raw === "auto" ? "auto" : "manual";
 }

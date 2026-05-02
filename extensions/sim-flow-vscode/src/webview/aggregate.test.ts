@@ -94,4 +94,32 @@ describe("aggregateDashboardState", () => {
     });
     expect(out.generatedAt).toBe(ts);
   });
+
+  it("defaults stepMode to manual and sessionActive to false when omitted", () => {
+    const out = aggregateDashboardState({
+      projectDir: "/proj",
+      flow: flow(),
+      critiques: [],
+      planProgress: { kind: "none", milestones: [], currentTask: null, currentTaskFilePath: null, currentTaskLine: null },
+      runs: [],
+      baselines: [],
+    });
+    expect(out.stepMode).toBe("manual");
+    expect(out.sessionActive).toBe(false);
+  });
+
+  it("forwards stepMode and sessionActive when supplied", () => {
+    const out = aggregateDashboardState({
+      projectDir: "/proj",
+      flow: flow(),
+      critiques: [],
+      planProgress: { kind: "none", milestones: [], currentTask: null, currentTaskFilePath: null, currentTaskLine: null },
+      runs: [],
+      baselines: [],
+      stepMode: "auto",
+      sessionActive: true,
+    });
+    expect(out.stepMode).toBe("auto");
+    expect(out.sessionActive).toBe(true);
+  });
 });
