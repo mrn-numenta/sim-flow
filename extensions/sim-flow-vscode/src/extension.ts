@@ -265,11 +265,23 @@ async function newProjectCommand(
     foundationRoot: getStringSetting("foundationRoot", ""),
   });
   try {
-    const result = await cli.newModel({ name, destination: parentTrimmed });
+    const result = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `sim-flow: creating project "${name}"`,
+        cancellable: false,
+      },
+      async (progress) => {
+        progress.report({ message: "scaffolding project files…" });
+        const created = await cli.newModel({ name, destination: parentTrimmed });
+        progress.report({ message: "opening dashboard…" });
+        await openDashboardForProject(context, created.project_dir);
+        return created;
+      },
+    );
     void vscode.window.showInformationMessage(
       `Created project "${name}" at ${result.project_dir}.`,
     );
-    await openDashboardForProject(context, result.project_dir);
   } catch (err) {
     await vscode.window.showErrorMessage(
       `sim-flow new model "${name}" failed: ${String((err as Error).message ?? err)}`,
@@ -394,7 +406,17 @@ async function bootstrapDefaultProject(): Promise<string | undefined> {
     foundationRoot: getStringSetting("foundationRoot", ""),
   });
   try {
-    const result = await cli.newModel({ name: projectName, destination: userDir });
+    const result = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `sim-flow: creating default project "${projectName}"`,
+        cancellable: false,
+      },
+      async (progress) => {
+        progress.report({ message: "scaffolding project files…" });
+        return await cli.newModel({ name: projectName, destination: userDir });
+      },
+    );
     void vscode.window.showInformationMessage(
       `Created default project at ${result.project_dir}. Use "Rename..." to give it a permanent name.`,
     );
