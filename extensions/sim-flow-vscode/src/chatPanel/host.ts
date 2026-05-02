@@ -398,8 +398,26 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
   }
 
+  /**
+   * Project the chat panel should be displaying RIGHT NOW. Anchors to
+   * the live session's project (active pump > pending launch > direct
+   * in-flight) so the panel doesn't auto-follow the user's active
+   * text editor when there's already a session attached. Without
+   * this anchor, switching files between sim-flow projects in the
+   * workspace flips the panel's transcript out from under a running
+   * session.
+   */
+  private anchoredProjectDir(): string | null {
+    return (
+      this.activePump?.projectDir ??
+      this.pendingAutoLaunch?.projectDir ??
+      this.inFlight?.projectDir ??
+      null
+    );
+  }
+
   private async readPanelContext(): Promise<PanelContext> {
-    const projectDir = await resolveProjectDirForPanel();
+    const projectDir = this.anchoredProjectDir() ?? (await resolveProjectDirForPanel());
     const settings = readPanelSettings();
     const currentStep = projectDir ? await readCurrentStepSafe(projectDir) : null;
     const projectLabel =
@@ -425,9 +443,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     specPath: string | undefined,
     projectDirHint: string | undefined,
   ): Promise<void> {
-    await vscode.commands.executeCommand(
-      `workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`,
-    );
+    // Resolve the target project BEFORE revealing the chat view so we
+    // can anchor the panel and pre-clear its transcript cache. The
+    // visibility hook fires `refresh()` async on reveal; without
+    // pre-anchoring it resolves to whatever `resolveProjectDir()`
+    // picks from the active editor, which can be a different
+    // sim-flow project than the one we're launching against and
+    // produces a brief flash of the editor-project's prior
+    // transcript before our `postState` overwrites it.
     const ctx = await resolveContext({
       projectDir: projectDirHint,
       showErrors: true,
@@ -446,6 +469,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.activePump.sourceTag === settings.source &&
       this.activePump.model === settings.model
     ) {
+      await vscode.commands.executeCommand(
+        `workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`,
+      );
       return;
     }
     if (
@@ -455,6 +481,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.pendingAutoLaunch.sourceTag === settings.source &&
       this.pendingAutoLaunch.model === settings.model
     ) {
+      await vscode.commands.executeCommand(
+        `workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`,
+      );
       return;
     }
 
@@ -473,6 +502,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       );
     }
 
+    // Anchor + reset the conversation cache for ctx.projectDir, then
+    // reveal the view. `startAutoSession` will overwrite this cache
+    // entry with the launch note + post the full state.
+    this.pendingAutoLaunch = {
+      projectDir: ctx.projectDir,
+      launchSpecPath: trimmedSpec,
+      sourceTag: settings.source,
+      model: settings.model,
+    };
+    this.rememberConversation(ctx.projectDir, clearConversationState());
+
+    await vscode.commands.executeCommand(
+      `workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`,
+    );
+
     await this.startAutoSession(
       ctx,
       trimmedSpec,
@@ -485,9 +529,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     kind: "work" | "critique",
     projectDirHint: string | undefined,
   ): Promise<void> {
-    await vscode.commands.executeCommand(
-      `workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`,
-    );
+    // Resolve the project before revealing so we can pre-anchor the
+    // panel to the launching project's transcript. See the matching
+    // comment in `launchAutoSession` for the rationale.
     const ctx = await resolveContext({
       projectDir: projectDirHint,
       showErrors: true,
@@ -507,6 +551,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.activePump.sourceTag === settings.source &&
       this.activePump.model === settings.model
     ) {
+      await vscode.commands.executeCommand(
+        `workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`,
+      );
       return;
     }
 
@@ -525,7 +572,33 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       );
     }
 
-    await this.startStepSession(ctx, stepRef, { resetConversation: true });
+    // Anchor the panel to ctx.projectDir before revealing so the
+    // visibility-triggered refresh resolves to this project (not the
+    // active editor's), and pre-clear the cache so it doesn't render
+    // the prior session's transcript briefly. `startStepSession`
+    // doesn't manage `pendingAutoLaunch` itself (it's primarily an
+    // auto-launch concept), so clean it up explicitly once the
+    // session is up.
+    const launchAnchor: PendingAutoLaunchState = {
+      projectDir: ctx.projectDir,
+      launchSpecPath: undefined,
+      sourceTag: settings.source,
+      model: settings.model,
+    };
+    this.pendingAutoLaunch = launchAnchor;
+    this.rememberConversation(ctx.projectDir, clearConversationState());
+
+    await vscode.commands.executeCommand(
+      `workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`,
+    );
+
+    try {
+      await this.startStepSession(ctx, stepRef, { resetConversation: true });
+    } finally {
+      if (this.pendingAutoLaunch === launchAnchor) {
+        this.pendingAutoLaunch = undefined;
+      }
+    }
   }
 
   private async startAutoSession(
