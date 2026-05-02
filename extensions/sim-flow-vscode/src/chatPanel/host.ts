@@ -610,6 +610,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     const llmConfig = buildPumpLlmConfig(ctx, this.secrets, config);
     const maxWorkIters = config.get<number>("auto.maxWorkIterations") ?? 3;
     const maxCritiqueIters = config.get<number>("auto.maxCritiqueIterations") ?? 3;
+    const stepMode = readStepModeSetting(config);
 
     const sessionId = randomUUID();
     const socketPath = reconnectableSocketPath(sessionId);
@@ -624,6 +625,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
     args.push("--max-auto-iters", String(maxWorkIters));
     args.push("--max-critique-iters", String(maxCritiqueIters));
+    args.push("--step-mode", stepMode);
     if (trimmedSpec) {
       args.push("--spec", trimmedSpec);
     } else {
@@ -696,6 +698,29 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   ): Promise<void> {
     const config = vscode.workspace.getConfiguration("sim-flow");
     const llmConfig = buildPumpLlmConfig(ctx, this.secrets, config);
+
+    // Side step-session launches happen only when the dashboard
+    // doesn't already have an orchestrator attached. When a manual-
+    // mode pump IS alive, the dashboard's per-step buttons route the
+    // request as a `RunStep` HostEvent instead of spawning a fresh
+    // `sim-flow session ...` process — see `routeManualCommand` in
+    // `webview/host.ts`. The fallback path below keeps the
+    // legacy "open a chat tab from cold" behavior.
+    if (this.autoSessions.getActiveSession()?.projectDir === ctx.projectDir) {
+      // Defensive: callers should suppress this path when a session
+      // is already live, but if they don't we surface the issue as a
+      // diagnostic note rather than launching a duplicate orchestrator
+      // that would race over the project's `.sim-flow/state.toml`.
+      const conversation = this.readConversation(ctx.projectDir);
+      const message =
+        "An orchestrator is already attached for this project; the dashboard's per-step controls send manual-mode commands directly. " +
+        "Disconnect first if you want to re-launch a fresh side session.";
+      const note = appendNote(conversation, "Step session skipped", message);
+      await this.persistConversation(ctx.projectDir, note);
+      const context = await this.readPanelContextForProject(ctx.projectDir);
+      await this.postState(context, note);
+      return;
+    }
 
     const sessionId = randomUUID();
     const socketPath = reconnectableSocketPath(sessionId);
@@ -1363,6 +1388,18 @@ function describePanelSession(
       ? `Chat with ${sourceLabel} while working on ${currentStep}.`
       : `Direct chat panel backed by ${sourceLabel}.`,
   };
+}
+
+/**
+ * Read the persisted `sim-flow.flow.stepMode` setting and clamp to a
+ * known value. The orchestrator's CLI rejects anything else, so a
+ * stale workspace setting from an older extension version that wrote
+ * a different string would fail-fast at launch. Defaulting to
+ * `manual` matches the package.json schema default.
+ */
+function readStepModeSetting(config: vscode.WorkspaceConfiguration): "auto" | "manual" {
+  const raw = (config.get<string>("flow.stepMode") ?? "manual").trim();
+  return raw === "auto" ? "auto" : "manual";
 }
 
 function readPanelSettings(): {

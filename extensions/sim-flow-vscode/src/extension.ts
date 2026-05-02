@@ -167,6 +167,7 @@ async function openDashboardForProject(
       projectDir,
       cli,
       workspaceState: context.workspaceState,
+      autoSessions: autoSessionManager,
     });
     dashboardHosts.set(projectDir, host);
   }

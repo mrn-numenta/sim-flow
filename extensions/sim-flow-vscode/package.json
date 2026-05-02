@@ -179,6 +179,19 @@
           "default": "per-step",
           "description": "Lifecycle for the interactive CLI-agent backend (`claude-cli` etc.). Ignored for chat-pane backends."
         },
+        "sim-flow.flow.stepMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "manual"
+          ],
+          "enumDescriptions": [
+            "Orchestrator walks current_step to the end of the flow without user input. Each step's work + critique sub-sessions and the advance gate run back-to-back.",
+            "Orchestrator parks waiting for explicit dashboard commands (Run Step, Run Critique, Run Gate, Advance, Reset). Critique-clean alone never auto-advances; the user clicks Advance."
+          ],
+          "default": "manual",
+          "description": "Initial step-axis mode passed to `sim-flow auto --step-mode <mode>` when the dashboard launches a session. The dashboard's step-mode toggle (between Connect and Disconnect) overrides this for the current session and emits a SetStepMode host event when a live session is attached."
+        },
         "sim-flow.llm.verbose": {
           "type": "boolean",
           "default": true,
