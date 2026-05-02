@@ -195,6 +195,25 @@
               "work_artifacts"
             ],
             "type": "object"
+          },
+          "StepMode": {
+            "description": "Step-axis mode of the orchestrator. Wire-stable enum serialized as `\"auto\"` / `\"manual\"`. See `docs/brainstorming/manual-step-mode.md`.",
+            "oneOf": [
+              {
+                "description": "Orchestrator walks `current_step` to end of flow without user input.",
+                "enum": [
+                  "auto"
+                ],
+                "type": "string"
+              },
+              {
+                "description": "Orchestrator parks after the hello handshake and dispatches sub-sessions only in response to manual-mode host commands.",
+                "enum": [
+                  "manual"
+                ],
+                "type": "string"
+              }
+            ]
           }
         },
         "description": "Event direction: orchestrator -> host.\n\nSerialized as a tagged JSON object with `event` carrying the variant name and the payload fields flattened next to it. We use kebab-case for the tag to match the JSON convention in the extension's existing types.",
@@ -558,6 +577,25 @@
               "reason"
             ],
             "type": "object"
+          },
+          {
+            "description": "The orchestrator's step-axis mode flag changed. Emitted on every flip — by user-issued `SetStepMode`, by the cap-exceeded \"drop to interactive\" path, or by any future internal trigger. The dashboard listens and reflects the current mode in its toggle UI so the visible state always matches the orchestrator's truth.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "step-mode-changed"
+                ],
+                "type": "string"
+              },
+              "mode": {
+                "$ref": "#/definitions/StepMode"
+              }
+            },
+            "required": [
+              "event",
+              "mode"
+            ],
+            "type": "object"
           }
         ],
         "title": "Event"
@@ -582,6 +620,33 @@
               "version"
             ],
             "type": "object"
+          },
+          "SessionKindOut": {
+            "description": "Mirror of `client::SessionKind` exposed in the protocol. Kept independent of the internal type so the wire format stays stable even if the internal representation changes.",
+            "enum": [
+              "work",
+              "critique"
+            ],
+            "type": "string"
+          },
+          "StepMode": {
+            "description": "Step-axis mode of the orchestrator. Wire-stable enum serialized as `\"auto\"` / `\"manual\"`. See `docs/brainstorming/manual-step-mode.md`.",
+            "oneOf": [
+              {
+                "description": "Orchestrator walks `current_step` to end of flow without user input.",
+                "enum": [
+                  "auto"
+                ],
+                "type": "string"
+              },
+              {
+                "description": "Orchestrator parks after the hello handshake and dispatches sub-sessions only in response to manual-mode host commands.",
+                "enum": [
+                  "manual"
+                ],
+                "type": "string"
+              }
+            ]
           }
         },
         "description": "Event direction: host -> orchestrator.",
@@ -736,6 +801,139 @@
               "event": {
                 "enum": [
                   "cancel"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "event"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Manual-mode command: run a step's work or critique sub-session. Rejected (with a Diagnostic) when the orchestrator is in auto mode — the auto loop owns step execution there.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "run-step"
+                ],
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/definitions/SessionKindOut"
+              },
+              "step": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event",
+              "kind",
+              "step"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Manual-mode command: run a step's critique sub-session. Alias for `RunStep { kind: critique }` for symmetry with the dashboard buttons.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "run-critique"
+                ],
+                "type": "string"
+              },
+              "step": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event",
+              "step"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Manual-mode command: evaluate the gate for a step and emit a `GateResult` event. Does NOT advance — see `Advance`.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "run-gate"
+                ],
+                "type": "string"
+              },
+              "step": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event",
+              "step"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Manual-mode command: gate-check + git commit + mark passed + bump `current_step`. Emits `GateResult` and `StateAdvanced`. If the gate is unclean, emits a Diagnostic and does not advance. Critique-clean alone never auto-advances; the user must issue this command.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "advance"
+                ],
+                "type": "string"
+              },
+              "step": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event",
+              "step"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Manual-mode command: clear a step's gate state and downstream gates (matching the existing `sim-flow reset` CLI semantics).",
+            "properties": {
+              "event": {
+                "enum": [
+                  "reset"
+                ],
+                "type": "string"
+              },
+              "step": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event",
+              "step"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Flip the orchestrator's step-axis mode flag. Takes effect at the next decision point in the run loop; never interrupts an in-flight sub-session. Auto → manual: current sub-session finishes, loop parks. Manual → auto: orchestrator stays parked until the user's next `RunStep` / `Advance`; after that command's sub-session, the loop sees `auto` and continues iterating from the now-current step.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "set-step-mode"
+                ],
+                "type": "string"
+              },
+              "mode": {
+                "$ref": "#/definitions/StepMode"
+              }
+            },
+            "required": [
+              "event",
+              "mode"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Tear the orchestrator down. Cancels any in-flight sub-session at the next safe boundary, emits `SessionEnd`, and exits.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "shutdown"
                 ],
                 "type": "string"
               }

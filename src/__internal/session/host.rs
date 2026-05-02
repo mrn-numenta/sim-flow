@@ -380,6 +380,9 @@ where
                     }
                 }
             }
+            Event::StepModeChanged { mode } => {
+                writeln!(self.stderr, "  [step mode now: {mode:?}]").map_err(write_err)?;
+            }
         }
         Ok(())
     }

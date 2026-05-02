@@ -111,6 +111,13 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
     },
+    /// The orchestrator's step-axis mode flag changed. Emitted on
+    /// every flip — by user-issued `SetStepMode`, by the
+    /// cap-exceeded "drop to interactive" path, or by any future
+    /// internal trigger. The dashboard listens and reflects the
+    /// current mode in its toggle UI so the visible state always
+    /// matches the orchestrator's truth.
+    StepModeChanged { mode: StepMode },
 }
 
 /// Event direction: host -> orchestrator.
@@ -147,6 +154,50 @@ pub enum HostEvent {
     /// User requested cancellation. The orchestrator stops, evaluates
     /// the gate one last time (informational), and emits SessionEnd.
     Cancel,
+    /// Manual-mode command: run a step's work or critique sub-session.
+    /// Rejected (with a Diagnostic) when the orchestrator is in auto
+    /// mode — the auto loop owns step execution there.
+    RunStep { step: String, kind: SessionKindOut },
+    /// Manual-mode command: run a step's critique sub-session. Alias
+    /// for `RunStep { kind: critique }` for symmetry with the
+    /// dashboard buttons.
+    RunCritique { step: String },
+    /// Manual-mode command: evaluate the gate for a step and emit a
+    /// `GateResult` event. Does NOT advance — see `Advance`.
+    RunGate { step: String },
+    /// Manual-mode command: gate-check + git commit + mark passed +
+    /// bump `current_step`. Emits `GateResult` and `StateAdvanced`.
+    /// If the gate is unclean, emits a Diagnostic and does not
+    /// advance. Critique-clean alone never auto-advances; the user
+    /// must issue this command.
+    Advance { step: String },
+    /// Manual-mode command: clear a step's gate state and downstream
+    /// gates (matching the existing `sim-flow reset` CLI semantics).
+    Reset { step: String },
+    /// Flip the orchestrator's step-axis mode flag. Takes effect at
+    /// the next decision point in the run loop; never interrupts an
+    /// in-flight sub-session. Auto → manual: current sub-session
+    /// finishes, loop parks. Manual → auto: orchestrator stays parked
+    /// until the user's next `RunStep` / `Advance`; after that
+    /// command's sub-session, the loop sees `auto` and continues
+    /// iterating from the now-current step.
+    SetStepMode { mode: StepMode },
+    /// Tear the orchestrator down. Cancels any in-flight sub-session
+    /// at the next safe boundary, emits `SessionEnd`, and exits.
+    Shutdown,
+}
+
+/// Step-axis mode of the orchestrator. Wire-stable enum serialized
+/// as `"auto"` / `"manual"`. See `docs/brainstorming/manual-step-mode.md`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum StepMode {
+    /// Orchestrator walks `current_step` to end of flow without user
+    /// input.
+    Auto,
+    /// Orchestrator parks after the hello handshake and dispatches
+    /// sub-sessions only in response to manual-mode host commands.
+    Manual,
 }
 
 /// Mirror of `client::SessionKind` exposed in the protocol. Kept

@@ -36,7 +36,9 @@ use std::path::{Path, PathBuf};
 use crate::Result;
 use crate::session::host::Host;
 use crate::session::orchestrator::{OrchestratorOptions, run_session};
-use crate::session::protocol::{DiagnosticLevel, Event, HostEvent, HostInfo, PROTOCOL_VERSION};
+use crate::session::protocol::{
+    DiagnosticLevel, Event, HostEvent, HostInfo, PROTOCOL_VERSION, StepMode,
+};
 use crate::state::State;
 use crate::steps::registry_for;
 
@@ -65,6 +67,17 @@ pub struct AutoOptions {
     /// Forwarded to each sub-session. Stuck-loop detection threshold;
     /// default 3.
     pub max_identical_responses: u32,
+    /// Initial step-axis mode. `Auto` (current behavior) walks
+    /// `current_step` to end of flow without user input. `Manual`
+    /// parks the orchestrator after the hello handshake and
+    /// dispatches sub-sessions only in response to host commands.
+    /// The mode flag is also live-mutable mid-run via the
+    /// `SetStepMode` host event; see
+    /// `docs/brainstorming/manual-step-mode.md`. Wired into
+    /// `AutoOptions` ahead of the run-loop refactor that consumes
+    /// it; today's `run_auto` ignores this field and always behaves
+    /// as if it were `Auto`.
+    pub step_mode: StepMode,
 }
 
 pub fn run_auto<H: Host>(opts: AutoOptions, host: &mut H) -> Result<()> {

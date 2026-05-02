@@ -255,6 +255,7 @@ fn event_kind(event: &Event) -> &'static str {
         Event::SessionEnd { .. } => "SessionEnd",
         Event::RequestUserInput { .. } => "RequestUserInput",
         Event::RequestLlmResponse { .. } => "RequestLlmResponse",
+        Event::StepModeChanged { .. } => "StepModeChanged",
     }
 }
 
@@ -267,6 +268,13 @@ fn host_event_kind(event: &HostEvent) -> &'static str {
         HostEvent::LlmEnd { .. } => "LlmEnd",
         HostEvent::LlmError { .. } => "LlmError",
         HostEvent::FollowupSelected { .. } => "FollowupSelected",
+        HostEvent::RunStep { .. } => "RunStep",
+        HostEvent::RunCritique { .. } => "RunCritique",
+        HostEvent::RunGate { .. } => "RunGate",
+        HostEvent::Advance { .. } => "Advance",
+        HostEvent::Reset { .. } => "Reset",
+        HostEvent::SetStepMode { .. } => "SetStepMode",
+        HostEvent::Shutdown => "Shutdown",
     }
 }
 

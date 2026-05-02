@@ -116,6 +116,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             spec,
             transport_socket,
             session_mode,
+            step_mode,
             max_llm_requests,
             max_identical_responses,
         } => auto_cmd(
@@ -129,6 +130,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             spec.as_deref(),
             transport_socket.as_deref(),
             *session_mode,
+            (*step_mode).into(),
             *max_llm_requests,
             *max_identical_responses,
         ),
@@ -389,6 +391,7 @@ fn auto_cmd(
     spec: Option<&Path>,
     transport_socket: Option<&Path>,
     session_mode: SessionMode,
+    step_mode: sim_flow::__internal::session::protocol::StepMode,
     max_llm_requests: u32,
     max_identical_responses: u32,
 ) -> sim_flow::Result<()> {
@@ -439,6 +442,7 @@ fn auto_cmd(
         dm0_interactive,
         max_llm_requests,
         max_identical_responses,
+        step_mode,
     };
     if let Some(socket_path) = transport_socket {
         let mut host = sim_flow::__internal::session::SocketHost::bind(socket_path.to_path_buf())?;

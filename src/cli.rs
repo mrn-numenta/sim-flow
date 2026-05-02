@@ -204,6 +204,15 @@ pub(crate) enum Command {
         /// backends (vscode / anthropic / openai / ollama / lmstudio).
         #[arg(long, value_enum, default_value_t = SessionMode::PerStep)]
         session_mode: SessionMode,
+        /// Step-axis mode (orthogonal to `--session-mode`). `auto`
+        /// (default) walks `current_step` to end of flow without user
+        /// input. `manual` binds the transport, hello-handshakes, then
+        /// parks waiting for `RunStep` / `RunCritique` / `RunGate` /
+        /// `Advance` / `Reset` / `SetStepMode` / `Shutdown` host
+        /// commands. The dashboard's step-mode toggle picks this at
+        /// connect time and can flip the flag live via `SetStepMode`.
+        #[arg(long, value_enum, default_value_t = StepMode::Auto)]
+        step_mode: StepMode,
         /// Hard cap on total LLM requests per work / critique
         /// sub-session. Backstop against runaway-loop bugs that the
         /// more specific `max_auto_iters` / `max_critique_iters`
@@ -406,6 +415,28 @@ pub(crate) enum ConfigAction {
 pub(crate) enum FlowArg {
     DirectModeling,
     DesignStudy,
+}
+
+/// Step-axis mode. Orthogonal to `SessionMode` (transport / agent
+/// lifecycle). `Auto` runs the full work → critique → advance loop
+/// unattended; `Manual` parks the orchestrator after the hello
+/// handshake and dispatches sub-sessions only in response to host
+/// commands. The flag is live: `SetStepMode { mode }` flips it
+/// mid-run, and the existing cap-exceeded "drop to interactive"
+/// path also flips it from auto → manual.
+#[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
+pub(crate) enum StepMode {
+    Auto,
+    Manual,
+}
+
+impl From<StepMode> for sim_flow::__internal::session::protocol::StepMode {
+    fn from(value: StepMode) -> Self {
+        match value {
+            StepMode::Auto => Self::Auto,
+            StepMode::Manual => Self::Manual,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
