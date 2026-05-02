@@ -701,3 +701,246 @@ fn session_protocol_schema_matches_committed_file() {
         committed_path.display(),
     );
 }
+
+// -------------------------------------------------------------------
+// Manual-mode (`run_auto` with `step_mode = Manual`).
+//
+// `run_auto` runs in one of two step-axis modes. These tests exercise
+// the manual-mode parking loop and its command dispatchers, plus the
+// auto-loop -> manual-loop transitions on `SetStepMode { manual }` and
+// the cap-exceeded path. The transport here is a `TestHost`; the
+// driver wraps it in an `AutoHost` to intercept SetStepMode / Shutdown
+// and route per-step commands.
+// -------------------------------------------------------------------
+
+fn auto_opts(
+    project: &Path,
+    mode: sim_flow::session::protocol::StepMode,
+) -> sim_flow::session::AutoOptions {
+    sim_flow::session::AutoOptions {
+        project_dir: project.to_path_buf(),
+        foundation_root: foundation_root(),
+        llm_backend: "test".into(),
+        llm_model: None,
+        max_auto_iters: 3,
+        max_critique_iters: 2,
+        dm0_interactive: false,
+        max_llm_requests: 50,
+        max_identical_responses: 0,
+        step_mode: mode,
+    }
+}
+
+#[test]
+fn manual_mode_starts_parked_and_emits_initial_step_mode_changed() {
+    use sim_flow::session::protocol::StepMode;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let project = init_project(&tmp);
+    let mut host = TestHost::new();
+    // No commands — the parking loop reads None and exits via HostClosed.
+
+    sim_flow::session::run_auto(auto_opts(&project, StepMode::Manual), &mut host).unwrap();
+
+    let saw_mode_change = host
+        .written
+        .iter()
+        .any(|e| matches!(e, Event::StepModeChanged { mode } if matches!(mode, StepMode::Manual)));
+    assert!(
+        saw_mode_change,
+        "manual mode should echo StepModeChanged on start so the dashboard toggle aligns",
+    );
+    let last = host.written.last().unwrap();
+    match last {
+        Event::SessionEnd { reason, .. } => assert_eq!(reason, "completed"),
+        other => panic!("expected SessionEnd, got {other:?}"),
+    }
+    // Manual-mode parking should never run a sub-session without a
+    // command, so no LLM request should ever go out.
+    let saw_llm = host
+        .written
+        .iter()
+        .any(|e| matches!(e, Event::RequestLlmResponse { .. }));
+    assert!(
+        !saw_llm,
+        "no LLM request should fire in a parked manual run"
+    );
+}
+
+#[test]
+fn manual_mode_dispatches_run_gate_and_keeps_parking() {
+    use sim_flow::session::protocol::StepMode;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let project = init_project(&tmp);
+    let mut host = TestHost::new();
+    host.enqueue(HostEvent::RunGate { step: "DM0".into() });
+    host.enqueue(HostEvent::Shutdown);
+
+    sim_flow::session::run_auto(auto_opts(&project, StepMode::Manual), &mut host).unwrap();
+
+    // RunGate evaluates the gate and emits a GateResult. DM0's
+    // structural gate looks for docs/spec.md — which doesn't exist in
+    // a freshly-initialized project — so the report is unclean.
+    let saw_gate = host
+        .written
+        .iter()
+        .any(|e| matches!(e, Event::GateResult { step, clean, .. } if step == "DM0" && !*clean));
+    assert!(
+        saw_gate,
+        "RunGate should emit a GateResult; events: {:?}",
+        host.written
+    );
+    // No LLM dispatch should happen for RunGate.
+    let saw_llm = host
+        .written
+        .iter()
+        .any(|e| matches!(e, Event::RequestLlmResponse { .. }));
+    assert!(!saw_llm, "RunGate should not dispatch an LLM call");
+}
+
+#[test]
+fn manual_mode_dispatches_run_step_and_runs_a_real_subsession() {
+    use sim_flow::session::protocol::StepMode;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let project = init_project(&tmp);
+    let mut host = TestHost::new();
+    host.enqueue(HostEvent::RunStep {
+        step: "DM0".into(),
+        kind: sim_flow::session::protocol::SessionKindOut::Work,
+    });
+    // The work sub-session needs an LLM response. A clean spec.md
+    // satisfies the structural gate so the orchestrator ends with
+    // SessionEnd { completed }.
+    let response = "Drafting the spec.\n\n\
+        ```docs/spec.md\n\
+        # Spec\n\nClock: 2 GHz\nNode: 7 nm\n\
+        ```\n";
+    host.enqueue_llm_response("lr-1", response);
+    host.enqueue(HostEvent::Shutdown);
+
+    sim_flow::session::run_auto(auto_opts(&project, StepMode::Manual), &mut host).unwrap();
+
+    // Spec landed.
+    let written = std::fs::read_to_string(project.join("docs/spec.md")).unwrap();
+    assert!(written.contains("Clock: 2 GHz"));
+    // Manual-mode sub-sessions forward their SessionEnd to the host
+    // so the dashboard can re-enable controls between commands. We
+    // expect TWO SessionEnds total: one from the dispatched
+    // sub-session, one from run_auto on shutdown.
+    let session_ends: Vec<_> = host
+        .written
+        .iter()
+        .filter(|e| matches!(e, Event::SessionEnd { .. }))
+        .collect();
+    assert!(
+        session_ends.len() >= 2,
+        "expected SessionEnd from sub-session AND final from driver; got {} ({:?})",
+        session_ends.len(),
+        host.written,
+    );
+}
+
+#[test]
+fn manual_mode_set_step_mode_to_auto_resumes_iteration() {
+    use sim_flow::session::protocol::StepMode;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let project = init_project(&tmp);
+    let mut host = TestHost::new();
+    // SetStepMode flips the flag (intercepted by AutoHost) and emits
+    // StepModeChanged. The auto loop then takes over and tries to
+    // run a DM0 work sub-session. We don't enqueue an LLM response,
+    // so the orchestrator's read returns None and the run terminates
+    // — but only AFTER we observe StepModeChanged { auto }.
+    host.enqueue(HostEvent::SetStepMode {
+        mode: StepMode::Auto,
+    });
+
+    let _ = sim_flow::session::run_auto(auto_opts(&project, StepMode::Manual), &mut host);
+
+    let saw_to_auto = host
+        .written
+        .iter()
+        .any(|e| matches!(e, Event::StepModeChanged { mode } if matches!(mode, StepMode::Auto)));
+    assert!(
+        saw_to_auto,
+        "SetStepMode {{ auto }} should emit StepModeChanged; events: {:?}",
+        host.written
+    );
+}
+
+#[test]
+fn auto_mode_cap_exceeded_flips_to_manual_and_emits_step_mode_changed() {
+    // The orchestrator's per-session cap fires after max_auto_iters
+    // bad responses. Today the auto driver flips the shared step-
+    // mode flag to manual and emits StepModeChanged so the dashboard
+    // toggle matches reality. The parking loop then takes over;
+    // here we have no further script so the run exits cleanly.
+    use sim_flow::session::protocol::StepMode;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let project = init_project(&tmp);
+    let mut host = TestHost::new();
+    // The very first sub-session in run_auto reads Hello from the
+    // actual host (every sub-session AFTER the first uses a
+    // synthetic Hello queued by AutoHost).
+    host.enqueue(hello());
+    let bad = "```docs/spec.md\n# Spec\n\nClock: 2 GHz\n```\n";
+    host.enqueue_llm_response("lr-1", bad);
+    host.enqueue_llm_response("lr-2", bad);
+    // No /end-session needed: AutoHost queues a Cancel on cap and
+    // the orchestrator stops itself.
+
+    let mut opts = auto_opts(&project, StepMode::Auto);
+    opts.max_auto_iters = 2;
+    sim_flow::session::run_auto(opts, &mut host).unwrap();
+
+    let saw_to_manual = host
+        .written
+        .iter()
+        .any(|e| matches!(e, Event::StepModeChanged { mode } if matches!(mode, StepMode::Manual)));
+    assert!(
+        saw_to_manual,
+        "cap-exceeded path should emit StepModeChanged {{ manual }}; events: {:?}",
+        host.written,
+    );
+    let saw_diag = host.written.iter().any(|e| {
+        matches!(
+            e,
+            Event::Diagnostic { level, message }
+                if matches!(level, sim_flow::session::DiagnosticLevel::Error)
+                    && message.contains("flipping to manual mode")
+        )
+    });
+    assert!(
+        saw_diag,
+        "cap-exceeded path should emit a clarifying Diagnostic; events: {:?}",
+        host.written,
+    );
+}
+
+#[test]
+fn manual_mode_shutdown_terminates_cleanly() {
+    use sim_flow::session::protocol::StepMode;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let project = init_project(&tmp);
+    let mut host = TestHost::new();
+    host.enqueue(HostEvent::Shutdown);
+
+    sim_flow::session::run_auto(auto_opts(&project, StepMode::Manual), &mut host).unwrap();
+
+    let last = host.written.last().unwrap();
+    match last {
+        Event::SessionEnd { reason, message } => {
+            assert_eq!(reason, "completed");
+            assert!(
+                message.as_deref().unwrap_or("").contains("shut down"),
+                "shutdown SessionEnd should mention shutdown; got {message:?}"
+            );
+        }
+        other => panic!("expected SessionEnd, got {other:?}"),
+    }
+}
