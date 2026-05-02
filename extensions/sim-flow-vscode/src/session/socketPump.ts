@@ -366,6 +366,11 @@ export class SocketSessionPump implements LiveSessionTransport {
           endMessage: event.message ?? undefined,
         });
         break;
+      case "step-mode-changed":
+        // Step-axis mode flipped (manual <-> auto). Dashboard wiring
+        // for the toggle UI lands in the extension-side PR; the
+        // event is already logged at the transport layer.
+        break;
       default: {
         const exhaustive: never = event;
         void exhaustive;

@@ -391,6 +391,12 @@ export class SessionPump {
           endMessage: event.message ?? undefined,
         });
         break;
+      case "step-mode-changed":
+        // Step-axis mode flipped (manual <-> auto). Dashboard wiring
+        // for the toggle UI lands in the extension-side PR; for now
+        // the debug log already records the event and consumers that
+        // care can subscribe via the bus's `event` channel.
+        break;
       default: {
         const exhaustive: never = event;
         void exhaustive;

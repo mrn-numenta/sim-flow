@@ -33,6 +33,54 @@ interface CommittedSchema {
   oneOf: Array<{ title: string; schema: Record<string, unknown> }>;
 }
 
+/**
+ * `compile()` is invoked once per schema in the top-level oneOf and
+ * each call inlines every type the schema references. Types that
+ * appear in BOTH directions (e.g. `SessionKindOut` is used by
+ * `Event::HelloAck.session.kind` and by `HostEvent::RunStep.kind`;
+ * `StepMode` is used by `Event::StepModeChanged.mode` and by
+ * `HostEvent::SetStepMode.mode`) are therefore emitted twice and
+ * produce TS2300 "Duplicate identifier" errors when the file is
+ * compiled.
+ *
+ * The duplicates are always single-line `export type X = ...;`
+ * declarations — `compile()` handles cross-references for object /
+ * union types via internal naming, so multi-line shapes only ever
+ * appear once. We dedupe at the line level: any `export type X =
+ * ...;` whose name was already emitted earlier in the concatenated
+ * output is dropped, along with any preceding doc comment.
+ */
+function dedupeSingleLineTypeAliases(source: string): string {
+  const lines = source.split("\n");
+  const seen = new Set<string>();
+  const keep: boolean[] = new Array(lines.length).fill(true);
+
+  for (let i = 0; i < lines.length; i++) {
+    // `export type X = "a" | "b";` (single-line literal-union form).
+    // Multi-line `export type X =\n | { ... };` declarations are never
+    // duplicated by `compile()` so they don't need this treatment.
+    const m = lines[i].match(/^export type (\w+) = .+;$/);
+    if (!m) continue;
+    if (!seen.has(m[1])) {
+      seen.add(m[1]);
+      continue;
+    }
+    keep[i] = false;
+    // Walk back over any immediately-preceding doc comment (`/** ... */`)
+    // and strip it too — leaving the orphan would be visually confusing.
+    let j = i - 1;
+    if (j >= 0 && lines[j].trimEnd().endsWith("*/")) {
+      while (j >= 0) {
+        keep[j] = false;
+        if (lines[j].trim().startsWith("/**")) break;
+        j--;
+      }
+    }
+  }
+
+  return lines.filter((_, idx) => keep[idx]).join("\n");
+}
+
 async function main(): Promise<void> {
   const raw = await fs.readFile(schemaPath, "utf8");
   const top = JSON.parse(raw) as CommittedSchema;
@@ -59,7 +107,8 @@ async function main(): Promise<void> {
     sections.push("");
   }
 
-  await fs.writeFile(outPath, sections.join("\n"));
+  const combined = dedupeSingleLineTypeAliases(sections.join("\n"));
+  await fs.writeFile(outPath, combined);
   console.log(`wrote ${outPath}`);
 }
 

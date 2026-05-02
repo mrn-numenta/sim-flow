@@ -85,6 +85,10 @@ export type Event =
       event: "session-end";
       message?: string | null;
       reason: string;
+    }
+  | {
+      event: "step-mode-changed";
+      mode: StepMode;
     };
 /**
  * Mirror of `client::SessionKind` exposed in the protocol. Kept independent of the internal type so the wire format stays stable even if the internal representation changes.
@@ -92,6 +96,10 @@ export type Event =
 export type SessionKindOut = "work" | "critique";
 export type LlmRole = "system" | "user" | "assistant";
 export type DiagnosticLevel = "info" | "warning" | "error";
+/**
+ * Step-axis mode of the orchestrator. Wire-stable enum serialized as `"auto"` / `"manual"`. See `docs/brainstorming/manual-step-mode.md`.
+ */
+export type StepMode = "auto" | "manual";
 
 export interface SessionTag {
   candidate?: string | null;
@@ -196,6 +204,34 @@ export type HostEvent =
     }
   | {
       event: "cancel";
+    }
+  | {
+      event: "run-step";
+      kind: SessionKindOut;
+      step: string;
+    }
+  | {
+      event: "run-critique";
+      step: string;
+    }
+  | {
+      event: "run-gate";
+      step: string;
+    }
+  | {
+      event: "advance";
+      step: string;
+    }
+  | {
+      event: "reset";
+      step: string;
+    }
+  | {
+      event: "set-step-mode";
+      mode: StepMode;
+    }
+  | {
+      event: "shutdown";
     };
 
 export interface HostInfo {
