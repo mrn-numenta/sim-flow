@@ -4,6 +4,13 @@
 // format is identical.
 
 import {
+  extractToolFences,
+  makeToolCallId,
+  normalizeToolArgsForOpenAi,
+  parseToolResultsEnvelope,
+  type ParsedToolCall,
+} from "./tool-translation";
+import {
   type CancellationLike,
   type LlmBackend,
   LlmError,
@@ -63,14 +70,23 @@ export class OpenAiCompatibleBackend implements LlmBackend {
     // generations as "fetch failed". With `stream: true` each delta
     // resets the timer, the user sees tokens in real time, and the
     // timeout stops being a problem.
+    //
+    // Translate sim-flow's fenced-block tool representation into
+    // OpenAI's native `tool_calls` + `role: tool` shape. Without
+    // this, the model sees its own previous tool calls as text in
+    // the conversation history and tends to emit text-mode tool
+    // calls in subsequent turns (or worse, near-misses on the fence
+    // syntax — qwen3-coder slips to `tool=name` instead of
+    // `tool:name`). Going native end-to-end keeps the model in its
+    // own protocol.
     const body: {
       model: string;
-      messages: Array<{ role: string; content: OpenAiContent }>;
+      messages: OpenAiMessage[];
       tools?: OpenAiTool[];
       stream: boolean;
     } = {
       model,
-      messages: messages.map((m) => ({ role: m.role, content: openAiContent(m) })),
+      messages: transformMessagesForOpenAi(messages),
       stream: true,
     };
     if (tools && tools.length > 0) {
@@ -321,6 +337,31 @@ interface OpenAiTool {
   };
 }
 
+interface OpenAiToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+/**
+ * OpenAI Chat Completions message shape. Three variants:
+ *
+ * - `system` / `user`: plain `content` (string or multimodal array).
+ * - `assistant`: optional text `content` plus optional `tool_calls`.
+ *   At least one of the two must be non-empty; a tool-call-only
+ *   assistant turn uses `content: null` per OpenAI's spec.
+ * - `tool`: result of one prior `assistant.tool_calls[i]`. The
+ *   `tool_call_id` MUST match the assistant message's id.
+ */
+type OpenAiMessage =
+  | { role: "system" | "user"; content: OpenAiContent }
+  | {
+      role: "assistant";
+      content: OpenAiContent | null;
+      tool_calls?: OpenAiToolCall[];
+    }
+  | { role: "tool"; tool_call_id: string; content: string };
+
 function toOpenAiTool(tool: LlmTool): OpenAiTool {
   return {
     type: "function",
@@ -330,6 +371,136 @@ function toOpenAiTool(tool: LlmTool): OpenAiTool {
       parameters: tool.args_schema,
     },
   };
+}
+
+/**
+ * Walk sim-flow's `LlmMessage[]` and produce OpenAI-native messages.
+ *
+ * The orchestrator's wire shape carries tool calls as fenced text in
+ * assistant content and tool results as a "Tool results: …" user
+ * message. This walks the conversation in order:
+ *
+ *   - For each assistant message, extract every `\`\`\`tool:<name>` fence
+ *     into a structured `tool_calls` entry, mint deterministic ids,
+ *     and keep any non-fence text as `content`. A tool-call-only
+ *     assistant turn becomes `{ content: null, tool_calls: [...] }`.
+ *   - When the next message is a "Tool results: …" user message,
+ *     split it on the orchestrator's `\n\n---\n\n` separator and emit
+ *     one `role: "tool"` message per section, paired by index with
+ *     the previous assistant's tool_call ids.
+ *   - Anything that doesn't match those patterns passes through
+ *     unchanged.
+ *
+ * Outcome: the model sees a clean
+ * `assistant{tool_calls} → tool → assistant{tool_calls} → …`
+ * conversation, so it stays in native-tool-calling mode instead of
+ * mimicking the fenced-text format we synthesized for it.
+ */
+export function transformMessagesForOpenAi(messages: LlmMessage[]): OpenAiMessage[] {
+  const out: OpenAiMessage[] = [];
+  // Outstanding tool_call ids from the most recent assistant message.
+  // The next user message is a candidate for translation into
+  // `role: tool` results paired with these ids; cleared once paired
+  // (or once a non-tool-results user message lands, since OpenAI
+  // doesn't allow lingering tool calls without matching results).
+  let pendingToolCallIds: string[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+
+    if (m.role === "assistant") {
+      // Tool fences only live in plain text content; if the message
+      // carries attachments we don't try to extract — fall back to
+      // pass-through. (Today the orchestrator never attaches images
+      // to assistant messages; the guard is defensive.)
+      if (m.attachments && m.attachments.length > 0) {
+        out.push({ role: "assistant", content: openAiContent(m) });
+        pendingToolCallIds = [];
+        continue;
+      }
+      const { content, toolCalls } = extractToolFences(m.content);
+      if (toolCalls.length === 0) {
+        out.push({ role: "assistant", content: m.content });
+        pendingToolCallIds = [];
+        continue;
+      }
+      const assistant: OpenAiToolCall[] = toolCalls.map(
+        (tc: ParsedToolCall, idx: number) => ({
+          id: makeToolCallId(i, idx),
+          type: "function" as const,
+          function: {
+            name: tc.name,
+            arguments: normalizeToolArgsForOpenAi(tc.args),
+          },
+        }),
+      );
+      out.push({
+        role: "assistant",
+        content: content.length > 0 ? content : null,
+        tool_calls: assistant,
+      });
+      pendingToolCallIds = assistant.map((c) => c.id);
+      continue;
+    }
+
+    if (m.role === "user" && pendingToolCallIds.length > 0) {
+      // Attachments on a tool-results message would lose alignment
+      // when split into per-section role: tool entries. Fall back to
+      // pass-through if any section would need to carry an image —
+      // the model still sees the data, just as a regular user
+      // message.
+      const sections =
+        m.attachments && m.attachments.length > 0
+          ? null
+          : parseToolResultsEnvelope(m.content);
+      if (sections === null) {
+        // Plain user message — clear pending ids so we don't
+        // mis-pair later, and pass through.
+        pendingToolCallIds = [];
+        out.push({ role: "user", content: openAiContent(m) });
+        continue;
+      }
+      // Pair each section with the corresponding pending id.
+      const pairCount = Math.min(sections.length, pendingToolCallIds.length);
+      for (let j = 0; j < pairCount; j++) {
+        out.push({
+          role: "tool",
+          tool_call_id: pendingToolCallIds[j],
+          content: sections[j],
+        });
+      }
+      // If there are extra sections (more results than calls), the
+      // surplus has nowhere to live as `role: tool` messages. Tack
+      // them on as a regular user message so the model still sees
+      // the data.
+      if (sections.length > pairCount) {
+        out.push({
+          role: "user",
+          content: sections.slice(pairCount).join("\n\n---\n\n"),
+        });
+      }
+      // Note: if there are MORE pending ids than sections, OpenAI
+      // will reject the request ("tool call without matching
+      // result"). We don't fabricate results — this signals a real
+      // protocol violation upstream that should surface as an HTTP
+      // error rather than be silently masked.
+      pendingToolCallIds = [];
+      continue;
+    }
+
+    // Plain message (system / user without pending tool calls). Pass
+    // through. Clear pending ids — any tool calls without matching
+    // results before the next user turn would be a protocol error.
+    pendingToolCallIds = [];
+    if (m.role === "system" || m.role === "user") {
+      out.push({ role: m.role, content: openAiContent(m) });
+    } else {
+      // Unknown role — shouldn't happen; pass through with role
+      // coerced to user so the message at least reaches the model.
+      out.push({ role: "user", content: openAiContent(m) });
+    }
+  }
+  return out;
 }
 
 function trimTrailingSlash(s: string): string {
