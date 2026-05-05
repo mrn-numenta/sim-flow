@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import * as net from "node:net";
 
@@ -13,6 +13,7 @@ import {
 } from "../llm";
 import { estimateMessagesTokens } from "../llm/tokenEstimate";
 import { DebugLog } from "./debug-log";
+import { removePidRecord, writePidRecord } from "./processRegistry";
 import {
   BREVITY_DIRECTIVE,
   type LiveSessionTransport,
@@ -62,6 +63,16 @@ export class SocketSessionPump implements LiveSessionTransport {
   private stepDescriptor: StepDescriptorOut | null = null;
   private lastUsedSource: LlmSource | null = null;
   /**
+   * Spawned `sim-flow` child. Tracked so `dispose()` can SIGTERM it
+   * (otherwise the child outlives the pump if its socket close
+   * handler doesn't notice the disconnect quickly enough). `null`
+   * when no child was spawned (attach-only mode for tests / future
+   * reconnection).
+   */
+  private child: ChildProcess | null = null;
+  /** True after we've reaped `<project>/.sim-flow/pids/<id>.json`. */
+  private pidRecordCleared = false;
+  /**
    * Last `StepModeChanged` value the orchestrator emitted. The
    * orchestrator echoes the initial mode as soon as it's spawned and
    * re-emits on every flip (user toggle, cap exceeded, gate failure
@@ -94,13 +105,36 @@ export class SocketSessionPump implements LiveSessionTransport {
         env,
         stdio: ["ignore", "ignore", "ignore"],
       });
+      this.child = child;
       this.debugLog.logProcessSpawn(
         options.launch.binary,
         options.launch.args,
         child.pid,
       );
+      // Stash a pid record under `<project>/.sim-flow/pids/<sessionId>.json`
+      // so that on the next extension activate we can reap orphans
+      // left behind by a host crash. The record is removed when the
+      // child exits cleanly or `dispose()` runs.
+      if (typeof child.pid === "number") {
+        try {
+          writePidRecord(llm.projectDir, {
+            pid: child.pid,
+            sessionId: options.sessionId,
+            binary: options.launch.binary,
+            label: options.launch.args.slice(0, 2).join(" "),
+            spawnedAtMs: Date.now(),
+          });
+        } catch (err) {
+          // Non-fatal: the child still runs; we just can't reap it
+          // automatically on a future activate. Log via debug log.
+          this.debugLog.logSpawnError(
+            `pid registry write failed: ${(err as Error).message}`,
+          );
+        }
+      }
       child.on("error", (err) => {
         this.debugLog.logSpawnError(err.message);
+        this.clearPidRecord();
         this.markTerminated({
           status: "ended",
           endReason: "spawn-error",
@@ -109,6 +143,7 @@ export class SocketSessionPump implements LiveSessionTransport {
       });
       child.on("exit", (code, signal) => {
         this.debugLog.logProcessExit(code, signal, "");
+        this.clearPidRecord();
         if (!this.terminated) {
           this.markTerminated({
             status: "ended",
@@ -122,6 +157,19 @@ export class SocketSessionPump implements LiveSessionTransport {
       });
     }
     this.connectionReady = this.connect();
+  }
+
+  private clearPidRecord(): void {
+    if (this.pidRecordCleared) {
+      return;
+    }
+    this.pidRecordCleared = true;
+    try {
+      removePidRecord(this.llm.projectDir, this.options.sessionId);
+    } catch {
+      // already logged by removePidRecord; ignore here so we don't
+      // throw out of an exit handler.
+    }
   }
 
   get session(): SessionTag | null {
@@ -266,6 +314,23 @@ export class SocketSessionPump implements LiveSessionTransport {
       this.socket.destroy();
     }
     this.socket = undefined;
+    // Tear down the spawned `sim-flow` child so it doesn't outlive
+    // the pump. Socket close usually causes the orchestrator to exit
+    // on its own (the JsonlHost / SocketHost reads return None), but
+    // a stuck orchestrator (e.g. blocked in an LLM call) won't
+    // notice for a while. SIGTERM is the polite kick. The child's
+    // `exit` handler will clear the pid record.
+    if (this.child && this.child.exitCode === null && this.child.signalCode === null) {
+      try {
+        this.child.kill("SIGTERM");
+      } catch {
+        // child already gone
+      }
+    }
+    this.child = null;
+    // Defensive: if the exit handler never fires (e.g. test harnesses
+    // that mock spawn), reap the pid record here too.
+    this.clearPidRecord();
     this.debugLog.dispose();
   }
 

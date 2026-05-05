@@ -680,23 +680,8 @@ function panel(id: TabId, content: Node[]): HTMLElement {
 function renderFlowTab(data: DashboardState): Node[] {
   const rail = el("div", { class: "step-rail" });
   const flowSteps = data.flow.flow === "direct-modeling" ? DM_STEPS : DS_STEPS;
-  for (let i = 0; i < flowSteps.length; i++) {
-    const step = flowSteps[i];
-    const box = stepBox(data, step);
-    // The first / last steps get flat outer edges; intermediate
-    // steps have triangular cut-outs at both top and bottom that
-    // the gate diamonds sit inside. See `.step` in panel.css for
-    // the clip-path geometry.
-    if (i === 0) {
-      box.classList.add("step-first");
-    }
-    if (i === flowSteps.length - 1) {
-      box.classList.add("step-last");
-    }
-    rail.appendChild(box);
-    if (i < flowSteps.length - 1) {
-      rail.appendChild(gateDiamond(data, step));
-    }
+  for (const step of flowSteps) {
+    rail.appendChild(stepBox(data, step));
   }
   // Grey out + disable interaction with the step rail and the
   // per-step detail panel until the user has clicked Play. The Run
@@ -719,17 +704,14 @@ function renderFlowTab(data: DashboardState): Node[] {
 }
 
 function renderAutoFlowRow(): HTMLElement {
-  // Two-row control panel:
-  //   row 1: Play (▶) / Stop (■) icon buttons.
-  //   row 2: `Spec:` label + path input + Browse... button.
-  // The CLI driver reads `state.current_step` and proceeds from there,
-  // so Play is also "resume": clicking it after a run that hit a cap /
-  // dropped to interactive picks up where the last run left off. Stop
-  // injects `/exit` over the single-session control socket, which
-  // tells the running claude TUI to leave; the orchestrator then
-  // parks at "waiting for the next dashboard command".
-  const playBtn = actionButton(
-    "▶", // ▶
+  // One-row control panel:
+  //   [Spec:] [help+input col] [Browse...] [🔌 Connect] [Manual ⇄ Auto] [⏻ Disconnect]
+  // Connect launches the orchestrator (or no-ops when one is already
+  // attached); the step-mode toggle picks the initial mode and can
+  // also flip live mid-session via SetStepMode; Disconnect tells the
+  // orchestrator to shut down cleanly.
+  const connectBtn = actionButton(
+    "\u{1F50C}", // 🔌
     "run-auto",
     () => {
       ui.autoRunning = true;
@@ -739,20 +721,20 @@ function renderAutoFlowRow(): HTMLElement {
       render();
     },
   );
-  playBtn.title =
-    "Play / Resume the automated flow. Picks up at `current_step` from state.toml. " +
-    "After clicking Play the step rail and per-step buttons become active.";
-  playBtn.classList.add("auto-run-btn", "auto-icon-btn");
+  connectBtn.title =
+    "Connect to a sim-flow session. Launches the orchestrator with the current step-mode setting; " +
+    "the step rail and per-step buttons become active afterward.";
+  connectBtn.classList.add("auto-run-btn", "auto-icon-btn");
   applyButtonState(
-    playBtn,
+    connectBtn,
     !ui.autoRunning,
     ui.autoRunning
-      ? "Play is disabled while a session is already running."
-      : playBtn.title,
+      ? "Connect is disabled while a session is already attached."
+      : connectBtn.title,
   );
 
-  const stopBtn = actionButton(
-    "■", // ■
+  const disconnectBtn = actionButton(
+    "\u{23FB}", // ⏻
     "stop-auto",
     () => {
       ui.autoRunning = false;
@@ -761,46 +743,23 @@ function renderAutoFlowRow(): HTMLElement {
     },
     "secondary",
   );
-  stopBtn.title =
-    "Stop the automated flow by injecting `/exit` over the control socket. " +
-    "The running claude TUI exits cleanly; the orchestrator parks waiting for the next command. " +
-    "After Stop the step rail re-locks until you click Play again.";
-  stopBtn.classList.add("auto-stop-btn", "auto-icon-btn");
+  disconnectBtn.title =
+    "Disconnect from the sim-flow session. The orchestrator shuts down cleanly; " +
+    "after Disconnect the step rail re-locks until you Connect again.";
+  disconnectBtn.classList.add("auto-stop-btn", "auto-icon-btn");
   applyButtonState(
-    stopBtn,
+    disconnectBtn,
     ui.autoRunning,
     ui.autoRunning
-      ? stopBtn.title
-      : "Stop is disabled because there is no active session.",
+      ? disconnectBtn.title
+      : "Disconnect is disabled because there is no active session.",
   );
 
-  // End-to-end "automated" red play. Hidden unless the user has
-  // explicitly enabled it via the Settings tab checkbox -- it kicks
-  // off a long unattended run and we don't want a single misclick
-  // to start one.
-  const buttonRowChildren: HTMLElement[] = [];
-  if (ui.data?.fullyAutomatedEnabled) {
-    const fullyAutoBtn = actionButton("▶", "run-auto-end-to-end", () => {
-      const spec = ui.specPath.trim();
-      if (!spec) {
-        ui.lastError = {
-          message: "Fully-automated flow needs a spec path.",
-          detail: "Type or browse to a spec file in the Spec field above, then click the red play.",
-        };
-        render();
-        return;
-      }
-      ui.autoRunning = true;
-      send({ type: "run-auto-end-to-end", specPath: spec });
-      render();
-    });
-    fullyAutoBtn.title =
-      "Fully automated: walk every step (DM0 → DM4b) without stopping for review. " +
-      "Requires a spec. Long-running and burns LLM credits; the host shows a confirm modal first.";
-    fullyAutoBtn.classList.add("auto-fully-automated-btn", "auto-icon-btn");
-    buttonRowChildren.push(fullyAutoBtn);
-  }
-  buttonRowChildren.push(playBtn, renderStepModeToggle(), stopBtn);
+  const buttonRowChildren: HTMLElement[] = [
+    connectBtn,
+    renderStepModeToggle(),
+    disconnectBtn,
+  ];
 
   const specLabel = el(
     "label",
@@ -832,7 +791,7 @@ function renderAutoFlowRow(): HTMLElement {
   const specHelp = el(
     "p",
     { class: "auto-flow-spec-help" },
-    "User-provided specification that drives the flow toward a Foundation model. If left empty, the agent will prompt you for what to model when DM0 starts. After entering the path to your spec (or leaving it blank) click the Play button to proceed.",
+    "User-provided specification that drives the flow toward a Foundation model. If left empty, the agent will prompt you for what to model when DM0 starts. After entering the path to your spec (or leaving it blank) click Connect to launch the session.",
   );
 
   // Stack the help line directly on top of the input within its own
@@ -840,10 +799,7 @@ function renderAutoFlowRow(): HTMLElement {
   // Spec: label or Browse... button to either side.
   const specInputCol = el("div", { class: "auto-spec-input-col" }, specHelp, input);
 
-  // Single row: [Spec:] [help+input column] [Browse...] [▶?] [▶] [■].
-  // The user reads the inline description, enters a spec (or
-  // browses to one), then clicks Play; Stop sits at the right edge
-  // of the same row so it's always reachable.
+  // Single row: [Spec:] [help+input column] [Browse...] [🔌] [Manual⇄Auto] [⏻].
   return el(
     "div",
     { class: "auto-flow-row" },
@@ -855,54 +811,39 @@ function renderAutoFlowRow(): HTMLElement {
 }
 
 /**
- * Step-axis mode toggle (Manual ⇄ Auto). Always visible, always
- * live: clicking the inactive label posts a `set-step-mode` message
- * which the host either persists to settings (no live session) or
- * forwards to the orchestrator as a `SetStepMode` host event (live
- * session). The orchestrator echoes `StepModeChanged` and the
- * dashboard refreshes with the new mode reflected here.
+ * Step-axis mode toggle (Manual ⇄ Auto). Two segmented buttons; the
+ * active one is highlighted and disabled, the inactive one posts a
+ * `set-step-mode` message on click. Tooltips on each option carry
+ * the explanation; we don't render a separate label or live/setting
+ * indicator since the visual state of the buttons already conveys
+ * which mode is active.
  */
 function renderStepModeToggle(): HTMLElement {
   const current = ui.data?.stepMode ?? "manual";
-  const sessionActive = ui.data?.sessionActive ?? false;
-  const indicator = sessionActive ? "live" : "setting";
-  const indicatorTitle = sessionActive
-    ? "An orchestrator is attached; the toggle reflects its current mode."
-    : "No live session; the toggle reflects the persisted setting (used at next launch).";
-
-  const toggle = el(
+  return el(
     "div",
-    {
-      class: "step-mode-toggle",
-      role: "group",
-      "aria-label": "Step mode",
-      title: indicatorTitle,
-    },
-    el(
-      "span",
-      { class: "step-mode-toggle-label" },
-      "Step mode",
-      el("span", { class: `step-mode-indicator step-mode-indicator-${indicator}` }, indicator),
-    ),
+    { class: "step-mode-toggle", role: "group", "aria-label": "Step mode" },
     renderStepModeOption("manual", current),
     renderStepModeOption("auto", current),
   );
-  return toggle;
 }
 
 function renderStepModeOption(mode: "manual" | "auto", current: string): HTMLButtonElement {
   const isActive = mode === current;
   const btn = document.createElement("button");
   btn.type = "button";
-  btn.className = isActive
-    ? "step-mode-option step-mode-option-active"
-    : "step-mode-option";
+  // Mode class lets CSS paint Auto-active in the warning palette
+  // (matches Reset's destructive cue) while Manual-active stays in
+  // the primary palette.
+  btn.className =
+    `step-mode-option step-mode-option-${mode}` +
+    (isActive ? " step-mode-option-active" : "");
   btn.textContent = mode === "manual" ? "Manual" : "Auto";
   btn.setAttribute("aria-pressed", isActive ? "true" : "false");
   btn.title =
     mode === "manual"
-      ? "Park between sub-sessions; per-step buttons drive the flow."
-      : "Walk current_step through end of flow without user input.";
+      ? "Manual: orchestrator parks between sub-sessions; per-step buttons drive the flow."
+      : "Auto: orchestrator walks current_step through end of flow without user input.";
   if (isActive) {
     btn.disabled = true;
   } else {
@@ -914,13 +855,18 @@ function renderStepModeOption(mode: "manual" | "auto", current: string): HTMLBut
 }
 
 function stepBox(data: DashboardState, step: StepDef): HTMLElement {
+  // Three visual states only:
+  //   - `current`  → primary (the orchestrator's current_step)
+  //   - `passed`   → green (gate flag is set)
+  //   - default    → primary-disabled (everything else, including
+  //                  steps ahead of current and steps before current
+  //                  whose gate flag was cleared by Reset)
+  // Selection adds an accent ring on top of any of the three.
   const gate = data.flow.gates[step.id];
   const passed = gate?.passed === true;
   const current = data.flow.current_step === step.id;
   const selected = ui.selectedStep === step.id;
   const selectable = isStepSelectableInRail(data, step.id);
-  const ahead = isStepAheadOfCurrent(data, step.id);
-  const disabledAhead = ahead && !selectable;
   const classes = ["step"];
   if (passed) {
     classes.push("passed");
@@ -928,8 +874,8 @@ function stepBox(data: DashboardState, step: StepDef): HTMLElement {
   if (current) {
     classes.push("current");
   }
-  if (disabledAhead) {
-    classes.push("disabled-ahead");
+  if (!selectable) {
+    classes.push("step-locked");
   }
   if (selected) {
     classes.push("selected");
@@ -965,23 +911,6 @@ function stepBox(data: DashboardState, step: StepDef): HTMLElement {
     box.click();
   });
   return box;
-}
-
-function isStepAheadOfCurrent(data: DashboardState, stepId: string): boolean {
-  const order = data.flow.flow === "direct-modeling" ? DM_STEPS : DS_STEPS;
-  const currentIndex = order.findIndex((step) => step.id === data.flow.current_step);
-  const stepIndex = order.findIndex((step) => step.id === stepId);
-  if (currentIndex === -1 || stepIndex === -1) {
-    return false;
-  }
-  return stepIndex > currentIndex;
-}
-
-function gateDiamond(data: DashboardState, step: StepDef): HTMLElement {
-  const gate = data.flow.gates[step.id];
-  const passed = gate?.passed === true;
-  const cls = passed ? "gate passed" : "gate";
-  return el("div", { class: cls, title: `Gate after ${step.id}` }, el("span", {}, "G"));
 }
 
 function renderSelectedStepDetail(data: DashboardState): HTMLElement {
@@ -1041,19 +970,35 @@ function renderSelectedStepDetail(data: DashboardState): HTMLElement {
     const g = stepGate(actions.advanceEnabled, actions.advanceReason);
     applyButtonState(advanceBtn, g.enabled, g.reason);
   }
-  const resetBtn = actionButton(
-    "Reset",
-    `reset-${stepId}`,
-    () => send({ type: "reset-step", step: stepId }),
-    "secondary",
-  );
-  {
-    const g = stepGate(actions.resetEnabled, actions.resetReason);
-    applyButtonState(resetBtn, g.enabled, g.reason);
+  // Reset is recovery, not a step action — it isn't owned by the
+  // orchestrator's auto loop. It only makes sense in manual mode and
+  // is hidden entirely in auto. In manual mode it's always enabled
+  // (no flowUnlocked / `actions.resetEnabled` gating); the user may
+  // need to recover before they connect, after a crash, or while a
+  // sub-session is in flight.
+  const resetBtn: HTMLButtonElement | null = manualMode
+    ? actionButton(
+        "Reset",
+        `reset-${stepId}`,
+        () => send({ type: "reset-step", step: stepId }),
+        "warning",
+      )
+    : null;
+  if (resetBtn) {
+    resetBtn.classList.add("step-action-reset");
+    resetBtn.title =
+      "Reset this step and every downstream step. " +
+      "Deletes generated work artifacts and critique files (when an orchestrator is attached) " +
+      "and clears the matching gate flags. Confirmation is required.";
   }
   const generateVerilogBtn = actions.showGenerateVerilog
     ? buildGenerateVerilogButton(stepId, flowUnlocked)
     : null;
+  // Layout: per-step actions left-to-right, optional Generate Verilog
+  // immediately after Advance, then Reset (manual mode only) pinned
+  // to the far right via CSS `margin-left: auto`
+  // (`.step-action-reset`). Reset is the destructive action; the
+  // visual gap reinforces that.
   const children: Node[] = [
     el("h3", {}, stepId),
     el(
@@ -1063,8 +1008,8 @@ function renderSelectedStepDetail(data: DashboardState): HTMLElement {
       runCritiqueBtn,
       runGateBtn,
       advanceBtn,
-      resetBtn,
       ...(generateVerilogBtn ? [generateVerilogBtn] : []),
+      ...(resetBtn ? [resetBtn] : []),
     ),
   ];
   // Plan-execution progress (DM2d / DM3c / DM4b only). For other
@@ -1686,7 +1631,7 @@ function actionButton(
   label: string,
   actionId: string,
   onClick: () => void,
-  variant?: "secondary",
+  variant?: "secondary" | "warning",
 ): HTMLButtonElement {
   const isPending = ui.pendingActions.has(actionId);
   const b = document.createElement("button");

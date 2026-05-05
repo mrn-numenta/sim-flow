@@ -22,6 +22,7 @@
 // LLM is still producing.
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { EventEmitter, once } from "node:events";
 
 import * as vscode from "vscode";
@@ -47,6 +48,7 @@ import type {
   StepMode,
 } from "./protocol-types";
 import { DebugLog } from "./debug-log";
+import { removePidRecord, writePidRecord } from "./processRegistry";
 
 /** Configuration the registry hands to a freshly-spawned pump. */
 export interface SessionPumpOptions {
@@ -175,6 +177,14 @@ export class SessionPump {
    * a banner when the user toggles `sim-flow.llm.source` mid-run.
    */
   private lastUsedSource: LlmSource | null = null;
+  /**
+   * Stable id for this pump's pid record. Generated internally
+   * because callers don't supply one (unlike `SocketSessionPump`).
+   * Used as the basename of `<project>/.sim-flow/pids/<id>.json` so
+   * the next extension activate can reap orphans.
+   */
+  private readonly sessionId: string = randomUUID();
+  private pidRecordCleared = false;
 
   constructor(
     options: SessionPumpOptions,
@@ -200,6 +210,21 @@ export class SessionPump {
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.debugLog.logProcessSpawn(options.binary, options.args, this.process.pid);
+    if (typeof this.process.pid === "number") {
+      try {
+        writePidRecord(llm.projectDir, {
+          pid: this.process.pid,
+          sessionId: this.sessionId,
+          binary: options.binary,
+          label: options.args.slice(0, 2).join(" "),
+          spawnedAtMs: Date.now(),
+        });
+      } catch (err) {
+        this.debugLog.logSpawnError(
+          `pid registry write failed: ${(err as Error).message}`,
+        );
+      }
+    }
     this.process.stdout.setEncoding("utf8");
     this.process.stderr.setEncoding("utf8");
     this.process.stdout.on("data", (chunk: string) => this.onStdoutChunk(chunk));
@@ -208,6 +233,7 @@ export class SessionPump {
     });
     this.process.on("error", (err) => {
       this.debugLog.logSpawnError(err.message);
+      this.clearPidRecord();
       this.markTerminated({
         status: "ended",
         endReason: "spawn-error",
@@ -216,6 +242,7 @@ export class SessionPump {
     });
     this.process.on("exit", (code, signal) => {
       this.debugLog.logProcessExit(code, signal, this.stderrBuffer);
+      this.clearPidRecord();
       this.markTerminated({
         status: "ended",
         endReason: code === 0 ? "completed" : "process-exit",
@@ -298,7 +325,22 @@ export class SessionPump {
       }
     }
     this.terminated = true;
+    // Defensive cleanup: if the exit handler hasn't fired yet (or
+    // never will, e.g. tests), reap the pid record here.
+    this.clearPidRecord();
     this.debugLog.dispose();
+  }
+
+  private clearPidRecord(): void {
+    if (this.pidRecordCleared) {
+      return;
+    }
+    this.pidRecordCleared = true;
+    try {
+      removePidRecord(this.llm.projectDir, this.sessionId);
+    } catch {
+      // ignored; removePidRecord already logs
+    }
   }
 
   // ------------------------------------------------------------------

@@ -937,7 +937,7 @@ fn run_phase_validator(phase: &str, project_dir: &Path) -> Option<runners::Runne
     }
 }
 
-fn step_descriptor_for_protocol(
+pub(crate) fn step_descriptor_for_protocol(
     step: &StepDescriptor,
     kind: SessionKindOut,
     foundation_root: &Path,
@@ -1030,32 +1030,44 @@ pub fn build_initial_messages(
     } else {
         "fenced-blocks"
     };
+    // Mode-notes: always inject a positive signal for the current
+    // mode (not the absence of the other one). Earlier we relied on
+    // "auto-mode notes get loaded only when auto, the step prompt
+    // does a self-check on the literal string." Weaker models
+    // (qwen3-coder etc.) couldn't tell that a backtick-quoted
+    // pattern reference was different from an active assertion, and
+    // happily proceeded as if auto mode were on. Loading both
+    // conventions side-by-side -- one per branch -- gives every
+    // model an unambiguous "MANUAL mode is ACTIVE" / "AUTOMATED mode
+    // is ACTIVE" anchor.
+    let mode_notes_name = if opts.auto {
+        "auto-mode"
+    } else {
+        "manual-mode"
+    };
+    let mode_notes_label = if opts.auto {
+        "automated-mode notes"
+    } else {
+        "manual-mode notes"
+    };
     let combined_system = if opts.agent_has_native_fs_tools {
-        let mut directives = format!(
+        let directives = format!(
             "Before responding, read the conventions file at:\n\n  {}\n\n\
              Treat its content as a system instruction that applies for\n\
-             the rest of this session. The file is short (read it in full).",
+             the rest of this session. The file is short (read it in full).\
+             \n\nAlso read the {} at:\n\n  {}\n\nFollow them on every turn.",
             prompts::convention_path(&opts.foundation_root, convention_name).display(),
+            mode_notes_label,
+            prompts::convention_path(&opts.foundation_root, mode_notes_name).display(),
         );
-        if opts.auto {
-            directives.push_str(&format!(
-                "\n\nAlso read the automated-mode notes at:\n\n  {}\n\n\
-                 Follow them on every turn.",
-                prompts::convention_path(&opts.foundation_root, "auto-mode").display(),
-            ));
-        }
         format!("{}\n\n---\n\n{}", directives, instruction_body)
     } else {
         let convention = prompts::load_convention(&opts.foundation_root, convention_name)?;
-        if opts.auto {
-            let auto_notes = prompts::load_convention(&opts.foundation_root, "auto-mode")?;
-            format!(
-                "{}\n\n---\n\n{}\n\n---\n\n{}",
-                convention, auto_notes, instruction_body
-            )
-        } else {
-            format!("{}\n\n---\n\n{}", convention, instruction_body)
-        }
+        let mode_notes = prompts::load_convention(&opts.foundation_root, mode_notes_name)?;
+        format!(
+            "{}\n\n---\n\n{}\n\n---\n\n{}",
+            convention, mode_notes, instruction_body
+        )
     };
     messages.push(LlmMessage {
         role: LlmRole::System,

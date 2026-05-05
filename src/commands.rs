@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use sim_flow::__internal::config::Config;
 use sim_flow::__internal::foundation_root;
 use sim_flow::__internal::runner::{DOT_SIM_FLOW, StepRunner};
+use sim_flow::__internal::session::{Event, Host};
 use sim_flow::__internal::state::{Flow, State};
 use sim_flow::__internal::steps::registry_for;
 
@@ -445,8 +446,9 @@ fn auto_cmd(
         step_mode,
     };
     if let Some(socket_path) = transport_socket {
-        let mut host = sim_flow::__internal::session::SocketHost::bind(socket_path.to_path_buf())?;
-        sim_flow::__internal::session::run_auto(opts, &mut host)
+        run_with_socket_session_end(socket_path, |host| {
+            sim_flow::__internal::session::run_auto(opts, host)
+        })
     } else {
         let mut host = sim_flow::__internal::session::JsonlHost::stdio();
         sim_flow::__internal::session::run_auto(opts, &mut host)
@@ -572,8 +574,9 @@ fn session_cmd(
         ..Default::default()
     };
     if let Some(socket_path) = transport_socket {
-        let mut host = sim_flow::__internal::session::SocketHost::bind(socket_path.to_path_buf())?;
-        sim_flow::__internal::session::run_session(opts, &mut host)
+        run_with_socket_session_end(socket_path, |host| {
+            sim_flow::__internal::session::run_session(opts, host)
+        })
     } else if jsonl {
         let mut host = sim_flow::__internal::session::JsonlHost::stdio();
         sim_flow::__internal::session::run_session(opts, &mut host)
@@ -607,6 +610,66 @@ fn session_cmd(
     }
 }
 
+fn run_with_socket_session_end<F>(socket_path: &Path, run: F) -> sim_flow::Result<()>
+where
+    F: FnOnce(
+        &mut SessionEndTrackingHost<sim_flow::__internal::session::SocketHost>,
+    ) -> sim_flow::Result<()>,
+{
+    let socket_host = sim_flow::__internal::session::SocketHost::bind(socket_path.to_path_buf())?;
+    let mut host = SessionEndTrackingHost::new(socket_host);
+    run_with_error_session_end(&mut host, run)
+}
+
+fn run_with_error_session_end<H: Host, F>(
+    host: &mut SessionEndTrackingHost<H>,
+    run: F,
+) -> sim_flow::Result<()>
+where
+    F: FnOnce(&mut SessionEndTrackingHost<H>) -> sim_flow::Result<()>,
+{
+    match run(host) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if !host.saw_session_end {
+                let message = format!("sim-flow session failed: {err}");
+                let _ = host.write(&Event::SessionEnd {
+                    reason: "error".into(),
+                    message: Some(message),
+                });
+            }
+            Err(err)
+        }
+    }
+}
+
+struct SessionEndTrackingHost<H> {
+    inner: H,
+    saw_session_end: bool,
+}
+
+impl<H> SessionEndTrackingHost<H> {
+    fn new(inner: H) -> Self {
+        Self {
+            inner,
+            saw_session_end: false,
+        }
+    }
+}
+
+impl<H: Host> Host for SessionEndTrackingHost<H> {
+    fn write(&mut self, event: &Event) -> sim_flow::Result<()> {
+        if matches!(event, Event::SessionEnd { .. }) {
+            self.saw_session_end = true;
+        }
+        self.inner.write(event)
+    }
+
+    fn read(&mut self) -> sim_flow::Result<Option<sim_flow::__internal::session::HostEvent>> {
+        self.inner.read()
+    }
+}
+
 /// Wrapper that adapts `Box<dyn CliAgent>` to satisfy `TerminalHost`'s
 /// `A: CliAgent` bound. Cheap to inline.
 struct BoxedAgent(Box<dyn sim_flow::__internal::session::CliAgent>);
@@ -626,6 +689,72 @@ impl sim_flow::__internal::session::CliAgent for BoxedAgent {
 
 fn dot_dir(project: &Path) -> PathBuf {
     project.join(DOT_SIM_FLOW)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct RecordingHost {
+        written: Vec<Event>,
+    }
+
+    impl Host for RecordingHost {
+        fn write(&mut self, event: &Event) -> sim_flow::Result<()> {
+            self.written.push(event.clone());
+            Ok(())
+        }
+
+        fn read(&mut self) -> sim_flow::Result<Option<sim_flow::__internal::session::HostEvent>> {
+            Ok(None)
+        }
+    }
+
+    #[test]
+    fn fallback_session_end_is_emitted_on_runtime_error() {
+        let mut host = SessionEndTrackingHost::new(RecordingHost::default());
+        let err = run_with_error_session_end(&mut host, |_host| {
+            Err(sim_flow::Error::State("boom".into()))
+        })
+        .unwrap_err();
+
+        assert!(format!("{err}").contains("boom"));
+        assert_eq!(host.inner.written.len(), 1);
+        match &host.inner.written[0] {
+            Event::SessionEnd { reason, message } => {
+                assert_eq!(reason, "error");
+                assert_eq!(
+                    message.as_deref(),
+                    Some("sim-flow session failed: state error: boom")
+                );
+            }
+            other => panic!("expected SessionEnd, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fallback_session_end_is_skipped_when_session_already_ended() {
+        let mut host = SessionEndTrackingHost::new(RecordingHost::default());
+        let err = run_with_error_session_end(&mut host, |host| {
+            host.write(&Event::SessionEnd {
+                reason: "protocol-mismatch".into(),
+                message: Some("bad hello".into()),
+            })?;
+            Err(sim_flow::Error::State("boom".into()))
+        })
+        .unwrap_err();
+
+        assert!(format!("{err}").contains("boom"));
+        assert_eq!(host.inner.written.len(), 1);
+        match &host.inner.written[0] {
+            Event::SessionEnd { reason, message } => {
+                assert_eq!(reason, "protocol-mismatch");
+                assert_eq!(message.as_deref(), Some("bad hello"));
+            }
+            other => panic!("expected SessionEnd, got {other:?}"),
+        }
+    }
 }
 
 fn init(project: &Path, flow: Flow) -> sim_flow::Result<()> {

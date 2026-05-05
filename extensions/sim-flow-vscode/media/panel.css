@@ -9,15 +9,20 @@
   --rail-disabled-bg: #f3f3f3;
   --rail-disabled-fg: #6a6a6a;
 
-  --step-bg: var(--rail-neutral);
   --step-bg-passed: var(--rail-success);
   --step-bg-current: var(--rail-primary);
-  --step-bg-disabled-ahead: var(--rail-disabled-bg);
-  --step-fg: #111;
-  --step-fg-disabled-ahead: var(--rail-disabled-fg);
-  --gate-bg: var(--rail-warning);
-  --gate-bg-passed: #66cc66;
-  --gate-bg-failed: var(--rail-danger);
+  /* Default rail step: a faded version of the primary color so the
+     unvisited / non-current steps still read as "part of this flow"
+     (vs. neutral gray) but visually recede behind the current step.
+     `color-mix` blends primary with the editor background; ~28%
+     primary keeps the hue legible without competing with the
+     current-step highlight. */
+  --step-bg: color-mix(
+    in srgb,
+    var(--rail-primary) 28%,
+    var(--vscode-editor-background, #f3f3f3)
+  );
+  --step-fg: var(--vscode-foreground, #111);
   --border-color: #b8b8b8;
   --muted: #6a6a6a;
   --accent: #3366cc;
@@ -269,55 +274,30 @@ main {
   filter: brightness(0.85);
 }
 
-/* Step-axis mode toggle (Manual ⇄ Auto). Sits between Play and Stop
-   in the auto-flow row. The active option renders inset / disabled;
-   the inactive one is clickable and posts `set-step-mode`. The small
-   "live" / "setting" indicator tells the user whether the mode
-   reflects the orchestrator's truth (a session is attached) or just
-   the persisted setting (no session, used at next launch). */
+/* Step-axis mode toggle (Manual ⇄ Auto). Two segmented buttons that
+   share a thin border so they read as a single control. The active
+   option renders inset / disabled; the inactive one is clickable
+   and posts `set-step-mode`. */
 .step-mode-toggle {
   display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  align-items: stretch;
   flex: 0 0 auto;
-  padding: 2px 6px;
   border: 1px solid var(--vscode-input-border, transparent);
-  border-radius: 4px;
-  background: var(--vscode-editor-background, transparent);
-}
-.step-mode-toggle-label {
-  font-size: 11px;
-  color: var(--muted);
-  font-weight: 600;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.step-mode-indicator {
-  font-size: 10px;
-  font-weight: 500;
-  padding: 0 4px;
   border-radius: 3px;
-  text-transform: uppercase;
-}
-.step-mode-indicator-live {
-  background: var(--vscode-charts-green, #2e8b57);
-  color: var(--vscode-editor-background, #fff);
-}
-.step-mode-indicator-setting {
-  background: var(--vscode-input-placeholderForeground, #888);
-  color: var(--vscode-editor-background, #fff);
+  overflow: hidden;
 }
 .step-mode-option {
   flex: 0 0 auto;
   padding: 2px 8px;
   font-size: 11px;
   line-height: 1.2;
-  border-radius: 3px;
-  border: 1px solid var(--vscode-input-border, transparent);
+  border: 0;
   background: var(--vscode-button-secondaryBackground, transparent);
   color: var(--vscode-button-secondaryForeground, inherit);
   cursor: pointer;
+}
+.step-mode-option + .step-mode-option {
+  border-left: 1px solid var(--vscode-input-border, transparent);
 }
 .step-mode-option:hover:not(:disabled) {
   filter: brightness(1.1);
@@ -325,8 +305,25 @@ main {
 .step-mode-option-active {
   background: var(--vscode-button-background);
   color: var(--vscode-button-foreground);
-  border-color: var(--vscode-button-border, transparent);
   cursor: default;
+}
+
+/* Auto-active gets the warning palette — same destructive cue as
+   Reset. The toggle's two segmented buttons pin a button.warning
+   override on disabled/disabled-hover, so we list those states here
+   to win over the generic stylesheet rules below. */
+.step-mode-option-auto.step-mode-option-active,
+.step-mode-option-auto.step-mode-option-active:disabled,
+.step-mode-option-auto.step-mode-option-active:disabled:hover {
+  background: var(
+    --vscode-statusBarItem-warningBackground,
+    var(--vscode-inputValidation-warningBackground, #b89500)
+  );
+  color: var(
+    --vscode-statusBarItem-warningForeground,
+    var(--vscode-inputValidation-warningForeground, #1e1e1e)
+  );
+  opacity: 1;
 }
 
 .auto-spec-label {
@@ -513,94 +510,28 @@ h2 {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  /* Steps stack flush; the gate diamonds float in the cut-outs at
-     each step boundary using negative margins below. */
-  gap: 0;
+  gap: 4px;
   padding: 8px 0;
   width: 100%;
 }
 
-/* Step boxes have triangular cut-outs at top + bottom (except the
-   first / last step) so the gate diamonds can sit visually inside
-   the boundary between consecutive steps. The cut-out geometry is
-   driven by two CSS variables so the gate's negative-margin and the
-   step's clip-path stay coordinated.
-     --cut-half-width  half the cut-out's base width (px)
-     --cut-depth       how deep the cut-out reaches into the step (px) */
+/* Plain rectangular step. Three states only — primary-disabled
+   default (`.step` alone), green for passed (`.step.passed`),
+   primary for current (`.step.current`). Selected adds an accent
+   ring on top of any of those. */
 .step {
-  --cut-half-width: 12px;
-  --cut-depth: 10px;
-  position: relative;
-  z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
-  /* Extra vertical padding compensates for the cut-outs eating into
-     the visible area; without this the step-id / step-label can
-     overlap the diamond glyph. */
-  padding: calc(2px + var(--cut-depth)) 10px;
+  padding: 6px 10px;
   background: var(--step-bg);
   color: var(--step-fg);
   cursor: pointer;
-  overflow: hidden;
   min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
   transition: transform 60ms ease-out;
-  /* Outline. clip-path eats `border` and outer `outline` rules, so
-     we trace the silhouette with an inset box-shadow -- inset
-     shadows render inside the content box and are clipped together
-     with the step's background, which means the 1px ring follows
-     the cut-out triangles cleanly. */
-  box-shadow: inset 0 0 0 1px var(--border-color);
-  /* Default shape: cut-outs at both top and bottom. Overridden by
-     `.step-first` (no top cut) and `.step-last` (no bottom cut)
-     below. The polygon walks the outline clockwise starting at the
-     top-left corner. */
-  clip-path: polygon(
-    0 0,
-    calc(50% - var(--cut-half-width)) 0,
-    50% var(--cut-depth),
-    calc(50% + var(--cut-half-width)) 0,
-    100% 0,
-    100% 100%,
-    calc(50% + var(--cut-half-width)) 100%,
-    50% calc(100% - var(--cut-depth)),
-    calc(50% - var(--cut-half-width)) 100%,
-    0 100%
-  );
-}
-
-.step:not(.step-first) {
-  /* Slightly overlap the previous step so the doubled boundary line
-     reads as one continuous rail instead of a dark divider. The gate
-     diamond still sits above that seam via its higher z-index. */
-  margin-top: -1px;
-}
-
-.step.step-first {
-  /* Flat top edge for the very first step in the rail. */
-  clip-path: polygon(
-    0 0,
-    100% 0,
-    100% 100%,
-    calc(50% + var(--cut-half-width)) 100%,
-    50% calc(100% - var(--cut-depth)),
-    calc(50% - var(--cut-half-width)) 100%,
-    0 100%
-  );
-}
-
-.step.step-last {
-  /* Flat bottom edge for the very last step in the rail. */
-  clip-path: polygon(
-    0 0,
-    calc(50% - var(--cut-half-width)) 0,
-    50% var(--cut-depth),
-    calc(50% + var(--cut-half-width)) 0,
-    100% 0,
-    100% 100%,
-    0 100%
-  );
 }
 
 .step:hover {
@@ -609,35 +540,26 @@ h2 {
 
 .step.passed {
   background: var(--step-bg-passed);
+  color: #111;
 }
 .step.current {
   background: var(--step-bg-current);
   color: #fff;
-  /* Stack: base 1px border + 2px translucent accent ring marking
-     the current step. Both are inset so they follow the cut-outs. */
-  box-shadow:
-    inset 0 0 0 1px var(--border-color),
-    inset 0 0 0 3px rgba(51, 102, 204, 0.4);
+  box-shadow: 0 0 0 2px rgba(51, 102, 204, 0.4);
 }
-.step.disabled-ahead {
-  background: var(--step-bg-disabled-ahead);
-  color: var(--step-fg-disabled-ahead);
+
+/* Locked = not currently selectable (out of order vs. current_step
+   in a way the rail enforces). Visually identical to the default
+   primary-disabled bg; only the cursor + tooltip differ. */
+.step.step-locked {
   cursor: default;
 }
 
-/* Selected = the rail row the user clicked. We override the base
-   border with a thicker accent ring so the selection reads even on
-   passed / current backgrounds. Stacks the base border underneath
-   so both edges trace the cut-outs. */
+/* Selected = the rail row the user clicked. Accent ring stacks on
+   top of the existing border / shadow so it reads on every state. */
 .step.selected {
-  box-shadow:
-    inset 0 0 0 1px var(--border-color),
-    inset 0 0 0 2px var(--accent);
-}
-.step.current.selected {
-  box-shadow:
-    inset 0 0 0 1px var(--border-color),
-    inset 0 0 0 2px var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .step[aria-disabled="true"] .step-label {
@@ -661,45 +583,6 @@ h2 {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
-}
-
-/* Gate diamonds. Sit in the cut-outs between consecutive steps:
-   negative margins shrink the diamond's flex-allocated height to
-   roughly zero so the steps remain visually flush, and z-index
-   keeps the diamond on top of step backgrounds where the cut-outs
-   overlap. The dimensions match the `--cut-depth` / `--cut-half-width`
-   on `.step` -- if you change them there, change them here. */
-.gate {
-  align-self: center;
-  width: 12px;
-  height: 12px;
-  margin-top: -6px;
-  margin-bottom: -6px;
-  position: relative;
-  z-index: 2;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: transparent;
-  font-size: 7px;
-  font-weight: 700;
-  transform: rotate(45deg);
-  background: var(--gate-bg);
-  border: 1px solid var(--border-color);
-}
-
-.gate > span {
-  transform: rotate(-45deg);
-  display: inline-block;
-}
-
-.gate.passed {
-  background: var(--gate-bg-passed);
-  color: #fff;
-}
-.gate.failed {
-  background: var(--gate-bg-failed);
-  color: #fff;
 }
 
 /* -----------------------------------------------------------------
@@ -726,12 +609,50 @@ h2 {
   gap: 8px;
 }
 
-/* "Generate Verilog" sits at the right edge of the actions row,
-   separated from the per-step buttons. `margin-left: auto` pushes it
-   into the leftover flex space, which is the simplest way to get a
-   right-aligned trailing button without breaking the existing flow. */
-.detail .actions .generate-verilog-btn {
+/* Reset is the destructive action and pins to the far right. The
+   leftover flex space gives it visual separation from Run Step /
+   Run Critique / Run Gate / Advance / Generate Verilog. Generate
+   Verilog (when shown) renders inline immediately after Advance — no
+   special positioning beyond the row's natural left-to-right flow. */
+.detail .actions .step-action-reset {
   margin-left: auto;
+}
+
+/* Warning-colored button variant (Reset). The base, hover, and
+   disabled states must each set `background` explicitly because the
+   generic `button:hover` / `button:disabled` rules later in this
+   stylesheet would otherwise repaint the button with the primary
+   palette on those states. The fallback chain prefers
+   `statusBarItem-warningBackground` (well-defined and high-contrast
+   in every shipped theme); falls back through inputValidation; and
+   ends at a literal amber so the button is still warn-colored when
+   the webview's themeable vars are missing. */
+button.warning,
+button.warning:hover,
+button.warning:disabled,
+button.warning:disabled:hover {
+  background: var(
+    --vscode-statusBarItem-warningBackground,
+    var(--vscode-inputValidation-warningBackground, #b89500)
+  );
+  color: var(
+    --vscode-statusBarItem-warningForeground,
+    var(--vscode-inputValidation-warningForeground, #1e1e1e)
+  );
+  border: 1px solid
+    var(
+      --vscode-statusBarItem-warningBackground,
+      var(--vscode-inputValidation-warningBorder, #8a7300)
+    );
+}
+button.warning:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+button.warning:disabled,
+button.warning:disabled:hover {
+  opacity: 0.55;
+  cursor: default;
+  filter: none;
 }
 
 /* -----------------------------------------------------------------

@@ -23,6 +23,7 @@ import {
   ChatPanelProvider,
 } from "./chatPanel/host";
 import { AutoSessionManager } from "./chatPanel/autoSessionManager";
+import { cleanupStalePidsAsync } from "./session/processRegistry";
 import { DashboardHost } from "./webview/host";
 import { cliBackendArgFor, isTerminalLlmSource, type LlmSourceTag } from "./webview/messages";
 
@@ -34,6 +35,14 @@ let autoSessionManager: AutoSessionManager | undefined;
 export function activate(context: vscode.ExtensionContext): void {
   console.log("sim-flow: extension activated");
   setBundledRoot(context.extensionUri.fsPath);
+  // Reap orphaned `sim-flow` processes left behind by a prior
+  // extension run (host crash, OS reboot, killed extension host
+  // before disconnect, etc.). Each pump writes a pid record under
+  // `<project>/.sim-flow/pids/<sessionId>.json` on spawn and clears
+  // it on clean exit; anything that survives is a leak we should
+  // clean up before the user starts a new session and ends up with
+  // duplicates.
+  void reapOrphanedSimFlowProcesses();
   autoSessionManager = new AutoSessionManager(context.workspaceState);
   chatPanelProvider = new ChatPanelProvider(
     context.extensionUri,
@@ -820,6 +829,54 @@ function shellQuote(value: string): string {
     return value;
   }
   return `"${value.replace(/"/g, '\\"')}"`;
+}
+
+/**
+ * Walk every sim-flow project under the open workspace folders and
+ * kill any `sim-flow` processes whose pid records are still on disk
+ * — those are orphans from a prior extension run that died without a
+ * clean disconnect. Best-effort: failures are logged to the console
+ * and never thrown, so a permission error on one project doesn't
+ * prevent activation. The kill itself is SIGTERM, which gives the
+ * orchestrator a chance to flush logs before exiting; if a stuck
+ * process ignores SIGTERM, the user will see it in `ps` and can deal
+ * with it manually.
+ */
+async function reapOrphanedSimFlowProcesses(): Promise<void> {
+  let candidates: string[];
+  try {
+    candidates = await findProjectCandidates();
+  } catch (err) {
+    console.error(
+      `sim-flow: pid cleanup: failed to enumerate projects: ${(err as Error).message ?? String(err)}`,
+    );
+    return;
+  }
+  let totalKilled = 0;
+  let totalStale = 0;
+  for (const projectDir of candidates) {
+    try {
+      const summary = await cleanupStalePidsAsync(projectDir);
+      totalKilled += summary.killed;
+      totalStale += summary.stale;
+      if (summary.killed > 0 || summary.skipped > 0) {
+        console.log(
+          `sim-flow: pid cleanup [${projectDir}] ` +
+            `killed=${summary.killed} stale=${summary.stale} ` +
+            `skipped=${summary.skipped} total=${summary.total}`,
+        );
+      }
+    } catch (err) {
+      console.error(
+        `sim-flow: pid cleanup [${projectDir}] failed: ${(err as Error).message ?? String(err)}`,
+      );
+    }
+  }
+  if (totalKilled > 0) {
+    console.log(
+      `sim-flow: reaped ${totalKilled} orphaned sim-flow process(es); ${totalStale} pid record(s) were already stale.`,
+    );
+  }
 }
 
 function asString(value: unknown): string | undefined {

@@ -87,6 +87,9 @@ impl SocketHost {
     }
 
     fn attach_stream(&mut self, stream: std::os::unix::net::UnixStream) -> Result<()> {
+        stream
+            .set_nonblocking(false)
+            .map_err(|err| Error::State(format!("socket-host: clear nonblocking: {err}")))?;
         let writer = stream
             .try_clone()
             .map_err(|err| Error::State(format!("socket-host: clone writer: {err}")))?;
@@ -289,20 +292,20 @@ fn write_event_line(writer: &mut std::os::unix::net::UnixStream, event: &Event) 
 mod tests {
     use super::*;
     use crate::session::protocol::{
-        Event, HostEvent, HostInfo, PROTOCOL_VERSION, SessionKindOut, SessionTag, StepDescriptorOut,
+        Event, HostEvent, HostInfo, LlmMessage, LlmRole, PROTOCOL_VERSION, SessionKindOut,
+        SessionTag, StepDescriptorOut,
     };
 
     fn temp_socket_path(name: &str) -> PathBuf {
         let unique = format!(
-            "{}-{}-{}.sock",
-            name,
+            "{}-{}.sock",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .subsec_nanos()
         );
-        std::env::temp_dir().join(unique)
+        std::env::temp_dir().join(format!("{name}-{unique}"))
     }
 
     fn connect_and_hello(path: &std::path::Path) -> std::os::unix::net::UnixStream {
@@ -383,5 +386,97 @@ mod tests {
         reader.read_line(&mut line).unwrap();
         let request: Event = serde_json::from_str(line.trim()).unwrap();
         assert!(matches!(request, Event::RequestUserInput { .. }));
+    }
+
+    #[test]
+    fn socket_host_delivers_large_request_events_without_dropping_connection() {
+        let socket_path = temp_socket_path("socket-host-large-request");
+        let mut host = SocketHost::bind(socket_path.clone()).unwrap();
+
+        let first = connect_and_hello(&socket_path);
+        match host.read().unwrap() {
+            Some(HostEvent::Hello {
+                protocol_version, ..
+            }) => {
+                assert_eq!(protocol_version, PROTOCOL_VERSION);
+            }
+            other => panic!("expected hello, got {other:?}"),
+        }
+
+        host.write(&Event::HelloAck {
+            protocol_version: PROTOCOL_VERSION.into(),
+            sim_flow_version: "0.0.0-test".into(),
+            session: SessionTag {
+                step: "DM0".into(),
+                kind: SessionKindOut::Work,
+                candidate: None,
+            },
+            step_descriptor: StepDescriptorOut {
+                step: "DM0".into(),
+                kind: SessionKindOut::Work,
+                flow: "dm".into(),
+                prerequisite: None,
+                instruction_path: "/tmp/spec.md".into(),
+                work_artifacts: Vec::new(),
+                predecessor_inputs: Vec::new(),
+                per_candidate: false,
+                phases: vec!["chat".into()],
+                tools: Vec::new(),
+            },
+        })
+        .unwrap();
+        host.write(&Event::PhaseChanged {
+            phase: "chat".into(),
+        })
+        .unwrap();
+        let writer = std::thread::spawn(move || {
+            host.write(&Event::RequestLlmResponse {
+                request_id: "lr-1".into(),
+                backend: "lmstudio".into(),
+                model: Some("qwen/qwen3-coder-next".into()),
+                messages: vec![LlmMessage {
+                    role: LlmRole::System,
+                    content: "x".repeat(32 * 1024),
+                    attachments: Vec::new(),
+                }],
+                tools: Vec::new(),
+            })
+            .unwrap();
+        });
+
+        let mut reader = BufReader::new(first);
+        let mut line = String::new();
+
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let hello_ack: Event = serde_json::from_str(line.trim()).unwrap();
+        assert!(matches!(hello_ack, Event::HelloAck { .. }));
+
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let phase: Event = serde_json::from_str(line.trim()).unwrap();
+        assert!(matches!(phase, Event::PhaseChanged { .. }));
+
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let request: Event = serde_json::from_str(line.trim()).unwrap();
+        match request {
+            Event::RequestLlmResponse {
+                request_id,
+                backend,
+                model,
+                messages,
+                ..
+            } => {
+                assert_eq!(request_id, "lr-1");
+                assert_eq!(backend, "lmstudio");
+                assert_eq!(model.as_deref(), Some("qwen/qwen3-coder-next"));
+                assert_eq!(messages.len(), 1);
+                assert_eq!(messages[0].content.len(), 32 * 1024);
+            }
+            other => panic!("expected RequestLlmResponse, got {other:?}"),
+        }
+
+        writer.join().unwrap();
     }
 }

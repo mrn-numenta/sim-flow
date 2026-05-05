@@ -394,7 +394,30 @@ export class DashboardHost {
       case "prompt-reset":
         await this.resetPromptOverride(msg.slug, msg.kind, msg.scope);
         return;
-      case "reset-step":
+      case "reset-step": {
+        // Reset is destructive. The detail copy depends on whether
+        // an orchestrator is attached: when it is, the reset deletes
+        // generated work artifacts and critique files in addition to
+        // clearing gate flags; when it isn't, the CLI fallback only
+        // mutates state.toml. Be honest about which one will happen.
+        const hasOrchestrator = this.activeSession() !== undefined;
+        const detail = hasOrchestrator
+          ? `Deletes generated work artifacts and the critique file for ${msg.step} ` +
+            `and every downstream step in the flow, and clears their gate flags. ` +
+            `Source spec, conversation transcript, and git history are not touched.\n\n` +
+            `This cannot be undone.`
+          : `Clears gate flags for ${msg.step} and every downstream step. ` +
+            `No orchestrator is attached, so generated artifacts on disk are NOT deleted — ` +
+            `Connect first if you want a full reset.\n\n` +
+            `This cannot be undone.`;
+        const confirmed = await vscode.window.showWarningMessage(
+          `Reset ${msg.step}?`,
+          { modal: true, detail },
+          "Reset",
+        );
+        if (confirmed !== "Reset") {
+          return;
+        }
         if (this.routeManualCommand((pump) => pump.reset?.(msg.step))) {
           return;
         }
@@ -407,6 +430,7 @@ export class DashboardHost {
           this.options.projectDir,
         );
         return;
+      }
       case "open-critique":
         await this.openCritiqueInEditor(msg.step);
         return;

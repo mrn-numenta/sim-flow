@@ -38,11 +38,17 @@
 //! - synthesizes a `Hello` for every sub-session after the first (so
 //!   the wrapped `run_session` thinks each iteration is a fresh
 //!   handshake);
-//! - swallows `SessionEnd` writes for auto-mode sub-sessions (the
-//!   host should see exactly one SessionEnd for the whole auto run)
-//!   while letting manual-mode sub-sessions surface their own
-//!   `SessionEnd` to the host so the dashboard can re-enable controls
-//!   between commands;
+//! - swallows `SessionEnd` writes for every sub-session in BOTH
+//!   modes (the host sees exactly one `SessionEnd` when the
+//!   orchestrator process exits on `Shutdown` or auto-loop
+//!   completion). The dashboard infers sub-session completion from
+//!   the absence of new chunks — same as auto mode between work
+//!   and critique iterations. The host's `markTerminated` path
+//!   treats `SessionEnd` as "the orchestrator process is gone" and
+//!   clears its `activeSession` reference, so emitting one per
+//!   manual sub-session would knock the toggle out of "live" state
+//!   and force the next dashboard click to spawn a fresh side
+//!   process;
 //! - watches for the `max_auto_iters`-exceeded diagnostic and queues
 //!   a `Cancel` so the orchestrator stops the current sub-session
 //!   immediately (rather than parking on `RequestUserInput`);
@@ -58,10 +64,12 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::Result;
 use crate::session::host::Host;
-use crate::session::orchestrator::{OrchestratorOptions, run_session};
+use crate::session::orchestrator::{
+    OrchestratorOptions, run_session, step_descriptor_for_protocol,
+};
 use crate::session::protocol::{
     DiagnosticLevel, Event, GateFailureOut, HostEvent, HostInfo, PROTOCOL_VERSION, SessionKindOut,
-    StepMode,
+    SessionTag, StepMode,
 };
 use crate::state::State;
 use crate::steps::registry_for;
@@ -103,8 +111,17 @@ pub fn run_auto<H: Host>(opts: AutoOptions, host: &mut H) -> Result<()> {
     let mode = Arc::new(AtomicU8::new(step_mode_to_u8(opts.step_mode)));
     let mut auto_host = AutoHost::new(host, mode);
 
-    // Echo back the initial mode so the dashboard's toggle aligns
-    // with the orchestrator's truth before any sub-session runs.
+    // 1. Hello/HelloAck handshake. Once per process — every sub-
+    //    session below queues a synthetic Hello via
+    //    `queue_synthetic_hello`, so the real host's Hello is
+    //    consumed exactly here. Without this step, manual mode would
+    //    park in `wait_for_command` and reject the incoming Hello as
+    //    "unexpected", and auto mode's first sub-session would race
+    //    with the synthetic-Hello queue.
+    perform_initial_handshake(&opts, &mut auto_host)?;
+
+    // 2. Echo back the initial mode so the dashboard's toggle aligns
+    //    with the orchestrator's truth before any sub-session runs.
     auto_host.write(&Event::StepModeChanged {
         mode: opts.step_mode,
     })?;
@@ -226,7 +243,9 @@ fn run_auto_loop<H: Host>(
                 return Ok(o);
             }
 
-            // Work session.
+            // Work session. The actual host's Hello was consumed in
+            // `perform_initial_handshake`, so every sub-session queues
+            // a synthetic one — including the first.
             let work_auto = !(opts.dm0_interactive && is_first_step && *step_id == "DM0");
             run_subsession(
                 opts,
@@ -235,7 +254,7 @@ fn run_auto_loop<H: Host>(
                 work_auto,
                 auto_host,
                 /*consume_end=*/ true,
-                /*synth_hello=*/ !(is_first_step && critique_iters == 0),
+                /*synth_hello=*/ true,
             )?;
             if let Some(o) =
                 check_post_subsession(auto_host, step_id, crate::client::SessionKind::Work, opts)?
@@ -374,6 +393,76 @@ fn emit_cap_exceeded_diagnostic<H: Host>(
              per resume; the critique-side cap is {}.",
             opts.max_auto_iters, opts.max_critique_iters,
         ),
+    })?;
+    Ok(())
+}
+
+/// Hello / HelloAck handshake. Run exactly once per `run_auto`
+/// invocation, before either the auto-iteration loop or the manual
+/// parking loop. The HelloAck's `session` / `step_descriptor` reflect
+/// `current_step` with `Work` as the kind — sub-sessions launched
+/// later (auto-mode iteration or manual `RunStep` / `RunCritique`)
+/// each queue a synthetic Hello internally and fire a fresh HelloAck
+/// with their own kind, so this initial pair is purely a connection-
+/// established signal for the host (the dashboard renders the banner
+/// from the first HelloAck and ignores subsequent ones for sub-
+/// session boundaries).
+fn perform_initial_handshake<H: Host>(
+    opts: &AutoOptions,
+    auto_host: &mut AutoHost<H>,
+) -> Result<()> {
+    let hello_version = match auto_host.read()? {
+        Some(HostEvent::Hello {
+            protocol_version, ..
+        }) => protocol_version,
+        Some(other) => {
+            auto_host.write(&Event::SessionEnd {
+                reason: "protocol-error".into(),
+                message: Some(format!("expected Hello first, got {other:?}")),
+            })?;
+            return Err(crate::Error::State(format!(
+                "expected Hello first, got {other:?}"
+            )));
+        }
+        None => {
+            return Err(crate::Error::State(
+                "session: host closed before Hello".into(),
+            ));
+        }
+    };
+    if hello_version != PROTOCOL_VERSION {
+        auto_host.write(&Event::SessionEnd {
+            reason: "protocol-mismatch".into(),
+            message: Some(format!(
+                "host sent protocolVersion={hello_version}; orchestrator speaks {PROTOCOL_VERSION}"
+            )),
+        })?;
+        return Err(crate::Error::State(format!(
+            "protocol version mismatch: host={hello_version} orchestrator={PROTOCOL_VERSION}"
+        )));
+    }
+
+    let dot = opts.project_dir.join(".sim-flow");
+    let state = State::load(&dot)?;
+    let registry = registry_for(state.flow);
+    let step = registry.get(&state.current_step).ok_or_else(|| {
+        crate::Error::State(format!(
+            "auto: current_step `{}` is not in the {} registry",
+            state.current_step,
+            state.flow.as_str()
+        ))
+    })?;
+    let descriptor =
+        step_descriptor_for_protocol(step, SessionKindOut::Work, &opts.foundation_root);
+    auto_host.write(&Event::HelloAck {
+        protocol_version: PROTOCOL_VERSION.into(),
+        sim_flow_version: env!("CARGO_PKG_VERSION").into(),
+        session: SessionTag {
+            step: step.id.into(),
+            kind: SessionKindOut::Work,
+            candidate: None,
+        },
+        step_descriptor: descriptor,
     })?;
     Ok(())
 }
@@ -523,10 +612,21 @@ fn run_manual_subsession<H: Host>(
     if !validate_step_id(opts, step_id, kind_label_for_manual(kind), auto_host)? {
         return Ok(());
     }
-    // Each manual sub-session emits its own SessionEnd to the host so
-    // the dashboard can re-enable controls between commands. Use the
-    // same `auto=true` semantics as the iterating loop so the agent
-    // runs unattended within the sub-session.
+    // Swallow the inner run_session's SessionEnd. The host treats
+    // SessionEnd as "the orchestrator process is gone" and clears
+    // its `activeSession` reference (see `socketPump.ts` →
+    // `markTerminated` → `onManagedSessionSettled` →
+    // `clearIfActive`). If we forwarded the per-sub-session
+    // SessionEnd, the next dashboard click would find no active
+    // pump and fall through to spawning a fresh `sim-flow session`
+    // side process — reverting to classic non-manual behavior. The
+    // orchestrator's outer `SessionEnd` only fires on `Shutdown`,
+    // matching auto mode's between-iterations behavior. The
+    // dashboard infers sub-session completion from the absence of
+    // new chunks (same as auto mode between work and critique).
+    //
+    // Use the same `auto=true` semantics as the iterating loop so
+    // the agent runs unattended within the sub-session.
     let session_auto = !(opts.dm0_interactive
         && step_id == "DM0"
         && matches!(kind, crate::client::SessionKind::Work));
@@ -536,7 +636,7 @@ fn run_manual_subsession<H: Host>(
         kind,
         session_auto,
         auto_host,
-        /*consume_end=*/ false,
+        /*consume_end=*/ true,
         /*synth_hello=*/ true,
     )
 }
@@ -633,6 +733,38 @@ fn run_manual_reset<H: Host>(
     };
     let registry = registry_for(state.flow);
     let order: Vec<&'static str> = registry.order_for(state.flow);
+    let Some(idx) = order.iter().position(|s| *s == step_id) else {
+        auto_host.write(&Event::Diagnostic {
+            level: DiagnosticLevel::Error,
+            message: format!("Reset: `{step_id}` is not a {} step", state.flow.as_str()),
+        })?;
+        return Ok(());
+    };
+
+    // Step 1: delete generated collateral for `step_id` and every
+    // downstream step. Source spec, conversation transcript, git
+    // history, and `.sim-flow/` are not touched. Files / dirs that
+    // don't exist are silently skipped; deletion failures are
+    // collected and reported alongside the success summary.
+    let mut deleted: Vec<PathBuf> = Vec::new();
+    let mut delete_failures: Vec<(PathBuf, String)> = Vec::new();
+    for downstream in &order[idx..] {
+        let Some(step) = registry.get(downstream) else {
+            continue;
+        };
+        for art in step.work_artifacts {
+            collect_collateral_deletion(&opts.project_dir, art, &mut deleted, &mut delete_failures);
+        }
+        let critique_rel = format!("docs/critiques/{}-critique.md", step.id);
+        collect_collateral_deletion(
+            &opts.project_dir,
+            &critique_rel,
+            &mut deleted,
+            &mut delete_failures,
+        );
+    }
+
+    // Step 2: clear gate flags + rewind current_step.
     if let Err(err) = state.reset(step_id, &order) {
         auto_host.write(&Event::Diagnostic {
             level: DiagnosticLevel::Error,
@@ -641,11 +773,69 @@ fn run_manual_reset<H: Host>(
         return Ok(());
     }
     state.save(&dot)?;
+
+    // Step 3: report.
+    let cleared_count = order.len() - idx;
+    let mut summary = format!("Reset to `{step_id}`. Cleared {cleared_count} gate flag(s)");
+    if deleted.is_empty() {
+        summary.push_str("; no generated collateral found to delete.");
+    } else {
+        summary.push_str(&format!(
+            "; deleted {} file(s) / directory(ies):",
+            deleted.len()
+        ));
+        for path in &deleted {
+            let rel = path
+                .strip_prefix(&opts.project_dir)
+                .unwrap_or(path)
+                .display();
+            summary.push_str(&format!("\n  - {rel}"));
+        }
+    }
     auto_host.write(&Event::Diagnostic {
         level: DiagnosticLevel::Info,
-        message: format!("reset to {step_id}; downstream gates cleared"),
+        message: summary,
     })?;
+    for (path, err) in &delete_failures {
+        let rel = path
+            .strip_prefix(&opts.project_dir)
+            .unwrap_or(path)
+            .display();
+        auto_host.write(&Event::Diagnostic {
+            level: DiagnosticLevel::Warning,
+            message: format!("Reset: failed to delete {rel}: {err}"),
+        })?;
+    }
     Ok(())
+}
+
+/// Best-effort delete of one collateral path under `project_dir`. A
+/// trailing `/` (or an actual directory on disk) triggers
+/// `remove_dir_all`; anything else is treated as a single file.
+/// Missing paths are silently skipped — the registry's
+/// `work_artifacts` lists every output the step *might* produce, but
+/// optional ones (per-candidate dirs, conditional outputs) won't
+/// always be present.
+fn collect_collateral_deletion(
+    project_dir: &Path,
+    rel: &str,
+    deleted: &mut Vec<PathBuf>,
+    failures: &mut Vec<(PathBuf, String)>,
+) {
+    let path = project_dir.join(rel);
+    if !path.exists() {
+        return;
+    }
+    let is_dir = rel.ends_with('/') || path.is_dir();
+    let result = if is_dir {
+        std::fs::remove_dir_all(&path)
+    } else {
+        std::fs::remove_file(&path)
+    };
+    match result {
+        Ok(()) => deleted.push(path),
+        Err(err) => failures.push((path, err.to_string())),
+    }
 }
 
 fn validate_step_id<H: Host>(

@@ -46,14 +46,18 @@ the name; do not conflate them:
    - When the source is ambiguous, incomplete, or contradictory, record
      that in `## Open Questions` and cite source-spec page numbers.
 3. If no source spec was provided, or if the source spec does not answer
-   everything needed to complete `docs/spec.md`, fill in the template as
-   far as you can from the available project artifacts and then:
-   - if `AUTOMATED mode is ACTIVE for this session.`, make your best
-     educated guess for the missing information and record each
-     non-trivial assumption in `## Auto-decisions`
-   - otherwise, prompt the user for the missing information and keep
-     updating `docs/spec.md` until the template is completed as fully as
-     the user can answer
+   everything needed to complete `docs/spec.md`, fill in the template
+   from the listed predecessor inputs and target artifacts as far as
+   you can. For the rest:
+   - In automated mode (the automated-mode notes appear earlier in
+     the system context above), make your best educated guess and
+     record each non-trivial assumption in `## Auto-decisions`.
+   - In manual mode (the manual-mode notes appear earlier in the
+     system context above), pick the single most important missing
+     field and ask the user one concrete question about it. Update
+     `docs/spec.md` once they answer, then ask about the next most
+     important missing field on the next turn. Do not bulk-guess in
+     manual mode.
 4. Use the template headings as the required document structure, but use
    engineering judgement about depth. The template is scaffolding for a
    clear, consistent spec; it is not a demand that every field be
