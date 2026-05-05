@@ -256,6 +256,8 @@ fn event_kind(event: &Event) -> &'static str {
         Event::RequestUserInput { .. } => "RequestUserInput",
         Event::RequestLlmResponse { .. } => "RequestLlmResponse",
         Event::StepModeChanged { .. } => "StepModeChanged",
+        Event::SubSessionStarted { .. } => "SubSessionStarted",
+        Event::SubSessionEnded { .. } => "SubSessionEnded",
     }
 }
 

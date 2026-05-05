@@ -482,6 +482,17 @@ fn run_subsession<H: Host>(
     host.consume_session_end = consume_end;
     host.cap_exceeded = false;
     host.in_subsession = true;
+    let kind_out = session_kind_to_protocol(kind);
+    // Bracket the inner run_session with SubSessionStarted /
+    // SubSessionEnded so the dashboard can disable per-step
+    // buttons while the orchestrator is busy. Emitted regardless
+    // of step-mode; auto mode drives multiple bracketed sub-
+    // sessions per outer run, manual mode drives one per
+    // dispatched command.
+    host.write(&Event::SubSessionStarted {
+        step: step_id.to_string(),
+        kind: kind_out,
+    })?;
     let session_opts = OrchestratorOptions {
         project_dir: opts.project_dir.clone(),
         foundation_root: opts.foundation_root.clone(),
@@ -501,7 +512,27 @@ fn run_subsession<H: Host>(
     };
     let result = run_session(session_opts, host);
     host.in_subsession = false;
+    // run_session returns Ok(()) for both clean completion and
+    // user-initiated Cancel (the Cancel path emits its own internal
+    // SessionEnd and returns Ok). Err is genuine protocol / I/O /
+    // state error — surface that as "error" so the dashboard can
+    // distinguish.
+    let outcome = if result.is_ok() { "completed" } else { "error" };
+    // Best-effort: if writing the closing event fails (e.g. host
+    // socket already closed), keep the inner `result` to surface.
+    let _ = host.write(&Event::SubSessionEnded {
+        step: step_id.to_string(),
+        kind: kind_out,
+        outcome: outcome.into(),
+    });
     result
+}
+
+fn session_kind_to_protocol(kind: crate::client::SessionKind) -> SessionKindOut {
+    match kind {
+        crate::client::SessionKind::Work => SessionKindOut::Work,
+        crate::client::SessionKind::Critique => SessionKindOut::Critique,
+    }
 }
 
 fn try_advance<H: Host>(project_dir: &Path, step_id: &str, host: &mut AutoHost<H>) -> Result<bool> {

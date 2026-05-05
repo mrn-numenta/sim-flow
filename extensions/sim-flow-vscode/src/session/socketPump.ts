@@ -34,7 +34,8 @@ import type {
 
 type SocketPumpBusEvent =
   | { type: "settled"; result: PumpSettleResult }
-  | { type: "step-mode"; mode: StepMode };
+  | { type: "step-mode"; mode: StepMode }
+  | { type: "in-sub-session"; inSubSession: boolean };
 
 export interface SocketSessionPumpOptions {
   sessionId: string;
@@ -80,6 +81,17 @@ export class SocketSessionPump implements LiveSessionTransport {
    * reflect. `null` until the first echo arrives.
    */
   private currentStepMode: StepMode | null = null;
+  /**
+   * True while the orchestrator is inside a sub-session (work or
+   * critique). Set by `sub-session-started` and cleared by
+   * `sub-session-ended`. The dashboard reads this to disable
+   * per-step buttons while the orchestrator is busy — clicking
+   * Run Gate / Run Step / Run Critique / Advance during this span
+   * is rejected on the orchestrator side anyway, but disabling
+   * here gives clearer feedback than a Diagnostic warning after
+   * the click.
+   */
+  private inSubSessionFlag = false;
 
   constructor(
     private readonly options: SocketSessionPumpOptions,
@@ -265,6 +277,31 @@ export class SocketSessionPump implements LiveSessionTransport {
   }
 
   /**
+   * Whether the orchestrator is currently inside a sub-session.
+   * `true` between `sub-session-started` and `sub-session-ended`;
+   * `false` while parked. The dashboard uses this to gate the
+   * per-step buttons.
+   */
+  get inSubSession(): boolean {
+    return this.inSubSessionFlag;
+  }
+
+  /**
+   * Subscribe to sub-session bracket transitions. The listener
+   * fires once on every sub-session boundary; the dashboard
+   * triggers a refresh so the per-step buttons re-evaluate.
+   */
+  onSubSessionChanged(listener: (inSubSession: boolean) => void): () => void {
+    const wrapped = (msg: SocketPumpBusEvent) => {
+      if (msg.type === "in-sub-session") {
+        listener(msg.inSubSession);
+      }
+    };
+    this.bus.on("msg", wrapped);
+    return () => this.bus.off("msg", wrapped);
+  }
+
+  /**
    * Manual-mode host commands. Each one fires-and-forgets — the
    * orchestrator emits `Diagnostic` if the command is rejected (auto
    * mode owns step execution, sub-session in flight, etc.) and that
@@ -426,14 +463,16 @@ export class SocketSessionPump implements LiveSessionTransport {
     if (
       this.currentRenderer === null &&
       event.event !== "session-end" &&
-      event.event !== "step-mode-changed"
+      event.event !== "step-mode-changed" &&
+      event.event !== "sub-session-started" &&
+      event.event !== "sub-session-ended"
     ) {
       // Defer most events until the next `settle()`; the renderer
       // is gone right now and we'd lose the markdown context. But
-      // session-end and step-mode-changed are pure state — the
-      // dashboard's toggle subscribes to step-mode-changed and
-      // would otherwise miss the orchestrator's initial echo when
-      // it lands between settles.
+      // session-end, step-mode-changed, and the sub-session
+      // bracket events are pure state — dashboard subscribers
+      // (toggle UI, per-step button gating) would otherwise miss
+      // transitions that land between settles.
       this.queuedEvents.push(event);
       return;
     }
@@ -535,6 +574,24 @@ export class SocketSessionPump implements LiveSessionTransport {
         this.bus.emit("msg", {
           type: "step-mode",
           mode: event.mode,
+        } as SocketPumpBusEvent);
+        break;
+      case "sub-session-started":
+        // Bracket open. Dashboard listeners disable per-step
+        // buttons until the matching `sub-session-ended` arrives.
+        this.inSubSessionFlag = true;
+        this.bus.emit("msg", {
+          type: "in-sub-session",
+          inSubSession: true,
+        } as SocketPumpBusEvent);
+        break;
+      case "sub-session-ended":
+        // Bracket close. Dashboard listeners re-enable per-step
+        // buttons (subject to disk-state preconditions).
+        this.inSubSessionFlag = false;
+        this.bus.emit("msg", {
+          type: "in-sub-session",
+          inSubSession: false,
         } as SocketPumpBusEvent);
         break;
       default: {

@@ -124,6 +124,16 @@ export interface LiveSessionTransport {
   advance?(step: string): void;
   reset?(step: string): void;
   shutdown?(): void;
+  /**
+   * Sub-session bracketing surface. `inSubSession` is true while the
+   * orchestrator is inside a Work / Critique sub-session and false
+   * while parked. `onSubSessionChanged` notifies on every transition
+   * so the dashboard can refresh and re-evaluate per-step button
+   * gating. Same JSONL-only optionality as the manual-mode commands
+   * above.
+   */
+  readonly inSubSession?: boolean;
+  onSubSessionChanged?(listener: (inSubSession: boolean) => void): () => void;
 }
 
 /**
@@ -456,6 +466,12 @@ export class SessionPump {
         // for the toggle UI lands in the extension-side PR; for now
         // the debug log already records the event and consumers that
         // care can subscribe via the bus's `event` channel.
+        break;
+      case "sub-session-started":
+      case "sub-session-ended":
+        // Stdio pump doesn't track sub-session bracketing; the
+        // socketPump handles it for the dashboard. The events
+        // already round-trip through the debug log above.
         break;
       default: {
         const exhaustive: never = event;

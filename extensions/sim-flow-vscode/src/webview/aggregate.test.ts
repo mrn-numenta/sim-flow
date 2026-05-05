@@ -122,4 +122,27 @@ describe("aggregateDashboardState", () => {
     expect(out.stepMode).toBe("auto");
     expect(out.sessionActive).toBe(true);
   });
+
+  it("defaults inSubSession to false and forwards it when supplied", () => {
+    const idle = aggregateDashboardState({
+      projectDir: "/proj",
+      flow: flow(),
+      critiques: [],
+      planProgress: { kind: "none", milestones: [], currentTask: null, currentTaskFilePath: null, currentTaskLine: null },
+      runs: [],
+      baselines: [],
+    });
+    expect(idle.inSubSession).toBe(false);
+
+    const busy = aggregateDashboardState({
+      projectDir: "/proj",
+      flow: flow(),
+      critiques: [],
+      planProgress: { kind: "none", milestones: [], currentTask: null, currentTaskFilePath: null, currentTaskLine: null },
+      runs: [],
+      baselines: [],
+      inSubSession: true,
+    });
+    expect(busy.inSubSession).toBe(true);
+  });
 });

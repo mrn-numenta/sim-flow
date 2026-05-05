@@ -383,6 +383,21 @@ where
             Event::StepModeChanged { mode } => {
                 writeln!(self.stderr, "  [step mode now: {mode:?}]").map_err(write_err)?;
             }
+            Event::SubSessionStarted { step, kind } => {
+                writeln!(self.stderr, "  [sub-session started: {step}.{kind:?}]")
+                    .map_err(write_err)?;
+            }
+            Event::SubSessionEnded {
+                step,
+                kind,
+                outcome,
+            } => {
+                writeln!(
+                    self.stderr,
+                    "  [sub-session ended: {step}.{kind:?} ({outcome})]"
+                )
+                .map_err(write_err)?;
+            }
         }
         Ok(())
     }

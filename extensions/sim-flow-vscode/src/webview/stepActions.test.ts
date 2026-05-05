@@ -39,6 +39,9 @@ function state(input: {
     fullyAutomatedEnabled: false,
     verilogSimEnabled: false,
     verilogSimulatorPath: "",
+    stepMode: "manual",
+    sessionActive: false,
+    inSubSession: false,
     generatedAt: "2026-04-30T00:00:00Z",
   };
 }

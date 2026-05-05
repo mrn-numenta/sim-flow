@@ -899,6 +899,56 @@ fn manual_mode_dispatches_run_step_and_runs_a_real_subsession() {
         session_ends.len(),
         host.written,
     );
+    // The dispatched sub-session must be bracketed by
+    // SubSessionStarted / SubSessionEnded so the dashboard can
+    // disable per-step buttons during the busy span. Started
+    // appears BEFORE the inner run_session emits its events
+    // (HelloAck for the synthetic Hello, PhaseChanged, etc.) and
+    // Ended appears AFTER them.
+    let started_idx = host
+        .written
+        .iter()
+        .position(|e| matches!(e, Event::SubSessionStarted { .. }))
+        .expect("expected SubSessionStarted");
+    let ended_idx = host
+        .written
+        .iter()
+        .position(|e| matches!(e, Event::SubSessionEnded { .. }))
+        .expect("expected SubSessionEnded");
+    assert!(
+        started_idx < ended_idx,
+        "SubSessionStarted must precede SubSessionEnded (got {started_idx} vs {ended_idx})",
+    );
+    let phase_idx = host
+        .written
+        .iter()
+        .position(|e| matches!(e, Event::PhaseChanged { .. }))
+        .expect("expected PhaseChanged from inner run_session");
+    assert!(
+        started_idx < phase_idx && phase_idx < ended_idx,
+        "PhaseChanged should fall inside the SubSession bracket",
+    );
+    // Verify the bracket carries the right step + kind.
+    if let Event::SubSessionStarted { step, kind } = &host.written[started_idx] {
+        assert_eq!(step, "DM0");
+        assert!(matches!(
+            kind,
+            sim_flow::session::protocol::SessionKindOut::Work
+        ));
+    }
+    if let Event::SubSessionEnded {
+        step,
+        kind,
+        outcome,
+    } = &host.written[ended_idx]
+    {
+        assert_eq!(step, "DM0");
+        assert!(matches!(
+            kind,
+            sim_flow::session::protocol::SessionKindOut::Work
+        ));
+        assert_eq!(outcome, "completed");
+    }
 }
 
 #[test]

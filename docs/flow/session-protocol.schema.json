@@ -596,6 +596,56 @@
               "mode"
             ],
             "type": "object"
+          },
+          {
+            "description": "A sub-session (work or critique) is starting. Emitted by the run loop just before `run_session` begins handling the sub-session. The dashboard uses this to disable per-step buttons while the orchestrator is busy — the pair `SubSessionStarted` / `SubSessionEnded` brackets a contiguous span of LLM streaming + tool calls during which dashboard commands cannot be dispatched.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "sub-session-started"
+                ],
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/definitions/SessionKindOut"
+              },
+              "step": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event",
+              "kind",
+              "step"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A sub-session ended. Emitted by the run loop right after `run_session` returns (success, error, or cancellation). The orchestrator typically parks at the next decision point in manual mode, or proceeds to the next sub-session in auto. `outcome` is `\"completed\"`, `\"cancelled\"`, or `\"error\"`.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "sub-session-ended"
+                ],
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/definitions/SessionKindOut"
+              },
+              "outcome": {
+                "type": "string"
+              },
+              "step": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event",
+              "kind",
+              "outcome",
+              "step"
+            ],
+            "type": "object"
           }
         ],
         "title": "Event"

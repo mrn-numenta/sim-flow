@@ -87,6 +87,14 @@ export class DashboardHost {
    */
   private stepModeListenerDispose: (() => void) | null = null;
   private stepModeListenerSession: ManagedAutoSessionState | null = null;
+  /**
+   * Bookkeeping for the active pump's sub-session bracket listener
+   * (`onSubSessionChanged`). Same pump-rotation lifecycle as the
+   * step-mode listener above. `null` means we have no current
+   * subscription.
+   */
+  private subSessionListenerDispose: (() => void) | null = null;
+  private subSessionListenerSession: ManagedAutoSessionState | null = null;
 
   constructor(private readonly options: DashboardHostOptions) {}
 
@@ -143,11 +151,43 @@ export class DashboardHost {
     this.watcher?.dispose();
     this.watcher = undefined;
     this.disposeStepModeListener();
+    this.disposeSubSessionListener();
     for (const d of this.disposables) {
       d.dispose();
     }
     this.disposables.length = 0;
     this.panel = undefined;
+  }
+
+  private disposeSubSessionListener(): void {
+    if (this.subSessionListenerDispose) {
+      this.subSessionListenerDispose();
+      this.subSessionListenerDispose = null;
+    }
+    this.subSessionListenerSession = null;
+  }
+
+  /**
+   * Resubscribe to the live pump's `SubSessionStarted` /
+   * `SubSessionEnded` events so the dashboard refreshes whenever the
+   * orchestrator transitions in/out of a sub-session. Mirrors the
+   * step-mode listener lifecycle above; safe to call when no pump is
+   * attached.
+   */
+  private syncSubSessionListener(): void {
+    const session = this.activeSession();
+    if (this.subSessionListenerSession === session) {
+      return;
+    }
+    this.disposeSubSessionListener();
+    if (!session || typeof session.pump.onSubSessionChanged !== "function") {
+      return;
+    }
+    this.subSessionListenerSession = session;
+    this.subSessionListenerDispose = session.pump.onSubSessionChanged(() => {
+      // Bracket transition: refresh so the per-step buttons re-evaluate.
+      void this.refresh();
+    });
   }
 
   private disposeStepModeListener(): void {
@@ -502,9 +542,11 @@ export class DashboardHost {
     try {
       const state = await this.buildState();
       // Re-subscribe to the (possibly rotated) pump's
-      // `StepModeChanged` channel so the toggle reflects the
-      // orchestrator's truth between refreshes.
+      // `StepModeChanged` and sub-session bracket channels so the
+      // toggle and the per-step buttons reflect the orchestrator's
+      // truth between refreshes.
       this.syncStepModeListener();
+      this.syncSubSessionListener();
       await this.post({ type: "state-update", state });
       await this.postLlmConfig();
       await this.postBlockDiagram();
@@ -893,6 +935,12 @@ export class DashboardHost {
     const stepMode: StepMode =
       session?.pump.stepMode ?? readStepModeSetting(cfg);
     const sessionActive = !!session;
+    // True while the orchestrator is inside a sub-session (Work or
+    // Critique). The pump tracks this from the
+    // `sub-session-started` / `-ended` bracket events. When no pump
+    // is attached we report `false` so the dashboard's "no
+    // orchestrator" path applies its own gating.
+    const inSubSession = session?.pump.inSubSession ?? false;
     return aggregateDashboardState({
       projectDir: this.options.projectDir,
       flow,
@@ -907,6 +955,7 @@ export class DashboardHost {
       verilogSimulatorPath,
       stepMode,
       sessionActive,
+      inSubSession,
       maxRuns: MAX_DASHBOARD_RUNS,
     });
   }

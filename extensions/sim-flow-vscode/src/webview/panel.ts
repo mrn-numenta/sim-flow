@@ -933,12 +933,29 @@ function renderSelectedStepDetail(data: DashboardState): HTMLElement {
   const autoModeReason =
     "Per-step controls are disabled while step mode is `auto`. " +
     "Toggle Step mode to `Manual` (between Play and Stop) to drive each step explicitly.";
+  // While the orchestrator is inside a sub-session (Work / Critique
+  // streaming, tool calls, gate evaluation, advance) the per-step
+  // buttons must be disabled regardless of which step the user has
+  // selected in the rail. Two reasons:
+  //   1. Within-step ordering: if Run Step is mid-flight, Run
+  //      Critique / Run Gate / Advance can't be sensibly clicked
+  //      yet — the artifacts they read are still being produced.
+  //   2. Cross-step lockout: clicking Run Gate on step Y while
+  //      step X is running is a user mistake; the orchestrator
+  //      would reject it but the post-click Diagnostic is jarring.
+  // Reset is the recovery action — it stays enabled so the user
+  // can recover from a stuck or mis-queued sub-session.
+  const inSubSession = data.inSubSession ?? false;
+  const subSessionReason =
+    "A sub-session is in flight; wait for it to complete before issuing the next command.";
   const stepGate = (enabled: boolean, reason: string): { enabled: boolean; reason: string } =>
     !flowUnlocked
       ? { enabled: false, reason: FLOW_LOCKED_REASON }
       : !manualMode
         ? { enabled: false, reason: autoModeReason }
-        : { enabled, reason };
+        : inSubSession
+          ? { enabled: false, reason: subSessionReason }
+          : { enabled, reason };
   const runStepBtn = actionButton("Run Step", `run-step-${stepId}`, () =>
     send({ type: "run-step", step: stepId }),
   );

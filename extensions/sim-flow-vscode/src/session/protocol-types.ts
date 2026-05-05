@@ -89,6 +89,17 @@ export type Event =
   | {
       event: "step-mode-changed";
       mode: StepMode;
+    }
+  | {
+      event: "sub-session-started";
+      kind: SessionKindOut;
+      step: string;
+    }
+  | {
+      event: "sub-session-ended";
+      kind: SessionKindOut;
+      outcome: string;
+      step: string;
     };
 /**
  * Mirror of `client::SessionKind` exposed in the protocol. Kept independent of the internal type so the wire format stays stable even if the internal representation changes.

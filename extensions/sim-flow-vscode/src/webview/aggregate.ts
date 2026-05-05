@@ -32,6 +32,12 @@ export interface AggregateInput {
   stepMode?: StepMode;
   /** True when a `SocketSessionPump` is alive for this project. */
   sessionActive?: boolean;
+  /**
+   * True while the orchestrator is inside a sub-session (Work or
+   * Critique). The dashboard reads this to disable per-step buttons
+   * while the orchestrator is busy. Defaults to `false`.
+   */
+  inSubSession?: boolean;
   generatedAt?: string;
   cliVersion?: string;
   maxRuns?: number;
@@ -58,6 +64,7 @@ export function aggregateDashboardState(input: AggregateInput): DashboardState {
     verilogSimulatorPath: input.verilogSimulatorPath ?? "",
     stepMode: input.stepMode ?? "manual",
     sessionActive: input.sessionActive ?? false,
+    inSubSession: input.inSubSession ?? false,
     generatedAt: input.generatedAt ?? new Date().toISOString(),
     cliVersion: input.cliVersion,
   };

@@ -82,6 +82,16 @@ export interface DashboardState {
    * fall back to their legacy chat-tab spawn path.
    */
   sessionActive: boolean;
+  /**
+   * True while the orchestrator is inside a sub-session (Work or
+   * Critique). Driven by the pump's `sub-session-started` /
+   * `sub-session-ended` bracket events. Per-step buttons (Run Step,
+   * Run Critique, Run Gate, Advance) are disabled while this is
+   * true so the user can't queue commands the orchestrator will
+   * reject mid-flight. Reset stays enabled — the user may need to
+   * recover from a stuck sub-session.
+   */
+  inSubSession: boolean;
   /** Timestamp of this snapshot (ISO-8601 UTC). */
   generatedAt: string;
   /** Sim-flow CLI version, if resolvable. */

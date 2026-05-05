@@ -118,6 +118,24 @@ pub enum Event {
     /// current mode in its toggle UI so the visible state always
     /// matches the orchestrator's truth.
     StepModeChanged { mode: StepMode },
+    /// A sub-session (work or critique) is starting. Emitted by the
+    /// run loop just before `run_session` begins handling the
+    /// sub-session. The dashboard uses this to disable per-step
+    /// buttons while the orchestrator is busy — the pair
+    /// `SubSessionStarted` / `SubSessionEnded` brackets a contiguous
+    /// span of LLM streaming + tool calls during which dashboard
+    /// commands cannot be dispatched.
+    SubSessionStarted { step: String, kind: SessionKindOut },
+    /// A sub-session ended. Emitted by the run loop right after
+    /// `run_session` returns (success, error, or cancellation). The
+    /// orchestrator typically parks at the next decision point in
+    /// manual mode, or proceeds to the next sub-session in auto.
+    /// `outcome` is `"completed"`, `"cancelled"`, or `"error"`.
+    SubSessionEnded {
+        step: String,
+        kind: SessionKindOut,
+        outcome: String,
+    },
 }
 
 /// Event direction: host -> orchestrator.
