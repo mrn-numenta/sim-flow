@@ -832,18 +832,20 @@ fn tool_args_from_body(name: &str, body: &str) -> std::result::Result<serde_json
     // require it. If the body parses as a JSON object we use it
     // directly; otherwise we fall back to the per-tool line-based
     // form documented in the system-prompt examples.
+    //
+    // `write_file` accepts JSON args here too: the system prompt
+    // still recommends the artifact-write convention (fenced block
+    // whose info-string is the file path) because it round-trips
+    // cleanly through fenced-block-only backends, but rejecting
+    // `tool:write_file` outright deadlocks native-tool-calling
+    // backends — they synthesize `tool:<name>` fences for every
+    // function-call response, and an unrecoverable rejection sends
+    // them into a runaway retry loop until `max_identical_responses`
+    // fires.
     let trimmed = body.trim_start();
     if trimmed.starts_with('{') {
         return match serde_json::from_str::<serde_json::Value>(trimmed) {
-            Ok(value) => {
-                if matches!(name, "write_file") {
-                    return Err(
-                        "write_file as a fenced tool call is not supported; use the artifact-write convention (fenced block whose info-string is the file path)."
-                            .into(),
-                    );
-                }
-                Ok(value)
-            }
+            Ok(value) => Ok(value),
             Err(e) => Err(format!("{name}: failed to parse JSON args: {e}")),
         };
     }
@@ -1595,6 +1597,35 @@ fn write_artifact(project_dir: &Path, art: &ExtractedArtifact) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_args_from_body_accepts_write_file_json() {
+        // Regression: native-tool-calling backends (LM Studio, OpenAI,
+        // Anthropic) translate function-call responses into
+        // `tool:<name>` fenced blocks with JSON args. Rejecting
+        // `write_file` outright sent those agents into a runaway
+        // retry loop because they had no other shape to emit.
+        let body = "{\"path\":\"docs/targets.md\",\"content\":\"# Targets\\n\"}";
+        let value = tool_args_from_body("write_file", body)
+            .expect("write_file with JSON args must be accepted");
+        assert_eq!(
+            value.get("path").and_then(|v| v.as_str()),
+            Some("docs/targets.md")
+        );
+        assert_eq!(
+            value.get("content").and_then(|v| v.as_str()),
+            Some("# Targets\n")
+        );
+    }
+
+    #[test]
+    fn tool_args_from_body_rejects_write_file_without_json_body() {
+        // Single-line bare-arg form can't carry write_file's content
+        // safely, so the line-based fallback still rejects it. The
+        // user error is clear about the expected shape.
+        let err = tool_args_from_body("write_file", "docs/targets.md\n").unwrap_err();
+        assert!(err.contains("not supported"), "unexpected error: {err}");
+    }
 
     #[test]
     fn normalize_strips_runs_of_digits() {
