@@ -154,10 +154,12 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 reason: SessionEndReason::ProtocolError,
                 message: Some(format!("expected Hello, got {other:?}")),
             })?;
-            return Err(Error::State(format!("expected Hello first, got {other:?}")));
+            return Err(Error::Protocol(format!(
+                "expected Hello first, got {other:?}"
+            )));
         }
         None => {
-            return Err(Error::State("session: host closed before Hello".into()));
+            return Err(Error::HostClosed("before Hello".into()));
         }
     };
     if hello != PROTOCOL_VERSION {
@@ -167,9 +169,10 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 "host sent protocolVersion={hello}; orchestrator speaks {PROTOCOL_VERSION}"
             )),
         })?;
-        return Err(Error::State(format!(
-            "protocol version mismatch: host={hello} orchestrator={PROTOCOL_VERSION}"
-        )));
+        return Err(Error::ProtocolVersionMismatch {
+            host: hello,
+            orchestrator: PROTOCOL_VERSION.into(),
+        });
     }
 
     // 3. Reply with HelloAck containing the step descriptor.
@@ -197,6 +200,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
     let library_root = detect_library_root(&opts.project_dir);
     let framework_root = detect_framework_root(&opts.foundation_root);
     let framework_docs_root = detect_framework_docs_root(&opts.foundation_root);
+    let write_paths: Vec<String> = crate::steps::allowed_write_paths(&step, opts.kind);
 
     // 4b. Build the message stack + LLM-side tool descriptors via the
     //     shared helper so the interactive PTY driver can produce the
@@ -297,6 +301,8 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
 
         let mut assistant_text = String::new();
         let mut llm_failed = false;
+        let mut llm_error_kind: Option<String> = None;
+        let mut llm_error_message: Option<String> = None;
         loop {
             match host.read()? {
                 Some(HostEvent::LlmChunk {
@@ -328,6 +334,8 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         message: format!("LLM error ({kind}): {message}"),
                     })?;
                     llm_failed = true;
+                    llm_error_kind = Some(kind);
+                    llm_error_message = Some(message);
                     break;
                 }
                 Some(HostEvent::Cancel) => {
@@ -345,7 +353,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     })?;
                 }
                 None => {
-                    return Err(Error::State("session: host closed mid-turn".into()));
+                    return Err(Error::HostClosed("mid-turn".into()));
                 }
             }
         }
@@ -492,7 +500,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             }
             for art in &artifacts {
                 let started = std::time::Instant::now();
-                match write_artifact(&opts.project_dir, art) {
+                match write_artifact(&opts.project_dir, &write_paths, art) {
                     Ok(bytes) => {
                         host.write(&Event::ArtifactWritten {
                             path: art.relative_path.clone(),
@@ -534,7 +542,8 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         library_root.as_deref(),
                         framework_root.as_deref(),
                         framework_docs_root.as_deref(),
-                    );
+                    )
+                    .with_write_paths(&write_paths);
                     let outcome = invoke_tool(&dispatcher, &ctx, call);
                     let status = if outcome.ok { "ok" } else { "error" };
                     host.write(&Event::ToolInvoked {
@@ -705,13 +714,53 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             }
         }
 
-        // 5g. Wait for the user's next message (or cancellation).
+        // 5g. Wait for the user's next message (or cancellation). When
+        //     the previous turn ended in an LlmError we emit a richer
+        //     prompt so the operator sees the error inline and knows the
+        //     available actions (retry, cancel, course-correct). The
+        //     `Followup` quick-actions pair with the prompt for hosts
+        //     that render buttons.
+        let (request_prompt, request_placeholder) = if llm_failed {
+            let k = llm_error_kind.as_deref().unwrap_or("unknown");
+            let m = llm_error_message.as_deref().unwrap_or("");
+            (
+                Some(format!(
+                    "LLM dispatch failed ({k}): {m}\n\n\
+                     - Type `/retry` to re-issue the same request to the same backend.\n\
+                     - Type `/end-session` to abort.\n\
+                     - Type any other message to send a course-correction prompt.\n\
+                     To switch backends or models, end the session and \
+                     restart with a different `--llm-backend` / `--llm-model`."
+                )),
+                Some("/retry, /end-session, or a course-correction message".into()),
+            )
+        } else {
+            (None, None)
+        };
+        if llm_failed {
+            host.write(&Event::Followup {
+                label: "Retry".into(),
+                action: "/retry".into(),
+            })?;
+            host.write(&Event::Followup {
+                label: "Cancel".into(),
+                action: "/end-session".into(),
+            })?;
+        }
         host.write(&Event::RequestUserInput {
-            prompt: None,
-            placeholder: None,
+            prompt: request_prompt,
+            placeholder: request_placeholder,
         })?;
         match host.read()? {
             Some(HostEvent::UserMessage { text }) => {
+                // `/retry` after an LlmError re-issues the same request
+                // to the same backend without a course-correction turn.
+                // We don't push the literal `/retry` onto `messages`
+                // (the LLM never sees it) -- just continue the outer
+                // loop, which re-sends the unchanged `messages`.
+                if llm_failed && text.trim() == "/retry" {
+                    continue;
+                }
                 messages.push(LlmMessage {
                     role: LlmRole::User,
                     content: text,
@@ -764,10 +813,26 @@ fn build_tool_notice(
     library_root: Option<&Path>,
     framework_root: Option<&Path>,
     framework_docs_root: Option<&Path>,
+    write_paths: &[String],
 ) -> String {
     let mut out = String::from("Tool catalog (orchestrator-mediated):\n\n");
     for t in dispatcher {
         out.push_str(&format!("- `{}` - {}\n", t.name(), t.description()));
+    }
+    if write_paths.is_empty() {
+        out.push_str(
+            "\nWrites are disabled in this session. `write_file`, `edit_file`, and the fenced artifact-write convention will all reject any path. Use the read-only tools to inspect state and report findings as text.\n",
+        );
+    } else {
+        out.push_str(
+            "\nWrite scope (per step + kind): the orchestrator only persists writes that match one of these project-relative prefixes (entries ending in `/` match any path under that directory; others must match exactly):\n",
+        );
+        for p in write_paths {
+            out.push_str(&format!("- `{p}`\n"));
+        }
+        out.push_str(
+            "Paths outside this list are rejected by `write_file`, `edit_file`, AND the fenced ` ```<path> ` artifact-write convention. If you have a strong reason to land work elsewhere, surface it in your reply rather than retrying with a different out-of-scope path.\n",
+        );
     }
     if let Some(root) = library_root {
         out.push_str(&format!(
@@ -1129,6 +1194,7 @@ pub fn build_initial_messages(
         attachments: Vec::new(),
     });
     if !llm_tools.is_empty() {
+        let write_paths = crate::steps::allowed_write_paths(step, opts.kind);
         messages.push(LlmMessage {
             role: LlmRole::System,
             content: build_tool_notice(
@@ -1136,6 +1202,7 @@ pub fn build_initial_messages(
                 library_root.as_deref(),
                 framework_root.as_deref(),
                 framework_docs_root.as_deref(),
+                &write_paths,
             ),
             attachments: Vec::new(),
         });
@@ -1615,17 +1682,32 @@ fn writes_to_sim_flow_state(p: &str) -> bool {
     normalized == ".sim-flow" || normalized.starts_with(".sim-flow/")
 }
 
-fn write_artifact(project_dir: &Path, art: &ExtractedArtifact) -> Result<u64> {
+fn write_artifact(
+    project_dir: &Path,
+    write_paths: &[String],
+    art: &ExtractedArtifact,
+) -> Result<u64> {
     if !is_safe_relative_path(&art.relative_path) {
-        return Err(Error::State(format!(
+        return Err(Error::Protocol(format!(
             "rejecting unsafe artifact path: {}",
             art.relative_path
         )));
     }
     if writes_to_sim_flow_state(&art.relative_path) {
-        return Err(Error::State(format!(
+        return Err(Error::Protocol(format!(
             "rejecting agent write to orchestrator state tree: {} (the `.sim-flow/` directory is read-only for the agent; write generated documents under `docs/`, project source under `src/`, etc.)",
             art.relative_path
+        )));
+    }
+    if !crate::steps::is_path_allowed_for_writes(write_paths, &art.relative_path) {
+        return Err(Error::Protocol(format!(
+            "rejecting agent write to `{}`: outside the per-step write allowlist ({}). Update the artifact path to land under one of the allowed prefixes, or extend the step's `work_write_paths` if the new location is a deliberate widening.",
+            art.relative_path,
+            if write_paths.is_empty() {
+                "(none)".to_string()
+            } else {
+                write_paths.join(", ")
+            },
         )));
     }
     // is_safe_relative_path rejects absolute paths and any segment
@@ -1758,8 +1840,10 @@ mod tests {
     #[test]
     fn write_artifact_creates_parent_dirs() {
         let tmp = tempfile::tempdir().unwrap();
+        let allowed = vec!["docs/".to_string()];
         let bytes = write_artifact(
             tmp.path(),
+            &allowed,
             &ExtractedArtifact {
                 relative_path: "docs/notes.md".into(),
                 content: "hi".into(),
@@ -1776,15 +1860,17 @@ mod tests {
     #[test]
     fn write_artifact_rejects_traversal() {
         let tmp = tempfile::tempdir().unwrap();
+        let allowed = vec!["docs/".to_string()];
         let err = write_artifact(
             tmp.path(),
+            &allowed,
             &ExtractedArtifact {
                 relative_path: "../escape.md".into(),
                 content: "x".into(),
             },
         )
         .unwrap_err();
-        assert!(matches!(err, Error::State(_)));
+        assert!(matches!(err, Error::Protocol(_)));
     }
 
     #[test]
@@ -1794,6 +1880,7 @@ mod tests {
         // by editing state.toml. Cover the obvious targets and a
         // backslash-disguised variant.
         let tmp = tempfile::tempdir().unwrap();
+        let allowed = vec!["docs/".to_string()];
         for bad in [
             ".sim-flow/state.toml",
             ".sim-flow/config.toml",
@@ -1803,6 +1890,7 @@ mod tests {
         ] {
             let err = write_artifact(
                 tmp.path(),
+                &allowed,
                 &ExtractedArtifact {
                     relative_path: bad.into(),
                     content: "tampered".into(),
@@ -1815,5 +1903,31 @@ mod tests {
                 "expected state-tree rejection for {bad:?}, got: {msg}",
             );
         }
+    }
+
+    #[test]
+    fn write_artifact_rejects_paths_outside_write_allowlist() {
+        // The per-step write allowlist gates fenced artifact-write
+        // blocks, not just `write_file` tool calls. A step whose
+        // allowlist is `["docs/"]` must reject a fenced ` ```src/lib.rs `
+        // block — otherwise the allowlist would only constrain the
+        // tool-use API, leaving the artifact-write convention as a
+        // bypass.
+        let tmp = tempfile::tempdir().unwrap();
+        let allowed = vec!["docs/".to_string()];
+        let err = write_artifact(
+            tmp.path(),
+            &allowed,
+            &ExtractedArtifact {
+                relative_path: "src/lib.rs".into(),
+                content: "fn main() {}".into(),
+            },
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("write allowlist"),
+            "expected allowlist rejection, got: {msg}",
+        );
     }
 }

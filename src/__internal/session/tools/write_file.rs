@@ -7,6 +7,7 @@ use serde_json::json;
 
 use super::{Tool, ToolContext, ToolResult, resolve_safe_path};
 use crate::Result;
+use crate::steps::is_path_allowed_for_writes;
 
 pub struct WriteFileTool;
 
@@ -37,6 +38,16 @@ impl Tool for WriteFileTool {
             return Ok(ToolResult::err(
                 "write_file: the library root is read-only; `lib:` paths cannot be written",
             ));
+        }
+        if !is_path_allowed_for_writes(ctx.write_paths, &path) {
+            return Ok(ToolResult::err(format!(
+                "write_file: `{path}` is outside the write allowlist for this step+kind. Allowed: {}.",
+                if ctx.write_paths.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    ctx.write_paths.join(", ")
+                },
+            )));
         }
         let content = match args.get("content").and_then(|v| v.as_str()) {
             Some(s) => s.to_string(),

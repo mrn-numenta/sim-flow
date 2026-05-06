@@ -38,6 +38,7 @@ pub fn register(reg: &mut StepRegistry) {
             // structurally-valid but content-empty descriptors.
             work_artifacts: &[],
             predecessor_inputs: &[],
+            work_write_paths: &["docs/"],
             work_phases: &["chat"],
             critique_phases: &["chat"],
         });

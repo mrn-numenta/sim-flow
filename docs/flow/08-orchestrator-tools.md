@@ -59,26 +59,49 @@ This separation is the structural drift prevention. The agent has
 agency within bounds; the orchestrator decides when those bounds
 have been satisfied.
 
-## Per-Step Capability Sets
+## Per-Step Write Scoping
 
-The tool catalog advertised to the agent depends on (step, kind):
+The orchestrator advertises the **same universal tool catalog** at
+every step (`read_file`, `list_dir`, `write_file`, `edit_file`,
+`search`, `run_cargo`). Per-step *tool* gating was tried and removed:
+it was cosmetic (the fenced artifact-write convention bypassed any
+catalog change) and it encouraged tool-name hallucination when an
+agent saw a familiar tool absent from the current step's catalog.
 
-| Step    | Work session                                             | Critique session                  |
-|---------|----------------------------------------------------------|-----------------------------------|
-| DM0     | `write_file`                                             | `read_file`, `search`             |
-| DM1     | `write_file`, `read_file`                                | `read_file`, `search`             |
-| DM2a    | `write_file`, `read_file`                                | `read_file`, `search`             |
-| DM2b    | `write_file`, `read_file`                                | `read_file`, `search`             |
-| **DM2c**| `read_file`, `list_dir`, `write_file`, `search`          | `read_file`, `list_dir`, `search` |
-| DM3a    | `read_file`, `list_dir`, `write_file`, `search`          | `read_file`, `list_dir`, `search` |
-| DM3b    | `write_file`, `read_file`                                | `read_file`                       |
-| DM3c    | `read_file`, `list_dir`, `search`                        | `read_file`, `list_dir`, `search` |
-| DM4     | `read_file`, `list_dir`, `search`, `write_file`          | `read_file`, `list_dir`           |
+What's actually enforced is per-step **write-path scoping**. Every
+step descriptor declares `work_write_paths`: the project-relative
+prefixes the work session may write to. The same allowlist binds
+all three write surfaces:
 
-Per-step **write whitelists** further constrain `write_file`. For
-example, DM2c work can write under `src/`, `tests/` but not
-`Cargo.toml`. The whitelist is part of the step's descriptor and
-enforced by the tool dispatcher.
+- `write_file` tool calls (native and fenced).
+- `edit_file` tool calls (native and fenced).
+- The fenced `` ```<path>\n...\n``` `` artifact-write convention.
+
+A path matches the allowlist when it equals an entry verbatim, or
+(for entries ending in `/`) starts with that prefix. Critique
+sessions ignore `work_write_paths` and are independently constrained
+to a single `docs/critiques/{step_id}-critique.md` file.
+
+| Step  | Work `work_write_paths`              |
+|-------|--------------------------------------|
+| DM0   | `docs/`                              |
+| DM1   | `docs/`                              |
+| DM2a  | `docs/`                              |
+| DM2b  | `docs/`                              |
+| DM2c  | `docs/`                              |
+| DM2d  | `src/`, `tests/`, `Cargo.toml`       |
+| DM3a  | `docs/`                              |
+| DM3b  | `tests/`, `src/`                     |
+| DM3c  | `tests/`, `src/`                     |
+| DM4a  | `docs/`                              |
+| DM4b  | `docs/`                              |
+
+Rejections surface to the agent as a tool-result error (for
+`write_file` / `edit_file` calls) or as a `Diagnostic` event with
+the artifact path and the allowlist (for fenced artifact writes).
+The agent sees the allowed set, so it can either correct the path
+or — if the new location is a deliberate widening — flag it for the
+operator.
 
 ## Iteration Loop For Code Steps
 
@@ -194,8 +217,10 @@ optional in v1 and can be skipped per project.
   diagnostic output to feed errors back fast.
 - **Malformed tool calls**: typos like `tool:read_files` should
   reply with an error tool-result, not silently no-op.
-- **Workspace mutation outside of step scope**: write whitelists
-  enforced at the tool dispatcher.
+- **Workspace mutation outside of step scope**: per-step
+  `work_write_paths` enforced at the tool dispatcher AND the
+  artifact-write extractor (single source of truth, no fenced-block
+  bypass).
 - **Coverage tool brittleness**: skip in v1 for any project where
   the tool isn't installed; emit a `Diagnostic` instead of failing
   the gate.

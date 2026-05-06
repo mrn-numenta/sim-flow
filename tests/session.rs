@@ -344,6 +344,157 @@ fn cancel_during_llm_call_ends_session_cleanly() {
 }
 
 #[test]
+fn llm_error_emits_retry_followups_and_rich_user_input_prompt() {
+    // When the host returns LlmError, the orchestrator must surface
+    // the failure inline (Diagnostic), advertise quick-actions
+    // (Followup retry / cancel), and prompt the user with a populated
+    // RequestUserInput rather than the bare prompt-less form. This
+    // gives operators agency on every failure instead of dropping
+    // them at an empty input box with no context.
+    let tmp = tempfile::tempdir().unwrap();
+    let project = init_project(&tmp);
+    let mut host = TestHost::new();
+    host.enqueue(hello()).enqueue(HostEvent::LlmError {
+        request_id: "lr-1".into(),
+        kind: "rate-limit".into(),
+        message: "429 too many requests".into(),
+    });
+    // After the failure prompt, user cancels.
+    host.enqueue(HostEvent::Cancel);
+
+    run_session(opts(&project, SessionKind::Work), &mut host).unwrap();
+
+    // Diagnostic carries the error verbatim.
+    let saw_diag = host.written.iter().any(|e| match e {
+        Event::Diagnostic { message, .. } => message.contains("rate-limit"),
+        _ => false,
+    });
+    assert!(saw_diag, "expected error Diagnostic with kind=rate-limit");
+
+    // Followup quick-actions: Retry + Cancel.
+    let actions: Vec<&str> = host
+        .written
+        .iter()
+        .filter_map(|e| match e {
+            Event::Followup { action, .. } => Some(action.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        actions.contains(&"/retry"),
+        "expected /retry Followup, got actions={actions:?}",
+    );
+    assert!(
+        actions.contains(&"/end-session"),
+        "expected /end-session Followup, got actions={actions:?}",
+    );
+
+    // RequestUserInput prompt mentions the error and the available
+    // commands so terminal hosts (no Followup rendering) still see
+    // them.
+    let prompt = host.written.iter().find_map(|e| match e {
+        Event::RequestUserInput { prompt, .. } => prompt.clone(),
+        _ => None,
+    });
+    let prompt = prompt.expect("expected a populated RequestUserInput prompt");
+    assert!(
+        prompt.contains("rate-limit"),
+        "prompt missing kind: {prompt}"
+    );
+    assert!(prompt.contains("/retry"), "prompt missing /retry: {prompt}");
+    assert!(
+        prompt.contains("/end-session"),
+        "prompt missing /end-session: {prompt}",
+    );
+}
+
+#[test]
+fn slash_retry_after_llm_error_reissues_request_without_user_turn() {
+    // `/retry` must re-issue the *same* RequestLlmResponse without
+    // pushing a User turn (the LLM should never see the literal
+    // "/retry" text). Verify by counting RequestLlmResponse events
+    // and inspecting the second one's messages: the message stack
+    // must be byte-identical to the first.
+    let tmp = tempfile::tempdir().unwrap();
+    let project = init_project(&tmp);
+    let mut host = TestHost::new();
+    host.enqueue(hello())
+        .enqueue(HostEvent::LlmError {
+            request_id: "lr-1".into(),
+            kind: "transport".into(),
+            message: "socket reset".into(),
+        })
+        .enqueue(HostEvent::UserMessage {
+            text: "/retry".into(),
+        });
+    // Second turn succeeds and the user ends the session.
+    host.enqueue_llm_response("lr-2", "no changes needed");
+    host.enqueue(HostEvent::UserMessage {
+        text: "/end-session".into(),
+    });
+
+    run_session(opts(&project, SessionKind::Work), &mut host).unwrap();
+
+    let llm_requests: Vec<_> = host
+        .written
+        .iter()
+        .filter_map(|e| match e {
+            Event::RequestLlmResponse { messages, .. } => Some(messages.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        llm_requests.len(),
+        2,
+        "expected exactly two RequestLlmResponse events (initial + post-retry)",
+    );
+    assert_eq!(
+        llm_requests[0].len(),
+        llm_requests[1].len(),
+        "/retry must not push a User turn into messages",
+    );
+    for (a, b) in llm_requests[0].iter().zip(llm_requests[1].iter()) {
+        assert_eq!(a.role, b.role);
+        assert_eq!(a.content, b.content);
+    }
+}
+
+#[test]
+fn write_outside_step_allowlist_is_rejected() {
+    // DM0's work-session allowlist is `["docs/"]`. A fenced
+    // artifact-write block targeting `src/lib.rs` must be rejected
+    // (Diagnostic emitted, no file written) so the per-step write
+    // scope binds the artifact-write convention, not just the
+    // tool-call API. Otherwise the convention would be a bypass.
+    let tmp = tempfile::tempdir().unwrap();
+    let project = init_project(&tmp);
+    let mut host = TestHost::new();
+    host.enqueue(hello());
+    let body = "Implementing the DM0 sketch.\n\n```src/lib.rs\nfn main() {}\n```\n";
+    host.enqueue_llm_response("lr-1", body);
+    host.enqueue(HostEvent::UserMessage {
+        text: "/end-session".into(),
+    });
+
+    run_session(opts(&project, SessionKind::Work), &mut host).unwrap();
+
+    assert!(
+        !project.join("src/lib.rs").exists(),
+        "src/lib.rs must not have been written by a DM0 work session",
+    );
+    let saw_rejection = host.written.iter().any(|e| match e {
+        Event::Diagnostic { message, .. } => {
+            message.contains("write allowlist") || message.contains("outside the per-step")
+        }
+        _ => false,
+    });
+    assert!(
+        saw_rejection,
+        "expected a Diagnostic explaining the allowlist rejection",
+    );
+}
+
+#[test]
 fn end_session_signal_completes_without_emitting_gate() {
     let tmp = tempfile::tempdir().unwrap();
     let project = init_project(&tmp);

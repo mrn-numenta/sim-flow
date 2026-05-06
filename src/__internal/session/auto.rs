@@ -446,14 +446,12 @@ fn perform_initial_handshake<H: Host>(
                 reason: SessionEndReason::ProtocolError,
                 message: Some(format!("expected Hello first, got {other:?}")),
             })?;
-            return Err(crate::Error::State(format!(
+            return Err(crate::Error::Protocol(format!(
                 "expected Hello first, got {other:?}"
             )));
         }
         None => {
-            return Err(crate::Error::State(
-                "session: host closed before Hello".into(),
-            ));
+            return Err(crate::Error::HostClosed("before Hello".into()));
         }
     };
     if hello_version != PROTOCOL_VERSION {
@@ -463,9 +461,10 @@ fn perform_initial_handshake<H: Host>(
                 "host sent protocolVersion={hello_version}; orchestrator speaks {PROTOCOL_VERSION}"
             )),
         })?;
-        return Err(crate::Error::State(format!(
-            "protocol version mismatch: host={hello_version} orchestrator={PROTOCOL_VERSION}"
-        )));
+        return Err(crate::Error::ProtocolVersionMismatch {
+            host: hello_version,
+            orchestrator: PROTOCOL_VERSION.into(),
+        });
     }
 
     let dot = opts.project_dir.join(".sim-flow");

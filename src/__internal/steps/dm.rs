@@ -79,6 +79,7 @@ fn dm0() -> StepDescriptor {
         ],
         work_artifacts: &["docs/spec.md"],
         predecessor_inputs: &[],
+        work_write_paths: &["docs/"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
     }
@@ -108,6 +109,7 @@ fn dm1() -> StepDescriptor {
         ],
         work_artifacts: &["docs/targets.md", "docs/testbench.md"],
         predecessor_inputs: &["docs/spec.md"],
+        work_write_paths: &["docs/"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
     }
@@ -141,6 +143,7 @@ fn dm2a() -> StepDescriptor {
             "docs/analysis/data-movement.md",
         ],
         predecessor_inputs: &["docs/spec.md", "docs/targets.md"],
+        work_write_paths: &["docs/"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
     }
@@ -171,6 +174,7 @@ fn dm2b() -> StepDescriptor {
             "docs/analysis/decomposition.md",
             "docs/analysis/data-movement.md",
         ],
+        work_write_paths: &["docs/"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
     }
@@ -209,6 +213,7 @@ fn dm2c() -> StepDescriptor {
             "docs/analysis/data-movement.md",
             "docs/analysis/pipeline-mapping.md",
         ],
+        work_write_paths: &["docs/"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
     }
@@ -261,6 +266,7 @@ fn dm2d() -> StepDescriptor {
             "docs/analysis/pipeline-mapping.md",
             "docs/plan/plan.md",
         ],
+        work_write_paths: &["src/", "tests/", "Cargo.toml"],
         work_phases: &["author", "build", "test"],
         critique_phases: &["chat"],
     }
@@ -335,6 +341,7 @@ fn dm3a() -> StepDescriptor {
             "docs/plan/plan.md",
             "src/",
         ],
+        work_write_paths: &["docs/"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
     }
@@ -369,6 +376,7 @@ fn dm3b() -> StepDescriptor {
         ],
         work_artifacts: &["tests/"],
         predecessor_inputs: &["docs/plan/test-plan.md", "src/"],
+        work_write_paths: &["tests/", "src/"],
         work_phases: &["author", "build"],
         critique_phases: &["chat"],
     }
@@ -407,6 +415,7 @@ fn dm3c() -> StepDescriptor {
         ],
         work_artifacts: &["tests/"],
         predecessor_inputs: &["docs/plan/test-plan.md", "tests/", "src/"],
+        work_write_paths: &["tests/", "src/"],
         work_phases: &["author", "test"],
         critique_phases: &["chat"],
     }
@@ -447,6 +456,7 @@ fn dm4a() -> StepDescriptor {
             "docs/analysis/pipeline-mapping.md",
             "docs/plan/test-plan.md",
         ],
+        work_write_paths: &["docs/"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
     }
@@ -490,6 +500,7 @@ fn dm4b() -> StepDescriptor {
             "docs/plan/perf-plan.md",
             ".sim-flow/experiments.db",
         ],
+        work_write_paths: &["docs/"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
     }

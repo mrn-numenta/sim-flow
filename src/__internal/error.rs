@@ -21,6 +21,36 @@ pub enum Error {
     #[error("toml serialize error: {0}")]
     TomlSerialize(#[from] toml::ser::Error),
 
+    /// The session host violated the wire protocol (out-of-order
+    /// event, malformed JSON, unsafe path in an artifact / tool call,
+    /// I/O on the protocol channel itself).
+    #[error("protocol error: {0}")]
+    Protocol(String),
+
+    /// Host advertised a `protocolVersion` the orchestrator doesn't
+    /// speak. Distinguished so callers can choose to recover by
+    /// downgrading or by surfacing a version-skew warning.
+    #[error("protocol version mismatch: host={host} orchestrator={orchestrator}")]
+    ProtocolVersionMismatch { host: String, orchestrator: String },
+
+    /// The session-host channel reached EOF where data was expected.
+    /// `context` names the point in the protocol (e.g.
+    /// `"before Hello"`, `"mid-turn"`).
+    #[error("session: host closed ({0})")]
+    HostClosed(String),
+
+    /// LLM backend / agent client failure (subprocess spawn, PTY I/O,
+    /// HTTP transport on managed agents, etc.). Distinct from
+    /// `Protocol` so the orchestrator's turn loop can offer
+    /// retry / cancel / switch-backend recovery instead of aborting.
+    #[error("llm error: {0}")]
+    Llm(String),
+
+    /// Catch-all for failures that don't fit a typed cluster yet:
+    /// mutex poisoning, worker-thread spawn failures, fs ops in spec
+    /// ingestion, CLI JSON serialization, sqlite/tracking errors, and
+    /// project-bootstrap validation. New typed variants should be
+    /// peeled off as call-site clusters emerge.
     #[error("state error: {0}")]
     State(String),
 

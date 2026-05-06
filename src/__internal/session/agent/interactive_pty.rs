@@ -74,13 +74,13 @@ impl PtyWriter {
         let mut guard = self
             .inner
             .lock()
-            .map_err(|_| Error::State("interactive-pty: writer mutex poisoned".into()))?;
+            .map_err(|_| Error::Llm("interactive-pty: writer mutex poisoned".into()))?;
         guard
             .write_all(bytes)
-            .map_err(|err| Error::State(format!("interactive-pty: pty write failed: {err}")))?;
+            .map_err(|err| Error::Llm(format!("interactive-pty: pty write failed: {err}")))?;
         guard
             .flush()
-            .map_err(|err| Error::State(format!("interactive-pty: pty flush failed: {err}")))?;
+            .map_err(|err| Error::Llm(format!("interactive-pty: pty flush failed: {err}")))?;
         Ok(())
     }
 
@@ -188,7 +188,7 @@ impl InteractivePtySession {
             return Ok(());
         }
         if self.cmd.is_empty() {
-            return Err(Error::State(
+            return Err(Error::Llm(
                 "interactive-pty: cannot spawn with empty argv".into(),
             ));
         }
@@ -201,7 +201,7 @@ impl InteractivePtySession {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|err| Error::State(format!("interactive-pty: openpty: {err}")))?;
+            .map_err(|err| Error::Llm(format!("interactive-pty: openpty: {err}")))?;
         let mut builder = CommandBuilder::new(&self.cmd[0]);
         for arg in &self.cmd[1..] {
             builder.arg(arg);
@@ -218,11 +218,11 @@ impl InteractivePtySession {
         let child = pair
             .slave
             .spawn_command(builder)
-            .map_err(|err| Error::State(format!("interactive-pty: spawn: {err}")))?;
+            .map_err(|err| Error::Llm(format!("interactive-pty: spawn: {err}")))?;
         let writer_inner = pair
             .master
             .take_writer()
-            .map_err(|err| Error::State(format!("interactive-pty: take_writer: {err}")))?;
+            .map_err(|err| Error::Llm(format!("interactive-pty: take_writer: {err}")))?;
         self.writer = Some(PtyWriter {
             inner: Arc::new(Mutex::new(writer_inner)),
         });
@@ -283,10 +283,10 @@ impl InteractivePtySession {
         let master = self
             ._master
             .as_mut()
-            .ok_or_else(|| Error::State("interactive-pty: spawn before take_reader".into()))?;
+            .ok_or_else(|| Error::Llm("interactive-pty: spawn before take_reader".into()))?;
         master
             .try_clone_reader()
-            .map_err(|err| Error::State(format!("interactive-pty: clone_reader: {err}")))
+            .map_err(|err| Error::Llm(format!("interactive-pty: clone_reader: {err}")))
     }
 
     /// Wait for the spawned child to exit. Returns the exit info, or
@@ -300,7 +300,7 @@ impl InteractivePtySession {
         };
         let status = child
             .wait()
-            .map_err(|err| Error::State(format!("interactive-pty: wait: {err}")))?;
+            .map_err(|err| Error::Llm(format!("interactive-pty: wait: {err}")))?;
         self.writer = None;
         self._master = None;
         Ok(ExitInfo {
@@ -392,7 +392,7 @@ pub fn start_pty_proxy(session: &mut InteractivePtySession) -> Result<ProxyHandl
                 }
             }
         })
-        .map_err(|err| Error::State(format!("interactive-pty: reader thread: {err}")))?;
+        .map_err(|err| Error::Llm(format!("interactive-pty: reader thread: {err}")))?;
 
     // Stdin thread: stdin -> PTY. Detached; cooked-mode restore on
     // proxy end usually unblocks its current `read` on the next user
@@ -415,7 +415,7 @@ pub fn start_pty_proxy(session: &mut InteractivePtySession) -> Result<ProxyHandl
                 }
             }
         })
-        .map_err(|err| Error::State(format!("interactive-pty: stdin thread: {err}")))?;
+        .map_err(|err| Error::Llm(format!("interactive-pty: stdin thread: {err}")))?;
 
     Ok(ProxyHandle {
         reader_join: Some(reader_join),

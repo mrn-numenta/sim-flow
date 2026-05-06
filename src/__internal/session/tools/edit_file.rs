@@ -23,6 +23,7 @@ use serde_json::json;
 
 use super::{Tool, ToolContext, ToolResult, resolve_safe_path};
 use crate::Result;
+use crate::steps::is_path_allowed_for_writes;
 
 pub struct EditFileTool;
 
@@ -63,6 +64,16 @@ impl Tool for EditFileTool {
             return Ok(ToolResult::err(
                 "edit_file: `lib:` and `fw:` are read-only roots; cannot edit",
             ));
+        }
+        if !is_path_allowed_for_writes(ctx.write_paths, &path) {
+            return Ok(ToolResult::err(format!(
+                "edit_file: `{path}` is outside the write allowlist for this step+kind. Allowed: {}.",
+                if ctx.write_paths.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    ctx.write_paths.join(", ")
+                },
+            )));
         }
         let old_string = match args.get("old_string").and_then(|v| v.as_str()) {
             Some(s) => s.to_string(),
@@ -138,8 +149,16 @@ fn changed_line_range(body: &str, old_string: &str) -> (usize, usize) {
 mod tests {
     use super::*;
 
-    fn ctx<'a>(dir: &'a std::path::Path) -> ToolContext<'a> {
-        ToolContext::new(dir, None, None, None)
+    fn ctx<'a>(dir: &'a std::path::Path, write_paths: &'a [String]) -> ToolContext<'a> {
+        ToolContext::new(dir, None, None, None).with_write_paths(write_paths)
+    }
+
+    fn root_writes() -> Vec<String> {
+        vec![
+            "note.md".to_string(),
+            "n.md".to_string(),
+            "a.txt".to_string(),
+        ]
     }
 
     #[test]
@@ -148,7 +167,7 @@ mod tests {
         std::fs::write(tmp.path().join("note.md"), "hello world\nbye world\n").unwrap();
         let result = EditFileTool
             .invoke(
-                &ctx(tmp.path()),
+                &ctx(tmp.path(), &root_writes()),
                 &json!({"path": "note.md", "old_string": "hello", "new_string": "HOWDY"}),
             )
             .unwrap();
@@ -164,7 +183,7 @@ mod tests {
         std::fs::write(tmp.path().join("a.txt"), "alpha\nbeta\ngamma\n").unwrap();
         let result = EditFileTool
             .invoke(
-                &ctx(tmp.path()),
+                &ctx(tmp.path(), &root_writes()),
                 &json!({
                     "path": "a.txt",
                     "old_string": "alpha\nbeta",
@@ -186,7 +205,7 @@ mod tests {
         std::fs::write(tmp.path().join("n.md"), "hello\n").unwrap();
         let result = EditFileTool
             .invoke(
-                &ctx(tmp.path()),
+                &ctx(tmp.path(), &root_writes()),
                 &json!({"path": "n.md", "old_string": "missing", "new_string": "x"}),
             )
             .unwrap();
@@ -200,7 +219,7 @@ mod tests {
         std::fs::write(tmp.path().join("n.md"), "hi\nhi\n").unwrap();
         let result = EditFileTool
             .invoke(
-                &ctx(tmp.path()),
+                &ctx(tmp.path(), &root_writes()),
                 &json!({"path": "n.md", "old_string": "hi", "new_string": "yo"}),
             )
             .unwrap();
@@ -214,7 +233,7 @@ mod tests {
         std::fs::write(tmp.path().join("n.md"), "hi\n").unwrap();
         let result = EditFileTool
             .invoke(
-                &ctx(tmp.path()),
+                &ctx(tmp.path(), &root_writes()),
                 &json!({"path": "n.md", "old_string": "", "new_string": "x"}),
             )
             .unwrap();
@@ -228,7 +247,7 @@ mod tests {
         std::fs::write(tmp.path().join("n.md"), "hello\n").unwrap();
         let result = EditFileTool
             .invoke(
-                &ctx(tmp.path()),
+                &ctx(tmp.path(), &root_writes()),
                 &json!({"path": "n.md", "old_string": "hello", "new_string": "hello"}),
             )
             .unwrap();
@@ -242,7 +261,7 @@ mod tests {
         for path in ["lib:foo.md", "fw:src/lib.rs"] {
             let result = EditFileTool
                 .invoke(
-                    &ctx(tmp.path()),
+                    &ctx(tmp.path(), &root_writes()),
                     &json!({"path": path, "old_string": "x", "new_string": "y"}),
                 )
                 .unwrap();

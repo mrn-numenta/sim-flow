@@ -60,16 +60,16 @@ impl<R: Read, W: Write> JsonlHost<R, W> {
 impl<R: Read, W: Write> Host for JsonlHost<R, W> {
     fn write(&mut self, event: &Event) -> Result<()> {
         let line = serde_json::to_string(event)
-            .map_err(|e| Error::State(format!("session: serialize event: {e}")))?;
+            .map_err(|e| Error::Protocol(format!("session: serialize event: {e}")))?;
         self.writer
             .write_all(line.as_bytes())
-            .map_err(|e| Error::State(format!("session: write: {e}")))?;
+            .map_err(|e| Error::Protocol(format!("session: write: {e}")))?;
         self.writer
             .write_all(b"\n")
-            .map_err(|e| Error::State(format!("session: write: {e}")))?;
+            .map_err(|e| Error::Protocol(format!("session: write: {e}")))?;
         self.writer
             .flush()
-            .map_err(|e| Error::State(format!("session: flush: {e}")))?;
+            .map_err(|e| Error::Protocol(format!("session: flush: {e}")))?;
         Ok(())
     }
 
@@ -80,7 +80,7 @@ impl<R: Read, W: Write> Host for JsonlHost<R, W> {
             let n = self
                 .reader
                 .read_line(&mut line)
-                .map_err(|e| Error::State(format!("session: read: {e}")))?;
+                .map_err(|e| Error::Protocol(format!("session: read: {e}")))?;
             if n == 0 {
                 return Ok(None);
             }
@@ -89,7 +89,7 @@ impl<R: Read, W: Write> Host for JsonlHost<R, W> {
                 continue; // skip blank lines (lenient parser)
             }
             let parsed: HostEvent = serde_json::from_str(trimmed)
-                .map_err(|e| Error::State(format!("session: parse host event: {e}")))?;
+                .map_err(|e| Error::Protocol(format!("session: parse host event: {e}")))?;
             return Ok(Some(parsed));
         }
     }

@@ -69,6 +69,7 @@ fn smoke_step() -> StepDescriptor {
         ],
         work_artifacts: &["artifact.md"],
         predecessor_inputs: &[],
+        work_write_paths: &["artifact.md"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
     }

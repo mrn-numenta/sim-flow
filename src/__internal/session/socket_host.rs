@@ -235,9 +235,9 @@ fn read_attach_hello(reader: &mut BufReader<std::os::unix::net::UnixStream>) -> 
         line.clear();
         let n = reader
             .read_line(&mut line)
-            .map_err(|err| Error::State(format!("socket-host: read attach hello: {err}")))?;
+            .map_err(|err| Error::Protocol(format!("socket-host: read attach hello: {err}")))?;
         if n == 0 {
-            return Err(Error::State(
+            return Err(Error::HostClosed(
                 "socket-host: client disconnected before hello".into(),
             ));
         }
@@ -246,11 +246,11 @@ fn read_attach_hello(reader: &mut BufReader<std::os::unix::net::UnixStream>) -> 
             continue;
         }
         let event: HostEvent = serde_json::from_str(trimmed)
-            .map_err(|err| Error::State(format!("socket-host: parse attach hello: {err}")))?;
+            .map_err(|err| Error::Protocol(format!("socket-host: parse attach hello: {err}")))?;
         match event {
             hello @ HostEvent::Hello { .. } => return Ok(hello),
             _ => {
-                return Err(Error::State(
+                return Err(Error::Protocol(
                     "socket-host: first client event must be hello".into(),
                 ));
             }
@@ -266,7 +266,7 @@ fn read_host_event(
         line.clear();
         let n = reader
             .read_line(&mut line)
-            .map_err(|err| Error::State(format!("socket-host: read host event: {err}")))?;
+            .map_err(|err| Error::Protocol(format!("socket-host: read host event: {err}")))?;
         if n == 0 {
             return Ok(None);
         }
@@ -275,7 +275,7 @@ fn read_host_event(
             continue;
         }
         let event: HostEvent = serde_json::from_str(trimmed)
-            .map_err(|err| Error::State(format!("socket-host: parse host event: {err}")))?;
+            .map_err(|err| Error::Protocol(format!("socket-host: parse host event: {err}")))?;
         if matches!(event, HostEvent::Hello { .. }) {
             continue;
         }
@@ -285,16 +285,16 @@ fn read_host_event(
 
 fn write_event_line(writer: &mut std::os::unix::net::UnixStream, event: &Event) -> Result<()> {
     let line = serde_json::to_string(event)
-        .map_err(|err| Error::State(format!("socket-host: serialize event: {err}")))?;
+        .map_err(|err| Error::Protocol(format!("socket-host: serialize event: {err}")))?;
     writer
         .write_all(line.as_bytes())
-        .map_err(|err| Error::State(format!("socket-host: write event: {err}")))?;
+        .map_err(|err| Error::Protocol(format!("socket-host: write event: {err}")))?;
     writer
         .write_all(b"\n")
-        .map_err(|err| Error::State(format!("socket-host: write newline: {err}")))?;
+        .map_err(|err| Error::Protocol(format!("socket-host: write newline: {err}")))?;
     writer
         .flush()
-        .map_err(|err| Error::State(format!("socket-host: flush event: {err}")))?;
+        .map_err(|err| Error::Protocol(format!("socket-host: flush event: {err}")))?;
     Ok(())
 }
 

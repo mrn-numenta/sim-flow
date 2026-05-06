@@ -57,6 +57,12 @@ pub struct ToolContext<'a> {
     pub library_root: Option<&'a Path>,
     pub framework_root: Option<&'a Path>,
     pub framework_docs_root: Option<&'a Path>,
+    /// Project-relative path prefixes the current step+kind allows
+    /// writes to. Empty list means no writes are allowed in this
+    /// session. `WriteFileTool` and `EditFileTool` enforce this; the
+    /// orchestrator's artifact-write extractor enforces the same set
+    /// before persisting fenced ` ```path ` blocks.
+    pub write_paths: &'a [String],
 }
 
 impl<'a> ToolContext<'a> {
@@ -71,7 +77,13 @@ impl<'a> ToolContext<'a> {
             library_root,
             framework_root,
             framework_docs_root,
+            write_paths: &[],
         }
+    }
+
+    pub fn with_write_paths(mut self, write_paths: &'a [String]) -> Self {
+        self.write_paths = write_paths;
+        self
     }
 }
 
@@ -215,7 +227,9 @@ pub fn is_safe_relative_path(p: &str) -> bool {
 /// any filesystem op.
 pub fn resolve_safe_path(project_dir: &Path, rel: &str) -> Result<PathBuf> {
     if !is_safe_relative_path(rel) {
-        return Err(Error::State(format!("rejecting unsafe tool path: {rel}")));
+        return Err(Error::Protocol(format!(
+            "rejecting unsafe tool path: {rel}"
+        )));
     }
     Ok(project_dir.join(rel))
 }
@@ -258,7 +272,7 @@ fn resolve_under(root: Option<&Path>, prefix: &str, rel: &str) -> Result<Option<
         return Ok(Some(root.to_path_buf()));
     }
     if !is_safe_relative_path(rel) {
-        return Err(Error::State(format!(
+        return Err(Error::Protocol(format!(
             "rejecting unsafe tool path: {prefix}:{rel}"
         )));
     }
