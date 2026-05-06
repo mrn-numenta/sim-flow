@@ -460,18 +460,25 @@ fn slash_retry_after_llm_error_reissues_request_without_user_turn() {
 }
 
 #[test]
-fn write_outside_step_allowlist_is_rejected() {
+fn write_outside_step_allowlist_is_rejected_and_fed_back_to_agent() {
     // DM0's work-session allowlist is `["docs/"]`. A fenced
     // artifact-write block targeting `src/lib.rs` must be rejected
-    // (Diagnostic emitted, no file written) so the per-step write
-    // scope binds the artifact-write convention, not just the
-    // tool-call API. Otherwise the convention would be a bypass.
+    // (Diagnostic emitted, no file written, error ToolInvoked) so
+    // the per-step write scope binds the artifact-write convention,
+    // not just the tool-call API. The rejection must also be
+    // threaded back to the agent as a User turn so it can correct
+    // on the next iteration instead of marching into validators
+    // assuming the write succeeded.
     let tmp = tempfile::tempdir().unwrap();
     let project = init_project(&tmp);
     let mut host = TestHost::new();
     host.enqueue(hello());
-    let body = "Implementing the DM0 sketch.\n\n```src/lib.rs\nfn main() {}\n```\n";
-    host.enqueue_llm_response("lr-1", body);
+    // Turn 1: bad path — gets rejected and fed back.
+    let bad = "Implementing the DM0 sketch.\n\n```src/lib.rs\nfn main() {}\n```\n";
+    host.enqueue_llm_response("lr-1", bad);
+    // Turn 2: agent corrects to a docs/ path.
+    let good = "```docs/spec.md\n# Spec\nClock: 2 GHz, Node: 7 nm\n```\n";
+    host.enqueue_llm_response("lr-2", good);
     host.enqueue(HostEvent::UserMessage {
         text: "/end-session".into(),
     });
@@ -482,6 +489,10 @@ fn write_outside_step_allowlist_is_rejected() {
         !project.join("src/lib.rs").exists(),
         "src/lib.rs must not have been written by a DM0 work session",
     );
+    assert!(
+        project.join("docs/spec.md").exists(),
+        "the corrected docs/spec.md write must have landed",
+    );
     let saw_rejection = host.written.iter().any(|e| match e {
         Event::Diagnostic { message, .. } => {
             message.contains("write allowlist") || message.contains("outside the per-step")
@@ -491,6 +502,52 @@ fn write_outside_step_allowlist_is_rejected() {
     assert!(
         saw_rejection,
         "expected a Diagnostic explaining the allowlist rejection",
+    );
+
+    // The rejection must surface as an `error` ToolInvoked event so
+    // hosts that render tool activity (the dashboard, the chat UI)
+    // show a failure marker instead of silently dropping the call.
+    let saw_error_tool = host.written.iter().any(|e| match e {
+        Event::ToolInvoked { status, .. } => status == "error",
+        _ => false,
+    });
+    assert!(
+        saw_error_tool,
+        "expected a ToolInvoked with status=error for the rejected write",
+    );
+
+    // The rejection must be threaded back to the LLM as a User turn
+    // before the orchestrator re-issues. Without this the agent
+    // marches into validators / gates believing the write landed.
+    let llm_requests: Vec<_> = host
+        .written
+        .iter()
+        .filter_map(|e| match e {
+            Event::RequestLlmResponse { messages, .. } => Some(messages.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        llm_requests.len(),
+        2,
+        "expected re-issue after rejection (initial + corrected)",
+    );
+    let last_user_in_second = llm_requests[1]
+        .iter()
+        .rev()
+        .find(|m| matches!(m.role, sim_flow::session::protocol::LlmRole::User))
+        .expect("second request must include a User turn");
+    assert!(
+        last_user_in_second
+            .content
+            .contains("Artifact-write rejections"),
+        "feedback turn must explain the rejection: {}",
+        last_user_in_second.content,
+    );
+    assert!(
+        last_user_in_second.content.contains("src/lib.rs"),
+        "feedback turn must name the rejected path: {}",
+        last_user_in_second.content,
     );
 }
 

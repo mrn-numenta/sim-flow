@@ -498,6 +498,16 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     content: assistant_text.clone(),
                 });
             }
+            // Track artifact-write failures so we can feed them back
+            // as a User turn below. Without this, a rejected write
+            // surfaces as a host-side `Diagnostic` only; the agent's
+            // turn ends believing the write succeeded, the validator
+            // / gate then fails because the file isn't on disk, and
+            // the agent has to reverse-engineer what went wrong from
+            // missing-file errors. Threading the rejection back is
+            // the same pattern the tool-call dispatcher already uses
+            // for tool errors: visible failure → next-turn correction.
+            let mut artifact_write_failures: Vec<(String, String)> = Vec::new();
             for art in &artifacts {
                 let started = std::time::Instant::now();
                 match write_artifact(&opts.project_dir, &write_paths, art) {
@@ -514,12 +524,48 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         })?;
                     }
                     Err(err) => {
+                        let detail = format!("{err}");
                         host.write(&Event::Diagnostic {
                             level: DiagnosticLevel::Error,
-                            message: format!("failed to write {}: {err}", art.relative_path),
+                            message: format!("failed to write {}: {detail}", art.relative_path),
                         })?;
+                        host.write(&Event::ToolInvoked {
+                            name: "write_file".into(),
+                            args_summary: art.relative_path.clone(),
+                            status: "error".into(),
+                            duration_ms: started.elapsed().as_millis() as u64,
+                        })?;
+                        artifact_write_failures.push((art.relative_path.clone(), detail));
                     }
                 }
+            }
+            if !artifact_write_failures.is_empty() {
+                // Feed rejections back as the next User turn so the
+                // agent can correct (e.g. retarget a path, drop a
+                // disallowed write) instead of marching into the
+                // validator / gate phase under false assumptions.
+                // We `continue` BEFORE running tool calls and
+                // validators so the next turn starts from the
+                // failure-aware message stack.
+                let mut feedback = String::new();
+                if loop_hint_pending {
+                    feedback.push_str(LOOP_HINT_PREFIX);
+                    loop_hint_pending = false;
+                }
+                feedback.push_str(
+                    "Artifact-write rejections (the orchestrator did NOT persist these files; \
+                     re-emit the affected blocks at allowed paths or surface why a wider \
+                     write scope is needed):\n\n",
+                );
+                for (path, detail) in &artifact_write_failures {
+                    feedback.push_str(&format!("- `{path}`: {detail}\n"));
+                }
+                messages.push(LlmMessage {
+                    role: LlmRole::User,
+                    content: feedback,
+                    attachments: Vec::new(),
+                });
+                continue;
             }
 
             // 5e. Extract + dispatch fenced tool calls. Tools that
