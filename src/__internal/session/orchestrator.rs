@@ -29,6 +29,19 @@ use crate::{Error, Result};
 
 const FRAMEWORK_DOCS_ROOT_ENV: &str = "SIM_FLOW_FRAMEWORK_DOCS_ROOT";
 
+/// One-strike-warning prefix injected into the next user message
+/// the orchestrator builds when the runaway-loop detector sees
+/// `cap - 1` structurally-identical responses in a row. The next
+/// identical response will trip the abort; this gives the agent
+/// one explicit chance to break the cycle by re-reading the prior
+/// tool / build error rather than retrying the same call shape.
+const LOOP_HINT_PREFIX: &str = "Loop guard warning: your last response was structurally identical to the prior one. \
+     If the next response is also identical the orchestrator will abort the session. \
+     If a tool call or build is failing repeatedly with the same error, RE-READ the error below \
+     before retrying — the call shape may be wrong, the file may not exist, the path may be \
+     unwritable, or the operation may simply not be possible in the current state. Try a \
+     different approach.\n\n";
+
 /// Inputs the caller (CLI dispatch) passes to `run_session`.
 pub struct OrchestratorOptions {
     pub project_dir: PathBuf,
@@ -235,8 +248,17 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
     //     `opts.max_identical_responses` assistant responses. When
     //     the model returns the same bytes that many times in a row
     //     it's clearly stuck; we abort instead of paying for more.
+    //   - `loop_hint_pending` is a one-strike-warning. When the
+    //     deque has `cap - 1` identical entries (one more identical
+    //     response would trip the abort), we prepend a "you've
+    //     already sent this exact request; check the error before
+    //     retrying" notice to the NEXT user message we build (tool
+    //     results, build-output feedback, etc.). Saves the third
+    //     turn when the agent would otherwise burn it on a fourth
+    //     identical retry.
     let mut recent_response_hashes: std::collections::VecDeque<u64> =
         std::collections::VecDeque::with_capacity(opts.max_identical_responses.max(1) as usize);
+    let mut loop_hint_pending: bool = false;
 
     // 5c. Turn loop.
     let mut turn_index: u32 = 0;
@@ -344,8 +366,8 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             while recent_response_hashes.len() > cap {
                 recent_response_hashes.pop_front();
             }
-            if recent_response_hashes.len() == cap && recent_response_hashes.iter().all(|x| *x == h)
-            {
+            let all_equal = recent_response_hashes.iter().all(|x| *x == h);
+            if recent_response_hashes.len() == cap && all_equal {
                 host.write(&Event::Diagnostic {
                     level: DiagnosticLevel::Error,
                     message: format!(
@@ -361,6 +383,25 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     message: Some(format!("{} identical responses in a row", cap)),
                 })?;
                 return Ok(());
+            }
+            // Strike-(cap-1): one more identical response will trip
+            // the abort above. Flag the next user message we build
+            // so the agent gets one explicit chance to break the
+            // cycle before we burn another turn. Only fires when
+            // cap >= 3 so the strike-2 case isn't immediately
+            // followed by an abort with no prior warning.
+            if cap >= 3 && recent_response_hashes.len() + 1 == cap && all_equal {
+                tracing::warn!(
+                    streak = recent_response_hashes.len(),
+                    cap,
+                    "near-repeat detected; injecting loop-guard hint into next user message",
+                );
+                loop_hint_pending = true;
+            } else if !all_equal {
+                // Streak broken — either by a fresh response or by
+                // a different one rolling into the deque. Drop any
+                // pending hint so we don't carry it past recovery.
+                loop_hint_pending = false;
             }
         }
 
@@ -479,7 +520,12 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             //     prompting the user.
             let tool_calls = tools::extract_tool_calls(&assistant_text);
             if !tool_calls.is_empty() {
-                let mut feedback = String::from("Tool results:\n\n");
+                let mut feedback = String::new();
+                if loop_hint_pending {
+                    feedback.push_str(LOOP_HINT_PREFIX);
+                    loop_hint_pending = false;
+                }
+                feedback.push_str("Tool results:\n\n");
                 let mut tool_attachments: Vec<crate::session::protocol::LlmAttachment> = Vec::new();
                 for call in &tool_calls {
                     let started = std::time::Instant::now();
@@ -538,16 +584,22 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                                     ),
                                 })?;
                             } else {
+                                let mut content = String::new();
+                                if loop_hint_pending {
+                                    content.push_str(LOOP_HINT_PREFIX);
+                                    loop_hint_pending = false;
+                                }
+                                content.push_str(&format!(
+                                    "{} phase failed (`{}` exited {}). Fix the issues below and re-emit the affected files.\n\n{}\n\n{}",
+                                    current_phase,
+                                    out.command,
+                                    out.exit_code,
+                                    out.stderr_tail,
+                                    out.stdout_tail
+                                ));
                                 messages.push(LlmMessage {
                                     role: LlmRole::User,
-                                    content: format!(
-                                        "{} phase failed (`{}` exited {}). Fix the issues below and re-emit the affected files.\n\n{}\n\n{}",
-                                        current_phase,
-                                        out.command,
-                                        out.exit_code,
-                                        out.stderr_tail,
-                                        out.stdout_tail
-                                    ),
+                                    content,
                                     attachments: Vec::new(),
                                 });
                                 continue;

@@ -545,6 +545,108 @@ fn tool_call_in_response_is_executed_and_results_feed_back() {
     );
 }
 
+#[test]
+fn near_repeat_streak_injects_loop_guard_hint_into_next_user_message() {
+    // Default `max_identical_responses = 3`. Strike-2 (deque len ==
+    // cap - 1, all equal) should prepend a one-strike-warning to the
+    // next user message the orchestrator builds. Strike-3 still
+    // aborts; this hint gives the agent one explicit chance to break
+    // the cycle before that.
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("proj");
+    std::fs::create_dir_all(project.join("docs/critiques")).unwrap();
+    let state = State::new(Flow::DirectModeling, "DM2d");
+    state.save(&project.join(".sim-flow")).unwrap();
+    let config = sim_flow::config::Config::default();
+    config.save(&project.join(".sim-flow")).unwrap();
+    std::fs::create_dir_all(project.join("src/model")).unwrap();
+    std::fs::write(project.join("src/model/lib.rs"), "pub fn f() {}\n").unwrap();
+
+    let mut host = TestHost::new();
+    host.enqueue(hello());
+
+    // Identical tool calls for two turns in a row. The orchestrator
+    // dispatches read_file each time and feeds the (same) result back
+    // as a user message. After turn 2 the strike-2 condition fires
+    // and the next user message we build (the tool result for turn 2)
+    // gets the hint prefix.
+    let identical_call = "Re-reading the file.\n\n```tool:read_file\nsrc/model/lib.rs\n```\n";
+    host.enqueue_llm_response("lr-1", identical_call);
+    host.enqueue_llm_response("lr-2", identical_call);
+
+    // Turn 3: emit something different so the streak breaks and we
+    // don't trip the strike-3 abort. The /end-session pumps the
+    // session to completion so we can inspect the recorded events.
+    host.enqueue_llm_response("lr-3", "Done with the lookup. /end-session");
+    host.enqueue(HostEvent::UserMessage {
+        text: "/end-session".into(),
+    });
+
+    let opts = OrchestratorOptions {
+        project_dir: project.clone(),
+        foundation_root: foundation_root(),
+        step_id: "DM2d".into(),
+        kind: SessionKind::Work,
+        candidate: None,
+        llm_backend: "test".into(),
+        llm_model: None,
+        ..Default::default()
+    };
+    run_session(opts, &mut host).unwrap();
+
+    // No abort should have fired (strike-3 didn't happen).
+    let saw_runaway = host.written.iter().any(|e| {
+        matches!(
+            e,
+            Event::SessionEnd { reason, .. } if reason == "runaway-guard"
+        )
+    });
+    assert!(
+        !saw_runaway,
+        "the streak was broken by turn 3; runaway-guard should NOT have fired",
+    );
+
+    // The third RequestLlmResponse's messages should include a User
+    // message whose content begins with the loop-guard hint prefix
+    // (the tool result for turn 2 was the message that got the
+    // injection).
+    let request_payloads: Vec<_> = host
+        .written
+        .iter()
+        .filter_map(|e| match e {
+            Event::RequestLlmResponse { messages, .. } => Some(messages.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        request_payloads.len() >= 3,
+        "expected at least 3 LLM requests (turns lr-1/2/3); got {}",
+        request_payloads.len()
+    );
+    let third = &request_payloads[2];
+    let saw_hint = third.iter().any(|m| {
+        matches!(m.role, sim_flow::session::protocol::LlmRole::User)
+            && m.content.contains("Loop guard warning")
+    });
+    assert!(
+        saw_hint,
+        "expected loop-guard hint in the tool-result user message ahead of turn 3; \
+         messages were: {third:?}",
+    );
+
+    // The SECOND request (turn 2) should NOT have the hint — at that
+    // point the deque only had one entry from turn 1.
+    let second = &request_payloads[1];
+    let second_has_hint = second.iter().any(|m| {
+        matches!(m.role, sim_flow::session::protocol::LlmRole::User)
+            && m.content.contains("Loop guard warning")
+    });
+    assert!(
+        !second_has_hint,
+        "hint should not appear before strike-2 detection; turn-2 messages were: {second:?}",
+    );
+}
+
 // -------------------------------------------------------------------
 // M4: TerminalHost.
 // -------------------------------------------------------------------
