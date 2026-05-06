@@ -12,6 +12,8 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
+use tracing::{debug, info};
+
 use crate::session::host::Host;
 use crate::session::protocol::{Event, HostEvent};
 use crate::{Error, Result};
@@ -56,6 +58,7 @@ impl SocketHost {
             .spawn(move || accept_loop(listener, accept_tx, shutdown_for_thread))
             .map_err(|err| Error::State(format!("socket-host: accept thread: {err}")))?;
 
+        info!(socket = %path.display(), "socket-host bound");
         Ok(Self {
             socket_path: path,
             accept_rx,
@@ -100,6 +103,10 @@ impl SocketHost {
         }
         self.active_reader = Some(reader);
         self.active_writer = Some(writer);
+        debug!(
+            history_len = self.history.len(),
+            "socket-host adopted connection; replaying history"
+        );
         self.replay_history_to_active()
     }
 
@@ -118,6 +125,9 @@ impl SocketHost {
     }
 
     fn clear_active_connection(&mut self) {
+        if self.active_reader.is_some() || self.active_writer.is_some() {
+            debug!("socket-host connection lost; awaiting reattach");
+        }
         self.active_reader = None;
         self.active_writer = None;
     }

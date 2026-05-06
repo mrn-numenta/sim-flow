@@ -62,6 +62,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
+use tracing::{debug, info, warn};
+
 use crate::Result;
 use crate::session::host::Host;
 use crate::session::orchestrator::{
@@ -108,6 +110,13 @@ pub struct AutoOptions {
 }
 
 pub fn run_auto<H: Host>(opts: AutoOptions, host: &mut H) -> Result<()> {
+    info!(
+        project = %opts.project_dir.display(),
+        backend = %opts.llm_backend,
+        model = opts.llm_model.as_deref().unwrap_or("(default)"),
+        step_mode = ?opts.step_mode,
+        "run_auto starting"
+    );
     let mode = Arc::new(AtomicU8::new(step_mode_to_u8(opts.step_mode)));
     let mut auto_host = AutoHost::new(host, mode);
 
@@ -131,19 +140,29 @@ pub fn run_auto<H: Host>(opts: AutoOptions, host: &mut H) -> Result<()> {
             break RunOutcome::Shutdown;
         }
         match auto_host.current_step_mode() {
-            StepMode::Auto => match run_auto_loop(&opts, &mut auto_host)? {
-                AutoLoopOutcome::Completed => break RunOutcome::Completed,
-                AutoLoopOutcome::FlippedToManual => continue,
-                AutoLoopOutcome::Shutdown => break RunOutcome::Shutdown,
-            },
-            StepMode::Manual => match wait_for_command(&opts, &mut auto_host)? {
-                ManualOutcome::Continue => continue,
-                ManualOutcome::Shutdown => break RunOutcome::Shutdown,
-                ManualOutcome::HostClosed => break RunOutcome::HostClosed,
-            },
+            StepMode::Auto => {
+                debug!("dispatching to run_auto_loop (auto mode)");
+                match run_auto_loop(&opts, &mut auto_host)? {
+                    AutoLoopOutcome::Completed => break RunOutcome::Completed,
+                    AutoLoopOutcome::FlippedToManual => {
+                        debug!("auto loop flipped to manual; re-evaluating mode");
+                        continue;
+                    }
+                    AutoLoopOutcome::Shutdown => break RunOutcome::Shutdown,
+                }
+            }
+            StepMode::Manual => {
+                debug!("dispatching to wait_for_command (manual mode)");
+                match wait_for_command(&opts, &mut auto_host)? {
+                    ManualOutcome::Continue => continue,
+                    ManualOutcome::Shutdown => break RunOutcome::Shutdown,
+                    ManualOutcome::HostClosed => break RunOutcome::HostClosed,
+                }
+            }
         }
     };
 
+    info!(outcome = ?outcome, "run_auto exiting");
     // Final SessionEnd. AutoHost forwards this to the underlying host
     // (consume_session_end is reset to false here so the user sees a
     // clean end-of-auto-run banner).
@@ -367,6 +386,7 @@ fn flip_to_manual<H: Host>(auto_host: &mut AutoHost<H>) -> Result<()> {
     let prev = auto_host.current_step_mode();
     auto_host.store_step_mode(StepMode::Manual);
     if !matches!(prev, StepMode::Manual) {
+        warn!("flipping step mode auto -> manual (cap exceeded or gate failure)");
         auto_host.write(&Event::StepModeChanged {
             mode: StepMode::Manual,
         })?;
@@ -483,6 +503,7 @@ fn run_subsession<H: Host>(
     host.cap_exceeded = false;
     host.in_subsession = true;
     let kind_out = session_kind_to_protocol(kind);
+    info!(step = step_id, kind = ?kind_out, auto, "sub-session starting");
     // Bracket the inner run_session with SubSessionStarted /
     // SubSessionEnded so the dashboard can disable per-step
     // buttons while the orchestrator is busy. Emitted regardless
@@ -518,6 +539,7 @@ fn run_subsession<H: Host>(
     // state error — surface that as "error" so the dashboard can
     // distinguish.
     let outcome = if result.is_ok() { "completed" } else { "error" };
+    info!(step = step_id, kind = ?kind_out, outcome, "sub-session ended");
     // Best-effort: if writing the closing event fails (e.g. host
     // socket already closed), keep the inner `result` to surface.
     let _ = host.write(&Event::SubSessionEnded {
@@ -1111,11 +1133,15 @@ impl<H: Host> Host for AutoHost<'_, H> {
                     let prev = self.current_step_mode();
                     self.store_step_mode(mode);
                     if prev != mode {
+                        info!(from = ?prev, to = ?mode, "step mode flipped by host command");
                         self.inner.write(&Event::StepModeChanged { mode })?;
+                    } else {
+                        debug!(mode = ?mode, "SetStepMode received but mode unchanged");
                     }
                     continue;
                 }
                 Some(HostEvent::Shutdown) => {
+                    info!(in_subsession = self.in_subsession, "shutdown requested");
                     self.shutdown_requested = true;
                     if self.in_subsession {
                         // Cancel the in-flight sub-session at the next
@@ -1128,6 +1154,7 @@ impl<H: Host> Host for AutoHost<'_, H> {
                 Some(cmd) if is_manual_command(&cmd) => {
                     let label = host_event_label(&cmd);
                     if matches!(self.current_step_mode(), StepMode::Auto) {
+                        warn!(cmd = label, "rejecting manual command in auto mode");
                         self.inner.write(&Event::Diagnostic {
                             level: DiagnosticLevel::Warning,
                             message: format!(
@@ -1137,6 +1164,10 @@ impl<H: Host> Host for AutoHost<'_, H> {
                         continue;
                     }
                     if self.in_subsession {
+                        warn!(
+                            cmd = label,
+                            "rejecting manual command while sub-session in flight"
+                        );
                         self.inner.write(&Event::Diagnostic {
                             level: DiagnosticLevel::Warning,
                             message: format!(
@@ -1145,6 +1176,7 @@ impl<H: Host> Host for AutoHost<'_, H> {
                         })?;
                         continue;
                     }
+                    debug!(cmd = label, "manual command dispatched");
                     return Ok(Some(cmd));
                 }
                 other => return Ok(other),

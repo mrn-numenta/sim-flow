@@ -399,7 +399,7 @@ pub fn run_auto_interactive_single(opts: AutoInteractiveOptions) -> Result<()> {
                     &listener_for_thread,
                 );
                 if let Err(err) = result {
-                    let _ = writeln!(std::io::stderr(), "sim-flow: control command failed: {err}",);
+                    tracing::error!(error = %err, "control command failed");
                 }
                 if matches!(cmd, ControlCommand::Shutdown) {
                     break;

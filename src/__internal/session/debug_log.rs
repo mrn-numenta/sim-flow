@@ -63,7 +63,7 @@ pub fn parse_categories(raw: Option<&str>) -> CategorySet {
                 out.llm = true;
             }
             other => {
-                eprintln!("sim-flow: ignoring unknown SIM_FOUNDATION_DEBUG token `{other}`");
+                tracing::warn!(token = %other, "ignoring unknown SIM_FOUNDATION_DEBUG token");
             }
         }
     }
@@ -88,9 +88,10 @@ impl DebugLog {
         }
         let dir = project_dir.join(".sim-flow").join("logs");
         if let Err(err) = std::fs::create_dir_all(&dir) {
-            eprintln!(
-                "sim-flow: cannot create debug log dir `{}`: {err}",
-                dir.display()
+            tracing::warn!(
+                dir = %dir.display(),
+                error = %err,
+                "cannot create debug log dir; debug logging disabled"
             );
             return Self::disabled(cats);
         }
@@ -98,9 +99,10 @@ impl DebugLog {
         let mut file = match OpenOptions::new().create(true).append(true).open(&path) {
             Ok(f) => f,
             Err(err) => {
-                eprintln!(
-                    "sim-flow: cannot open debug log `{}`: {err}",
-                    path.display()
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "cannot open debug log file; debug logging disabled"
                 );
                 return Self::disabled(cats);
             }
