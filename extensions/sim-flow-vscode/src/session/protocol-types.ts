@@ -84,7 +84,7 @@ export type Event =
   | {
       event: "session-end";
       message?: string | null;
-      reason: string;
+      reason: SessionEndReason;
     }
   | {
       event: "step-mode-changed";
@@ -107,6 +107,16 @@ export type Event =
 export type SessionKindOut = "work" | "critique";
 export type LlmRole = "system" | "user" | "assistant";
 export type DiagnosticLevel = "info" | "warning" | "error";
+/**
+ * Terminal state of a `SessionEnd` event. Closed-set enum so hosts can route on it deterministically (e.g. only re-enable Connect after `Completed`/`Cancelled`/`Error` but treat `RunawayGuard` as a hard abort that requires user attention). Serialized in kebab-case to match the existing wire strings.
+ */
+export type SessionEndReason =
+  | "completed"
+  | "cancelled"
+  | "error"
+  | "protocol-error"
+  | "protocol-mismatch"
+  | "runaway-guard";
 /**
  * Step-axis mode of the orchestrator. Wire-stable enum serialized as `"auto"` / `"manual"`. See `docs/brainstorming/manual-step-mode.md`.
  */

@@ -70,8 +70,8 @@ use crate::session::orchestrator::{
     OrchestratorOptions, run_session, step_descriptor_for_protocol,
 };
 use crate::session::protocol::{
-    DiagnosticLevel, Event, GateFailureOut, HostEvent, HostInfo, PROTOCOL_VERSION, SessionKindOut,
-    SessionTag, StepMode,
+    DiagnosticLevel, Event, GateFailureOut, HostEvent, HostInfo, PROTOCOL_VERSION,
+    SessionEndReason, SessionKindOut, SessionTag, StepMode,
 };
 use crate::state::State;
 use crate::steps::registry_for;
@@ -168,14 +168,20 @@ pub fn run_auto<H: Host>(opts: AutoOptions, host: &mut H) -> Result<()> {
     // clean end-of-auto-run banner).
     auto_host.consume_session_end = false;
     let (reason, message) = match outcome {
-        RunOutcome::Completed => ("completed", Some("auto run finished".into())),
-        RunOutcome::Shutdown => ("completed", Some("orchestrator shut down".into())),
-        RunOutcome::HostClosed => ("completed", Some("host disconnected".into())),
+        RunOutcome::Completed => (
+            SessionEndReason::Completed,
+            Some("auto run finished".into()),
+        ),
+        RunOutcome::Shutdown => (
+            SessionEndReason::Completed,
+            Some("orchestrator shut down".into()),
+        ),
+        RunOutcome::HostClosed => (
+            SessionEndReason::Completed,
+            Some("host disconnected".into()),
+        ),
     };
-    auto_host.write(&Event::SessionEnd {
-        reason: reason.into(),
-        message,
-    })?;
+    auto_host.write(&Event::SessionEnd { reason, message })?;
     Ok(())
 }
 
@@ -437,7 +443,7 @@ fn perform_initial_handshake<H: Host>(
         }) => protocol_version,
         Some(other) => {
             auto_host.write(&Event::SessionEnd {
-                reason: "protocol-error".into(),
+                reason: SessionEndReason::ProtocolError,
                 message: Some(format!("expected Hello first, got {other:?}")),
             })?;
             return Err(crate::Error::State(format!(
@@ -452,7 +458,7 @@ fn perform_initial_handshake<H: Host>(
     };
     if hello_version != PROTOCOL_VERSION {
         auto_host.write(&Event::SessionEnd {
-            reason: "protocol-mismatch".into(),
+            reason: SessionEndReason::ProtocolMismatch,
             message: Some(format!(
                 "host sent protocolVersion={hello_version}; orchestrator speaks {PROTOCOL_VERSION}"
             )),
@@ -1405,7 +1411,7 @@ mod tests {
         let (mut host, _flag) = auto_host_with_mode(StepMode::Auto, &mut inner);
         host.consume_session_end = true;
         host.write(&Event::SessionEnd {
-            reason: "completed".into(),
+            reason: SessionEndReason::Completed,
             message: None,
         })
         .unwrap();
@@ -1424,7 +1430,7 @@ mod tests {
         let (mut host, _flag) = auto_host_with_mode(StepMode::Manual, &mut inner);
         host.consume_session_end = false;
         host.write(&Event::SessionEnd {
-            reason: "completed".into(),
+            reason: SessionEndReason::Completed,
             message: None,
         })
         .unwrap();

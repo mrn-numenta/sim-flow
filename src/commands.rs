@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use sim_flow::__internal::config::Config;
 use sim_flow::__internal::foundation_root;
 use sim_flow::__internal::runner::{DOT_SIM_FLOW, StepRunner};
+use sim_flow::__internal::session::protocol::SessionEndReason;
 use sim_flow::__internal::session::{Event, Host};
 use sim_flow::__internal::state::{Flow, State};
 use sim_flow::__internal::steps::registry_for;
@@ -634,7 +635,7 @@ where
             if !host.saw_session_end {
                 let message = format!("sim-flow session failed: {err}");
                 let _ = host.write(&Event::SessionEnd {
-                    reason: "error".into(),
+                    reason: SessionEndReason::Error,
                     message: Some(message),
                 });
             }
@@ -723,7 +724,7 @@ mod tests {
         assert_eq!(host.inner.written.len(), 1);
         match &host.inner.written[0] {
             Event::SessionEnd { reason, message } => {
-                assert_eq!(reason, "error");
+                assert_eq!(*reason, SessionEndReason::Error);
                 assert_eq!(
                     message.as_deref(),
                     Some("sim-flow session failed: state error: boom")
@@ -738,7 +739,7 @@ mod tests {
         let mut host = SessionEndTrackingHost::new(RecordingHost::default());
         let err = run_with_error_session_end(&mut host, |host| {
             host.write(&Event::SessionEnd {
-                reason: "protocol-mismatch".into(),
+                reason: SessionEndReason::ProtocolMismatch,
                 message: Some("bad hello".into()),
             })?;
             Err(sim_flow::Error::State("boom".into()))
@@ -749,7 +750,7 @@ mod tests {
         assert_eq!(host.inner.written.len(), 1);
         match &host.inner.written[0] {
             Event::SessionEnd { reason, message } => {
-                assert_eq!(reason, "protocol-mismatch");
+                assert_eq!(*reason, SessionEndReason::ProtocolMismatch);
                 assert_eq!(message.as_deref(), Some("bad hello"));
             }
             other => panic!("expected SessionEnd, got {other:?}"),

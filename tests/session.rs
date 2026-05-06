@@ -120,7 +120,10 @@ fn handshake_emits_hello_ack_and_phase_changed() {
     // we enqueued during the LLM-await loop.
     let last = host.written.last().unwrap();
     match last {
-        Event::SessionEnd { reason, .. } => assert_eq!(reason, "cancelled"),
+        Event::SessionEnd { reason, .. } => assert_eq!(
+            *reason,
+            sim_flow::session::protocol::SessionEndReason::Cancelled
+        ),
         other => panic!("expected SessionEnd, got {other:?}"),
     }
 }
@@ -143,7 +146,10 @@ fn protocol_version_mismatch_ends_session_with_error() {
     assert!(format!("{err}").contains("protocol version mismatch"));
     let last = host.written.last().expect("should have emitted SessionEnd");
     match last {
-        Event::SessionEnd { reason, .. } => assert_eq!(reason, "protocol-mismatch"),
+        Event::SessionEnd { reason, .. } => assert_eq!(
+            *reason,
+            sim_flow::session::protocol::SessionEndReason::ProtocolMismatch
+        ),
         other => panic!("expected SessionEnd, got {other:?}"),
     }
 }
@@ -329,7 +335,10 @@ fn cancel_during_llm_call_ends_session_cleanly() {
 
     let last = host.written.last().unwrap();
     match last {
-        Event::SessionEnd { reason, .. } => assert_eq!(reason, "cancelled"),
+        Event::SessionEnd { reason, .. } => assert_eq!(
+            *reason,
+            sim_flow::session::protocol::SessionEndReason::Cancelled
+        ),
         other => panic!("expected SessionEnd cancelled, got {other:?}"),
     }
 }
@@ -357,7 +366,10 @@ fn end_session_signal_completes_without_emitting_gate() {
     assert!(!saw_gate, "/end-session should not emit a GateResult");
     let last = host.written.last().unwrap();
     match last {
-        Event::SessionEnd { reason, .. } => assert_eq!(reason, "completed"),
+        Event::SessionEnd { reason, .. } => assert_eq!(
+            *reason,
+            sim_flow::session::protocol::SessionEndReason::Completed
+        ),
         other => panic!("expected SessionEnd completed, got {other:?}"),
     }
 }
@@ -403,7 +415,10 @@ fn auto_mode_ends_when_structural_gate_clean() {
     );
     let last = host.written.last().unwrap();
     match last {
-        Event::SessionEnd { reason, .. } => assert_eq!(reason, "completed"),
+        Event::SessionEnd { reason, .. } => assert_eq!(
+            *reason,
+            sim_flow::session::protocol::SessionEndReason::Completed
+        ),
         other => panic!("expected SessionEnd completed, got {other:?}"),
     }
 }
@@ -450,7 +465,10 @@ fn auto_mode_caps_iterations_and_drops_to_user_input() {
     );
     let last = host.written.last().unwrap();
     match last {
-        Event::SessionEnd { reason, .. } => assert_eq!(reason, "completed"),
+        Event::SessionEnd { reason, .. } => assert_eq!(
+            *reason,
+            sim_flow::session::protocol::SessionEndReason::Completed
+        ),
         other => panic!("expected SessionEnd completed, got {other:?}"),
     }
 }
@@ -598,7 +616,7 @@ fn near_repeat_streak_injects_loop_guard_hint_into_next_user_message() {
     let saw_runaway = host.written.iter().any(|e| {
         matches!(
             e,
-            Event::SessionEnd { reason, .. } if reason == "runaway-guard"
+            Event::SessionEnd { reason, .. } if *reason == sim_flow::session::protocol::SessionEndReason::RunawayGuard
         )
     });
     assert!(
@@ -909,7 +927,10 @@ fn manual_mode_starts_parked_and_emits_initial_step_mode_changed() {
     );
     let last = host.written.last().unwrap();
     match last {
-        Event::SessionEnd { reason, .. } => assert_eq!(reason, "completed"),
+        Event::SessionEnd { reason, .. } => assert_eq!(
+            *reason,
+            sim_flow::session::protocol::SessionEndReason::Completed
+        ),
         other => panic!("expected SessionEnd, got {other:?}"),
     }
     // Manual-mode parking should never run a sub-session without a
@@ -1247,7 +1268,10 @@ fn manual_mode_shutdown_terminates_cleanly() {
     let last = host.written.last().unwrap();
     match last {
         Event::SessionEnd { reason, message } => {
-            assert_eq!(reason, "completed");
+            assert_eq!(
+                *reason,
+                sim_flow::session::protocol::SessionEndReason::Completed
+            );
             assert!(
                 message.as_deref().unwrap_or("").contains("shut down"),
                 "shutdown SessionEnd should mention shutdown; got {message:?}"

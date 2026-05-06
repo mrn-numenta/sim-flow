@@ -104,10 +104,11 @@ pub enum Event {
         level: DiagnosticLevel,
         message: String,
     },
-    /// Session finished. `reason` is `completed`, `cancelled`, or
-    /// `error`; `message` is an optional human-readable detail.
+    /// Session finished. `reason` is the typed terminal state; the
+    /// optional `message` carries a human-readable detail (often
+    /// the error string for `error`-class reasons).
     SessionEnd {
-        reason: String,
+        reason: SessionEndReason,
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
     },
@@ -203,6 +204,59 @@ pub enum HostEvent {
     /// Tear the orchestrator down. Cancels any in-flight sub-session
     /// at the next safe boundary, emits `SessionEnd`, and exits.
     Shutdown,
+}
+
+/// Terminal state of a `SessionEnd` event. Closed-set enum so hosts
+/// can route on it deterministically (e.g. only re-enable Connect
+/// after `Completed`/`Cancelled`/`Error` but treat `RunawayGuard` as
+/// a hard abort that requires user attention). Serialized in
+/// kebab-case to match the existing wire strings.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SessionEndReason {
+    /// Session finished its work cleanly: gate clean, advance
+    /// happened, or auto-loop walked to the end of the flow.
+    Completed,
+    /// User-initiated cancel via `HostEvent::Cancel` or `/end-session`
+    /// in TerminalHost.
+    Cancelled,
+    /// Generic error path (LLM dispatch failed, tool error escalated,
+    /// etc.). The accompanying `message` carries the detail.
+    Error,
+    /// Wire-protocol violation: malformed JSON, unexpected event in
+    /// the handshake, or anything else that breaks the host /
+    /// orchestrator contract.
+    ProtocolError,
+    /// Host advertised a `protocolVersion` the orchestrator doesn't
+    /// speak. Hard fatal.
+    ProtocolMismatch,
+    /// `max_identical_responses` runaway-loop guard tripped. The
+    /// agent produced N structurally-identical responses in a row;
+    /// feeding it back another identical prompt is unlikely to help.
+    RunawayGuard,
+}
+
+impl SessionEndReason {
+    /// Wire-stable kebab-case rendering. Mirrors the serde
+    /// representation so callers that only have the enum (e.g.
+    /// stderr renderers, log lines) emit the same string the
+    /// host sees on the wire.
+    pub fn as_wire_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
+            Self::Error => "error",
+            Self::ProtocolError => "protocol-error",
+            Self::ProtocolMismatch => "protocol-mismatch",
+            Self::RunawayGuard => "runaway-guard",
+        }
+    }
+}
+
+impl std::fmt::Display for SessionEndReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_wire_str())
+    }
 }
 
 /// Step-axis mode of the orchestrator. Wire-stable enum serialized

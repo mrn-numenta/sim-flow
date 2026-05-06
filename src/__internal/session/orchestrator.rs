@@ -19,7 +19,7 @@ use crate::prompts;
 use crate::session::host::Host;
 use crate::session::protocol::{
     DiagnosticLevel, Event, HostEvent, LlmMessage, LlmRole, LlmTool, PROTOCOL_VERSION,
-    SessionKindOut, SessionTag, StepDescriptorOut,
+    SessionEndReason, SessionKindOut, SessionTag, StepDescriptorOut,
 };
 use crate::session::runners;
 use crate::session::tools::{self, Tool, ToolResult};
@@ -151,7 +151,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
         }) => protocol_version,
         Some(other) => {
             host.write(&Event::SessionEnd {
-                reason: "protocol-error".into(),
+                reason: SessionEndReason::ProtocolError,
                 message: Some(format!("expected Hello, got {other:?}")),
             })?;
             return Err(Error::State(format!("expected Hello first, got {other:?}")));
@@ -162,7 +162,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
     };
     if hello != PROTOCOL_VERSION {
         host.write(&Event::SessionEnd {
-            reason: "protocol-mismatch".into(),
+            reason: SessionEndReason::ProtocolMismatch,
             message: Some(format!(
                 "host sent protocolVersion={hello}; orchestrator speaks {PROTOCOL_VERSION}"
             )),
@@ -277,7 +277,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 ),
             })?;
             host.write(&Event::SessionEnd {
-                reason: "runaway-guard".into(),
+                reason: SessionEndReason::RunawayGuard,
                 message: Some(format!(
                     "max_llm_requests cap ({}) reached after {} turns",
                     opts.max_llm_requests,
@@ -332,7 +332,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 }
                 Some(HostEvent::Cancel) => {
                     host.write(&Event::SessionEnd {
-                        reason: "cancelled".into(),
+                        reason: SessionEndReason::Cancelled,
                         message: None,
                     })?;
                     return Ok(());
@@ -379,7 +379,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     ),
                 })?;
                 host.write(&Event::SessionEnd {
-                    reason: "runaway-guard".into(),
+                    reason: SessionEndReason::RunawayGuard,
                     message: Some(format!("{} identical responses in a row", cap)),
                 })?;
                 return Ok(());
@@ -634,7 +634,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     let report = evaluate_structural_gate(&opts.project_dir, &step)?;
                     if report.is_clean() {
                         host.write(&Event::SessionEnd {
-                            reason: "completed".into(),
+                            reason: SessionEndReason::Completed,
                             message: Some(format!("auto: {} structural gate clean", step.id)),
                         })?;
                         return Ok(());
@@ -721,7 +721,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             }
             Some(HostEvent::Cancel) | None => {
                 host.write(&Event::SessionEnd {
-                    reason: "cancelled".into(),
+                    reason: SessionEndReason::Cancelled,
                     message: None,
                 })?;
                 return Ok(());
@@ -747,7 +747,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             && content.trim() == "/end-session"
         {
             host.write(&Event::SessionEnd {
-                reason: "completed".into(),
+                reason: SessionEndReason::Completed,
                 message: None,
             })?;
             return Ok(());
