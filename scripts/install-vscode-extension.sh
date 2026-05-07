@@ -15,6 +15,7 @@
 #   export VSCODE_BIN="/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
 set -euo pipefail
 
+export VSCODE_BIN=/Applications/Visual\ Studio\ Code.app/Contents/Resources/app/bin/code
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EXT_DIR="${ROOT_DIR}/tools/sim-flow/extensions/sim-flow-vscode"
 
