@@ -1,3 +1,4 @@
+pub mod block_diagram;
 pub mod client;
 pub mod clients;
 pub mod config;

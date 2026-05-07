@@ -314,10 +314,20 @@ function build(): Node[] {
 
 function header(data: DashboardState): HTMLElement {
   const generated = new Date(data.generatedAt).toLocaleTimeString();
+  // Project name = the last path segment of projectDir. The full
+  // path stays available in the toolbar tooltip / Documents tab;
+  // the title bar prefers the short project name so it doesn't
+  // wrap across two lines.
+  const projectName = projectNameFromDir(data.projectDir);
   return el(
     "header",
     {},
-    el("h1", {}, `sim-flow: ${shortPath(data.projectDir)}`),
+    el("h1", { title: data.projectDir }, `Sim Flow Dashboard: ${projectName}`),
+    // Refresh button removed: the host already pushes a fresh
+    // state-update on every relevant disk / pump event (file
+    // watcher + sub-session bracket events), so a manual button
+    // was redundant and a click during a sub-session can race
+    // the watcher's snapshot.
     el(
       "div",
       { class: "toolbar" },
@@ -326,10 +336,19 @@ function header(data: DashboardState): HTMLElement {
       `current step: ${data.flow.current_step}`,
       sep(),
       `snapshot: ${generated}`,
-      sep(),
-      actionButton("Refresh", "refresh", () => send({ type: "refresh" })),
     ),
   );
+}
+
+/** Last path segment of a project dir, with a fallback to the
+ *  full path when no separator is present. */
+function projectNameFromDir(dir: string): string {
+  const trimmed = dir.replace(/[\\/]+$/, "");
+  const idx = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  if (idx < 0) {
+    return trimmed;
+  }
+  return trimmed.slice(idx + 1) || trimmed;
 }
 
 /**

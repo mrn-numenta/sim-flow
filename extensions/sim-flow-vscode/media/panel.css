@@ -513,94 +513,30 @@ h2 {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  /* Steps stack flush; the gate diamonds float in the cut-outs at
-     each step boundary using negative margins below. */
-  gap: 0;
+  /* Steps stack as plain rectangles separated by a small gap.
+     The earlier diamond-cutout geometry was retired in favor of
+     a simpler list -- gate state lives in the per-step detail
+     panel now, not as inline diamond glyphs. */
+  gap: 4px;
   padding: 8px 0;
   width: 100%;
 }
 
-/* Step boxes have triangular cut-outs at top + bottom (except the
-   first / last step) so the gate diamonds can sit visually inside
-   the boundary between consecutive steps. The cut-out geometry is
-   driven by two CSS variables so the gate's negative-margin and the
-   step's clip-path stay coordinated.
-     --cut-half-width  half the cut-out's base width (px)
-     --cut-depth       how deep the cut-out reaches into the step (px) */
 .step {
-  --cut-half-width: 12px;
-  --cut-depth: 10px;
   position: relative;
-  z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
-  /* Extra vertical padding compensates for the cut-outs eating into
-     the visible area; without this the step-id / step-label can
-     overlap the diamond glyph. */
-  padding: calc(2px + var(--cut-depth)) 10px;
+  padding: 6px 10px;
   background: var(--step-bg);
   color: var(--step-fg);
   cursor: pointer;
   overflow: hidden;
   min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
   transition: transform 60ms ease-out;
-  /* Outline. clip-path eats `border` and outer `outline` rules, so
-     we trace the silhouette with an inset box-shadow -- inset
-     shadows render inside the content box and are clipped together
-     with the step's background, which means the 1px ring follows
-     the cut-out triangles cleanly. */
-  box-shadow: inset 0 0 0 1px var(--border-color);
-  /* Default shape: cut-outs at both top and bottom. Overridden by
-     `.step-first` (no top cut) and `.step-last` (no bottom cut)
-     below. The polygon walks the outline clockwise starting at the
-     top-left corner. */
-  clip-path: polygon(
-    0 0,
-    calc(50% - var(--cut-half-width)) 0,
-    50% var(--cut-depth),
-    calc(50% + var(--cut-half-width)) 0,
-    100% 0,
-    100% 100%,
-    calc(50% + var(--cut-half-width)) 100%,
-    50% calc(100% - var(--cut-depth)),
-    calc(50% - var(--cut-half-width)) 100%,
-    0 100%
-  );
-}
-
-.step:not(.step-first) {
-  /* Slightly overlap the previous step so the doubled boundary line
-     reads as one continuous rail instead of a dark divider. The gate
-     diamond still sits above that seam via its higher z-index. */
-  margin-top: -1px;
-}
-
-.step.step-first {
-  /* Flat top edge for the very first step in the rail. */
-  clip-path: polygon(
-    0 0,
-    100% 0,
-    100% 100%,
-    calc(50% + var(--cut-half-width)) 100%,
-    50% calc(100% - var(--cut-depth)),
-    calc(50% - var(--cut-half-width)) 100%,
-    0 100%
-  );
-}
-
-.step.step-last {
-  /* Flat bottom edge for the very last step in the rail. */
-  clip-path: polygon(
-    0 0,
-    calc(50% - var(--cut-half-width)) 0,
-    50% var(--cut-depth),
-    calc(50% + var(--cut-half-width)) 0,
-    100% 0,
-    100% 100%,
-    0 100%
-  );
 }
 
 .step:hover {
@@ -613,11 +549,8 @@ h2 {
 .step.current {
   background: var(--step-bg-current);
   color: #fff;
-  /* Stack: base 1px border + 2px translucent accent ring marking
-     the current step. Both are inset so they follow the cut-outs. */
-  box-shadow:
-    inset 0 0 0 1px var(--border-color),
-    inset 0 0 0 3px rgba(51, 102, 204, 0.4);
+  border-color: rgba(51, 102, 204, 0.6);
+  box-shadow: 0 0 0 2px rgba(51, 102, 204, 0.4);
 }
 .step.disabled-ahead {
   background: var(--step-bg-disabled-ahead);

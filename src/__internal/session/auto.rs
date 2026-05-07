@@ -939,6 +939,38 @@ fn try_advance<H: Host>(project_dir: &Path, step_id: &str, host: &mut AutoHost<H
         .position(|s| *s == step.id)
         .and_then(|idx| order.get(idx + 1).copied());
 
+    // Auto-render the block diagram on the DM2d -> DM3a boundary
+    // so DM3a (test-plan author) and downstream readers can see
+    // the topology the model just landed without manually clicking
+    // the dashboard's Render button. Failures are surfaced as
+    // warnings rather than aborting the advance: the agent's
+    // main.rs may not have wired `dump_netlist_json` yet, in which
+    // case the user gets an actionable diagnostic and the flow
+    // continues. The dashboard's manual Render button stays
+    // available for retries.
+    if step.id == "DM2d" && next == Some("DM3a") {
+        match crate::block_diagram::render_for_project(crate::block_diagram::RenderConfig {
+            project_dir,
+            output: None,
+            direction: "tb",
+            show_types: false,
+            netlist_in: None,
+        }) {
+            Ok(svg_path) => {
+                host.write(&Event::Diagnostic {
+                    level: DiagnosticLevel::Info,
+                    message: format!("auto: rendered block diagram at {}", svg_path.display()),
+                })?;
+            }
+            Err(err) => {
+                host.write(&Event::Diagnostic {
+                    level: DiagnosticLevel::Warning,
+                    message: format!("auto: block-diagram render failed (advancing anyway): {err}"),
+                })?;
+            }
+        }
+    }
+
     // Commit step artifacts before mutating sim-flow state so a
     // committed git history reflects each gate-clean checkpoint.
     let outcome = crate::git_commit::commit_step_advance(project_dir, step.id, next);

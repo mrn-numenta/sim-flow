@@ -303,83 +303,16 @@ fn block_diagram_cmd(
     show_types: bool,
     netlist_in: Option<&Path>,
 ) -> sim_flow::Result<()> {
-    use block_diagram::__internal::render::RenderOptions;
-    use block_diagram::__internal::sugiyama::{Direction, LayoutConfig};
-
-    let dot = project.join(".sim-flow");
-    std::fs::create_dir_all(&dot).map_err(|err| sim_flow::Error::Io {
-        path: dot.clone(),
-        source: err,
-    })?;
-    let output_path = output
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| dot.join("block-diagram.svg"));
-
-    let direction = match direction {
-        "lr" | "left-to-right" | "LR" => Direction::LeftToRight,
-        _ => Direction::TopToBottom,
-    };
-
-    // Get a netlist JSON. Either the caller pre-generated one (e.g.
-    // via a custom build step) or we run the project's own binary
-    // with `--dump-netlist-json`. The framework's CLI integration
-    // adds that flag to every model that uses it.
-    let owned_netlist;
-    let netlist_path: &Path = match netlist_in {
-        Some(p) => p,
-        None => {
-            let tmp = dot.join("block-diagram.netlist.json");
-            run_dump_netlist(project, &tmp)?;
-            owned_netlist = tmp;
-            owned_netlist.as_path()
-        }
-    };
-
-    let config = LayoutConfig {
-        direction,
-        ..LayoutConfig::default()
-    };
-    let svg = block_diagram::__internal::render_netlist_file(
-        netlist_path,
-        config,
-        RenderOptions { show_types },
-    )
-    .map_err(|e| sim_flow::Error::State(format!("block-diagram: {e}")))?;
-    std::fs::write(&output_path, svg).map_err(|err| sim_flow::Error::Io {
-        path: output_path.clone(),
-        source: err,
-    })?;
-    eprintln!("block-diagram: wrote {}", output_path.display());
-    Ok(())
-}
-
-fn run_dump_netlist(project: &Path, out: &Path) -> sim_flow::Result<()> {
-    use std::process::Command;
-
-    let mut cmd = Command::new("cargo");
-    cmd.arg("run")
-        .arg("--quiet")
-        .arg("--")
-        .arg("--dump-netlist-json")
-        .arg(out)
-        .current_dir(project);
-    let status = cmd.status().map_err(|err| sim_flow::Error::Io {
-        path: project.to_path_buf(),
-        source: err,
-    })?;
-    if !status.success() {
-        return Err(sim_flow::Error::State(format!(
-            "block-diagram: `cargo run -- --dump-netlist-json {}` exited {}; ensure the project builds and its CLI uses foundation-framework's CliIntegration (which provides --dump-netlist-json)",
-            out.display(),
-            status.code().unwrap_or(-1)
-        )));
-    }
-    if !out.exists() {
-        return Err(sim_flow::Error::State(format!(
-            "block-diagram: cargo finished but no netlist at {}; the project's binary may not have invoked `dump_netlist_json`",
-            out.display()
-        )));
-    }
+    let path = sim_flow::__internal::block_diagram::render_for_project(
+        sim_flow::__internal::block_diagram::RenderConfig {
+            project_dir: project,
+            output,
+            direction,
+            show_types,
+            netlist_in,
+        },
+    )?;
+    eprintln!("block-diagram: wrote {}", path.display());
     Ok(())
 }
 
