@@ -119,6 +119,22 @@ export interface DocumentEntry {
   modifiedAt: string | null;
   /** True if the file is on disk; false rows are placeholders for expected outputs. */
   exists: boolean;
+  /**
+   * Optional inline preview of the file body, populated by the host
+   * for select small artifacts where the per-step view should show
+   * content directly (e.g. decomposition.md, pipeline-mapping.md
+   * summary tables) so the user gets an overview without clicking
+   * Open. Capped at ~4 KB of original markdown; UI renders inside
+   * a `<pre>`-style code block.
+   */
+  previewBody?: string;
+  /**
+   * Line count when the host computed it (currently only for
+   * Rust source files under `src/` and `tests/`). The per-step
+   * view summarizes "N files / M lines" for code-touching steps
+   * (DM2d / DM3b / DM3c / DM4b).
+   */
+  lineCount?: number;
 }
 
 export type HostMessage =

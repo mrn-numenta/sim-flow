@@ -20,18 +20,28 @@ import type { DocumentEntry } from "../webview/messages";
 const STEP_ARTIFACTS: Record<string, string[]> = {
   // Direct Modeling Flow. All generated markdown documents now live
   // under `docs/`; Rust source / tests stay at `src/` / `tests/`. See
-  // `tools/sim-flow/src/steps/dm.rs` for the canonical paths.
+  // `tools/sim-flow/src/steps/dm.rs` for the canonical paths. The
+  // paths below MUST match the Rust step descriptors -- when they
+  // drift, the dashboard's per-step artifact list shows phantom
+  // "not yet on disk" rows for files that never get written.
   DM0: ["docs/spec.md"],
   DM1: ["docs/targets.md", "docs/testbench.md"],
   DM2a: ["docs/analysis/decomposition.md", "docs/analysis/data-movement.md"],
   DM2b: ["docs/analysis/pipeline-mapping.md"],
-  DM2c: ["docs/plan/plan.md"],
-  DM2d: ["src/model/", "tests/"],
-  DM3a: ["docs/plan/test-plan.md"],
+  DM2c: ["docs/impl-plan/"],
+  // DM2cd writes per-milestone task lists into the SAME directory
+  // DM2c set up; the dashboard groups by step id so the same file
+  // can appear under both rows. Listing the directory here keeps
+  // the per-step view honest.
+  DM2cd: ["docs/impl-plan/"],
+  DM2d: ["src/", "tests/", "Cargo.toml"],
+  DM3a: ["docs/test-plan/"],
+  DM3ad: ["docs/test-plan/"],
   DM3b: ["tests/"],
-  DM3c: ["tests/", "docs/plan/test-plan.md"],
-  DM4a: ["docs/plan/perf-plan.md"],
-  DM4b: ["docs/analysis/", "experiments.db"],
+  DM3c: ["tests/"],
+  DM4a: ["docs/perf-plan/"],
+  DM4ad: ["docs/perf-plan/"],
+  DM4b: ["docs/analysis/"],
   // Design Study Flow.
   DS0: ["docs/spec.md"],
   DS1: ["docs/targets.md", "docs/testbench.md"],
@@ -51,11 +61,14 @@ const FLOW_STEP_ORDER: Record<string, string[]> = {
     "DM2a",
     "DM2b",
     "DM2c",
+    "DM2cd",
     "DM2d",
     "DM3a",
+    "DM3ad",
     "DM3b",
     "DM3c",
     "DM4a",
+    "DM4ad",
     "DM4b",
   ],
   "design-study": ["DS0", "DS1", "DS2", "DS3", "DS4", "DS5a", "DS5b", "DS5c", "DS6"],
@@ -64,6 +77,76 @@ const FLOW_STEP_ORDER: Record<string, string[]> = {
 export interface EnumerateInput {
   projectDir: string;
   flow: string;
+}
+
+/**
+ * Files for which the per-step dashboard view inlines a content
+ * preview (capped at PREVIEW_CAP_BYTES). The user wants
+ * decomposition + pipeline-mapping summary tables visible at a
+ * glance from the step rail without an "Open" click round-trip.
+ * Other markdown artifacts stay link-only -- inlining everything
+ * would balloon the dashboard payload.
+ */
+const PREVIEW_PATHS = new Set<string>([
+  "docs/analysis/decomposition.md",
+  "docs/analysis/pipeline-mapping.md",
+  "docs/analysis/data-movement.md",
+  "docs/targets.md",
+  "docs/testbench.md",
+]);
+const PREVIEW_CAP_BYTES = 4096;
+
+/** Extensions for which the per-step view shows a "files / lines"
+ *  code summary (DM2d / DM3b / DM3c). Markdown / TOML are excluded
+ *  -- those are docs, not code. */
+const CODE_EXTENSIONS = new Set<string>([".rs"]);
+
+function readPreview(abs: string, sizeBytes: number): string | undefined {
+  if (sizeBytes === 0) {
+    return undefined;
+  }
+  try {
+    if (sizeBytes <= PREVIEW_CAP_BYTES) {
+      return fs.readFileSync(abs, "utf8");
+    }
+    // Larger files: read the head only. Capped reads keep dashboard
+    // refresh cheap even when a generated artifact grows past the
+    // cap (rare in practice -- most plans stay small).
+    const fd = fs.openSync(abs, "r");
+    try {
+      const buf = Buffer.alloc(PREVIEW_CAP_BYTES);
+      const read = fs.readSync(fd, buf, 0, PREVIEW_CAP_BYTES, 0);
+      return buf.subarray(0, read).toString("utf8") + "\n... (truncated)";
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+function countLines(abs: string): number | undefined {
+  try {
+    const body = fs.readFileSync(abs, "utf8");
+    if (body.length === 0) {
+      return 0;
+    }
+    let count = 1;
+    for (let i = 0; i < body.length; i++) {
+      if (body.charCodeAt(i) === 0x0a) {
+        count++;
+      }
+    }
+    // If the file ends with a newline the last "line" is empty;
+    // discount it so a 10-line file with a trailing newline reads
+    // as 10, not 11.
+    if (body.endsWith("\n")) {
+      count--;
+    }
+    return count;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -90,6 +173,9 @@ export function enumerateProjectDocuments(input: EnumerateInput): DocumentEntry[
           for (const child of walkDirShallow(dirAbs, 200)) {
             const childRel = path.posix.join(rel, path.relative(dirAbs, child));
             const stats = safeStat(child);
+            const ext = path.extname(child).toLowerCase();
+            const lineCount =
+              stats !== null && CODE_EXTENSIONS.has(ext) ? countLines(child) : undefined;
             out.push({
               absPath: child,
               relPath: childRel,
@@ -98,6 +184,7 @@ export function enumerateProjectDocuments(input: EnumerateInput): DocumentEntry[
               bytes: stats?.size ?? null,
               modifiedAt: stats?.mtime.toISOString() ?? null,
               exists: stats !== null,
+              ...(lineCount !== undefined ? { lineCount } : {}),
             });
             added++;
           }
@@ -117,6 +204,10 @@ export function enumerateProjectDocuments(input: EnumerateInput): DocumentEntry[
       }
       const abs = path.join(input.projectDir, rel);
       const stats = safeStat(abs);
+      const previewBody =
+        stats !== null && PREVIEW_PATHS.has(rel) ? readPreview(abs, stats.size) : undefined;
+      const ext = path.extname(rel).toLowerCase();
+      const lineCount = stats !== null && CODE_EXTENSIONS.has(ext) ? countLines(abs) : undefined;
       out.push({
         absPath: abs,
         relPath: rel,
@@ -125,6 +216,8 @@ export function enumerateProjectDocuments(input: EnumerateInput): DocumentEntry[
         bytes: stats?.size ?? null,
         modifiedAt: stats?.mtime.toISOString() ?? null,
         exists: stats !== null,
+        ...(previewBody !== undefined ? { previewBody } : {}),
+        ...(lineCount !== undefined ? { lineCount } : {}),
       });
     }
 

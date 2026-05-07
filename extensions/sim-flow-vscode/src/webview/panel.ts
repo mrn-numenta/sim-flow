@@ -680,8 +680,23 @@ function panel(id: TabId, content: Node[]): HTMLElement {
 function renderFlowTab(data: DashboardState): Node[] {
   const rail = el("div", { class: "step-rail" });
   const flowSteps = data.flow.flow === "direct-modeling" ? DM_STEPS : DS_STEPS;
-  for (const step of flowSteps) {
-    rail.appendChild(stepBox(data, step));
+  for (let i = 0; i < flowSteps.length; i++) {
+    const step = flowSteps[i];
+    const box = stepBox(data, step);
+    // The first / last steps get flat outer edges; intermediate
+    // steps have triangular cut-outs at both top and bottom that
+    // the gate diamonds sit inside. See `.step` in panel.css for
+    // the clip-path geometry.
+    if (i === 0) {
+      box.classList.add("step-first");
+    }
+    if (i === flowSteps.length - 1) {
+      box.classList.add("step-last");
+    }
+    rail.appendChild(box);
+    if (i < flowSteps.length - 1) {
+      rail.appendChild(gateDiamond(data, step));
+    }
   }
   // Grey out + disable interaction with the step rail and the
   // per-step detail panel until the user has clicked Play. The Run
@@ -704,14 +719,17 @@ function renderFlowTab(data: DashboardState): Node[] {
 }
 
 function renderAutoFlowRow(): HTMLElement {
-  // One-row control panel:
-  //   [Spec:] [help+input col] [Browse...] [🔌 Connect] [Manual ⇄ Auto] [⏻ Disconnect]
-  // Connect launches the orchestrator (or no-ops when one is already
-  // attached); the step-mode toggle picks the initial mode and can
-  // also flip live mid-session via SetStepMode; Disconnect tells the
-  // orchestrator to shut down cleanly.
-  const connectBtn = actionButton(
-    "\u{1F50C}", // 🔌
+  // Two-row control panel:
+  //   row 1: Play (▶) / Stop (■) icon buttons.
+  //   row 2: `Spec:` label + path input + Browse... button.
+  // The CLI driver reads `state.current_step` and proceeds from there,
+  // so Play is also "resume": clicking it after a run that hit a cap /
+  // dropped to interactive picks up where the last run left off. Stop
+  // injects `/exit` over the single-session control socket, which
+  // tells the running claude TUI to leave; the orchestrator then
+  // parks at "waiting for the next dashboard command".
+  const playBtn = actionButton(
+    "▶", // ▶
     "run-auto",
     () => {
       ui.autoRunning = true;
@@ -721,20 +739,18 @@ function renderAutoFlowRow(): HTMLElement {
       render();
     },
   );
-  connectBtn.title =
-    "Connect to a sim-flow session. Launches the orchestrator with the current step-mode setting; " +
-    "the step rail and per-step buttons become active afterward.";
-  connectBtn.classList.add("auto-run-btn", "auto-icon-btn");
+  playBtn.title =
+    "Play / Resume the automated flow. Picks up at `current_step` from state.toml. " +
+    "After clicking Play the step rail and per-step buttons become active.";
+  playBtn.classList.add("auto-run-btn", "auto-icon-btn");
   applyButtonState(
-    connectBtn,
+    playBtn,
     !ui.autoRunning,
-    ui.autoRunning
-      ? "Connect is disabled while a session is already attached."
-      : connectBtn.title,
+    ui.autoRunning ? "Play is disabled while a session is already running." : playBtn.title,
   );
 
-  const disconnectBtn = actionButton(
-    "\u{23FB}", // ⏻
+  const stopBtn = actionButton(
+    "■", // ■
     "stop-auto",
     () => {
       ui.autoRunning = false;
@@ -743,23 +759,44 @@ function renderAutoFlowRow(): HTMLElement {
     },
     "secondary",
   );
-  disconnectBtn.title =
-    "Disconnect from the sim-flow session. The orchestrator shuts down cleanly; " +
-    "after Disconnect the step rail re-locks until you Connect again.";
-  disconnectBtn.classList.add("auto-stop-btn", "auto-icon-btn");
+  stopBtn.title =
+    "Stop the automated flow by injecting `/exit` over the control socket. " +
+    "The running claude TUI exits cleanly; the orchestrator parks waiting for the next command. " +
+    "After Stop the step rail re-locks until you click Play again.";
+  stopBtn.classList.add("auto-stop-btn", "auto-icon-btn");
   applyButtonState(
-    disconnectBtn,
+    stopBtn,
     ui.autoRunning,
-    ui.autoRunning
-      ? disconnectBtn.title
-      : "Disconnect is disabled because there is no active session.",
+    ui.autoRunning ? stopBtn.title : "Stop is disabled because there is no active session.",
   );
 
-  const buttonRowChildren: HTMLElement[] = [
-    connectBtn,
-    renderStepModeToggle(),
-    disconnectBtn,
-  ];
+  // End-to-end "automated" red play. Hidden unless the user has
+  // explicitly enabled it via the Settings tab checkbox -- it kicks
+  // off a long unattended run and we don't want a single misclick
+  // to start one.
+  const buttonRowChildren: HTMLElement[] = [];
+  if (ui.data?.fullyAutomatedEnabled) {
+    const fullyAutoBtn = actionButton("▶", "run-auto-end-to-end", () => {
+      const spec = ui.specPath.trim();
+      if (!spec) {
+        ui.lastError = {
+          message: "Fully-automated flow needs a spec path.",
+          detail: "Type or browse to a spec file in the Spec field above, then click the red play.",
+        };
+        render();
+        return;
+      }
+      ui.autoRunning = true;
+      send({ type: "run-auto-end-to-end", specPath: spec });
+      render();
+    });
+    fullyAutoBtn.title =
+      "Fully automated: walk every step (DM0 → DM4b) without stopping for review. " +
+      "Requires a spec. Long-running and burns LLM credits; the host shows a confirm modal first.";
+    fullyAutoBtn.classList.add("auto-fully-automated-btn", "auto-icon-btn");
+    buttonRowChildren.push(fullyAutoBtn);
+  }
+  buttonRowChildren.push(playBtn, renderStepModeToggle(), stopBtn);
 
   const specLabel = el(
     "label",
@@ -791,7 +828,7 @@ function renderAutoFlowRow(): HTMLElement {
   const specHelp = el(
     "p",
     { class: "auto-flow-spec-help" },
-    "User-provided specification that drives the flow toward a Foundation model. If left empty, the agent will prompt you for what to model when DM0 starts. After entering the path to your spec (or leaving it blank) click Connect to launch the session.",
+    "User-provided specification that drives the flow toward a Foundation model. If left empty, the agent will prompt you for what to model when DM0 starts. After entering the path to your spec (or leaving it blank) click the Play button to proceed.",
   );
 
   // Stack the help line directly on top of the input within its own
@@ -799,7 +836,10 @@ function renderAutoFlowRow(): HTMLElement {
   // Spec: label or Browse... button to either side.
   const specInputCol = el("div", { class: "auto-spec-input-col" }, specHelp, input);
 
-  // Single row: [Spec:] [help+input column] [Browse...] [🔌] [Manual⇄Auto] [⏻].
+  // Single row: [Spec:] [help+input column] [Browse...] [▶?] [▶] [■].
+  // The user reads the inline description, enters a spec (or
+  // browses to one), then clicks Play; Stop sits at the right edge
+  // of the same row so it's always reachable.
   return el(
     "div",
     { class: "auto-flow-row" },
@@ -811,39 +851,52 @@ function renderAutoFlowRow(): HTMLElement {
 }
 
 /**
- * Step-axis mode toggle (Manual ⇄ Auto). Two segmented buttons; the
- * active one is highlighted and disabled, the inactive one posts a
- * `set-step-mode` message on click. Tooltips on each option carry
- * the explanation; we don't render a separate label or live/setting
- * indicator since the visual state of the buttons already conveys
- * which mode is active.
+ * Step-axis mode toggle (Manual ⇄ Auto). Always visible, always
+ * live: clicking the inactive label posts a `set-step-mode` message
+ * which the host either persists to settings (no live session) or
+ * forwards to the orchestrator as a `SetStepMode` host event (live
+ * session). The orchestrator echoes `StepModeChanged` and the
+ * dashboard refreshes with the new mode reflected here.
  */
 function renderStepModeToggle(): HTMLElement {
   const current = ui.data?.stepMode ?? "manual";
-  return el(
+  const sessionActive = ui.data?.sessionActive ?? false;
+  const indicator = sessionActive ? "live" : "setting";
+  const indicatorTitle = sessionActive
+    ? "An orchestrator is attached; the toggle reflects its current mode."
+    : "No live session; the toggle reflects the persisted setting (used at next launch).";
+
+  const toggle = el(
     "div",
-    { class: "step-mode-toggle", role: "group", "aria-label": "Step mode" },
+    {
+      class: "step-mode-toggle",
+      role: "group",
+      "aria-label": "Step mode",
+      title: indicatorTitle,
+    },
+    el(
+      "span",
+      { class: "step-mode-toggle-label" },
+      "Step mode",
+      el("span", { class: `step-mode-indicator step-mode-indicator-${indicator}` }, indicator),
+    ),
     renderStepModeOption("manual", current),
     renderStepModeOption("auto", current),
   );
+  return toggle;
 }
 
 function renderStepModeOption(mode: "manual" | "auto", current: string): HTMLButtonElement {
   const isActive = mode === current;
   const btn = document.createElement("button");
   btn.type = "button";
-  // Mode class lets CSS paint Auto-active in the warning palette
-  // (matches Reset's destructive cue) while Manual-active stays in
-  // the primary palette.
-  btn.className =
-    `step-mode-option step-mode-option-${mode}` +
-    (isActive ? " step-mode-option-active" : "");
+  btn.className = isActive ? "step-mode-option step-mode-option-active" : "step-mode-option";
   btn.textContent = mode === "manual" ? "Manual" : "Auto";
   btn.setAttribute("aria-pressed", isActive ? "true" : "false");
   btn.title =
     mode === "manual"
-      ? "Manual: orchestrator parks between sub-sessions; per-step buttons drive the flow."
-      : "Auto: orchestrator walks current_step through end of flow without user input.";
+      ? "Park between sub-sessions; per-step buttons drive the flow."
+      : "Walk current_step through end of flow without user input.";
   if (isActive) {
     btn.disabled = true;
   } else {
@@ -855,18 +908,13 @@ function renderStepModeOption(mode: "manual" | "auto", current: string): HTMLBut
 }
 
 function stepBox(data: DashboardState, step: StepDef): HTMLElement {
-  // Three visual states only:
-  //   - `current`  → primary (the orchestrator's current_step)
-  //   - `passed`   → green (gate flag is set)
-  //   - default    → primary-disabled (everything else, including
-  //                  steps ahead of current and steps before current
-  //                  whose gate flag was cleared by Reset)
-  // Selection adds an accent ring on top of any of the three.
   const gate = data.flow.gates[step.id];
   const passed = gate?.passed === true;
   const current = data.flow.current_step === step.id;
   const selected = ui.selectedStep === step.id;
   const selectable = isStepSelectableInRail(data, step.id);
+  const ahead = isStepAheadOfCurrent(data, step.id);
+  const disabledAhead = ahead && !selectable;
   const classes = ["step"];
   if (passed) {
     classes.push("passed");
@@ -874,8 +922,8 @@ function stepBox(data: DashboardState, step: StepDef): HTMLElement {
   if (current) {
     classes.push("current");
   }
-  if (!selectable) {
-    classes.push("step-locked");
+  if (disabledAhead) {
+    classes.push("disabled-ahead");
   }
   if (selected) {
     classes.push("selected");
@@ -913,6 +961,23 @@ function stepBox(data: DashboardState, step: StepDef): HTMLElement {
   return box;
 }
 
+function isStepAheadOfCurrent(data: DashboardState, stepId: string): boolean {
+  const order = data.flow.flow === "direct-modeling" ? DM_STEPS : DS_STEPS;
+  const currentIndex = order.findIndex((step) => step.id === data.flow.current_step);
+  const stepIndex = order.findIndex((step) => step.id === stepId);
+  if (currentIndex === -1 || stepIndex === -1) {
+    return false;
+  }
+  return stepIndex > currentIndex;
+}
+
+function gateDiamond(data: DashboardState, step: StepDef): HTMLElement {
+  const gate = data.flow.gates[step.id];
+  const passed = gate?.passed === true;
+  const cls = passed ? "gate passed" : "gate";
+  return el("div", { class: cls, title: `Gate after ${step.id}` }, el("span", {}, "G"));
+}
+
 function renderSelectedStepDetail(data: DashboardState): HTMLElement {
   const stepId = ui.selectedStep;
   if (!stepId) {
@@ -933,29 +998,12 @@ function renderSelectedStepDetail(data: DashboardState): HTMLElement {
   const autoModeReason =
     "Per-step controls are disabled while step mode is `auto`. " +
     "Toggle Step mode to `Manual` (between Play and Stop) to drive each step explicitly.";
-  // While the orchestrator is inside a sub-session (Work / Critique
-  // streaming, tool calls, gate evaluation, advance) the per-step
-  // buttons must be disabled regardless of which step the user has
-  // selected in the rail. Two reasons:
-  //   1. Within-step ordering: if Run Step is mid-flight, Run
-  //      Critique / Run Gate / Advance can't be sensibly clicked
-  //      yet — the artifacts they read are still being produced.
-  //   2. Cross-step lockout: clicking Run Gate on step Y while
-  //      step X is running is a user mistake; the orchestrator
-  //      would reject it but the post-click Diagnostic is jarring.
-  // Reset is the recovery action — it stays enabled so the user
-  // can recover from a stuck or mis-queued sub-session.
-  const inSubSession = data.inSubSession ?? false;
-  const subSessionReason =
-    "A sub-session is in flight; wait for it to complete before issuing the next command.";
   const stepGate = (enabled: boolean, reason: string): { enabled: boolean; reason: string } =>
     !flowUnlocked
       ? { enabled: false, reason: FLOW_LOCKED_REASON }
       : !manualMode
         ? { enabled: false, reason: autoModeReason }
-        : inSubSession
-          ? { enabled: false, reason: subSessionReason }
-          : { enabled, reason };
+        : { enabled, reason };
   const runStepBtn = actionButton("Run Step", `run-step-${stepId}`, () =>
     send({ type: "run-step", step: stepId }),
   );
@@ -987,35 +1035,19 @@ function renderSelectedStepDetail(data: DashboardState): HTMLElement {
     const g = stepGate(actions.advanceEnabled, actions.advanceReason);
     applyButtonState(advanceBtn, g.enabled, g.reason);
   }
-  // Reset is recovery, not a step action — it isn't owned by the
-  // orchestrator's auto loop. It only makes sense in manual mode and
-  // is hidden entirely in auto. In manual mode it's always enabled
-  // (no flowUnlocked / `actions.resetEnabled` gating); the user may
-  // need to recover before they connect, after a crash, or while a
-  // sub-session is in flight.
-  const resetBtn: HTMLButtonElement | null = manualMode
-    ? actionButton(
-        "Reset",
-        `reset-${stepId}`,
-        () => send({ type: "reset-step", step: stepId }),
-        "warning",
-      )
-    : null;
-  if (resetBtn) {
-    resetBtn.classList.add("step-action-reset");
-    resetBtn.title =
-      "Reset this step and every downstream step. " +
-      "Deletes generated work artifacts and critique files (when an orchestrator is attached) " +
-      "and clears the matching gate flags. Confirmation is required.";
+  const resetBtn = actionButton(
+    "Reset",
+    `reset-${stepId}`,
+    () => send({ type: "reset-step", step: stepId }),
+    "secondary",
+  );
+  {
+    const g = stepGate(actions.resetEnabled, actions.resetReason);
+    applyButtonState(resetBtn, g.enabled, g.reason);
   }
   const generateVerilogBtn = actions.showGenerateVerilog
     ? buildGenerateVerilogButton(stepId, flowUnlocked)
     : null;
-  // Layout: per-step actions left-to-right, optional Generate Verilog
-  // immediately after Advance, then Reset (manual mode only) pinned
-  // to the far right via CSS `margin-left: auto`
-  // (`.step-action-reset`). Reset is the destructive action; the
-  // visual gap reinforces that.
   const children: Node[] = [
     el("h3", {}, stepId),
     el(
@@ -1025,8 +1057,8 @@ function renderSelectedStepDetail(data: DashboardState): HTMLElement {
       runCritiqueBtn,
       runGateBtn,
       advanceBtn,
+      resetBtn,
       ...(generateVerilogBtn ? [generateVerilogBtn] : []),
-      ...(resetBtn ? [resetBtn] : []),
     ),
   ];
   // Plan-execution progress (DM2d / DM3c / DM4b only). For other
@@ -1035,6 +1067,13 @@ function renderSelectedStepDetail(data: DashboardState): HTMLElement {
   if (stepId === data.flow.current_step && data.planProgress.kind !== "none") {
     children.push(renderPlanProgress(data.planProgress));
   }
+  // Per-step artifact list with sizes + estimated tokens + click-to-
+  // open. For DM2d / DM3b / DM3c (code-touching steps) also surfaces
+  // a one-line code summary (file count + total lines). Replaces the
+  // older "click into Documents tab to find your files" indirection
+  // -- the user wants every step's outputs visible without a tab
+  // round-trip when they click back into the rail.
+  children.push(renderStepArtifacts(data, stepId));
   const critique = findCritique(data.critiques, stepId);
   if (critique) {
     children.push(renderCritiqueSummary(critique));
@@ -1045,6 +1084,137 @@ function renderSelectedStepDetail(data: DashboardState): HTMLElement {
     children.push(renderGateReport(ui.gateReport));
   }
   return el("div", { class: "detail" }, ...children);
+}
+
+/**
+ * Per-step artifacts overview. Lists every DocumentEntry whose
+ * `step === stepId` (plus the source-spec rows under DM0) with
+ * size + estimated tokens + Open button. For files marked with a
+ * `previewBody` (decomposition.md / pipeline-mapping.md / etc.),
+ * inlines the head of the file as a `<pre>` block so the user
+ * gets an at-a-glance summary without an Open round-trip. For
+ * code-touching steps, surfaces a one-line "N files / M lines"
+ * code summary above the table.
+ */
+function renderStepArtifacts(data: DashboardState, stepId: string): HTMLElement {
+  const wrap = el("div", { class: "step-artifacts" });
+  wrap.appendChild(el("h4", { class: "step-artifacts-heading" }, "Artifacts"));
+
+  // Filter: step-tagged rows + source-spec rows (which are
+  // step-less but conceptually belong to DM0's input surface).
+  const entries = data.documents.filter((d) => {
+    if (d.step === stepId) {
+      return true;
+    }
+    if (stepId === "DM0" && d.category === "source-spec") {
+      return true;
+    }
+    return false;
+  });
+
+  if (entries.length === 0) {
+    wrap.appendChild(el("p", { class: "empty" }, "No artifacts on disk yet for this step."));
+    return wrap;
+  }
+
+  // Code summary for code-touching steps: count rows whose
+  // lineCount is set (i.e., Rust source / tests). Bytes-only
+  // artifacts (markdown plans) don't contribute -- they're docs
+  // not code.
+  const codeRows = entries.filter((d) => d.exists && d.lineCount !== undefined);
+  if (codeRows.length > 0) {
+    const totalLines = codeRows.reduce((acc, d) => acc + (d.lineCount ?? 0), 0);
+    const totalBytes = codeRows.reduce((acc, d) => acc + (d.bytes ?? 0), 0);
+    wrap.appendChild(
+      el(
+        "p",
+        { class: "step-artifacts-summary muted" },
+        `Code summary: ${codeRows.length} file${codeRows.length === 1 ? "" : "s"}, ` +
+          `${totalLines.toLocaleString()} lines, ${humanBytes(totalBytes)}.`,
+      ),
+    );
+  }
+
+  const table = el("table", { class: "documents-table step-artifacts-table" });
+  table.appendChild(
+    el(
+      "thead",
+      {},
+      el(
+        "tr",
+        {},
+        el("th", {}, "Path"),
+        el("th", {}, "Size"),
+        el("th", {}, "~Tokens"),
+        el("th", {}, ""),
+      ),
+    ),
+  );
+  const body = el("tbody", {});
+  for (const entry of entries) {
+    const sizeCell = entry.exists
+      ? humanBytes(entry.bytes ?? 0)
+      : el("span", { class: "muted" }, "—");
+    const tokenCell = entry.exists
+      ? approxTokens(entry.bytes ?? 0)
+      : el("span", { class: "muted" }, "—");
+    const pathCell = el("code", {}, entry.relPath);
+    if (!entry.exists) {
+      pathCell.classList.add("muted");
+    }
+    const action = entry.exists
+      ? actionButton(
+          "Open",
+          `open-doc-${entry.absPath}`,
+          () => send({ type: "open-document", path: entry.absPath }),
+          "secondary",
+        )
+      : el("span", { class: "muted" }, "not yet on disk");
+    body.appendChild(
+      el(
+        "tr",
+        { class: entry.exists ? "" : "doc-missing" },
+        el("td", {}, pathCell),
+        el("td", {}, sizeCell),
+        el("td", {}, tokenCell),
+        el("td", { class: "actions" }, action),
+      ),
+    );
+    if (entry.previewBody !== undefined && entry.exists) {
+      body.appendChild(
+        el(
+          "tr",
+          { class: "step-artifacts-preview-row" },
+          el(
+            "td",
+            { colspan: "4" },
+            el("pre", { class: "step-artifacts-preview" }, entry.previewBody),
+          ),
+        ),
+      );
+    }
+  }
+  table.appendChild(body);
+  wrap.appendChild(table);
+  return wrap;
+}
+
+/** Estimate tokens at ~4 characters per token. Rough but
+ *  consistent across model families; what we want is a relative
+ *  signal so the user can spot a 100K-token spec next to a
+ *  4K-token plan, not a precise count. */
+function approxTokens(bytes: number): string {
+  if (bytes === 0) {
+    return "0";
+  }
+  const tokens = Math.round(bytes / 4);
+  if (tokens < 1000) {
+    return `~${tokens}`;
+  }
+  if (tokens < 1_000_000) {
+    return `~${(tokens / 1000).toFixed(1)}K`;
+  }
+  return `~${(tokens / 1_000_000).toFixed(1)}M`;
 }
 
 /**
@@ -1159,6 +1329,30 @@ function renderCritiqueSummary(critique: CritiqueFile): HTMLElement {
   const blocker = critique.findings.filter((f: Finding) => f.kind === "blocker");
   const unresolved = critique.findings.filter((f: Finding) => f.kind === "unresolved");
   const resolved = critique.findings.filter((f: Finding) => f.kind === "resolved");
+  const wrap = el("div", { class: "critique-summary" });
+  const headline = critique.hasBlocking ? "Critique: blocking" : "Critique: clean";
+  const counts: string[] = [];
+  if (blocker.length > 0) {
+    counts.push(`${blocker.length} BLOCKER`);
+  }
+  if (unresolved.length > 0) {
+    counts.push(`${unresolved.length} UNRESOLVED`);
+  }
+  if (resolved.length > 0) {
+    counts.push(`${resolved.length} RESOLVED`);
+  }
+  const countSuffix = counts.length > 0 ? ` (${counts.join(", ")})` : "";
+  wrap.appendChild(el("strong", {}, headline + countSuffix));
+  if (critique.findings.length === 0) {
+    wrap.appendChild(
+      el(
+        "p",
+        { class: "empty" },
+        "Critique recorded no findings -- this step had nothing to flag.",
+      ),
+    );
+    return wrap;
+  }
   const list = el("ul", { class: "critique-list" });
   for (const f of [...blocker, ...unresolved, ...resolved]) {
     list.appendChild(
@@ -1169,12 +1363,8 @@ function renderCritiqueSummary(critique: CritiqueFile): HTMLElement {
       ),
     );
   }
-  return el(
-    "div",
-    {},
-    el("strong", {}, critique.hasBlocking ? "Critique: blocking" : "Critique: clean"),
-    list,
-  );
+  wrap.appendChild(list);
+  return wrap;
 }
 
 function renderGateReport(report: GateResult): HTMLElement {
@@ -1569,11 +1759,14 @@ const DM_STEPS: StepDef[] = [
   { id: "DM2a", label: "Decomp" },
   { id: "DM2b", label: "Pipeline" },
   { id: "DM2c", label: "ImplPlan" },
+  { id: "DM2cd", label: "ImplDetail" },
   { id: "DM2d", label: "Model" },
   { id: "DM3a", label: "TestPlan" },
+  { id: "DM3ad", label: "TestDetail" },
   { id: "DM3b", label: "Bench" },
   { id: "DM3c", label: "Tests" },
   { id: "DM4a", label: "PerfPlan" },
+  { id: "DM4ad", label: "PerfDetail" },
   { id: "DM4b", label: "Perf" },
 ];
 
@@ -1648,7 +1841,7 @@ function actionButton(
   label: string,
   actionId: string,
   onClick: () => void,
-  variant?: "secondary" | "warning",
+  variant?: "secondary",
 ): HTMLButtonElement {
   const isPending = ui.pendingActions.has(actionId);
   const b = document.createElement("button");
