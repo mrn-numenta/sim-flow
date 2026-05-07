@@ -261,6 +261,16 @@ fn dm2d() -> StepDescriptor {
                 "foundation-framework",
                 "Cargo.toml depends on foundation-framework",
             ),
+            shell(
+                "cargo",
+                &["fmt", "--all", "--", "--check"],
+                "cargo fmt --check passes (no unformatted code)",
+            ),
+            shell(
+                "cargo",
+                &["clippy", "--all-targets", "--quiet", "--", "-D", "warnings"],
+                "cargo clippy --all-targets clean (warnings denied)",
+            ),
             shell("cargo", &["build", "--quiet"], "cargo build succeeds"),
             shell(
                 "cargo",
@@ -424,6 +434,16 @@ fn dm3b() -> StepDescriptor {
                 ],
                 "tests/ references UVM-lite testbench components",
             ),
+            shell(
+                "cargo",
+                &["fmt", "--all", "--", "--check"],
+                "cargo fmt --check passes (no unformatted code)",
+            ),
+            shell(
+                "cargo",
+                &["clippy", "--all-targets", "--quiet", "--", "-D", "warnings"],
+                "cargo clippy --all-targets clean (warnings denied)",
+            ),
             shell("cargo", &["build", "--quiet"], "cargo build succeeds"),
             milestones_all_resolved(
                 "docs/test-plan/",
@@ -465,6 +485,16 @@ fn dm3c() -> StepDescriptor {
         instruction_slug: "dm3c-test-execution",
         per_candidate: false,
         gate_checks: vec![
+            shell(
+                "cargo",
+                &["fmt", "--all", "--", "--check"],
+                "cargo fmt --check passes (no unformatted code)",
+            ),
+            shell(
+                "cargo",
+                &["clippy", "--all-targets", "--quiet", "--", "-D", "warnings"],
+                "cargo clippy --all-targets clean (warnings denied)",
+            ),
             shell(
                 "cargo",
                 &["test", "--quiet"],
@@ -588,6 +618,22 @@ fn dm4b() -> StepDescriptor {
             file_exists(
                 "docs/perf-plan/perf-plan.md",
                 "docs/perf-plan/perf-plan.md still present",
+            ),
+            // DM4b mostly writes markdown reports, but any Rust
+            // helpers / sweep glue / scratch binaries it lands
+            // must still meet the same fmt + clippy bar as
+            // earlier code-generating steps. `cargo build` is
+            // already implied by `cargo clippy` so we skip a
+            // separate build check here.
+            shell(
+                "cargo",
+                &["fmt", "--all", "--", "--check"],
+                "cargo fmt --check passes (no unformatted code)",
+            ),
+            shell(
+                "cargo",
+                &["clippy", "--all-targets", "--quiet", "--", "-D", "warnings"],
+                "cargo clippy --all-targets clean (warnings denied)",
             ),
             milestones_all_resolved(
                 "docs/perf-plan/",

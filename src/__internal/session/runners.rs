@@ -44,6 +44,34 @@ pub fn cargo_test(project: &Path, narrow: Option<&str>) -> Result<RunnerOutput> 
     spawn(project, "cargo", &args)
 }
 
+/// Run `cargo fmt --all` (or `--all -- --check` when
+/// `check_only`). The `fmt` mode rewrites every Rust file in
+/// place; `fmt-check` reports a non-zero exit if any file is
+/// mis-formatted without modifying it. Both are idempotent
+/// from the agent's perspective: `fmt` produces a no-op when
+/// already formatted; `fmt-check` is non-destructive.
+pub fn cargo_fmt(project: &Path, check_only: bool) -> Result<RunnerOutput> {
+    let args: &[&str] = if check_only {
+        &["fmt", "--all", "--", "--check"]
+    } else {
+        &["fmt", "--all"]
+    };
+    spawn(project, "cargo", args)
+}
+
+/// Run `cargo clippy --all-targets --quiet -- -D warnings`. The
+/// `-D warnings` makes any clippy warning a non-zero exit so
+/// the orchestrator's gate can fail on lint regressions; the
+/// `--quiet` cuts the "checking sim-flow ..." progress lines
+/// so the diagnostic body is what dominates the captured tail.
+pub fn cargo_clippy(project: &Path) -> Result<RunnerOutput> {
+    spawn(
+        project,
+        "cargo",
+        &["clippy", "--all-targets", "--quiet", "--", "-D", "warnings"],
+    )
+}
+
 /// Coalesced view of a failing `cargo test` run. `failure_count`
 /// is the number of distinct `panicked at` headers parsed out of
 /// stdout (one per failing test); `display` is the formatted summary
@@ -232,6 +260,204 @@ fn is_instrumentation_line(l: &str) -> bool {
         || t.starts_with("elab insn:")
         || t.starts_with("sim insn:")
         || t.starts_with("insn/sim-cycle:")
+}
+
+/// Coalesced view of a failing `cargo clippy` run. `diagnostic_count`
+/// is the total number of `error:` / `warning:` blocks parsed out
+/// of stderr; `display` is the formatted summary the orchestrator
+/// threads back into the next User turn.
+#[derive(Debug, Clone)]
+pub struct ClippyDiagSummary {
+    pub diagnostic_count: usize,
+    pub display: String,
+}
+
+/// Parse `cargo clippy` stderr into a coalesced summary. Each
+/// diagnostic emits an `error:` or `warning:` header followed by a
+/// `   --> file:line:col` location line and several lines of code-
+/// snippet + help. Many diagnostics are the SAME lint repeated at
+/// different sites; coalescing groups by header text and lists the
+/// locations together so the agent sees `clippy::single_match: 12
+/// occurrences across 4 files (sample: src/foo.rs:42)` rather than
+/// 12 verbatim blocks.
+///
+/// Returns `None` when no diagnostic headers are found (caller
+/// falls back to the raw stderr tail).
+pub fn summarize_clippy_diagnostics(stdout: &str, stderr: &str) -> Option<ClippyDiagSummary> {
+    // Clippy emits diagnostics on stderr. stdout typically just
+    // shows the `Compiling ...` / `Checking ...` progress lines
+    // (cut by `--quiet`) plus a final cargo summary; we keep it
+    // trimmed for context but parse the stderr.
+    let diagnostics = extract_clippy_diagnostics(stderr);
+    if diagnostics.is_empty() {
+        return None;
+    }
+    let diagnostic_count = diagnostics.len();
+
+    // Group by (kind, message header). Locations differ per
+    // occurrence; collect them per group.
+    let mut groups: Vec<ClippyGroup> = Vec::new();
+    for d in &diagnostics {
+        let key = (d.kind, d.message.clone());
+        if let Some(g) = groups.iter_mut().find(|g| g.key == key) {
+            g.locations.push(d.location.clone());
+        } else {
+            groups.push(ClippyGroup {
+                key,
+                locations: vec![d.location.clone()],
+            });
+        }
+    }
+
+    let unique = groups.len();
+    let mut out = String::new();
+    out.push_str(&format!(
+        "clippy diagnostics: {diagnostic_count} total, {unique} unique.\n\n",
+    ));
+    for g in &groups {
+        let (kind, msg) = &g.key;
+        let count = g.locations.len();
+        let kind_str = match kind {
+            ClippyKind::Error => "error",
+            ClippyKind::Warning => "warning",
+        };
+        if count == 1 {
+            out.push_str(&format!("- {kind_str}: {msg}\n  at {}\n", g.locations[0]));
+        } else {
+            // Show a sample location + count of additional sites.
+            let sample = &g.locations[0];
+            out.push_str(&format!(
+                "- {kind_str}: {msg}\n  ({count} occurrences; sample: {sample})\n",
+            ));
+            // For small group sizes (<=6) list every location so
+            // the agent can fix them in one pass.
+            if count <= 6 {
+                for loc in &g.locations[1..] {
+                    out.push_str(&format!("    also: {loc}\n"));
+                }
+            }
+        }
+        out.push('\n');
+    }
+    // Preserve the final cargo summary line(s) verbatim if present
+    // (e.g. "error: could not compile ..." or
+    // "error: aborting due to N previous errors").
+    for line in stderr.lines().rev().take(20) {
+        if line.starts_with("error: aborting due to") || line.starts_with("error: could not") {
+            out.push_str(line.trim());
+            out.push('\n');
+        }
+    }
+    let trimmed_stdout = stdout.trim();
+    if !trimmed_stdout.is_empty() {
+        out.push_str("\nstdout (tail):\n");
+        out.push_str(trimmed_stdout);
+        out.push('\n');
+    }
+    Some(ClippyDiagSummary {
+        diagnostic_count,
+        display: out,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClippyKind {
+    Error,
+    Warning,
+}
+
+#[derive(Debug, Clone)]
+struct ExtractedClippyDiag {
+    kind: ClippyKind,
+    /// First-line text of the diagnostic, with the `error: ` /
+    /// `warning: ` prefix stripped and a trailing lint-name
+    /// suffix (`#[deny(clippy::single_match)]`) preserved when
+    /// present so identical lints group correctly.
+    message: String,
+    /// `file:line:col` form from the `--> ...` location line.
+    location: String,
+}
+
+#[derive(Debug)]
+struct ClippyGroup {
+    key: (ClippyKind, String),
+    locations: Vec<String>,
+}
+
+/// Walk clippy stderr extracting each diagnostic block. A block
+/// opens with `error: ...` or `warning: ...` and contains a
+/// `   --> file:line:col` location line. Blocks without a location
+/// (terminal "could not compile" wrappers) are dropped here -- the
+/// caller surfaces those separately as the trailing summary line.
+fn extract_clippy_diagnostics(stderr: &str) -> Vec<ExtractedClippyDiag> {
+    let mut out: Vec<ExtractedClippyDiag> = Vec::new();
+    let lines: Vec<&str> = stderr.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let kind = if line.starts_with("error: ") {
+            Some(ClippyKind::Error)
+        } else if line.starts_with("warning: ") {
+            Some(ClippyKind::Warning)
+        } else {
+            None
+        };
+        let Some(kind) = kind else {
+            i += 1;
+            continue;
+        };
+        // The "summary" diagnostic at the tail of clippy output --
+        // `error: aborting due to N previous errors; M warnings
+        // emitted` or `error: could not compile FOO due to N
+        // previous errors` -- doesn't have a location line and is
+        // accounted for separately. Detect by header shape so it
+        // doesn't inflate the diagnostic count.
+        let msg_first_line = line
+            .trim_start_matches("error: ")
+            .trim_start_matches("warning: ");
+        if msg_first_line.starts_with("aborting due to")
+            || msg_first_line.starts_with("could not compile")
+        {
+            i += 1;
+            continue;
+        }
+        // Look for the `--> file:line:col` location line in the
+        // next few non-blank lines. Real diagnostics have it
+        // within 1-2 lines of the header; if missing entirely,
+        // skip the block (treat as non-coalescable).
+        let mut location: Option<String> = None;
+        let mut j = i + 1;
+        let scan_limit = (i + 5).min(lines.len());
+        while j < scan_limit {
+            let l = lines[j].trim_start();
+            if let Some(rest) = l.strip_prefix("--> ") {
+                location = Some(rest.trim().to_string());
+                break;
+            }
+            j += 1;
+        }
+        let Some(location) = location else {
+            i += 1;
+            continue;
+        };
+        out.push(ExtractedClippyDiag {
+            kind,
+            message: msg_first_line.to_string(),
+            location,
+        });
+        // Advance to the next blank line OR next header so we
+        // don't double-count when the block has its own embedded
+        // `note:` / `help:` lines.
+        i = j + 1;
+        while i < lines.len() {
+            let l = lines[i];
+            if l.is_empty() || l.starts_with("error: ") || l.starts_with("warning: ") {
+                break;
+            }
+            i += 1;
+        }
+    }
+    out
 }
 
 fn spawn(project: &Path, cmd: &str, args: &[&str]) -> Result<RunnerOutput> {
@@ -426,5 +652,124 @@ test result: FAILED. 0 passed; 2 failed
         assert!(s.display.contains("2 test(s) panicked across 2 unique"));
         assert!(s.display.contains("tests/smoke.rs:42:5"));
         assert!(s.display.contains("tests/smoke.rs:88:5"));
+    }
+
+    #[test]
+    fn clippy_summary_returns_none_on_empty_input() {
+        assert!(summarize_clippy_diagnostics("", "").is_none());
+        assert!(summarize_clippy_diagnostics("anything", "").is_none());
+    }
+
+    #[test]
+    fn clippy_summary_extracts_single_warning() {
+        let stderr = "\
+warning: this `let` binding has unit value
+   --> tests/foo.rs:42:5
+    |
+42  |     let _ = bar();
+    |     ^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(let_unit_value)]` on by default
+
+error: aborting due to 0 previous errors; 1 warning emitted
+";
+        let s = summarize_clippy_diagnostics("", stderr)
+            .expect("should produce a summary for one warning");
+        assert_eq!(s.diagnostic_count, 1);
+        assert!(s.display.contains("1 total, 1 unique"));
+        assert!(s.display.contains("warning:"));
+        assert!(s.display.contains("tests/foo.rs:42:5"));
+        assert!(s.display.contains("`let` binding has unit value"));
+    }
+
+    #[test]
+    fn clippy_summary_groups_repeats_across_files() {
+        // The same `single_match` lint at three different sites
+        // should produce ONE group with three locations, not
+        // three separate entries.
+        let stderr = "\
+warning: you seem to be trying to use `match` for an equality check
+   --> src/a.rs:10:5
+    |
+10  |     match x { 1 => 1, _ => 0, };
+    |
+warning: you seem to be trying to use `match` for an equality check
+   --> src/b.rs:22:9
+    |
+22  |     match y { 0 => 0, _ => 1, };
+    |
+warning: you seem to be trying to use `match` for an equality check
+   --> src/c.rs:33:13
+    |
+33  |     match z { 2 => 2, _ => 3, };
+    |
+error: aborting due to 0 previous errors; 3 warnings emitted
+";
+        let s = summarize_clippy_diagnostics("", stderr)
+            .expect("three identical warnings should still summarize");
+        assert_eq!(s.diagnostic_count, 3);
+        assert!(s.display.contains("3 total, 1 unique"));
+        assert!(s.display.contains("3 occurrences"));
+        // All three locations should be listed (count <= 6).
+        assert!(s.display.contains("src/a.rs:10:5"));
+        assert!(s.display.contains("src/b.rs:22:9"));
+        assert!(s.display.contains("src/c.rs:33:13"));
+    }
+
+    #[test]
+    fn clippy_summary_distinguishes_errors_from_warnings() {
+        let stderr = "\
+error: unused import: `std::collections::HashMap`
+   --> src/foo.rs:1:5
+    |
+1   | use std::collections::HashMap;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+   --> src/foo.rs:5:9
+    |
+5   |     bar(&x);
+    |         ^^
+
+error: aborting due to 1 previous error; 1 warning emitted
+";
+        let s = summarize_clippy_diagnostics("", stderr).expect("mixed errors + warnings");
+        assert_eq!(s.diagnostic_count, 2);
+        assert!(s.display.contains("2 total, 2 unique"));
+        assert!(s.display.contains("- error: unused import"));
+        assert!(s.display.contains("- warning: "));
+    }
+
+    #[test]
+    fn clippy_summary_drops_summary_line_from_count() {
+        // The terminal `error: aborting due to N previous errors`
+        // line has no `-->` location and must NOT be counted as
+        // a third diagnostic.
+        let stderr = "\
+error: real failure
+   --> src/foo.rs:1:1
+    |
+1   | bad();
+    |
+
+error: also real
+   --> src/foo.rs:5:1
+    |
+5   | bad();
+    |
+
+error: aborting due to 2 previous errors
+
+error: could not compile `proj` (lib) due to 2 previous errors
+";
+        let s = summarize_clippy_diagnostics("", stderr).expect("two real errors");
+        assert_eq!(
+            s.diagnostic_count, 2,
+            "summary should not count the aborting / could-not-compile lines"
+        );
+        // The could-not-compile line gets preserved verbatim at
+        // the end of the display so the agent sees the cargo-
+        // level outcome.
+        assert!(s.display.contains("could not compile"));
     }
 }

@@ -102,31 +102,44 @@ Reference material (read on demand):
 4. **Decompose DM3b's work into testbench milestones** named
    `tb-milestone-NN-<name>.md`. Each file MUST hold no more than
    10 `- [ ]` task rows (`plan-management.md` enforces the cap).
-   Typical breakdown for a small-to-medium design:
+   DM3b writes its scaffolding under `tests/testbench/<file>.rs`
+   (a SUBDIRECTORY, one file per concern; never one big
+   `tests/testbench.rs` or `tests/tests.rs`). Typical breakdown
+   for a small-to-medium design:
 
-   - `tb-milestone-01-payloads-and-sequencers.md` -- one
-     payload-aware Sequencer per stimulus class; payload structs
-     not already in `src/model/`.
+   - `tb-milestone-01-payloads-and-sequencers.md` -- payload
+     structs + one payload-aware Sequencer per stimulus class.
+     Tasks point at `tests/testbench/payloads.rs` and
+     `tests/testbench/sequencers.rs`.
    - `tb-milestone-02-drivers.md` -- one Driver per external
-     interface, with handshake wiring.
+     interface. Tasks point at `tests/testbench/drivers.rs`.
    - `tb-milestone-03-monitors.md` -- one Monitor per observable
-     port.
+     port. Tasks point at `tests/testbench/monitors.rs`.
    - `tb-milestone-04-scoreboards.md` -- one Scoreboard per
-     invariant; reference model definitions.
+     invariant + reference-model helpers. Tasks point at
+     `tests/testbench/scoreboards.rs` (split into
+     `tests/testbench/scoreboards/<name>.rs` if the file would
+     exceed 400 lines; the per-file 400-line cap from the work
+     prompt's Coding Requirements is a hard rule).
    - `tb-milestone-05-simenv-and-smoke.md` -- the
-     `SimEnvBuilder` helper + the basic data-flow smoke test
-     (the ONE smoke test DM3b implements end-to-end).
+     `SimEnvBuilder` helper at `tests/testbench/env.rs` (with
+     `tests/testbench/mod.rs` re-exporting siblings) + the basic
+     data-flow smoke test at `tests/smoke/basic_data_flow.rs`
+     (one file per test; lives in `tests/smoke/`, not under
+     `tests/testbench/`).
 
    Combine, split, or rename these as the design demands -- the
    important rules are: each file ≤10 tasks, the numbers are
-   contiguous (`01`, `02`, ...), and each milestone is reviewable
-   in isolation. For a tiny design with no Scoreboard invariants,
-   merging milestones 04 and 05 is fine; document why.
+   contiguous (`01`, `02`, ...), each milestone is reviewable in
+   isolation, and the file-layout convention above is honored.
+   For a tiny design with no Scoreboard invariants, merging
+   milestones 04 and 05 is fine; document why.
 
-   Each task names a concrete artifact:
+   Each task names a concrete artifact path under
+   `tests/testbench/` (or `tests/smoke/` for the smoke test):
 
    ```markdown
-   - [ ] `<file_or_helper_path>::<symbol>` -- <one-sentence
+   - [ ] `tests/testbench/<file>.rs::<symbol>` -- <one-sentence
      purpose>; mirrors: `lib:examples/<NN-name>/test/<file>`;
      traces to: `<spec section / target row / decomposition op>`
    ```
@@ -204,16 +217,20 @@ Reference material (read on demand):
    per-milestone critique pattern depends on each milestone
    reviewing one slice of one category.
 
-   Each task row format:
+   Each task row format names the test AND its destination file
+   (DM3c writes one test per file under `tests/<category>/`):
 
    ```markdown
-   - [ ] `<test_name>` -- <one-sentence purpose>; pass criteria:
-     <specific, measurable>; traces to: <spec section / target
-     row / decomposition operation>
+   - [ ] `tests/<category>/<test_name>.rs::<test_name>` --
+     <one-sentence purpose>; pass criteria: <specific,
+     measurable>; traces to: <spec section / target row /
+     decomposition operation>
    ```
 
-   Test names must be identifier-safe (DM3c will use them as Rust
-   `#[test]` function names).
+   Test names must be identifier-safe (DM3c uses them as Rust
+   `#[test]` function names AND as filenames). Random tests pin
+   a seed in the name AND filename:
+   `tests/random/<test>_seed_<N>.rs::<test>_seed_<N>`.
 
    For purely combinational designs with no flow-control surface,
    write a one-line `RESOLVED: design has no flow-control surface,

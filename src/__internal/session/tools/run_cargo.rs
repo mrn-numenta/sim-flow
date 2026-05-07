@@ -20,9 +20,10 @@ impl Tool for RunCargoTool {
         "run_cargo"
     }
     fn description(&self) -> &'static str {
-        "Run a cargo subcommand (`build`, `check`, `test`, or `clippy`) in the project directory \
-         and return the truncated stdout / stderr plus the exit code. Use this whenever you need \
-         actual compiler / test output -- do NOT guess at build errors from source files."
+        "Run a cargo subcommand (`fmt`, `fmt-check`, `build`, `check`, `test`, or `clippy`) in \
+         the project directory and return the truncated stdout / stderr plus the exit code. Use \
+         this whenever you need actual compiler / test / lint output -- do NOT guess at build \
+         errors from source files."
     }
     fn args_schema(&self) -> serde_json::Value {
         json!({
@@ -31,10 +32,13 @@ impl Tool for RunCargoTool {
             "properties": {
                 "command": {
                     "type": "string",
-                    "enum": ["build", "check", "test", "clippy"],
-                    "description": "Which cargo subcommand to run. `check` is the cheapest \
-                                   way to get type errors; `build` produces a binary; `test` \
-                                   compiles + runs tests; `clippy` adds lints."
+                    "enum": ["fmt", "fmt-check", "build", "check", "test", "clippy"],
+                    "description": "Which cargo subcommand to run. `fmt` formats every Rust file \
+                                   in place (idempotent; safe to run repeatedly); `fmt-check` \
+                                   reports a non-zero exit if any file is mis-formatted without \
+                                   modifying it. `check` is the cheapest way to get type errors; \
+                                   `build` produces a binary; `test` compiles + runs tests; \
+                                   `clippy` adds lints."
                 }
             }
         })
@@ -46,13 +50,15 @@ impl Tool for RunCargoTool {
             None => return Ok(ToolResult::err("run_cargo: missing `command` arg")),
         };
         let outcome = match command {
+            "fmt" => runners::cargo_fmt(ctx.project_dir, /*check_only=*/ false),
+            "fmt-check" => runners::cargo_fmt(ctx.project_dir, /*check_only=*/ true),
             "check" => runners::cargo_check(ctx.project_dir),
             "build" => spawn_one(ctx.project_dir, "build"),
             "test" => runners::cargo_test(ctx.project_dir, None),
-            "clippy" => spawn_one(ctx.project_dir, "clippy"),
+            "clippy" => runners::cargo_clippy(ctx.project_dir),
             other => {
                 return Ok(ToolResult::err(format!(
-                    "run_cargo: unsupported command `{other}`; allowed: build, check, test, clippy"
+                    "run_cargo: unsupported command `{other}`; allowed: fmt, fmt-check, build, check, test, clippy"
                 )));
             }
         };
@@ -83,13 +89,33 @@ impl Tool for RunCargoTool {
         } else {
             None
         };
+        // Clippy output coalescing: group warnings / errors by
+        // lint name + location-shape so the agent sees "this lint
+        // tripped 12 times across N files (sample: src/foo.rs:42)"
+        // instead of 12 verbatim diagnostic blocks. Mirrors the
+        // test-failure coalescing pattern. Clippy emits its
+        // diagnostics on stderr, not stdout.
+        let clippy_summary = if command == "clippy" && !outcome.ok() {
+            crate::session::runners::summarize_clippy_diagnostics(
+                &outcome.stdout_tail,
+                &outcome.stderr_tail,
+            )
+        } else {
+            None
+        };
 
-        let display = match &test_summary {
-            Some(s) => format!(
+        let display = if let Some(s) = &test_summary {
+            format!(
                 "[run_cargo `{}`] exit {}\n\n{}",
                 outcome.command, outcome.exit_code, s.display,
-            ),
-            None => format!(
+            )
+        } else if let Some(s) = &clippy_summary {
+            format!(
+                "[run_cargo `{}`] exit {}\n\n{}",
+                outcome.command, outcome.exit_code, s.display,
+            )
+        } else {
+            format!(
                 "[run_cargo `{}`] exit {}\n\n--- stdout (tail) ---\n{}\n\n--- stderr (tail) ---\n{}",
                 outcome.command,
                 outcome.exit_code,
@@ -103,7 +129,7 @@ impl Tool for RunCargoTool {
                 } else {
                     outcome.stderr_tail.as_str()
                 },
-            ),
+            )
         };
 
         if outcome.ok() {

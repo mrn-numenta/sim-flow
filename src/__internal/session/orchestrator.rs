@@ -241,6 +241,14 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
     // (the cross-session critique loop has its own cap in the
     // CLI-side `auto` driver).
     let mut auto_iterations: u32 = 0;
+    // Did THIS session produce any successful artifact / tool call
+    // yet? Used by the per-milestone wind-down exit so we don't
+    // misfire when the agent's first turn is just reading inputs:
+    // without this flag, a milestone-walk step where milestone-N-1
+    // is already on disk (from a prior killed run) would see
+    // `find_current_milestone(retry=true) != find_current_milestone(retry=false)`
+    // on turn 1 and end the session prematurely.
+    let mut session_produced_artifact: bool = false;
 
     // Backstop guards against runaway loops that don't trip the more
     // specific `max_auto_iters` / `max_critique_iters` caps:
@@ -676,6 +684,9 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             if artifact_write_successes > 0 && artifact_write_failures.is_empty() {
                 consecutive_tool_error_turns = 0;
             }
+            if artifact_write_successes > 0 {
+                session_produced_artifact = true;
+            }
             if !artifact_write_failures.is_empty() {
                 // Any-failed turn with no successes -> bump streak;
                 // mixed turn (some succeeded) -> reset.
@@ -773,6 +784,9 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     consecutive_tool_error_turns += 1;
                 } else if tool_successes > 0 {
                     consecutive_tool_error_turns = 0;
+                }
+                if tool_successes > 0 {
+                    session_produced_artifact = true;
                 }
                 messages.push(LlmMessage {
                     role: LlmRole::User,
@@ -893,7 +907,18 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 // back to the agent. Cap iterations at
                 // `opts.max_auto_iters` so a confused agent can't
                 // burn turns indefinitely.
-                if opts.auto {
+                //
+                // Critique sessions skip this entirely: a critique
+                // session writes an evaluation, not project artifacts,
+                // and the structural gate is meaningless at that
+                // point (e.g. for a milestone-walk step the gate is
+                // dirty by design until every milestone resolves --
+                // critique iterations are not the path that resolves
+                // them). The OUTER auto-driver evaluates the full
+                // gate after each sub-session ends; the critique
+                // session itself ends naturally on a no-artifact
+                // turn (the wind-down branch below).
+                if opts.auto && opts.kind == SessionKind::Work {
                     let report = evaluate_structural_gate(&opts.project_dir, &step)?;
                     if report.is_clean() {
                         host.write(&Event::SessionEnd {
@@ -974,6 +999,71 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         )),
                     })?;
                     return Ok(());
+                }
+                // Milestone-walk steps: the per-step structural
+                // gate stays dirty until EVERY milestone has all
+                // rows resolved (MilestonesAllResolved), so the
+                // gate-clean check above never fires until the
+                // last milestone closes. But each individual
+                // milestone wind-down is also a legitimate
+                // session end -- we want the paired critique to
+                // run and the next iteration to scope to the
+                // next milestone. Detect "the milestone the
+                // agent has been working on is done" by checking
+                // whether the current milestone file has any
+                // `- [x]` rows AND no `- [ ]` rows. If yes, the
+                // agent finished its scoped slice; end the
+                // session.
+                if let Some(walk) = step.milestone_walk
+                    && session_produced_artifact
+                {
+                    let current = crate::__internal::steps::find_current_milestone(
+                        &opts.project_dir,
+                        &walk,
+                        false,
+                    );
+                    use crate::__internal::steps::CurrentMilestone;
+                    let milestone_done = match &current {
+                        // No more pending milestones: this case
+                        // is identical to "structural gate clean"
+                        // and is actually unreachable here
+                        // (MilestonesAllResolved would have made
+                        // the gate clean above), but keep the
+                        // arm for safety.
+                        CurrentMilestone::AllResolved => true,
+                        CurrentMilestone::File(rel) => {
+                            // The current milestone is the one
+                            // with the FIRST `- [ ]` row -- so
+                            // by definition `current` always has
+                            // pending rows. To detect "milestone
+                            // just finished", check the highest-
+                            // numbered milestone with at least
+                            // one `- [x]` (i.e. retry-mode pick).
+                            // If that's a DIFFERENT file than
+                            // the current pending one, the agent
+                            // finished a milestone this session.
+                            let touched = crate::__internal::steps::find_current_milestone(
+                                &opts.project_dir,
+                                &walk,
+                                true,
+                            );
+                            matches!(
+                                &touched,
+                                CurrentMilestone::File(t) if t != rel
+                            )
+                        }
+                        CurrentMilestone::NoMilestonesPresent => false,
+                    };
+                    if milestone_done {
+                        host.write(&Event::SessionEnd {
+                            reason: SessionEndReason::Completed,
+                            message: Some(format!(
+                                "auto: {} milestone complete (no-artifact wind-down); critique will run",
+                                step.id
+                            )),
+                        })?;
+                        return Ok(());
+                    }
                 }
             }
             auto_iterations += 1;
@@ -1746,19 +1836,31 @@ fn build_session_inputs(
     // chains them in a single work session, defeating the
     // per-milestone critique pattern.
     //
-    // The current-milestone choice depends on retry state: a
-    // critique with prior BLOCKERs means we're retrying THE SAME
-    // milestone (the one whose tasks the agent already touched);
-    // a clean prior critique (or no critique) means we're advancing
-    // to the FIRST pending milestone.
+    // The current-milestone choice depends on session kind AND
+    // retry state:
+    //
+    // - **Work, fresh advance** (no prior BLOCKERs): scope to the
+    //   FIRST pending milestone -- the next slice of work.
+    // - **Work, retry** (prior BLOCKERs): scope to the
+    //   HIGHEST-numbered already-touched milestone -- the same
+    //   milestone the Work session was on when the critique
+    //   raised the BLOCKERs.
+    // - **Critique** (any state): scope to the HIGHEST-numbered
+    //   already-touched milestone -- the one the Work session
+    //   JUST finished. Without this, a fresh-advance critique
+    //   after milestone-N's Work would scope to milestone-(N+1)
+    //   (the new "first pending") and the agent would critique
+    //   the wrong milestone -- exactly the bug observed where
+    //   DM3b's first critique reviewed an empty milestone-02
+    //   instead of the milestone-01 work it should have evaluated.
     let milestone_scope: Option<String> = match step.milestone_walk {
         Some(walk) => {
-            let prior_has_blockers = !prior_critique_blockers.is_empty();
-            match crate::__internal::steps::find_current_milestone(
-                project_dir,
-                &walk,
-                prior_has_blockers,
-            ) {
+            let pick_touched = match kind {
+                SessionKind::Critique => true,
+                SessionKind::Work => !prior_critique_blockers.is_empty(),
+            };
+            match crate::__internal::steps::find_current_milestone(project_dir, &walk, pick_touched)
+            {
                 crate::__internal::steps::CurrentMilestone::File(rel) => Some(rel),
                 // AllResolved / NoMilestonesPresent: don't inject a
                 // milestone scope. The structural gate

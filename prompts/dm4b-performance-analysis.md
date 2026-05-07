@@ -81,6 +81,22 @@ Reference material (read on demand):
    measurement. Mark `BLOCKER:`-eligible items in the report
    prose so the critique can flag them.
 
+7. **Pre-stop hygiene** (every milestone, but especially when
+   any Rust helpers / sweep glue / scratch binaries landed):
+   - `run_cargo({"command": "fmt"})` -- format every Rust file
+     in place. Idempotent; safe to run repeatedly. The gate
+     enforces `cargo fmt --check`.
+   - `run_cargo({"command": "clippy"})` -- lint clean. Treat
+     every warning as a `BLOCKER:`-shaped issue and fix it
+     before stopping; the gate runs `cargo clippy -- -D
+     warnings` and fails on ANY warning. Repeated lints across
+     files are coalesced ("12 occurrences across 4 files;
+     sample: ..."), so fix each unique lint once and re-run.
+   For purely-markdown milestones (no new Rust code), the
+   commands are still cheap idempotent no-ops -- run them so
+   the gate doesn't fail downstream when cumulative reports
+   land.
+
 ## Order, jumping, and deferring
 
 `docs/impl-plan/plan-management.md` is the source of truth: task
@@ -96,6 +112,38 @@ for this measurement run (e.g. "requires a workload not yet
 written"). Deferring a target because the design misses it is
 NOT acceptable -- leave the row `- [ ]` so the critique flags
 it as a `BLOCKER:`.
+
+## Coding Requirements
+
+DM4b's deliverables are mostly markdown reports under
+`docs/analysis/`, but any Rust helpers / sweep glue / scratch
+binaries it writes MUST follow these rules. Markdown files
+inherit the "no emojis" + "under 400 lines" rules; the rest are
+Rust-specific.
+
+- **Idiomatic Rust** (for any code DM4b authors). Prefer the
+  standard idioms (`?` for error propagation, `Result` /
+  `Option` over panics, iterators over manual loops, pattern
+  matching over nested `if let`). Boring code beats clever code.
+- **Data-oriented + memory-friendly**. Prefer concrete types
+  over trait objects, owned data over indirection, contiguous
+  storage over heap-of-heaps. Avoid premature
+  `Arc<Mutex<_>>` indirection.
+- **Functional where appropriate**. Small pure helpers,
+  immutable bindings by default, `iter().map().filter().collect()`
+  over mutable accumulators, exhaustive `match` for state
+  machines.
+- **No magic numbers or strings**. Workload names, run-id
+  patterns, threshold values -- all named (`const`, enum
+  variant, named struct field), not inlined.
+- **No emojis** in code, markdown reports, doc strings, or log
+  output. Reports rendered in dashboards rely on plain ASCII.
+- **File size cap: under 400 lines** for every Rust source AND
+  every report markdown under `docs/analysis/`. Split a long
+  report along its natural axes (per-workload sections, per-
+  topic files like `throughput.md` + `latency.md`) rather than
+  growing one mega-report. The critique flags any file at or
+  above 400 lines as `BLOCKER:`.
 
 ## Constraints
 

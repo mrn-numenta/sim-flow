@@ -82,12 +82,20 @@ deliberately.
    Each row format:
 
    ```markdown
-   - [ ] `<file_or_helper_path>::<symbol>` -- <purpose>;
+   - [ ] `tests/testbench/<file>.rs::<symbol>` -- <purpose>;
      mirrors: `lib:examples/...`; traces to: <ref>
    ```
 
    Reject rows that don't name a concrete artifact path or
-   don't trace to the test plan's testbench section.
+   don't trace to the test plan's testbench section. Specifically:
+   - Tasks targeting `tests/testbench.rs` or `tests/tests.rs`
+     (the monolithic single-file layout) -> `BLOCKER:`. DM3b
+     writes scaffolding under `tests/testbench/<file>.rs`
+     (subdirectory + per-concern files).
+   - The basic data-flow smoke task targets
+     `tests/smoke/basic_data_flow.rs::basic_data_flow`, NOT
+     `tests/testbench/<anything>.rs`. The smoke test is a TEST,
+     not scaffolding -> `BLOCKER:` if it's misplaced.
 7. **Test-execution milestones
    (`test-milestone-NN-*.md`)**. Do the milestones cover all four
    required categories (smoke, edge, stress, random) PLUS a
@@ -115,15 +123,19 @@ deliberately.
    inside it explaining what the category would have covered.
    Silent omission of any of the five categories is `BLOCKER:`.
 
-   Each test row format:
+   Each test row format names the test AND its destination
+   file (DM3c writes one test per file under `tests/<category>/`):
 
    ```markdown
-   - [ ] <test_name> -- <purpose>; pass criteria: <criteria>;
-     traces to: <ref>
+   - [ ] `tests/<category>/<test_name>.rs::<test_name>` --
+     <purpose>; pass criteria: <criteria>; traces to: <ref>
    ```
 
    Reject vague pass criteria ("reasonable", "fast", "looks
-   correct").
+   correct"). Reject rows that don't include the
+   `tests/<category>/<test_name>.rs::<test_name>` file path -->
+   DM3c relies on the per-test-per-file layout for review
+   tractability and the 400-line file-size cap.
 
    **Category-mixing rule**: a milestone file MUST cover exactly
    one category. A single file holding both smoke and edge rows

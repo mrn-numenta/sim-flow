@@ -105,6 +105,15 @@ Reference material (read on demand):
    milestone is resolved (`- [x]` done OR `- [-]` deferred with
    a `- defer reason:` sub-bullet), run a final sanity pass:
    - `run_cargo({"command": "build"})` -- compiles cleanly.
+   - `run_cargo({"command": "fmt"})` -- format every Rust file
+     in place. Idempotent; safe to run repeatedly. The gate
+     enforces `cargo fmt --check`.
+   - `run_cargo({"command": "clippy"})` -- lint clean. Treat
+     every warning as a `BLOCKER:`-shaped issue and fix it
+     before stopping; the gate runs `cargo clippy -- -D
+     warnings` and fails on ANY warning. Repeated lints across
+     files are coalesced ("12 occurrences across 4 files;
+     sample: ..."), so fix each unique lint once and re-run.
    - On the smoke milestone only:
      `run_cargo({"command": "test"})` -- the smoke test passes.
 
@@ -125,6 +134,71 @@ Reference material (read on demand):
 states (`- [ ]` / `- [x]` / `- [-]` with `defer reason:`),
 out-of-order work (`order swap:` sub-bullet), and additions
 (`added:` sub-bullet). Read it before starting.
+
+## Coding Requirements
+
+All Rust code authored in this step MUST follow these rules. The
+critique flags violations as `BLOCKER:` because downstream steps
+depend on the codebase staying readable, idiomatic, and
+modification-friendly across iterations.
+
+- **Idiomatic Rust**. Prefer the standard idioms (`?` for error
+  propagation, `Result` / `Option` over panics for recoverable
+  conditions, iterators over manual loops, pattern matching over
+  nested `if let`). Boring code beats clever code.
+- **Data-oriented + memory-friendly**. Prefer concrete types over
+  trait objects, owned data over indirection, contiguous storage
+  (`Vec`, fixed-size arrays) over heap-of-heaps, struct-of-arrays
+  when iteration patterns favor it. Avoid premature
+  `Arc<Mutex<_>>` and similar shared-mutable indirection unless
+  the framework forces it.
+- **Functional where appropriate**. Small pure helpers, immutable
+  bindings by default, `iter().map().filter().collect()` over
+  mutable accumulators, exhaustive `match` for state machines.
+- **No magic numbers or strings**. Any literal with meaning
+  beyond "this exact value" must be a named `const` (or named
+  enum variant, or named struct field). Port names, payload
+  widths, threshold values, run-id schemes -- all named, not
+  inlined.
+- **No emojis**. Comments, error messages, doc strings, log
+  output, and string literals stay ASCII. Emojis muddle
+  terminals, diffs, and grep.
+- **File size cap: under 400 lines**. Split files along clear
+  axes (one component class per file) rather than letting any
+  single file grow without bound. The critique flags any source
+  file at or above 400 lines as `BLOCKER:`.
+
+## File Layout
+
+DM3b writes the testbench under `tests/testbench/` -- a
+subdirectory, not a single `tests/testbench.rs` file -- and splits
+concerns across multiple files:
+
+- `tests/testbench/mod.rs` -- module root that re-exports the
+  per-component files and exposes the `SimEnvBuilder` helper.
+- `tests/testbench/payloads.rs` -- payload structs (or just
+  re-exports of the `src/model/` types if those already cover
+  the testbench's needs).
+- `tests/testbench/sequencers.rs` -- one Sequencer per stimulus
+  class.
+- `tests/testbench/drivers.rs` -- one Driver per external
+  interface.
+- `tests/testbench/monitors.rs` -- one Monitor per observable
+  port.
+- `tests/testbench/scoreboards.rs` -- one Scoreboard per
+  correctness invariant + the reference model `compute_expected`
+  helpers.
+- `tests/testbench/env.rs` -- the `SimEnvBuilder` wiring helper
+  function (`make_env(...)` or per the test plan).
+- `tests/smoke/basic_data_flow.rs` -- the basic data-flow smoke
+  test (the ONE `#[test]` DM3b authors). Lives outside
+  `tests/testbench/` because it's a TEST, not scaffolding;
+  same `tests/<category>/<test>.rs` pattern DM3c uses.
+
+The 400-line cap applies to each individual file under
+`tests/testbench/`. Adapt the split (e.g. one Scoreboard per file
+under `tests/testbench/scoreboards/`) if any single file would
+otherwise exceed the cap.
 
 ## Constraints
 

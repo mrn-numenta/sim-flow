@@ -133,16 +133,28 @@ strictly.
    helpers when that improves clarity. Do not treat those style notes as
    permission to ignore the plan's intended architecture.
 7. **Cargo verification**: after each module lands, invoke the
-   `run_cargo` tool to verify it compiles / passes:
-   - `run_cargo({"command": "check"})` for the cheap type-only
-     pass while iterating.
-   - `run_cargo({"command": "build"})` once you think a module is
-     done.
-   - `run_cargo({"command": "test"})` once smoke / unit tests are
-     in place.
+   `run_cargo` tool to verify it compiles / passes / lints
+   clean. Run them in this order so cheap checks fail fast:
+   - `run_cargo({"command": "check"})` -- cheap type-only pass
+     while iterating.
+   - `run_cargo({"command": "build"})` -- once you think a
+     module is done.
+   - `run_cargo({"command": "fmt"})` -- format every Rust file
+     in place (idempotent; safe to run repeatedly). DO NOT skip
+     this; the gate runs `cargo fmt --check` and fails if any
+     file is mis-formatted.
+   - `run_cargo({"command": "clippy"})` -- lint clean. Treat
+     every warning as a `BLOCKER:`-shaped issue and fix it
+     before declaring the milestone complete; the gate runs
+     `cargo clippy -- -D warnings` and fails on ANY warning.
+     Repeated lints across files are coalesced in the tool's
+     output ("12 occurrences across 4 files; sample: ..."), so
+     fix each unique lint once and re-run.
+   - `run_cargo({"command": "test"})` -- once smoke / unit
+     tests are in place, the elaboration smoke test must pass.
    Read the returned stdout / stderr; if there are real errors,
-   fix them and re-run. Do NOT guess at build errors from source
-   -- always confirm with `run_cargo` output.
+   fix them and re-run. Do NOT guess at build errors from
+   source -- always confirm with `run_cargo` output.
 8. **Tests**: write **only** unit tests and smoke tests at this
    step. Exhaustive verification (directed sequences, coverage
    targets, randomized stimulus, scoreboards) belongs to **DM3** --
@@ -167,6 +179,39 @@ strictly.
    confirms milestone-by-milestone progress on incremental DM2d
    reviews; missing them shows up as `UNRESOLVED:` items at minimum
    and can hide regressions during multi-milestone retries.
+
+## Coding Requirements
+
+All Rust code authored in this step MUST follow these rules. The
+critique flags violations as `BLOCKER:` because downstream steps
+depend on the codebase staying readable, idiomatic, and
+modification-friendly across iterations.
+
+- **Idiomatic Rust**. Prefer the standard idioms (`?` for error
+  propagation, `Result` / `Option` over panics for recoverable
+  conditions, iterators over manual loops, pattern matching over
+  nested `if let`). Boring code beats clever code.
+- **Data-oriented + memory-friendly**. Prefer concrete types over
+  trait objects, owned data over indirection, contiguous storage
+  (`Vec`, fixed-size arrays) over heap-of-heaps, struct-of-arrays
+  when iteration patterns favor it. Avoid premature
+  `Arc<Mutex<_>>` and similar shared-mutable indirection unless
+  the framework forces it.
+- **Functional where appropriate**. Small pure helpers, immutable
+  bindings by default, `iter().map().filter().collect()` over
+  mutable accumulators, exhaustive `match` for state machines.
+- **No magic numbers or strings**. Any literal with meaning
+  beyond "this exact value" must be a named `const` (or named
+  enum variant, or named struct field). Port names, payload
+  widths, threshold values, run-id schemes -- all named, not
+  inlined.
+- **No emojis**. Comments, error messages, doc strings, log
+  output, and string literals stay ASCII. Emojis muddle
+  terminals, diffs, and grep.
+- **File size cap: under 400 lines**. Split files along clear
+  axes (one component / module per file) rather than letting any
+  single file grow without bound. The critique flags any source
+  file at or above 400 lines as `BLOCKER:`.
 
 ## Constraints
 

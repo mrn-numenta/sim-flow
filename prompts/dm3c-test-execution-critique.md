@@ -121,6 +121,41 @@ deliberately.
     milestone-local test additions compose into a clean
     end-to-end suite + coverage result without regression?
 
+11. **Coding Requirements (per the work prompt)**. Inspect every
+    Rust source file landed or modified in this milestone:
+    - **Idiomatic Rust**: manual loops where iterators fit,
+      `unwrap()` in non-test code paths, nested `if let` where
+      `match` would read better, `Box<dyn _>` where a concrete
+      type fits -> `BLOCKER:` with the file/line.
+    - **Magic numbers / strings**: any inlined port name,
+      payload value, threshold, seed (other than the
+      milestone-pinned seed in random tests), or invariant
+      constant -> `BLOCKER:`.
+    - **Emojis**: any non-ASCII decorative glyph in code,
+      comments, doc strings, error messages, or string literals
+      -> `BLOCKER:`.
+    - **File size cap**: line-count every Rust file authored
+      or modified this milestone. Any file at or above 400
+      lines -> `BLOCKER:` with the count and a suggested split
+      (typically: extract a helper into its own file, or split
+      a multi-test file into the per-test-per-file layout).
+
+12. **File Layout (per the work prompt)**. Verify the per-
+    category subdirectory split:
+    - Smoke tests at `tests/smoke/<test_name>.rs`.
+    - Edge tests at `tests/edge/<test_name>.rs`.
+    - Stress tests at `tests/stress/<test_name>.rs`.
+    - Random tests at `tests/random/<test_name>.rs` with the
+      seed pinned in the filename (`<test>_seed_<N>.rs`).
+    - DM3b's testbench scaffolding stays under
+      `tests/testbench/`; DM3c does not modify it.
+    - Multiple `#[test]` functions packed into one file ->
+      `BLOCKER:`. One file per test is the contract.
+    - The basic-data-flow smoke test from DM3b
+      (`tests/smoke/basic_data_flow.rs`) survives intact
+      (`UNRESOLVED:` if DM3c modified it; `BLOCKER:` if it was
+      removed or replaced).
+
 ## Output
 
 Write `docs/critiques/DM3c-critique.md`. Free-form markdown body;

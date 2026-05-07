@@ -99,6 +99,26 @@ deliberately.
     local runs and reports compose into a coherent end-to-end
     performance story without regression?
 
+12. **Coding Requirements (per the work prompt)**. For any
+    Rust helpers / sweep glue / scratch binaries DM4b wrote
+    AND for the markdown reports under `docs/analysis/`:
+    - **Idiomatic Rust** in code: manual loops where iterators
+      fit, `unwrap()` in non-test paths, nested `if let` where
+      `match` would read better -> `BLOCKER:`.
+    - **Magic numbers / strings**: workload identifiers,
+      run-id patterns, threshold values, p50/p90/p99 cutoffs,
+      etc. -- all named (`const`, enum variant, named struct
+      field), not inlined -> any inlined literal is `BLOCKER:`.
+    - **No emojis** in Rust code, markdown reports, or log
+      output. Any decorative glyph in `docs/analysis/*.md` ->
+      `BLOCKER:`.
+    - **File size cap: under 400 lines** for every Rust file
+      AND every report markdown under `docs/analysis/`. Any
+      file at or above 400 lines -> `BLOCKER:`. Reports get
+      split along natural axes (per-workload sections, per-
+      topic files like `throughput.md` + `latency.md`) rather
+      than growing one mega-report.
+
 ## Output
 
 Write `docs/critiques/DM4b-critique.md`. Free-form markdown body;

@@ -332,7 +332,47 @@ fn run_auto_loop<H: Host>(
             );
             prev_blocker_count = Some(cur_count);
             if blockers.is_empty() {
-                break;
+                // Clean critique. Try to advance the step. For
+                // milestone-walk steps, the gate may stay dirty
+                // (`MilestonesAllResolved` fails) between
+                // milestones -- in that case loop back here to
+                // run Work + Critique for the next milestone
+                // INSTEAD of breaking out and advancing the for
+                // loop. This is the structural enforcement that
+                // makes "one milestone at a time, critique each,
+                // advance the step only when ALL milestones
+                // resolved" actually happen in auto mode.
+                let advance_outcome =
+                    try_advance_classified(&opts.project_dir, step_id, auto_host)?;
+                let step_wall_ms = step_started.elapsed().as_millis() as u64;
+                let advanced = matches!(advance_outcome, AdvanceOutcome::Advanced);
+                tracing::info!(
+                    target: "sim_flow::metrics",
+                    event = "step_end",
+                    step = %step_id,
+                    critique_iters,
+                    advanced,
+                    wall_ms = step_wall_ms,
+                );
+                match advance_outcome {
+                    AdvanceOutcome::Advanced => break,
+                    AdvanceOutcome::MoreMilestonesPending => {
+                        critique_iters = 0;
+                        prev_blocker_count = None;
+                        auto_host.write(&Event::Diagnostic {
+                            level: DiagnosticLevel::Info,
+                            message: format!(
+                                "auto: {step_id} milestone-walk step has more pending milestones; \
+                                 re-running work session for next milestone"
+                            ),
+                        })?;
+                        continue;
+                    }
+                    AdvanceOutcome::Stuck => {
+                        flip_to_manual(auto_host)?;
+                        return Ok(AutoLoopOutcome::FlippedToManual);
+                    }
+                }
             }
             critique_iters += 1;
             if critique_iters > opts.max_critique_iters {
@@ -366,24 +406,8 @@ fn run_auto_loop<H: Host>(
             // build_session_inputs will inline the critique file so
             // the agent sees the findings.
         }
-
-        // Try to advance. If gate clean, mark passed + bump
-        // current_step. If not clean, flip to manual so the user can
-        // inspect and decide.
-        let advanced = try_advance(&opts.project_dir, step_id, auto_host)?;
-        let step_wall_ms = step_started.elapsed().as_millis() as u64;
-        tracing::info!(
-            target: "sim_flow::metrics",
-            event = "step_end",
-            step = %step_id,
-            critique_iters,
-            advanced,
-            wall_ms = step_wall_ms,
-        );
-        if !advanced {
-            flip_to_manual(auto_host)?;
-            return Ok(AutoLoopOutcome::FlippedToManual);
-        }
+        // Inner loop break-only path: clean critique advanced the
+        // step. Outer for-loop moves to the next step.
     }
 
     Ok(AutoLoopOutcome::Completed)
@@ -591,6 +615,78 @@ fn session_kind_to_protocol(kind: crate::client::SessionKind) -> SessionKindOut 
         crate::client::SessionKind::Work => SessionKindOut::Work,
         crate::client::SessionKind::Critique => SessionKindOut::Critique,
     }
+}
+
+/// Outcome of `try_advance_classified`. Distinguishes "gate clean,
+/// advanced" from "gate dirty only because more milestones are
+/// pending in a milestone-walk step (loop back to Work)" from "gate
+/// dirty for a real reason (flip to manual)".
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AdvanceOutcome {
+    Advanced,
+    MoreMilestonesPending,
+    Stuck,
+}
+
+fn try_advance_classified<H: Host>(
+    project_dir: &Path,
+    step_id: &str,
+    host: &mut AutoHost<H>,
+) -> Result<AdvanceOutcome> {
+    use crate::gate;
+    let dot = project_dir.join(".sim-flow");
+    let state = State::load(&dot)?;
+    let registry = registry_for(state.flow);
+    let step = registry.get(step_id).ok_or_else(|| {
+        crate::Error::InvalidStep(format!("{} is not a {} step", step_id, state.flow.as_str()))
+    })?;
+    let report = gate::evaluate(project_dir, &step.gate_checks)?;
+    if report.is_clean() {
+        // Re-use the existing advance helper to do the bookkeeping
+        // (mark passed, bump current_step, git commit).
+        let advanced = try_advance(project_dir, step_id, host)?;
+        return Ok(if advanced {
+            AdvanceOutcome::Advanced
+        } else {
+            // The advance helper re-evaluates the gate; if it sees
+            // dirty there but we saw clean here, the world changed
+            // mid-evaluation. Treat as Stuck.
+            AdvanceOutcome::Stuck
+        });
+    }
+    // Gate dirty. For milestone-walk steps, classify whether the
+    // ONLY failing checks are MilestonesAllResolved -- which means
+    // the agent is mid-walk and the next iteration should be a
+    // fresh Work session for the next milestone, not a flip-to-
+    // manual.
+    let only_milestones_pending = step.milestone_walk.is_some()
+        && !report.failures.is_empty()
+        && report.failures.iter().all(|f| {
+            // The MilestonesAllResolved gate check uses a
+            // distinctive description prefix; its failure reason
+            // also starts with "milestone files still have
+            // unresolved rows". Match either to be robust.
+            f.reason
+                .contains("milestone files still have unresolved rows")
+                || f.reason.contains("no `") && f.reason.contains("NN-*.md` files found")
+        });
+    if only_milestones_pending {
+        return Ok(AdvanceOutcome::MoreMilestonesPending);
+    }
+    host.write(&Event::Diagnostic {
+        level: DiagnosticLevel::Error,
+        message: format!(
+            "auto: {step_id} gate is not clean after critique; cannot advance. {} failure(s).",
+            report.failures.len()
+        ),
+    })?;
+    for f in &report.failures {
+        host.write(&Event::Diagnostic {
+            level: DiagnosticLevel::Error,
+            message: format!("  - {}: {}", f.description, f.reason),
+        })?;
+    }
+    Ok(AdvanceOutcome::Stuck)
 }
 
 fn try_advance<H: Host>(project_dir: &Path, step_id: &str, host: &mut AutoHost<H>) -> Result<bool> {

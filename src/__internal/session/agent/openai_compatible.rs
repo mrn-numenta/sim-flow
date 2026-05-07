@@ -29,9 +29,12 @@ pub struct OpenAiCompatibleRequest<'a> {
     /// from chain-of-thought-heavy local models (e.g. nemotron with
     /// reasoning enabled), which can otherwise burn 90K+ tokens
     /// before producing the actual artifact. Defaults read from the
-    /// `SIM_FLOW_MAX_TOKENS` env var, falling back to 16384 — large
-    /// enough for legitimate critique / work responses (typical
-    /// observed: 1-5K tokens) but well under any local model's
+    /// `SIM_FLOW_MAX_TOKENS` env var, falling back to 32768. 16384
+    /// was the prior default but qwen3.6's milestone-level work
+    /// sessions (multi-file scoreboard / testbench writes) blow
+    /// past it on the thinking-plus-tool-calls path, hitting
+    /// `finish_reason=length` and leaving the milestone with zero
+    /// files on disk. 32768 still sits well under any local model's
     /// context window so a runaway is killed by the server, not by
     /// us hitting the context wall.
     pub max_tokens: u32,
@@ -42,13 +45,27 @@ impl<'a> OpenAiCompatibleRequest<'a> {
         let max_tokens = std::env::var("SIM_FLOW_MAX_TOKENS")
             .ok()
             .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(16_384);
+            .unwrap_or(32_768);
+        // Response-body cap. 64 KB was too tight for verbose
+        // models -- qwen3.6's milestone-04 response with embedded
+        // Rust code legitimately exceeded that and the JSON parser
+        // EOF'd mid-string (`failed to parse response: EOF while
+        // parsing a string at line 1 column 65536`). 512 KB is
+        // still small relative to a workstation's memory budget
+        // and well above any legitimate single-turn answer; if a
+        // server returns more than that it's almost certainly
+        // garbage or runaway behavior. Override via
+        // `SIM_FLOW_MAX_RESPONSE_BYTES` if needed.
+        let max_response_bytes = std::env::var("SIM_FLOW_MAX_RESPONSE_BYTES")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(512 * 1024);
         Self {
             base_url,
             model,
             messages,
             api_key: None,
-            max_response_bytes: 64 * 1024,
+            max_response_bytes,
             max_tokens,
         }
     }

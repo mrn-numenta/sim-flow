@@ -104,6 +104,15 @@ Do NOT chain milestones.
 5. **Verify and stop**. When every `- [ ]` row in the current
    milestone is resolved (`- [x]` done OR `- [-]` deferred with
    a `- defer reason:` sub-bullet), run a sanity pass:
+   - `run_cargo({"command": "fmt"})` -- format every Rust file
+     in place. Idempotent; safe to run repeatedly. The gate
+     enforces `cargo fmt --check`.
+   - `run_cargo({"command": "clippy"})` -- lint clean. Treat
+     every warning as a `BLOCKER:`-shaped issue and fix it
+     before stopping; the gate runs `cargo clippy -- -D
+     warnings` and fails on ANY warning. Repeated lints across
+     files are coalesced ("12 occurrences across 4 files;
+     sample: ..."), so fix each unique lint once and re-run.
    - `run_cargo({"command": "test"})` -- the full suite still
      passes (no regression).
 
@@ -135,6 +144,60 @@ row-count rule. If you find yourself deferring more than ~25% of
 a milestone's rows, stop and surface the trend rather than
 coasting -- the critique flags a "mostly-deferred milestone" as
 a `BLOCKER:` even when individual defer reasons read fine.
+
+## Coding Requirements
+
+All Rust code authored in this step MUST follow these rules. The
+critique flags violations as `BLOCKER:` because downstream steps
+depend on the codebase staying readable, idiomatic, and
+modification-friendly across iterations.
+
+- **Idiomatic Rust**. Prefer the standard idioms (`?` for error
+  propagation, `Result` / `Option` over panics for recoverable
+  conditions, iterators over manual loops, pattern matching over
+  nested `if let`). Boring code beats clever code.
+- **Data-oriented + memory-friendly**. Prefer concrete types over
+  trait objects, owned data over indirection, contiguous storage
+  (`Vec`, fixed-size arrays) over heap-of-heaps, struct-of-arrays
+  when iteration patterns favor it. Avoid premature
+  `Arc<Mutex<_>>` and similar shared-mutable indirection unless
+  the framework forces it.
+- **Functional where appropriate**. Small pure helpers, immutable
+  bindings by default, `iter().map().filter().collect()` over
+  mutable accumulators, exhaustive `match` for state machines.
+- **No magic numbers or strings**. Any literal with meaning
+  beyond "this exact value" must be a named `const` (or named
+  enum variant, or named struct field). Port names, payload
+  widths, threshold values, run-id schemes -- all named, not
+  inlined.
+- **No emojis**. Comments, error messages, doc strings, log
+  output, and string literals stay ASCII. Emojis muddle
+  terminals, diffs, and grep.
+- **File size cap: under 400 lines**. Split files along clear
+  axes (one test per file -- see "File Layout" below) rather
+  than letting any single file grow without bound. The critique
+  flags any source file at or above 400 lines as `BLOCKER:`.
+
+## File Layout
+
+DM3c writes EACH test to its own file under a per-category
+subdirectory:
+
+- `tests/smoke/<test_name>.rs` -- one file per smoke test.
+- `tests/edge/<test_name>.rs` -- one file per edge test.
+- `tests/stress/<test_name>.rs` -- one file per stress test.
+- `tests/random/<test_name>.rs` -- one file per random test.
+  Random test names pin a seed (`<test>_seed_<N>.rs`).
+
+DM3b's testbench scaffolding lives under `tests/testbench/`
+(separate, not modified by DM3c). The basic data-flow smoke test
+DM3b authored lives at `tests/smoke/basic_data_flow.rs` -- DM3c
+does NOT overwrite it.
+
+`<test_name>.rs` matches the test's `#[test]` function name
+exactly (so `cargo test <test_name>` lines up with the file).
+File-per-test gives the critique a clean unit of review and
+keeps each file well under the 400-line cap.
 
 ## Re-entry
 

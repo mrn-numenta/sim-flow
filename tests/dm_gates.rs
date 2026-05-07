@@ -367,6 +367,24 @@ fn stage_perf_plan(project: &Path) {
 }
 
 /// Mark every row in every `perf-milestone-NN-*.md` file as
+/// Stage a minimal Rust crate so `cargo fmt --check` and
+/// `cargo clippy --all-targets` (DM2d / DM3b / DM3c / DM4b
+/// gate checks) can run. Empty `src/lib.rs` formats cleanly
+/// and produces no clippy diagnostics, so any test that uses
+/// this stays gate-clean for the fmt + clippy checks while
+/// exercising whatever step-specific gates the test cares about.
+fn stage_minimal_crate(project: &Path) {
+    write(
+        &project.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+    );
+    // cargo fmt rejects an entirely empty file (it wants the
+    // file to end with at least one newline). A single blank line
+    // is the minimum that formats cleanly AND triggers no clippy
+    // diagnostics.
+    write(&project.join("src/lib.rs"), "\n");
+}
+
 /// resolved (`- [x]`). DM4b's `MilestonesAllResolved` gate check
 /// only passes once every row is `- [x]` or `- [-]`.
 fn complete_perf_milestones(project: &Path) {
@@ -410,6 +428,7 @@ fn dm4a_gate_rejects_perf_plan_without_milestone_files() {
 #[test]
 fn dm4b_gate_accepts_analysis_report_with_tracked_run() {
     let (_tmp, project) = new_project();
+    stage_minimal_crate(&project);
     stage_experiments_db(&project);
     stage_perf_plan(&project);
     complete_perf_milestones(&project);
