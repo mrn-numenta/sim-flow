@@ -80,3 +80,64 @@ export async function writeSpecPath(projectDir: string, specPath: string): Promi
   }
   await writeConfigTable(projectDir, table);
 }
+
+/**
+ * DM3c coverage acceptance criteria mirror of the Rust
+ * `CoverageSettings` struct. The dashboard reads these to seed the
+ * Settings panel, and writes back when the user edits either field.
+ */
+export interface CoverageSettings {
+  /** 0..=100. Stored verbatim; `writeCoverageSettings` clamps. */
+  thresholdPct: number;
+  /** "module": every module hits the bar. "total": only the project total does. */
+  level: "module" | "total";
+}
+
+export const COVERAGE_DEFAULTS: CoverageSettings = {
+  thresholdPct: 90,
+  level: "total",
+};
+
+/**
+ * Read `[coverage]` from `.sim-flow/config.toml`. Returns the
+ * defaults when the file or section is missing -- the orchestrator
+ * does the same on its side, so the dashboard reads the same value
+ * the agent will eventually see.
+ */
+export async function readCoverageSettings(projectDir: string): Promise<CoverageSettings> {
+  const table = await loadConfigTable(projectDir);
+  const section = table["coverage"];
+  if (typeof section !== "object" || section === null || Array.isArray(section)) {
+    return { ...COVERAGE_DEFAULTS };
+  }
+  const sectionTable = section as TomlTable;
+  const rawPct = sectionTable["threshold_pct"];
+  const rawLevel = sectionTable["level"];
+  const thresholdPct =
+    typeof rawPct === "number" && Number.isFinite(rawPct)
+      ? rawPct
+      : COVERAGE_DEFAULTS.thresholdPct;
+  const level =
+    rawLevel === "module" || rawLevel === "total" ? rawLevel : COVERAGE_DEFAULTS.level;
+  return { thresholdPct, level };
+}
+
+/**
+ * Write `[coverage]` back to `.sim-flow/config.toml`, clamping the
+ * threshold percentage to `[0, 100]` so a slipped keystroke in the
+ * Settings panel can't write `9000` to disk. All other keys are
+ * preserved untouched.
+ */
+export async function writeCoverageSettings(
+  projectDir: string,
+  settings: CoverageSettings,
+): Promise<CoverageSettings> {
+  const clampedPct = Math.max(0, Math.min(100, settings.thresholdPct));
+  const table = await loadConfigTable(projectDir);
+  table["coverage"] = {
+    threshold_pct: clampedPct,
+    level: settings.level,
+  };
+  await writeConfigTable(projectDir, table);
+  return { thresholdPct: clampedPct, level: settings.level };
+}

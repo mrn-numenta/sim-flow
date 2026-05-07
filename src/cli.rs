@@ -310,6 +310,13 @@ pub(crate) enum Command {
         #[command(subcommand)]
         action: PromptsAction,
     },
+    /// Inspect or update DM3c coverage acceptance criteria stored
+    /// in `.sim-flow/config.toml::coverage`. The DM3c critique
+    /// enforces these against the live `cargo tarpaulin` report.
+    Coverage {
+        #[command(subcommand)]
+        action: CoverageAction,
+    },
     /// Generate a Sugiyama block diagram of the project's foundation
     /// model. Runs `cargo run -- --dump-netlist-json <tmp>` against
     /// the project to obtain the live ConnectivityPlan, then renders
@@ -373,6 +380,46 @@ pub(crate) enum PromptsAction {
         #[arg(long)]
         scope: Option<PromptScopeArg>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum CoverageAction {
+    /// Print the current threshold and level. Use `--json` for
+    /// machine-readable output (the dashboard reads this).
+    Show {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Update one or both fields. Either flag may be omitted to
+    /// keep its current value; passing neither is a no-op (but
+    /// still legal -- it prints the unchanged settings so callers
+    /// can use `set` as a verbose `show`).
+    Set {
+        /// Required line-coverage percentage. Clamped to
+        /// `[0.0, 100.0]` before being written.
+        #[arg(long)]
+        threshold_pct: Option<f32>,
+        /// Coverage level. `module` requires every module to hit
+        /// the threshold; `total` only requires the project-wide
+        /// total to do so.
+        #[arg(long, value_enum)]
+        level: Option<CoverageLevelArg>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
+pub(crate) enum CoverageLevelArg {
+    Module,
+    Total,
+}
+
+impl From<CoverageLevelArg> for sim_flow::__internal::config::CoverageLevel {
+    fn from(value: CoverageLevelArg) -> Self {
+        match value {
+            CoverageLevelArg::Module => Self::Module,
+            CoverageLevelArg::Total => Self::Total,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]

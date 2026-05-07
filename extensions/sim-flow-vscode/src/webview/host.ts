@@ -416,6 +416,9 @@ export class DashboardHost {
           .getConfiguration("sim-flow")
           .update("llm.servers", msg.servers, vscode.ConfigurationTarget.Workspace);
         return;
+      case "set-coverage":
+        await this.writeCoverage(msg.coverage);
+        return;
       case "request-model-list":
         await this.sendModelList(msg.source);
         return;
@@ -925,6 +928,11 @@ export class DashboardHost {
     // hiding the section.
     const planProgressByKind = await readAllPlanProgress(this.options.projectDir);
     const specPath = this.readSpecPath();
+    // Coverage settings live in the project's `.sim-flow/config.toml`
+    // (the orchestrator side reads them too). Read failures fall
+    // back to defaults so the dashboard keeps rendering even when
+    // the file is missing or malformed.
+    const coverage = await this.readCoverage();
     const cfg = vscode.workspace.getConfiguration("sim-flow");
     const fullyAutomatedEnabled = cfg.get<boolean>("dashboard.showFullyAutomated") ?? false;
     const verilogSimEnabled = cfg.get<boolean>("dashboard.verilogSimEnabled") ?? false;
@@ -959,6 +967,7 @@ export class DashboardHost {
       llmServers: cfg.get<unknown>("llm.servers") as
         | import("./messages").LlmServerEntry[]
         | undefined,
+      coverage,
       stepMode,
       sessionActive,
       inSubSession,
@@ -1050,6 +1059,47 @@ export class DashboardHost {
         detail: String((err as Error).message ?? err),
       });
     }
+  }
+
+  /**
+   * Read `[coverage]` from `.sim-flow/config.toml`. Falls back to
+   * defaults silently -- the dashboard always has a value to seed
+   * the Settings UI with, even on a fresh project.
+   */
+  private async readCoverage(): Promise<import("./messages").CoverageState> {
+    try {
+      const { readCoverageSettings } = await import("../state/projectConfig");
+      const settings = await readCoverageSettings(this.options.projectDir);
+      return { thresholdPct: settings.thresholdPct, level: settings.level };
+    } catch {
+      // Don't surface read failures: the agent side will catch a
+      // malformed file when it next loads the config, and the
+      // user can still edit fields here to overwrite a broken
+      // section.
+      return { thresholdPct: 90, level: "total" };
+    }
+  }
+
+  /**
+   * Persist the coverage section. Triggers a refresh so the panel
+   * sees the (clamped) value the helper actually wrote.
+   */
+  private async writeCoverage(value: import("./messages").CoverageState): Promise<void> {
+    try {
+      const { writeCoverageSettings } = await import("../state/projectConfig");
+      await writeCoverageSettings(this.options.projectDir, {
+        thresholdPct: value.thresholdPct,
+        level: value.level,
+      });
+    } catch (err) {
+      await this.post({
+        type: "error",
+        message: "Failed to persist coverage settings to .sim-flow/config.toml",
+        detail: String((err as Error).message ?? err),
+      });
+      return;
+    }
+    await this.refresh();
   }
 
   private async loadRuns(): Promise<DashboardState["runs"]> {

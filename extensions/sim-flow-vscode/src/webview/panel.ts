@@ -458,6 +458,17 @@ function renderSettingsTab(): Node[] {
     el(
       "div",
       { class: "settings-section" },
+      el("h3", {}, "Coverage acceptance"),
+      el(
+        "p",
+        { class: "muted" },
+        "DM3c gates a flow on `cargo tarpaulin`. Threshold is the minimum required line-coverage percentage. Level controls whether every reported module must hit the bar (`module`) or only the project-wide total (`total`). Stored in `.sim-flow/config.toml::coverage` and round-trippable from the CLI via `sim-flow coverage show / set`.",
+      ),
+      el("div", { class: "settings-row" }, renderCoverageThreshold(), renderCoverageLevel()),
+    ),
+    el(
+      "div",
+      { class: "settings-section" },
       el("h3", {}, "Verilog simulation"),
       el(
         "p",
@@ -730,6 +741,77 @@ function renderFullyAutomatedToggle(): HTMLElement {
   });
   wrap.appendChild(input);
   wrap.appendChild(document.createTextNode(" Show fully-automated flow button"));
+  return wrap;
+}
+
+function renderCoverageThreshold(): HTMLElement {
+  const wrap = el("label", { class: "llm-source" }, "Threshold (%): ");
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = "0";
+  input.max = "100";
+  input.step = "0.1";
+  input.className = "coverage-threshold";
+  input.value = (ui.data?.coverage?.thresholdPct ?? 90).toString();
+  input.title =
+    "Minimum required line-coverage percentage. The DM3c critique fails when measured coverage is below this value. Persist on blur / Enter to avoid a round-trip per keystroke.";
+  const commit = (): void => {
+    const parsed = Number.parseFloat(input.value);
+    if (!Number.isFinite(parsed)) {
+      // Reset to the last-known value when the user types
+      // something unparseable rather than silently writing NaN.
+      input.value = (ui.data?.coverage?.thresholdPct ?? 90).toString();
+      return;
+    }
+    send({
+      type: "set-coverage",
+      coverage: {
+        thresholdPct: parsed,
+        level: ui.data?.coverage?.level ?? "total",
+      },
+    });
+  };
+  input.addEventListener("blur", commit);
+  input.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commit();
+    }
+  });
+  wrap.appendChild(input);
+  return wrap;
+}
+
+function renderCoverageLevel(): HTMLElement {
+  const wrap = el("label", { class: "llm-source" }, "Level: ");
+  const select = document.createElement("select");
+  select.className = "coverage-level-select";
+  const current = ui.data?.coverage?.level ?? "total";
+  for (const value of ["total", "module"] as const) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent =
+      value === "total"
+        ? "total -- only the project total must meet the threshold"
+        : "module -- every module must meet the threshold";
+    if (value === current) {
+      opt.selected = true;
+    }
+    select.appendChild(opt);
+  }
+  select.title =
+    "`total` lets heavily-tested modules offset thinly-tested ones; `module` is strict and surfaces gaps in any one file.";
+  select.addEventListener("change", () => {
+    const level = select.value === "module" ? "module" : "total";
+    send({
+      type: "set-coverage",
+      coverage: {
+        thresholdPct: ui.data?.coverage?.thresholdPct ?? 90,
+        level,
+      },
+    });
+  });
+  wrap.appendChild(select);
   return wrap;
 }
 

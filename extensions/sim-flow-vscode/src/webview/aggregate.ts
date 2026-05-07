@@ -6,7 +6,7 @@
 import type { BaselineRecord, RunRow } from "../cli/types";
 import type { StepMode } from "../session/protocol-types";
 import type { CritiqueFile, FlowState, PlanProgress } from "../state/types";
-import type { DashboardState, DocumentEntry, LlmServerEntry } from "./messages";
+import type { CoverageState, DashboardState, DocumentEntry, LlmServerEntry } from "./messages";
 
 export interface AggregateInput {
   projectDir: string;
@@ -38,6 +38,8 @@ export interface AggregateInput {
   verilogSimulatorPath?: string;
   /** Mirrors `sim-flow.llm.servers`. Defaults to []. */
   llmServers?: LlmServerEntry[];
+  /** Mirrors `[coverage]` in `.sim-flow/config.toml`. Defaults to 90% / total. */
+  coverage?: CoverageState;
   /**
    * Resolved step-axis mode: orchestrator's last `StepModeChanged`
    * truth when a session is attached, otherwise the persisted
@@ -80,6 +82,7 @@ export function aggregateDashboardState(input: AggregateInput): DashboardState {
     verilogSimEnabled: input.verilogSimEnabled ?? false,
     verilogSimulatorPath: input.verilogSimulatorPath ?? "",
     llmServers: input.llmServers ?? [],
+    coverage: input.coverage ?? { thresholdPct: 90, level: "total" },
     stepMode: input.stepMode ?? "manual",
     sessionActive: input.sessionActive ?? false,
     inSubSession: input.inSubSession ?? false,

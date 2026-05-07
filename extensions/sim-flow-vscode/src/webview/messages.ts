@@ -93,6 +93,13 @@ export interface DashboardState {
    */
   llmServers: LlmServerEntry[];
   /**
+   * Mirrors `[coverage]` in `.sim-flow/config.toml`. Surfaced in
+   * the Settings tab so the user can edit the threshold and level
+   * without dropping to the CLI. The dashboard writes back via the
+   * `set-coverage` webview message.
+   */
+  coverage: CoverageState;
+  /**
    * Current step-axis mode. When a manual-mode pump is attached this
    * is the orchestrator's truth (last `StepModeChanged` echo);
    * otherwise it falls back to the `sim-flow.flow.stepMode` setting.
@@ -291,6 +298,18 @@ export function llmServerBaseUrl(entry: LlmServerEntry): string {
   return `http://${entry.host}:${entry.port}${normalisedPath}`;
 }
 
+/**
+ * DM3c coverage acceptance criteria mirror of the Rust
+ * `CoverageSettings` struct. Carried on `DashboardState.coverage`
+ * and round-tripped through the `set-coverage` webview message.
+ */
+export interface CoverageState {
+  /** 0..=100. The host clamps before persisting. */
+  thresholdPct: number;
+  /** "module": every module hits the bar. "total": only the project total does. */
+  level: "module" | "total";
+}
+
 /** Conventional default port per kind, used when seeding a new
  *  servers entry. */
 export const LLM_SERVER_DEFAULT_PORT: Record<LlmServerEntry["kind"], number> = {
@@ -361,6 +380,7 @@ export type WebviewMessage =
   | { type: "request-model-list"; source: LlmSourceTag | string }
   | { type: "set-llm-verbose"; verbose: boolean }
   | { type: "set-llm-servers"; servers: LlmServerEntry[] }
+  | { type: "set-coverage"; coverage: CoverageState }
   | { type: "prompts-list" }
   /**
    * Open a prompt override in a regular VS Code editor tab. The host

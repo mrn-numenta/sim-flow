@@ -35,8 +35,62 @@ pub struct Config {
     /// mode).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec_path: Option<String>,
+    /// Coverage acceptance criteria for DM3c. The CLI subcommand
+    /// `sim-flow coverage` and the dashboard's Settings tab both
+    /// read / write this section. The DM3c critique enforces it
+    /// against the live `cargo tarpaulin` report.
+    #[serde(default)]
+    pub coverage: CoverageSettings,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub steps: BTreeMap<String, StepOverride>,
+}
+
+/// DM3c coverage acceptance criteria. `threshold_pct` is the
+/// minimum required line-coverage percentage; `level` selects
+/// whether the threshold has to hold per-module (every module
+/// reaches the bar -- strict) or only on the project-wide total
+/// (cheap modules can drag heavy ones up -- lax).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CoverageSettings {
+    /// 0.0 ..= 100.0. Stored as f32 because the dashboard surfaces
+    /// it as a percentage with one decimal of precision; we never
+    /// round-trip it to and from doubles.
+    pub threshold_pct: f32,
+    pub level: CoverageLevel,
+}
+
+impl Default for CoverageSettings {
+    fn default() -> Self {
+        // 90% / total matches the historical DM3c critique baseline
+        // (the prompt previously hard-coded "90%" and didn't
+        // distinguish module-vs-total). Default `Total` keeps the
+        // pre-config behaviour for projects whose `config.toml`
+        // pre-dates this section.
+        Self {
+            threshold_pct: 90.0,
+            level: CoverageLevel::Total,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CoverageLevel {
+    /// Every reported module must hit `threshold_pct`. Strict
+    /// reading; surfaces gaps in any one file.
+    Module,
+    /// Only the project-wide total has to hit `threshold_pct`.
+    /// Heavily-tested modules can offset thinly-tested ones.
+    Total,
+}
+
+impl CoverageLevel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CoverageLevel::Module => "module",
+            CoverageLevel::Total => "total",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,6 +198,19 @@ impl Config {
             .unwrap_or(self.client.name)
     }
 
+    /// Update the `[coverage]` section in-place. Clamps the
+    /// percentage to `[0.0, 100.0]` so a typo in the dashboard's
+    /// number input can't write 9000% to disk. Returns the clamped
+    /// value the caller can echo back to the user.
+    pub fn set_coverage(&mut self, threshold_pct: f32, level: CoverageLevel) -> CoverageSettings {
+        let clamped = threshold_pct.clamp(0.0, 100.0);
+        self.coverage = CoverageSettings {
+            threshold_pct: clamped,
+            level,
+        };
+        self.coverage
+    }
+
     /// Resolve the effective model name for a given step.
     pub fn effective_model(&self, step: &str) -> Option<String> {
         if let Some(m) = self.steps.get(step).and_then(|o| o.model.clone()) {
@@ -180,6 +247,78 @@ mod tests {
         let loaded = Config::load(dir.path()).unwrap();
         assert_eq!(loaded.client.name, ClientName::Claude);
         assert_eq!(loaded.claude.model.as_deref(), Some("sonnet"));
+    }
+
+    #[test]
+    fn coverage_defaults_to_90_total() {
+        let cfg = Config::default();
+        assert_eq!(cfg.coverage.threshold_pct, 90.0);
+        assert_eq!(cfg.coverage.level, CoverageLevel::Total);
+    }
+
+    #[test]
+    fn coverage_round_trips_through_toml() {
+        let dir = tempdir().unwrap();
+        let cfg = Config {
+            coverage: CoverageSettings {
+                threshold_pct: 75.5,
+                level: CoverageLevel::Module,
+            },
+            ..Config::default()
+        };
+        cfg.save(dir.path()).unwrap();
+        let loaded = Config::load(dir.path()).unwrap();
+        assert_eq!(loaded.coverage.threshold_pct, 75.5);
+        assert_eq!(loaded.coverage.level, CoverageLevel::Module);
+    }
+
+    #[test]
+    fn coverage_loads_from_legacy_config_without_section() {
+        // Older `config.toml` files predate the [coverage] section;
+        // loading them must not fail and must surface the defaults.
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[client]\nname = \"mock\"\n",
+        )
+        .unwrap();
+        let loaded = Config::load(dir.path()).unwrap();
+        assert_eq!(loaded.coverage, CoverageSettings::default());
+    }
+
+    #[test]
+    fn set_coverage_clamps_out_of_range_values() {
+        let mut cfg = Config::default();
+        let above = cfg.set_coverage(120.0, CoverageLevel::Module);
+        assert_eq!(above.threshold_pct, 100.0);
+        let below = cfg.set_coverage(-5.0, CoverageLevel::Total);
+        assert_eq!(below.threshold_pct, 0.0);
+        assert_eq!(cfg.coverage.level, CoverageLevel::Total);
+    }
+
+    #[test]
+    fn coverage_level_serde_uses_lowercase() {
+        // The dashboard's webview message protocol speaks the
+        // lowercase forms; serde rename_all keeps the on-disk form
+        // matching that. Round-trip both variants via a wrapper
+        // struct because TOML can't serialize a bare enum value at
+        // the document root.
+        #[derive(Serialize, Deserialize)]
+        struct Wrap {
+            level: CoverageLevel,
+        }
+        let module = toml::to_string(&Wrap {
+            level: CoverageLevel::Module,
+        })
+        .unwrap();
+        let total = toml::to_string(&Wrap {
+            level: CoverageLevel::Total,
+        })
+        .unwrap();
+        assert!(module.contains("\"module\""), "got {module}");
+        assert!(total.contains("\"total\""), "got {total}");
+        assert_eq!(CoverageLevel::Module.as_str(), "module");
+        assert_eq!(CoverageLevel::Total.as_str(), "total");
     }
 
     #[test]

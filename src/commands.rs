@@ -9,8 +9,8 @@ use sim_flow::__internal::state::{Flow, State};
 use sim_flow::__internal::steps::registry_for;
 
 use crate::cli::{
-    BaselineAction, Cli, Command, ConfigAction, NewKind, PromptResetScope, PromptScopeArg,
-    PromptsAction, SessionMode,
+    BaselineAction, Cli, Command, ConfigAction, CoverageAction, NewKind, PromptResetScope,
+    PromptScopeArg, PromptsAction, SessionMode,
 };
 
 pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
@@ -143,6 +143,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             *no_preamble,
         ),
         Command::Prompts { action } => prompts_cmd(cli, &project_dir, action),
+        Command::Coverage { action } => coverage_cmd(&project_dir, action),
         Command::BlockDiagram {
             output,
             direction,
@@ -297,6 +298,54 @@ fn prompt_scope_for(scope: PromptScopeArg) -> sim_flow::__internal::prompts::Pro
     match scope {
         PromptScopeArg::Project => PromptScope::Project,
         PromptScopeArg::Global => PromptScope::Global,
+    }
+}
+
+fn coverage_cmd(project_dir: &Path, action: &CoverageAction) -> sim_flow::Result<()> {
+    let dot = project_dir.join(DOT_SIM_FLOW);
+    let mut cfg = Config::load(&dot)?;
+    match action {
+        CoverageAction::Show { json } => {
+            print_coverage(&cfg, *json);
+        }
+        CoverageAction::Set {
+            threshold_pct,
+            level,
+        } => {
+            // Honor each flag independently: if only `--level` is
+            // passed, keep the existing threshold (and vice versa).
+            // Passing neither is legal; it just round-trips the
+            // current config (after the clamp pass that `set_coverage`
+            // performs, which can normalize a previously-broken
+            // file).
+            let new_pct = threshold_pct.unwrap_or(cfg.coverage.threshold_pct);
+            let new_level = level.map(Into::into).unwrap_or(cfg.coverage.level);
+            cfg.set_coverage(new_pct, new_level);
+            cfg.save(&dot)?;
+            print_coverage(&cfg, false);
+        }
+    }
+    Ok(())
+}
+
+fn print_coverage(cfg: &Config, json: bool) {
+    if json {
+        // Hand-rolled JSON: the dashboard parses this and we want
+        // to avoid pulling serde_json in just for two fields. The
+        // float-formatting trick (`{:.4}`) avoids `90` (no decimal)
+        // round-tripping into something a JSON parser would accept
+        // as an integer.
+        println!(
+            "{{\"threshold_pct\":{:.4},\"level\":\"{}\"}}",
+            cfg.coverage.threshold_pct,
+            cfg.coverage.level.as_str(),
+        );
+    } else {
+        println!(
+            "coverage: threshold={:.1}% level={}",
+            cfg.coverage.threshold_pct,
+            cfg.coverage.level.as_str(),
+        );
     }
 }
 
