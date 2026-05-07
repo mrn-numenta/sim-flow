@@ -293,6 +293,24 @@ fn run_auto_loop<H: Host>(
                 return Ok(o);
             }
 
+            // Auto-tick milestone task rows whose named artifact
+            // (path[::Symbol]) now exists on disk. Saves the agent
+            // from spending a tool turn per task on `edit_file`
+            // checkbox flips after it has already written the file.
+            // Conservative: rows that don't parse as a path::sym
+            // pattern are left for the agent to handle. Runs only
+            // for milestone-walk steps (DM2d / DM3b / DM3c / DM4b);
+            // a no-op for everything else.
+            tick_milestone_checkboxes(opts, step_id);
+
+            // Orchestrator-side cargo fmt --check + cargo clippy.
+            // Writes a markdown summary the next Critique session
+            // inlines. Saves the agent the 2-3 tool turns it would
+            // otherwise spend invoking `run_cargo` and reasoning
+            // about the output. No-op when the project has no
+            // Cargo.toml.
+            run_orchestrator_cargo_checks(opts, step_id);
+
             // Critique session.
             run_subsession(
                 opts,
@@ -441,6 +459,77 @@ fn check_post_subsession<H: Host>(
         return Ok(Some(AutoLoopOutcome::FlippedToManual));
     }
     Ok(None)
+}
+
+/// Auto-tick milestone task rows whose named artifact (`path` or
+/// `path::Symbol`) now resolves on disk. Wraps the pure
+/// `crate::__internal::steps::tick_resolved_milestone_tasks` with the
+/// step lookup + a tracing emit so a flipped count is visible in the
+/// metrics stream.
+fn tick_milestone_checkboxes(opts: &AutoOptions, step_id: &str) {
+    let dot = opts.project_dir.join(".sim-flow");
+    let state = match State::load(&dot) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let registry = crate::__internal::steps::registry_for(state.flow);
+    let Some(step) = registry.get(step_id) else {
+        return;
+    };
+    let flipped = crate::__internal::steps::tick_resolved_milestone_tasks(&opts.project_dir, step);
+    if flipped > 0 {
+        tracing::info!(
+            target: "sim_flow::metrics",
+            event = "milestone_tasks_auto_ticked",
+            step = %step_id,
+            flipped,
+        );
+    }
+}
+
+/// Run `cargo fmt --check` + `cargo clippy` after the Work session,
+/// stash a markdown summary at
+/// `.sim-flow/cargo-checks-{step_id}.md`, and emit a tracing event
+/// with the pass/fail outcome. The Critique session inlines that file
+/// via `build_session_inputs`, so the agent sees an objective lint /
+/// build / fmt signal instead of relying on the Work session's
+/// self-report. No-op when the project has no `Cargo.toml` (early DM
+/// steps before any code has landed). The file path is overwritten on
+/// each call so each milestone's report is fresh.
+fn run_orchestrator_cargo_checks(opts: &AutoOptions, step_id: &str) {
+    let report = match crate::__internal::session::runners::run_post_work_cargo(&opts.project_dir) {
+        Ok(Some(r)) => r,
+        Ok(None) => return,
+        Err(err) => {
+            tracing::warn!(
+                target: "sim_flow::metrics",
+                event = "post_work_cargo_failed",
+                step = %step_id,
+                error = %err,
+            );
+            return;
+        }
+    };
+    let path = opts
+        .project_dir
+        .join(".sim-flow")
+        .join(format!("cargo-checks-{step_id}.md"));
+    if let Some(parent) = path.parent()
+        && std::fs::create_dir_all(parent).is_err()
+    {
+        return;
+    }
+    if std::fs::write(&path, report.render_markdown()).is_err() {
+        return;
+    }
+    tracing::info!(
+        target: "sim_flow::metrics",
+        event = "post_work_cargo_checks",
+        step = %step_id,
+        fmt_ok = report.fmt_ok,
+        clippy_ok = report.clippy_ok,
+        all_clean = report.all_clean(),
+    );
 }
 
 fn flip_to_manual<H: Host>(auto_host: &mut AutoHost<H>) -> Result<()> {

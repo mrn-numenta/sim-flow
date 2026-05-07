@@ -133,25 +133,19 @@ strictly.
    helpers when that improves clarity. Do not treat those style notes as
    permission to ignore the plan's intended architecture.
 7. **Cargo verification**: after each module lands, invoke the
-   `run_cargo` tool to verify it compiles / passes / lints
-   clean. Run them in this order so cheap checks fail fast:
+   `run_cargo` tool to verify it compiles / passes:
    - `run_cargo({"command": "check"})` -- cheap type-only pass
      while iterating.
    - `run_cargo({"command": "build"})` -- once you think a
      module is done.
-   - `run_cargo({"command": "fmt"})` -- format every Rust file
-     in place (idempotent; safe to run repeatedly). DO NOT skip
-     this; the gate runs `cargo fmt --check` and fails if any
-     file is mis-formatted.
-   - `run_cargo({"command": "clippy"})` -- lint clean. Treat
-     every warning as a `BLOCKER:`-shaped issue and fix it
-     before declaring the milestone complete; the gate runs
-     `cargo clippy -- -D warnings` and fails on ANY warning.
-     Repeated lints across files are coalesced in the tool's
-     output ("12 occurrences across 4 files; sample: ..."), so
-     fix each unique lint once and re-run.
    - `run_cargo({"command": "test"})` -- once smoke / unit
      tests are in place, the elaboration smoke test must pass.
+   `cargo fmt --check` AND `cargo clippy --all-targets -- -D
+   warnings` are run AUTOMATICALLY by the orchestrator AFTER you
+   stop and surfaced to the next critique. Do NOT invoke them
+   yourself; their results are authoritative when the critique
+   sees them. Any FAIL is flagged as a BLOCKER and you'll
+   re-enter the milestone with diagnostics inlined.
    Read the returned stdout / stderr; if there are real errors,
    fix them and re-run. Do NOT guess at build errors from
    source -- always confirm with `run_cargo` output.

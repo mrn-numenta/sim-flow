@@ -460,6 +460,100 @@ fn extract_clippy_diagnostics(stderr: &str) -> Vec<ExtractedClippyDiag> {
     out
 }
 
+/// Combined report from running the post-Work cargo checks
+/// (`cargo fmt --check` + `cargo clippy --all-targets -- -D
+/// warnings`). The orchestrator inlines `render_markdown()` into the
+/// next Critique session so the agent doesn't have to spend tool
+/// turns re-running these and reasoning about the output -- saves
+/// 1-3 LLM dispatches per milestone. Clippy implicitly covers
+/// `cargo build` (it can't lint code that doesn't compile, so a
+/// build failure surfaces as a clippy `error: ...` block).
+#[derive(Debug, Clone)]
+pub struct PostWorkCargoReport {
+    pub fmt_ok: bool,
+    pub fmt_command: String,
+    pub fmt_tail: String,
+    pub clippy_ok: bool,
+    pub clippy_command: String,
+    pub clippy_summary: Option<ClippyDiagSummary>,
+    pub clippy_raw_tail: String,
+}
+
+impl PostWorkCargoReport {
+    pub fn all_clean(&self) -> bool {
+        self.fmt_ok && self.clippy_ok
+    }
+
+    /// Compose the markdown the orchestrator inlines into the
+    /// Critique session input. Header is the same regardless of
+    /// outcome so the Critique can reliably grep for it; the
+    /// PASS / FAIL line per check is the actionable signal.
+    pub fn render_markdown(&self) -> String {
+        let mut out = String::from(
+            "## Orchestrator-side cargo checks (post-Work)\n\n\
+             These ran AFTER the work session's last response and \
+             BEFORE this critique session was launched. Treat them \
+             as authoritative -- the agent's earlier reports of \
+             cargo state in the work transcript may be stale.\n\n",
+        );
+        let fmt_status = if self.fmt_ok { "PASS" } else { "FAIL" };
+        let clippy_status = if self.clippy_ok { "PASS" } else { "FAIL" };
+        out.push_str(&format!("- `{}` -- {}\n", self.fmt_command, fmt_status));
+        out.push_str(&format!(
+            "- `{}` -- {}\n\n",
+            self.clippy_command, clippy_status
+        ));
+        if !self.fmt_ok {
+            out.push_str("### fmt diff (tail)\n\n```\n");
+            out.push_str(self.fmt_tail.trim_end());
+            out.push_str("\n```\n\n");
+        }
+        if !self.clippy_ok {
+            out.push_str("### clippy diagnostics\n\n");
+            if let Some(summary) = &self.clippy_summary {
+                out.push_str(&summary.display);
+            } else {
+                out.push_str("```\n");
+                out.push_str(self.clippy_raw_tail.trim_end());
+                out.push_str("\n```\n");
+            }
+        }
+        out
+    }
+}
+
+/// Run `cargo fmt --all -- --check` followed by `cargo clippy
+/// --all-targets --quiet -- -D warnings` in `project` and bundle the
+/// results. Returns `Ok(None)` when `project` does not contain a
+/// `Cargo.toml` (e.g. early DM steps where no Rust code has landed
+/// yet); the caller treats that as "no checks to surface".
+pub fn run_post_work_cargo(project: &Path) -> Result<Option<PostWorkCargoReport>> {
+    if !project.join("Cargo.toml").exists() {
+        return Ok(None);
+    }
+    let fmt = cargo_fmt(project, true)?;
+    let clippy = cargo_clippy(project)?;
+    let clippy_summary = if clippy.ok() {
+        None
+    } else {
+        summarize_clippy_diagnostics(&clippy.stdout_tail, &clippy.stderr_tail)
+    };
+    Ok(Some(PostWorkCargoReport {
+        fmt_ok: fmt.ok(),
+        fmt_command: fmt.command.clone(),
+        fmt_tail: if fmt.ok() {
+            String::new()
+        } else {
+            // fmt --check writes its diff to stdout
+            fmt.stdout_tail.clone()
+        },
+        clippy_ok: clippy.ok(),
+        clippy_command: clippy.command.clone(),
+        clippy_summary,
+        clippy_raw_tail: clippy.stderr_tail.clone(),
+    }))
+}
+
 fn spawn(project: &Path, cmd: &str, args: &[&str]) -> Result<RunnerOutput> {
     let mut command = Command::new(cmd);
     command.args(args).current_dir(project);
@@ -771,5 +865,83 @@ error: could not compile `proj` (lib) due to 2 previous errors
         // the end of the display so the agent sees the cargo-
         // level outcome.
         assert!(s.display.contains("could not compile"));
+    }
+
+    #[test]
+    fn post_work_report_renders_clean_pass_with_just_status_lines() {
+        let report = PostWorkCargoReport {
+            fmt_ok: true,
+            fmt_command: "cargo fmt --all -- --check".into(),
+            fmt_tail: String::new(),
+            clippy_ok: true,
+            clippy_command: "cargo clippy --all-targets --quiet -- -D warnings".into(),
+            clippy_summary: None,
+            clippy_raw_tail: String::new(),
+        };
+        let md = report.render_markdown();
+        assert!(md.contains("PASS"));
+        assert!(!md.contains("FAIL"));
+        assert!(!md.contains("### fmt diff"));
+        assert!(!md.contains("### clippy diagnostics"));
+    }
+
+    #[test]
+    fn post_work_report_renders_clippy_failure_with_summary_when_available() {
+        let summary = ClippyDiagSummary {
+            diagnostic_count: 1,
+            display: "clippy diagnostics: 1 total, 1 unique.\n\n- warning: foo\n  at src/x.rs:1\n"
+                .into(),
+        };
+        let report = PostWorkCargoReport {
+            fmt_ok: true,
+            fmt_command: "cargo fmt --all -- --check".into(),
+            fmt_tail: String::new(),
+            clippy_ok: false,
+            clippy_command: "cargo clippy --all-targets --quiet -- -D warnings".into(),
+            clippy_summary: Some(summary),
+            clippy_raw_tail: "noise".into(),
+        };
+        let md = report.render_markdown();
+        assert!(md.contains("FAIL"));
+        assert!(md.contains("### clippy diagnostics"));
+        assert!(md.contains("warning: foo"));
+        assert!(!md.contains("noise"));
+    }
+
+    #[test]
+    fn post_work_report_falls_back_to_raw_tail_when_no_clippy_summary() {
+        let report = PostWorkCargoReport {
+            fmt_ok: false,
+            fmt_command: "cargo fmt --all -- --check".into(),
+            fmt_tail: "Diff in src/main.rs at line 1".into(),
+            clippy_ok: false,
+            clippy_command: "cargo clippy --all-targets --quiet -- -D warnings".into(),
+            clippy_summary: None,
+            clippy_raw_tail: "linker error: cannot find -lz".into(),
+        };
+        let md = report.render_markdown();
+        assert!(md.contains("### fmt diff"));
+        assert!(md.contains("Diff in src/main.rs"));
+        assert!(md.contains("### clippy diagnostics"));
+        assert!(md.contains("linker error"));
+    }
+
+    #[test]
+    fn post_work_all_clean_only_true_when_both_pass() {
+        let mut r = PostWorkCargoReport {
+            fmt_ok: true,
+            fmt_command: String::new(),
+            fmt_tail: String::new(),
+            clippy_ok: true,
+            clippy_command: String::new(),
+            clippy_summary: None,
+            clippy_raw_tail: String::new(),
+        };
+        assert!(r.all_clean());
+        r.fmt_ok = false;
+        assert!(!r.all_clean());
+        r.fmt_ok = true;
+        r.clippy_ok = false;
+        assert!(!r.all_clean());
     }
 }

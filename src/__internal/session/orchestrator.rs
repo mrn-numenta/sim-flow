@@ -1624,13 +1624,13 @@ pub fn build_initial_messages(
             attachments: Vec::new(),
         });
     }
-    if let Some(summary) = build_session_inputs(&opts.project_dir, step, opts.kind) {
-        messages.push(LlmMessage {
-            role: LlmRole::System,
-            content: summary,
-            attachments: Vec::new(),
-        });
-    }
+    // Stable-first ordering: project-stable TOCs (spec, framework
+    // API), then per-step stable inputs, then per-milestone /
+    // per-retry volatile inputs. vLLM's KV prefix cache reuses every
+    // token-identical message at the head of the request, so anything
+    // that changes between dispatches (current milestone, prior
+    // critique body) goes LAST so the long stable head stays cached
+    // across milestone advances and critique retries within a step.
     if let Some(toc) = build_spec_toc_message(&opts.project_dir) {
         messages.push(LlmMessage {
             role: LlmRole::System,
@@ -1646,6 +1646,20 @@ pub fn build_initial_messages(
             content: toc,
             attachments: Vec::new(),
         });
+    }
+    if let Some(inputs) = build_session_inputs(&opts.project_dir, step, opts.kind) {
+        messages.push(LlmMessage {
+            role: LlmRole::System,
+            content: inputs.stable,
+            attachments: Vec::new(),
+        });
+        if let Some(volatile) = inputs.volatile {
+            messages.push(LlmMessage {
+                role: LlmRole::System,
+                content: volatile,
+                attachments: Vec::new(),
+            });
+        }
     }
     let opening = initial_user_prompt(step.id, opts.kind, &expected_output_paths(step, opts.kind));
     messages.push(LlmMessage {
@@ -1786,11 +1800,25 @@ fn build_framework_api_toc_message(framework_docs_root: &Path) -> Option<String>
     ))
 }
 
+/// Split form of the per-session inputs message. `stable` is the
+/// preamble + predecessor / work-artifact / plan-index TOC that does
+/// NOT change across milestones or critique retries within a step.
+/// `volatile` is the milestone-scope preamble + current-milestone TOC
+/// entry + inlined critique body -- everything that DOES change. The
+/// caller emits them as TWO separate System messages so vLLM's prefix
+/// cache can reuse the long stable prefix across dispatches; without
+/// the split the volatile tail invalidates the cache from the first
+/// turn onward and the model re-encodes the entire input each time.
+struct SessionInputs {
+    stable: String,
+    volatile: Option<String>,
+}
+
 fn build_session_inputs(
     project_dir: &Path,
     step: &StepDescriptor,
     kind: SessionKind,
-) -> Option<String> {
+) -> Option<SessionInputs> {
     // Predecessors and this step's existing artifacts are listed as
     // a TOC (path + size) -- the agent fetches their content via
     // `read_file` on demand. This avoids burning tokens re-inlining
@@ -1872,17 +1900,27 @@ fn build_session_inputs(
         None => None,
     };
 
-    let mut toc_entries: Vec<TocEntry> = Vec::new();
+    // Two TOC buckets so volatile entries (the current milestone file)
+    // can be emitted in a separate System message after the stable
+    // ones, lengthening the prefix vLLM's KV cache can reuse across
+    // milestone advances and critique retries within a step.
+    let mut stable_toc: Vec<TocEntry> = Vec::new();
+    let mut volatile_toc: Vec<TocEntry> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut consider: Vec<String> = Vec::new();
-    if let (Some(walk), Some(milestone_rel)) = (step.milestone_walk, &milestone_scope) {
+    let mut push_stable = |rel: &str, seen: &mut std::collections::HashSet<String>| {
+        if seen.insert(rel.to_string()) {
+            stable_toc.push(toc_entry_for(project_dir, rel));
+        }
+    };
+    if let Some(walk) = step.milestone_walk {
         // Keep predecessor inputs / work_artifacts that are NOT
         // inside the milestone directory (e.g. docs/spec.md,
         // docs/testbench.md, src/, tests/), drop everything that
         // points at or into walk.dir, then explicitly add the
-        // plan index and the SINGLE current milestone file. The
-        // agent never sees other milestone files exist (beyond
-        // any TOC inside the index).
+        // plan index in the stable bucket. The current milestone
+        // file goes into the volatile bucket below. The agent never
+        // sees other milestone files exist (beyond any TOC inside
+        // the index).
         let walk_dir = walk.dir.trim_end_matches('/');
         let inside_walk = |rel: &str| {
             let r = rel.trim_end_matches('/');
@@ -1890,37 +1928,43 @@ fn build_session_inputs(
         };
         for rel in step.predecessor_inputs {
             if !inside_walk(rel) {
-                consider.push((*rel).to_string());
+                push_stable(rel, &mut seen);
             }
         }
         for rel in step.work_artifacts {
             if !inside_walk(rel) {
-                consider.push((*rel).to_string());
+                push_stable(rel, &mut seen);
             }
         }
-        consider.push(walk.index_file.to_string());
-        consider.push(milestone_rel.clone());
+        push_stable(walk.index_file, &mut seen);
     } else {
-        consider.extend(step.predecessor_inputs.iter().map(|s| (*s).to_string()));
-        consider.extend(step.work_artifacts.iter().map(|s| (*s).to_string()));
-    }
-
-    for rel in consider {
-        if !seen.insert(rel.clone()) {
-            continue;
+        for rel in step.predecessor_inputs {
+            push_stable(rel, &mut seen);
         }
-        toc_entries.push(toc_entry_for(project_dir, &rel));
+        for rel in step.work_artifacts {
+            push_stable(rel, &mut seen);
+        }
     }
-    if inline_critique {
-        seen.insert(critique_rel.clone());
-        toc_entries.push(toc_entry_for(project_dir, &critique_rel));
+    if let Some(milestone_rel) = &milestone_scope
+        && seen.insert(milestone_rel.clone())
+    {
+        volatile_toc.push(toc_entry_for(project_dir, milestone_rel));
+    }
+    // Only TOC the critique file when its body exists. The OLD
+    // build always added a "(not yet on disk)" entry for the
+    // critique file even on a fresh Work session, which both
+    // misled the Work agent into thinking it should write the
+    // critique file AND added a synthetic volatile message that
+    // broke prefix caching across the very first dispatch.
+    if inline_critique && critique_body.is_some() && seen.insert(critique_rel.clone()) {
+        volatile_toc.push(toc_entry_for(project_dir, &critique_rel));
     }
 
-    if toc_entries.is_empty() && !inline_critique {
+    if stable_toc.is_empty() && volatile_toc.is_empty() && !inline_critique {
         return None;
     }
 
-    let mut out = format!(
+    let mut stable = format!(
         "Step `{}` inputs and target artifacts. File entries show path + size; \
          directory entries are expanded one level so you can see what's actually \
          on disk WITHOUT calling `list_dir`. Use `read_file` to fetch file content \
@@ -1928,6 +1972,11 @@ fn build_session_inputs(
          claim a directory is empty unless its expansion below is empty.\n\n",
         step.id
     );
+    for entry in &stable_toc {
+        stable.push_str(&entry.render_block(project_dir));
+    }
+
+    let mut volatile = String::new();
     // Milestone-scope preamble. The agent's prompt already mentions
     // milestone walking, but the orchestrator-injected preamble
     // makes the CURRENT milestone unambiguous and tells the agent
@@ -1939,7 +1988,7 @@ fn build_session_inputs(
             SessionKind::Work => "work",
             SessionKind::Critique => "critique",
         };
-        out.push_str(&format!(
+        volatile.push_str(&format!(
             "**Milestone scope (orchestrator-enforced)**: this {session_label} \
              session targets EXACTLY ONE milestone -- `{milestone_rel}`. The plan \
              index `{}` is also inlined for context. You MUST NOT read or modify \
@@ -1954,15 +2003,15 @@ fn build_session_inputs(
             walk.index_file, walk.file_prefix,
         ));
     }
-    for entry in &toc_entries {
-        out.push_str(&entry.render_block(project_dir));
+    for entry in &volatile_toc {
+        volatile.push_str(&entry.render_block(project_dir));
     }
 
     if inline_critique && let Some(body) = &critique_body {
-        out.push_str("\n---\n\n");
+        volatile.push_str("\n---\n\n");
         if is_critique_retry {
             let blocks = extract_blocker_blocks(body);
-            out.push_str(&format!(
+            volatile.push_str(&format!(
                 "Critique-retry mode. The prior pass flagged the BLOCKER(s) below; \
                  the work session has since re-run. Your task on THIS pass is FOCUSED:\n\n\
                  - For each prior BLOCKER, decide whether the work session's updated \
@@ -1983,13 +2032,13 @@ fn build_session_inputs(
             ));
             const RETRY_BLOCK_CAP: usize = 4_000;
             for (i, block) in blocks.iter().enumerate() {
-                out.push_str(&format!(
+                volatile.push_str(&format!(
                     "#### Prior BLOCKER {} of {}\n\n",
                     i + 1,
                     blocks.len()
                 ));
                 if block.len() <= RETRY_BLOCK_CAP {
-                    out.push_str(block);
+                    volatile.push_str(block);
                 } else {
                     // Surface truncation explicitly so the agent
                     // doesn't silently fix the wrong part of the
@@ -2003,28 +2052,49 @@ fn build_session_inputs(
                         block_bytes = block.len(),
                         cap_bytes = RETRY_BLOCK_CAP,
                     );
-                    out.push_str(&block[..RETRY_BLOCK_CAP]);
-                    out.push_str(&format!(
+                    volatile.push_str(&block[..RETRY_BLOCK_CAP]);
+                    volatile.push_str(&format!(
                         "\n\n... [truncated to {RETRY_BLOCK_CAP} chars; original was {} chars. \
                          The full BLOCKER body is in the prior critique file -- \
                          re-read `{critique_rel}` if you need the tail.]",
                         block.len(),
                     ));
                 }
-                out.push_str("\n\n");
+                volatile.push_str("\n\n");
             }
         } else {
-            out.push_str(
+            volatile.push_str(
                 "Latest critique for this step (inlined because addressing these findings is your immediate task):\n\n",
             );
-            out.push_str(&format!(
+            volatile.push_str(&format!(
                 "### `{critique_rel}`\n\n{}",
                 truncate(body, 16_000),
             ));
         }
     }
 
-    Some(out)
+    // Inline the orchestrator's most recent post-Work cargo report
+    // (fmt-check + clippy) into the Critique session input. Lives at
+    // `.sim-flow/cargo-checks-{step}.md` and gets overwritten each
+    // milestone advance; the Critique now sees authoritative cargo
+    // state instead of guessing from the Work transcript. Skip on
+    // Work sessions -- Work writes the code, then the orchestrator
+    // runs the checks AFTER, so Work has nothing fresh to read.
+    if kind == SessionKind::Critique {
+        let cargo_report_rel = format!(".sim-flow/cargo-checks-{}.md", step.id);
+        let cargo_report_abs = project_dir.join(&cargo_report_rel);
+        if let Ok(report_body) = std::fs::read_to_string(&cargo_report_abs) {
+            volatile.push_str("\n---\n\n");
+            volatile.push_str(&report_body);
+        }
+    }
+
+    let volatile = if volatile.is_empty() {
+        None
+    } else {
+        Some(volatile)
+    };
+    Some(SessionInputs { stable, volatile })
 }
 
 /// Pull each `BLOCKER:` block out of a critique markdown file as a

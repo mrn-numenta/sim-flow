@@ -92,19 +92,22 @@ fn handshake_emits_hello_ack_and_phase_changed() {
             messages, tools, ..
         } => {
             // System (convention + instructions), System (tool catalog),
-            // System (current artifact state — spec.md is "not yet on
-            // disk" for a fresh DM0 init), optional System (framework
-            // API TOC when bundled docs are available), User (opening
-            // prompt).
+            // optional System (framework API TOC when bundled docs are
+            // available), System (stable session inputs -- spec.md is
+            // "not yet on disk" for a fresh DM0 init), User (opening
+            // prompt). Stable / volatile input split is a no-op here
+            // because there's no critique body and DM0 has no
+            // milestone walk, so volatile is empty.
             assert!(messages.len() == 4 || messages.len() == 5);
             assert!(messages[0].content.contains("Artifact-write convention"));
             assert!(messages[1].content.contains("Tool catalog"));
-            assert!(messages[2].content.contains("docs/spec.md"));
-            assert!(messages[2].content.contains("not yet on disk"));
             let opening_idx = messages.len() - 1;
+            let inputs_idx = opening_idx - 1;
+            assert!(messages[inputs_idx].content.contains("docs/spec.md"));
+            assert!(messages[inputs_idx].content.contains("not yet on disk"));
             assert!(messages[opening_idx].content.contains("DM0 work session"));
             if messages.len() == 5 {
-                assert!(messages[3].content.contains("Framework API TOC"));
+                assert!(messages[2].content.contains("Framework API TOC"));
             }
             // Tool catalog also surfaces as a structured field for
             // backends that support native tool-use. Every step now

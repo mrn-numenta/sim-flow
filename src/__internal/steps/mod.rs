@@ -255,6 +255,108 @@ fn milestone_has_checked_row(path: &std::path::Path) -> bool {
     })
 }
 
+/// Per-milestone task-row auto-tick. Walks the current milestone
+/// file, finds every `- [ ]` row whose first backtick-quoted token
+/// matches the `path[::Symbol[::Sub]]` pattern, verifies the file
+/// exists (and the symbol grep-matches if a symbol was named), and
+/// flips the row in place to `- [x]`. Returns the number of rows
+/// flipped. Idempotent and a no-op when the step has no
+/// `milestone_walk` config or the current milestone is `AllResolved`.
+///
+/// Conservative on purpose: a row whose backtick-quoted token does
+/// NOT parse as `path::sym` (e.g. a prose row, or a row that names
+/// only a directory) is left alone. The Critique still does the full
+/// review; this just removes the agent's tick-the-checkbox turn from
+/// the milestone loop.
+pub fn tick_resolved_milestone_tasks(
+    project_dir: &std::path::Path,
+    step: &StepDescriptor,
+) -> usize {
+    let Some(walk) = step.milestone_walk else {
+        return 0;
+    };
+    let CurrentMilestone::File(rel) = find_current_milestone(project_dir, &walk, true) else {
+        return 0;
+    };
+    let path = project_dir.join(&rel);
+    let Ok(body) = std::fs::read_to_string(&path) else {
+        return 0;
+    };
+    let mut flipped = 0usize;
+    let new_body: String = body
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            if !trimmed.starts_with("- [ ]") {
+                return line.to_string();
+            }
+            let after = trimmed.trim_start_matches("- [ ]").trim_start();
+            let Some(token) = first_backtick_token(after) else {
+                return line.to_string();
+            };
+            if !task_artifact_resolved(project_dir, token) {
+                return line.to_string();
+            }
+            flipped += 1;
+            line.replacen("- [ ]", "- [x]", 1)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let new_body = if body.ends_with('\n') && !new_body.ends_with('\n') {
+        format!("{new_body}\n")
+    } else {
+        new_body
+    };
+    if flipped > 0 && std::fs::write(&path, new_body).is_err() {
+        return 0;
+    }
+    flipped
+}
+
+/// Pull the FIRST backtick-quoted token from `s`. Returns the inner
+/// string (without the surrounding backticks) or `None` if no
+/// well-formed token is found.
+fn first_backtick_token(s: &str) -> Option<&str> {
+    let start = s.find('`')?;
+    let rest = &s[start + 1..];
+    let end = rest.find('`')?;
+    Some(&rest[..end])
+}
+
+/// True if `token` parses as `path[::Symbol[::Sub]]` AND the path
+/// exists under `project_dir`, AND -- if a symbol was named -- the
+/// LAST `::`-separated segment grep-matches as a word boundary in the
+/// file. The grep is conservative: it accepts the symbol name in any
+/// position (definition, comment, doc string) because tightening to
+/// `\bfn name\b` / `\bstruct name\b` would miss legitimate variants
+/// (associated methods, trait impls, type aliases) and produce
+/// false-negatives the agent would then have to correct anyway. False
+/// positives are recoverable: the Critique does the full review.
+fn task_artifact_resolved(project_dir: &std::path::Path, token: &str) -> bool {
+    let mut parts = token.splitn(2, "::");
+    let path_str = match parts.next() {
+        Some(p) if !p.is_empty() => p,
+        _ => return false,
+    };
+    let abs = project_dir.join(path_str);
+    if !abs.exists() {
+        return false;
+    }
+    let Some(symbol_chain) = parts.next() else {
+        return true;
+    };
+    let last_symbol = symbol_chain.rsplit("::").next().unwrap_or(symbol_chain);
+    if last_symbol.is_empty() {
+        return false;
+    }
+    let body = match std::fs::read_to_string(&abs) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    body.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .any(|word| word == last_symbol)
+}
+
 /// True iff `path` (project-relative) is covered by one of the
 /// `allowed` prefixes. `/` accepts both `\\` and `/` separators on
 /// the input side so artifact paths that came in via the fenced
@@ -518,5 +620,124 @@ mod write_path_tests {
             CurrentMilestone::File("docs/test-plan/test-milestone-02b-edge-flow.md".into()),
             "split files must walk lexicographically before the next category"
         );
+    }
+
+    fn dm3b_step_with_walk() -> StepDescriptor {
+        StepDescriptor {
+            id: "DM3b",
+            flow: Flow::DirectModeling,
+            prerequisite: None,
+            instruction_slug: "dm3b-testbench-impl",
+            per_candidate: false,
+            gate_checks: Vec::new(),
+            work_artifacts: &["tests/"],
+            predecessor_inputs: &[],
+            work_write_paths: &["tests/"],
+            work_phases: &["chat"],
+            critique_phases: &["chat"],
+            milestone_walk: Some(dm3b_walk()),
+        }
+    }
+
+    #[test]
+    fn auto_tick_flips_pending_rows_when_path_only_artifact_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("docs/test-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(tmp.path().join("tests/testbench")).unwrap();
+        std::fs::write(tmp.path().join("tests/testbench/mod.rs"), "// stub\n").unwrap();
+        write_milestone(
+            &dir,
+            "tb-milestone-01-scoreboard.md",
+            "- [ ] `tests/testbench/mod.rs` -- module root\n",
+        );
+        let step = dm3b_step_with_walk();
+        let flipped = tick_resolved_milestone_tasks(tmp.path(), &step);
+        assert_eq!(flipped, 1);
+        let updated = std::fs::read_to_string(dir.join("tb-milestone-01-scoreboard.md")).unwrap();
+        assert!(updated.contains("- [x] `tests/testbench/mod.rs`"));
+    }
+
+    #[test]
+    fn auto_tick_requires_symbol_match_when_path_carries_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("docs/test-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(tmp.path().join("tests/testbench")).unwrap();
+        std::fs::write(
+            tmp.path().join("tests/testbench/scoreboard.rs"),
+            "pub struct RgbPipelineScoreboard;\n",
+        )
+        .unwrap();
+        write_milestone(
+            &dir,
+            "tb-milestone-01-scoreboard.md",
+            "- [ ] `tests/testbench/scoreboard.rs::RgbPipelineScoreboard`\n\
+             - [ ] `tests/testbench/scoreboard.rs::Missing`\n",
+        );
+        let step = dm3b_step_with_walk();
+        let flipped = tick_resolved_milestone_tasks(tmp.path(), &step);
+        assert_eq!(flipped, 1, "only the row whose symbol exists should flip");
+        let updated = std::fs::read_to_string(dir.join("tb-milestone-01-scoreboard.md")).unwrap();
+        assert!(updated.contains("- [x] `tests/testbench/scoreboard.rs::RgbPipelineScoreboard`"));
+        assert!(updated.contains("- [ ] `tests/testbench/scoreboard.rs::Missing`"));
+    }
+
+    #[test]
+    fn auto_tick_leaves_prose_rows_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("docs/test-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_milestone(
+            &dir,
+            "tb-milestone-01-scoreboard.md",
+            "- [ ] explain the scoreboard pattern in `docs/testbench.md`\n\
+             - [ ] add a paragraph about latency alignment\n",
+        );
+        let step = dm3b_step_with_walk();
+        let flipped = tick_resolved_milestone_tasks(tmp.path(), &step);
+        assert_eq!(flipped, 0);
+    }
+
+    #[test]
+    fn auto_tick_finds_method_by_last_symbol_segment() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("docs/test-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(tmp.path().join("tests/testbench")).unwrap();
+        std::fs::write(
+            tmp.path().join("tests/testbench/scoreboard.rs"),
+            "impl RgbPipelineScoreboard { fn on_input(&mut self) {} }\n",
+        )
+        .unwrap();
+        write_milestone(
+            &dir,
+            "tb-milestone-01-scoreboard.md",
+            "- [ ] `tests/testbench/scoreboard.rs::RgbPipelineScoreboard::on_input`\n",
+        );
+        let step = dm3b_step_with_walk();
+        let flipped = tick_resolved_milestone_tasks(tmp.path(), &step);
+        assert_eq!(flipped, 1);
+    }
+
+    #[test]
+    fn auto_tick_is_no_op_when_step_has_no_milestone_walk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let step = StepDescriptor {
+            id: "DM2a",
+            flow: Flow::DirectModeling,
+            prerequisite: None,
+            instruction_slug: "dm2a-decomposition",
+            per_candidate: false,
+            gate_checks: Vec::new(),
+            work_artifacts: &[],
+            predecessor_inputs: &[],
+            work_write_paths: &[],
+            work_phases: &["chat"],
+            critique_phases: &["chat"],
+            milestone_walk: None,
+        };
+        let flipped = tick_resolved_milestone_tasks(tmp.path(), &step);
+        assert_eq!(flipped, 0);
     }
 }

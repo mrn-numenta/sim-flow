@@ -83,19 +83,15 @@ Reference material (read on demand):
 
 7. **Pre-stop hygiene** (every milestone, but especially when
    any Rust helpers / sweep glue / scratch binaries landed):
-   - `run_cargo({"command": "fmt"})` -- format every Rust file
-     in place. Idempotent; safe to run repeatedly. The gate
-     enforces `cargo fmt --check`.
-   - `run_cargo({"command": "clippy"})` -- lint clean. Treat
-     every warning as a `BLOCKER:`-shaped issue and fix it
-     before stopping; the gate runs `cargo clippy -- -D
-     warnings` and fails on ANY warning. Repeated lints across
-     files are coalesced ("12 occurrences across 4 files;
-     sample: ..."), so fix each unique lint once and re-run.
-   For purely-markdown milestones (no new Rust code), the
-   commands are still cheap idempotent no-ops -- run them so
-   the gate doesn't fail downstream when cumulative reports
-   land.
+   `cargo fmt --check` AND `cargo clippy --all-targets -- -D
+   warnings` are run AUTOMATICALLY by the orchestrator after
+   you stop and surfaced to the next critique. Do NOT invoke
+   them yourself; their results are authoritative when the
+   critique sees them. A FAIL on either gets flagged as a
+   BLOCKER and you'll re-enter the milestone with diagnostics
+   inlined. For purely-markdown milestones (no new Rust code),
+   the orchestrator's checks are cheap idempotent no-ops; you
+   don't need to do anything special.
 
 ## Order, jumping, and deferring
 

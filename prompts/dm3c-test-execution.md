@@ -103,18 +103,16 @@ Do NOT chain milestones.
 
 5. **Verify and stop**. When every `- [ ]` row in the current
    milestone is resolved (`- [x]` done OR `- [-]` deferred with
-   a `- defer reason:` sub-bullet), run a sanity pass:
-   - `run_cargo({"command": "fmt"})` -- format every Rust file
-     in place. Idempotent; safe to run repeatedly. The gate
-     enforces `cargo fmt --check`.
-   - `run_cargo({"command": "clippy"})` -- lint clean. Treat
-     every warning as a `BLOCKER:`-shaped issue and fix it
-     before stopping; the gate runs `cargo clippy -- -D
-     warnings` and fails on ANY warning. Repeated lints across
-     files are coalesced ("12 occurrences across 4 files;
-     sample: ..."), so fix each unique lint once and re-run.
+   a `- defer reason:` sub-bullet):
    - `run_cargo({"command": "test"})` -- the full suite still
      passes (no regression).
+   - `cargo fmt --check` AND `cargo clippy --all-targets -- -D
+     warnings` are run AUTOMATICALLY by the orchestrator after
+     you stop and surfaced to the next critique. Do NOT invoke
+     them yourself; their results are authoritative when the
+     critique sees them. A FAIL on either gets flagged as a
+     BLOCKER and you'll re-enter the milestone with diagnostics
+     inlined.
 
    Then **STOP**. Surface a clear notice:
 

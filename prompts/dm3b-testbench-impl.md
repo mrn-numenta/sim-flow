@@ -103,19 +103,19 @@ Reference material (read on demand):
 
 6. **Verify and stop**. When every `- [ ]` row in the current
    milestone is resolved (`- [x]` done OR `- [-]` deferred with
-   a `- defer reason:` sub-bullet), run a final sanity pass:
-   - `run_cargo({"command": "build"})` -- compiles cleanly.
-   - `run_cargo({"command": "fmt"})` -- format every Rust file
-     in place. Idempotent; safe to run repeatedly. The gate
-     enforces `cargo fmt --check`.
-   - `run_cargo({"command": "clippy"})` -- lint clean. Treat
-     every warning as a `BLOCKER:`-shaped issue and fix it
-     before stopping; the gate runs `cargo clippy -- -D
-     warnings` and fails on ANY warning. Repeated lints across
-     files are coalesced ("12 occurrences across 4 files;
-     sample: ..."), so fix each unique lint once and re-run.
+   a `- defer reason:` sub-bullet):
+   - `run_cargo({"command": "build"})` -- confirm the milestone
+     compiles before you stop. Cheap to run; do NOT skip.
    - On the smoke milestone only:
      `run_cargo({"command": "test"})` -- the smoke test passes.
+   - `cargo fmt --check` AND `cargo clippy --all-targets -- -D
+     warnings` are run AUTOMATICALLY by the orchestrator
+     post-stop and surfaced to the next critique. Do NOT
+     invoke them yourself unless you suspect formatting / lint
+     drift mid-session and want a quick local check; their
+     results are authoritative when the critique sees them.
+     A FAIL on either gets flagged as a BLOCKER and you'll
+     re-enter this milestone with the diagnostics inlined.
 
    Then **STOP**. Surface a clear notice:
 
