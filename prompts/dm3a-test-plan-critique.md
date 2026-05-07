@@ -1,221 +1,115 @@
-# DM3a - Test Plan (critique session)
+# DM3a - Test Plan, Outline (critique session)
 
-You are reviewing the DM3a test plan. Treat it as work produced by
-a third party even if you produced it yourself earlier in this
-conversation -- the independent-review property depends on you
-bracketing any prior reasoning rather than leaning on it. The plan
-is the contract DM3b (testbench implementation) and DM3c (test
-execution + coverage) will execute against; gaps here propagate as
-missing tests or insufficient coverage downstream. Do not modify
-the plan; evaluate it and write the critique file.
+You are reviewing the DM3a test-plan OUTLINE. Treat it as work
+produced by a third party even if you produced it yourself
+earlier. The outline is the contract DM3ad will detail against;
+gaps here propagate as missing or mis-shaped milestones.
 
 ## Inputs
 
-- `docs/impl-plan/plan-management.md` -- plan-file conventions
-  (including the 10-task-per-milestone cap).
-- `docs/test-plan/` -- the plan under review (a directory):
+- `docs/impl-plan/plan-management.md` -- plan-file conventions.
+- `docs/test-plan/` -- the outline under review:
   - `test-plan.md` -- index. Testbench architecture +
-    traceability table + TOCs of milestone files.
-  - `tb-milestone-NN-<name>.md` -- DM3b's per-milestone task
-    lists (testbench impl).
-  - `test-milestone-NN-<name>.md` -- DM3c's per-milestone task
-    lists (test execution).
-  - `coverage.md` -- coverage strategy.
+    traceability + per-milestone scope blurbs + TOCs.
+  - `tb-milestone-NN-<name>.md` -- one stub per testbench
+    milestone (Scope / Components / Trace +
+    `<!-- detail-pending -->` placeholder).
+  - `test-milestone-NN-<name>.md` -- one stub per test-execution
+    milestone (same shape).
+  - `coverage.md` -- coverage strategy (full content, no stub).
 - `docs/spec.md`
 - `docs/targets.md`
-- `docs/testbench.md` -- DM1's verification strategy + named
-  baseline.
+- `docs/testbench.md`
 - `docs/analysis/decomposition.md`
 - `docs/analysis/pipeline-mapping.md`
 - `docs/analysis/data-movement.md`
-- `src/` -- the model under test.
+- `src/`
 
 ## Evaluation
 
-Prefix gate-blocking issues with `BLOCKER:` (DM3b cannot proceed
-until fixed). Prefix informational notes with `UNRESOLVED:`. The
-orchestrator fails the DM3a gate on `BLOCKER:` lines only.
+Prefix gate-blocking issues with `BLOCKER:` (DM3ad cannot
+proceed). Prefix nits with `UNRESOLVED:`. The gate fails on
+`BLOCKER:` lines.
 
-**Finding-marker grammar.** The gate parses lines starting with
-`BLOCKER:` / `RESOLVED:` / `UNRESOLVED:` (case-insensitive,
-plural OK) optionally preceded by list markers (`-`, `*`, `+`,
-`>`), heading markers (`#`+), bold/underline (`**` / `__`), and
-one decoration glyph (e.g. `❌` `✅`). Headings DO match
-(`### BLOCKER: ...`); section titles describing a blocker
-without a colon-after-keyword (e.g. `### BLOCKER 1 - title`)
-do NOT match -- they're prose. Mid-sentence mentions do NOT
-match. ONLY the keyword-colon shape is a finding; pick the form
-deliberately.
+**Finding-marker grammar.** Same as other critiques -- list /
+heading / bold / decoration prefix optional, only
+`<keyword>:` form is recognized.
 
-1. **Directory layout**. Does the plan exist as a directory at
-   `docs/test-plan/` with `test-plan.md` (index), `coverage.md`,
-   at least one `tb-milestone-NN-<name>.md`, and at least one
-   `test-milestone-NN-<name>.md`? Missing categories of file are
-   BLOCKER.
-2. **Milestone numbering**. Within each prefix
-   (`tb-milestone-` and `test-milestone-`), are numbers
-   contiguous starting from `01`? Gaps or duplicates are BLOCKER.
-3. **Milestone size cap (10-task rule)**. Does every
-   `tb-milestone-NN-*.md` and `test-milestone-NN-*.md` file have
-   no more than 10 `- [ ]` rows? A milestone exceeding the cap
-   forces the agent to skim or chain reviews; flag any
-   over-cap milestone as `BLOCKER:` and require splitting along
-   a clear axis (e.g. component-class for testbench, test-axis
-   for execution).
-4. **Testbench design (in `test-plan.md`)**. Does the index
-   describe at least one Sequencer, Driver, Monitor, and
-   Scoreboard? Are payload types and target ports named
-   explicitly? Is the `SimEnvBuilder` wiring described
-   concretely enough that DM3b can implement it without making
-   architectural decisions?
-5. **UVM-lite topology**. Does the testbench architecture honor
-   Sequencer -> Driver -> DUT -> Monitor -> Scoreboard? Does
-   `test-plan.md` cite the named baseline from
-   `docs/testbench.md`'s `## Implementation Baseline` section
-   AND chapters of `lib:docs/modeling-guide/` (especially
-   `04-testing-models.md`)? Reject hand-rolled testbench
-   architectures that bypass UVM-lite without justification.
-6. **Testbench-impl milestones (`tb-milestone-NN-*.md`)**. Do
-   the milestones cover the components named in the index
-   (Sequencers, Drivers, Monitors, Scoreboards, the
-   `SimEnvBuilder` helper, plus the basic data-flow smoke test)?
-   Each row format:
+This critique reviews the OUTLINE, not per-milestone task
+lists. Resist reviewing content that lives in
+`<!-- detail-pending -->` placeholders; flag the ABSENCE of
+one as a `BLOCKER:`, but don't critique missing tasks
+themselves.
 
-   ```markdown
-   - [ ] `tests/testbench/<file>.rs::<symbol>` -- <purpose>;
-     mirrors: `lib:examples/...`; traces to: <ref>
-   ```
-
-   Reject rows that don't name a concrete artifact path or
-   don't trace to the test plan's testbench section. Specifically:
-   - Tasks targeting `tests/testbench.rs` or `tests/tests.rs`
-     (the monolithic single-file layout) -> `BLOCKER:`. DM3b
-     writes scaffolding under `tests/testbench/<file>.rs`
-     (subdirectory + per-concern files).
-   - The basic data-flow smoke task targets
-     `tests/smoke/basic_data_flow.rs::basic_data_flow`, NOT
-     `tests/testbench/<anything>.rs`. The smoke test is a TEST,
-     not scaffolding -> `BLOCKER:` if it's misplaced.
-7. **Test-execution milestones
-   (`test-milestone-NN-*.md`)**. Do the milestones cover all four
-   required categories (smoke, edge, stress, random) PLUS a
-   coverage milestone? Each category maps to one or more
-   consecutive milestones. The mandatory mapping AND the
-   numbering order:
-
-   - `01` -> Smoke -- at least one `test-milestone-01-smoke*.md`
-   - `02` -> Edge -- at least one `test-milestone-02-edge*.md`
-   - `03` -> Stress -- at least one `test-milestone-03-stress*.md`
-   - `04` -> Random -- at least one `test-milestone-04-random*.md`
-   - `05` -> Coverage -- `test-milestone-05-coverage.md`
-
-   The numbering IS the execution order: smoke first, then edge,
-   then stress, then random, then coverage. A milestone file that
-   uses the wrong number for its category (e.g.
-   `test-milestone-02-stress.md` or
-   `test-milestone-04-edge-extra.md`) is `BLOCKER:` -- it would
-   make DM3c walk categories in the wrong order. Quote the
-   offending filename(s) and require renaming.
-
-   A category file that's genuinely N/A for this design (e.g.
-   smoke for purely combinational designs with no flow-control
-   surface) MUST still exist with an explicit `RESOLVED:` line
-   inside it explaining what the category would have covered.
-   Silent omission of any of the five categories is `BLOCKER:`.
-
-   Each test row format names the test AND its destination
-   file (DM3c writes one test per file under `tests/<category>/`):
-
-   ```markdown
-   - [ ] `tests/<category>/<test_name>.rs::<test_name>` --
-     <purpose>; pass criteria: <criteria>; traces to: <ref>
-   ```
-
-   Reject vague pass criteria ("reasonable", "fast", "looks
-   correct"). Reject rows that don't include the
-   `tests/<category>/<test_name>.rs::<test_name>` file path -->
-   DM3c relies on the per-test-per-file layout for review
-   tractability and the 400-line file-size cap.
-
-   **Category-mixing rule**: a milestone file MUST cover exactly
-   one category. A single file holding both smoke and edge rows
-   (or any other mixture) is `BLOCKER:` because the
-   per-milestone critique pattern depends on each milestone
-   slicing one category cleanly.
-
-   **Split-file naming rule**: when a category exceeds the
-   10-task cap, the splits use a letter suffix on NN and an axis
-   tag on the name (`test-milestone-02a-edge-arithmetic.md`,
-   `test-milestone-02b-edge-flow-control.md`). Letters
-   contiguous from `a`. A category split into multiple files
-   without the letter suffix scheme is `BLOCKER:`; the splits
-   must walk lexicographically before the next category starts.
-8. **Smoke coverage (smoke milestone)**. Are the required smoke
-   tests present (elaboration, basic data flow, plus
-   backpressure / idle if the design has flow-control)? Pure
-   combinational designs may RESOLVE the missing categories.
-9. **Edge coverage (edge milestone(s))**. Is there at least one
-   edge test per non-trivial operation in `decomposition.md`?
-   Are obvious boundaries (zero / max / min / saturation, empty /
-   full buffers, single-element transit, reset mid-traffic)
-   covered?
-10. **Stress coverage (stress milestone(s))**. Does it exercise
-    every target in `docs/targets.md`? Are run lengths concrete
-    (1000+ cycles, named iteration counts) rather than vague
-    ("for a while")?
-11. **Random coverage (random milestone(s))**. Does each random
-    test pin a seed in its name (`<test>_seed_<N>`) for
-    reproducibility? Is there at least one random test per
-    Sequencer plus a seed-sweep "soak" entry?
-12. **Coverage strategy (`coverage.md`)**. Did the work session
-    use the copy-then-fill template (`coverage.md.tmpl`)? The
-    file MUST contain ALL FIVE required headings -- `## Tool`,
-    `## Threshold`, `## Exclusions`, `## Run Command`,
-    `## Report Output` (or `## Report Path`) -- and each must
-    have concrete content, not placeholder prose. A `coverage.md`
-    that's structurally missing any of these sections is
-    `BLOCKER:` -- the template's structure is the contract DM3c
-    reads. Specific checks within each section:
-    - `## Tool`: names `cargo-tarpaulin`.
-    - `## Threshold`: declares a numeric percentage (default
-      90%); a non-default value needs an in-prose rationale.
-    - `## Exclusions`: lists each excluded file with a
-      one-sentence prose reason. An empty section, or a section
-      that just gives a list with no rationales, is `BLOCKER:`.
-    - `## Run Command`: contains a `cargo tarpaulin ...`
-      command inside a CLOSED triple-backtick code fence. An
-      unclosed fence is `BLOCKER:` (it breaks the markdown
-      parse and signals a truncated response).
-    - `## Report Output` (or `## Report Path`): names a
-      specific FILE (e.g. `target/coverage/lcov.info`), not
-      just a directory.
-
-    Reject "we'll figure out coverage later".
-13. **Coverage milestone (`test-milestone-NN-coverage.md` or
-    similar)**. Does the final test-execution milestone walk
-    `coverage.md`'s run command, record the measured percentage
-    in `test-plan.md`'s `## Coverage` section, and address any
-    uncovered lines? This milestone is what closes DM3c.
-14. **Traceability (in `test-plan.md`)**. Does every requirement
-    in `docs/spec.md` map to at least one task row in some
-    milestone (quoting the requirement and naming
-    `<milestone-file>::<task>`)? Does every target in
-    `docs/targets.md` map to at least one row in a stress
-    milestone? Does every operation in `decomposition.md` map to
-    at least one row across smoke / edge milestones? Reject vague
-    mappings ("covered by overall flow"); each link must name a
-    specific task in a specific milestone file.
-15. **Template hygiene**. Do any files still contain placeholder
-    template text or empty sections that hide missing
-    information rather than stating something concrete or
-    explicitly saying "not applicable"?
-16. **Scope**. Does the plan stay out of test-code territory?
-    Each file should describe WHAT and HOW MUCH, not HOW each
-    test is implemented. Reject embedded code snippets,
-    `#[test]` annotations, or implementation pseudocode.
+1. **Directory layout**. Does `docs/test-plan/` exist with
+   `test-plan.md`, `coverage.md`, plus at least one
+   `tb-milestone-NN-*.md` stub and one `test-milestone-NN-*.md`
+   stub?
+2. **Index file** (`test-plan.md`):
+   - Has a verification-strategy overview.
+   - Has a testbench architecture summary naming Sequencers /
+     Drivers / Monitors / Scoreboards.
+   - Has TWO TOCs: one for `tb-milestone-*.md` files, one for
+     `test-milestone-*.md` files. Each TOC entry has a 1-2
+     sentence scope blurb.
+   - Has a `## Traceability` section linking each spec
+     requirement / target / decomposition operation to a
+     SPECIFIC milestone file (not a specific test name -- that's
+     DM3ad's level of detail). Vague mappings ("covered by
+     overall flow") = `BLOCKER:`.
+3. **Stub structure** (every `tb-milestone-*.md` and
+   `test-milestone-*.md`):
+   - Contains the literal `<!-- detail-pending -->` marker.
+     Missing marker = `BLOCKER:` (DM3ad's gate keys on it).
+   - Has Scope, Components/Tests, Trace sections.
+   - Scope blurb names the milestone's slice and acceptance
+     criterion (NOT a task list -- that's the detail step's
+     job).
+   - Trace section points at SPECIFIC entries in spec.md /
+     targets.md / decomposition.md / testbench.md. Vague trace
+     = `UNRESOLVED:`; missing trace entirely = `BLOCKER:`.
+4. **Milestone breakdown -- testbench (`tb-milestone-*.md`)**:
+   - Numbers contiguous (`01`, `02`, ...).
+   - Covers payloads, Sequencers, Drivers, Monitors,
+     Scoreboards, SimEnvBuilder, smoke test (in some
+     reasonable grouping).
+5. **Milestone breakdown -- test execution
+   (`test-milestone-*.md`)**:
+   - Order is fixed: `smoke (01) -> edge (02) -> stress (03) ->
+     random (04) -> coverage (05)`. Lexicographic filename
+     order MUST match this order. Reordering or interleaving =
+     `BLOCKER:`.
+   - All four mandatory categories present (smoke / edge /
+     stress / random) plus coverage. Skipping a category =
+     `BLOCKER:` even if the design is small. For combinational
+     designs without flow-control, the smoke milestone may
+     include a one-line `RESOLVED: design has no flow-control
+     surface, ...` note in its Scope.
+   - Split-category files use letter suffix (`02a-edge-x`,
+     `02b-edge-y`) and an axis tag in the name. Documented
+     splits = OK; un-documented = `UNRESOLVED:`.
+   - One milestone file never mixes categories. Mixing =
+     `BLOCKER:`.
+6. **Coverage strategy** (`coverage.md`):
+   - Names `cargo-tarpaulin` as the tool.
+   - States a numeric line-coverage threshold (90% expected;
+     other values need prose justification).
+   - Has Exclusions / Run Command / Report Output sections.
+   - Run Command is in a CLOSED triple-backtick code fence.
+7. **Stub leakage**: does ANY stub leak per-task content
+   (concrete `- [ ]` rows, specific test bodies, algorithm
+   details) into its Scope or Trace? That's the detail step's
+   job; stubs describe WHAT, not specific HOW. Flag offending
+   lines as `BLOCKER:`.
+8. **Pre-empting DM3b/DM3c**: does any stub or the index
+   prescribe internal Foundation helpers / specific framework
+   APIs the implementer should use? The plan describes WHAT
+   will be tested and how it MAPS to spec; HOW each test is
+   implemented is DM3b/DM3c's concern. Mark `BLOCKER:` for
+   prescription.
 
 ## Output
 
-Write `docs/critiques/DM3a-critique.md`. Free-form markdown body;
-only line-prefix tokens (`BLOCKER:`, `UNRESOLVED:`, `RESOLVED:`)
-are inspected by the gate.
+Write `docs/critiques/DM3a-critique.md`. Free-form markdown
+body; only line-prefix tokens (`BLOCKER:`, `UNRESOLVED:`,
+`RESOLVED:`) are inspected.

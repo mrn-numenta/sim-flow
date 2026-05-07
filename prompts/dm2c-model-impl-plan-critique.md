@@ -1,18 +1,21 @@
-# DM2c - Implementation Plan (critique session)
+# DM2c - Implementation Plan, Outline (critique session)
 
-You are reviewing the DM2c implementation plan. Treat it as work
-produced by a third party even if you produced it yourself earlier
-in this conversation -- the independent-review property depends on
-you bracketing any prior reasoning rather than leaning on it. The
-plan is the contract DM2d will execute against; gaps here
-propagate forward as missing code or thrash during implementation.
-Do not modify the plan; evaluate it and write the critique file.
+You are reviewing the DM2c implementation-plan OUTLINE. Treat it
+as work produced by a third party even if you produced it
+yourself earlier -- the independent-review property depends on
+you bracketing any prior reasoning. The outline is the contract
+DM2cd will detail against; gaps here propagate forward as
+missing or mis-shaped milestones. Do not modify the plan;
+evaluate it and write the critique file.
 
 ## Inputs
 
 - `docs/impl-plan/plan-management.md` -- plan-file conventions.
-- `docs/impl-plan/plan.md` -- plan index + TOC.
-- `docs/impl-plan/milestone-*.md` -- per-milestone task lists.
+- `docs/impl-plan/plan.md` -- plan index + per-milestone scope
+  blurbs.
+- `docs/impl-plan/milestone-*.md` -- one stub file per
+  milestone (Scope / Dependencies / Trace +
+  `<!-- detail-pending -->` placeholder).
 - `docs/spec.md`
 - `docs/targets.md`
 - `docs/testbench.md`
@@ -22,80 +25,75 @@ Do not modify the plan; evaluate it and write the critique file.
 
 ## Evaluation
 
-Prefix gate-blocking issues with `BLOCKER:` (DM2d cannot proceed
-until fixed). Prefix informational notes -- nits, follow-up
-questions, things DM2d can work around -- with `UNRESOLVED:`. The
-orchestrator fails the DM2c gate on `BLOCKER:` lines only.
+Prefix gate-blocking issues with `BLOCKER:` (DM2cd cannot
+proceed until fixed). Prefix informational notes -- nits,
+follow-up questions, things downstream can work around -- with
+`UNRESOLVED:`. The orchestrator fails the DM2c gate on
+`BLOCKER:` lines only.
 
 **Finding-marker grammar.** The gate parses lines starting with
 `BLOCKER:` / `RESOLVED:` / `UNRESOLVED:` (case-insensitive,
 plural OK) optionally preceded by list markers (`-`, `*`, `+`,
 `>`), heading markers (`#`+), bold/underline (`**` / `__`), and
-one decoration glyph (e.g. `❌` `✅`). Headings DO match
-(`### BLOCKER: ...`); section titles describing a blocker
-without a colon-after-keyword (e.g. `### BLOCKER 1 - title`)
-do NOT match -- they're prose. Mid-sentence mentions do NOT
-match. ONLY the keyword-colon shape is a finding; pick the form
-deliberately.
+one decoration glyph. Headings DO match (`### BLOCKER: ...`);
+section titles describing a blocker without a colon-after-keyword
+do NOT match. ONLY the keyword-colon shape is a finding.
 
-1. Does `docs/impl-plan/plan.md` follow the conventions in
-   `plan-management.md`? Is there an overview and a TOC pointing at
-   each milestone file?
-2. Are milestones named `Milestone NN: <description>` and saved as
-   `milestone-NN-<name>.md`? Are the numbers contiguous?
-3. Is every task a `[ ]`-prefixed bullet that names a concrete
-   artifact (file path, module name, payload struct name)? Reject
-   vague tasks like "implement the pipeline" or "write tests".
-4. Does every operation in `decomposition.md` map to at least one
-   task? Quote the operation name and the task that covers it.
-5. Does every payload in `data-movement.md` map to at least one
-   task that produces or consumes it?
-6. Is the milestone ordering correct -- payload types before
-   modules, skeletons + connectivity before per-stage logic, logic
-   before its tests? Flag tasks whose dependencies live in later
-   milestones.
-7. Does the plan cover the elaboration smoke test, the basic
-   data-flow smoke test, AND any flow-control / idle-cycle tests
-   **explicitly required by `docs/testbench.md`** for this design?
-   When the design is purely combinational with no ready/valid or
-   stall semantics, the absence of backpressure / idle-cycle tests
-   is **RESOLVED**, not BLOCKER, provided the plan contains a
-   one-line note acknowledging the choice (e.g. "design has no
-   flow-control surface, backpressure / idle tests do not apply").
-   Per-module unit tests should cover at least one representative
-   input per non-trivial module.
-8. Does the plan account for target-sensitive and verification-sensitive
-   implementation concerns from `docs/targets.md` and `docs/testbench.md`
-   where they materially affect DM2d structure, without turning DM2c
-   into a full DM3 verification-plan step? When `docs/testbench.md`
-   names internal signals to observe, does the plan list the signals
-   AND the modules that expose them (without prescribing the
-   framework mechanism -- naming `SignalTrace` / `test-only port` /
-   etc. is a NIT, not a BLOCKER)?
-9. Does the plan stay within DM2d scope? Reject tasks that pre-empt
-   DM3 (directed verification suites, coverage targets,
-   scoreboards, randomized stimulus).
-10. Does the plan describe WHAT will be built and IN WHAT ORDER,
-   without prescribing the algorithm inside each module's
-   `evaluate()`? Tasks may name the function and the module file;
-   they MUST NOT include shift-and-mask recipes, intermediate
-   variable names, packing-format choices, or loop-vs-vectorized
-   decisions. Acceptable: `Implement evaluate() in
-   src/model/avg_stage.rs (consumes pixel_in_a + pixel_in_b,
-   produces averaged_pixel).` Unacceptable: `Compute per-channel
-   average: (a.r + b.r) >> 1, similarly for g, b, a / Pack the
-   result into a u32...`. Flag the latter as BLOCKER and quote the
-   offending lines.
-11. Are open decisions (data types, buffer depths, fanouts not
-    pinned by analysis) surfaced as explicit `DECIDE:` (or `OPEN:`
-    for DM3-bound items) tasks with the format
-    `- [ ] DECIDE: <question> -- options: <A | B>; default: <pick>;
-    rationale: <one line>`? Decisions buried as parenthetical
-    asides inside other tasks (e.g. `(u32 or PixelRGBA?)`) are
-    BLOCKER -- name the offending lines.
+This critique reviews the OUTLINE, not the per-milestone task
+lists -- those are DM2cd's responsibility. Resist reviewing
+content that lives in `<!-- detail-pending -->` placeholders;
+flag the ABSENCE of one as a `BLOCKER:` (the gate keys on it),
+but don't critique the missing tasks themselves.
+
+1. Does `docs/impl-plan/plan.md` follow `plan-management.md`?
+   Is there a design summary, a TOC pointing at every
+   `milestone-NN-*.md` stub, and a 1-2 sentence scope blurb
+   per milestone in the index?
+2. Are milestones named `Milestone NN: <description>` in
+   `milestone-NN-<name>.md`? Are the numbers contiguous (no
+   gaps, no duplicates)? Is the directory order lexicographic?
+3. Does each stub file contain Scope / Dependencies / Trace
+   sections + the literal comment marker
+   `<!-- detail-pending -->`? Missing marker = `BLOCKER:` (the
+   orchestrator's detail-step gate keys on it).
+4. Does each stub's Scope blurb name a coherent slice of work
+   with a clear acceptance criterion (NOT a task list)? A scope
+   that just lists files is a `BLOCKER:`; a scope that says
+   "compile passes" without naming what's being compiled is a
+   `BLOCKER:`.
+5. Does each stub's Dependencies section list the predecessor
+   milestones AND the predecessor input docs the detail step
+   needs? Missing predecessors = `BLOCKER:`.
+6. Does each stub's Trace section point at SPECIFIC entries in
+   `decomposition.md` / `data-movement.md` /
+   `pipeline-mapping.md` / `testbench.md`? Vague trace ("see
+   decomposition.md") = `UNRESOLVED:`; missing trace entirely
+   for a milestone = `BLOCKER:`.
+7. Does every operation in `decomposition.md` and every payload
+   in `data-movement.md` map to at least one milestone (via
+   some stub's Trace section)? Quote any unmapped operation /
+   payload.
+8. Is the milestone ordering correct? Payload types before
+   modules that use them, skeletons + connectivity before
+   per-stage logic, logic before its tests. Flag any milestone
+   whose Dependencies list a successor milestone.
+9. Does the outline cover the elaboration smoke test, basic
+   data-flow smoke test, AND any flow-control / idle-cycle
+   tests **explicitly required by `docs/testbench.md`**? When
+   the design has no flow-control surface, the absence of
+   backpressure / idle tests is `RESOLVED:` provided some stub
+   has a one-line note acknowledging the choice.
+10. Does the outline stay within DM2d scope? A stub that
+    pre-empts DM3 (directed verification suites, coverage
+    targets, scoreboards, randomized stimulus) is `BLOCKER:`.
+11. Does ANY stub file leak per-task content (concrete `- [ ]`
+    rows, algorithm details, shift-and-mask recipes) into its
+    Scope or Trace section? That's the detail step's job;
+    stubs should describe WHAT, not HOW. Flag offending lines
+    as `BLOCKER:` -- they pre-empt DM2cd.
 
 ## Output
 
-Write `docs/critiques/DM2c-critique.md`. Free-form markdown body;
-only line-prefix tokens (`BLOCKER:`, `UNRESOLVED:`, `RESOLVED:`)
-are inspected by the gate.
+Write `docs/critiques/DM2c-critique.md`. Free-form markdown
+body; only line-prefix tokens (`BLOCKER:`, `UNRESOLVED:`,
+`RESOLVED:`) are inspected by the gate.

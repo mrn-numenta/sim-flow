@@ -84,15 +84,34 @@ pub struct MilestoneWalkConfig {
     /// Project-relative directory holding the milestone files.
     /// Must end in `/`. Example: `"docs/test-plan/"`.
     pub dir: &'static str,
-    /// Filename prefix (before the `NN-...` suffix) that
-    /// identifies milestone files in `dir`. Example:
-    /// `"tb-milestone-"` for DM3b, `"test-milestone-"` for DM3c.
-    pub file_prefix: &'static str,
+    /// Filename prefixes (before the `NN-...` suffix) that identify
+    /// milestone files in `dir`. Most steps use one prefix
+    /// (`"tb-milestone-"` for DM3b, `"test-milestone-"` for DM3c);
+    /// DM3a-detail walks BOTH `tb-milestone-` and `test-milestone-`
+    /// in one step because each tb / test category is small enough
+    /// to share a critique loop. The walker treats every matching
+    /// file as a milestone, walking lexicographically across all
+    /// prefixes (so `tb-milestone-01-*.md` comes before
+    /// `test-milestone-01-*.md` if both prefixes are present).
+    pub file_prefixes: &'static [&'static str],
     /// Project-relative path of the plan-index file that lives
     /// alongside the milestone files. Always inlined in the
     /// session inputs so the agent can see the TOC, traceability,
     /// etc. Example: `"docs/test-plan/test-plan.md"`.
     pub index_file: &'static str,
+    /// Optional placeholder-mode marker. When `Some(s)`, a milestone
+    /// is "pending" iff its body contains `s`, "resolved" iff it
+    /// doesn't. Used by the planning detail steps (DM2cd / DM3ad /
+    /// DM4ad), which walk milestone-NN-*.md stub files written by
+    /// the outline step (DM2c / DM3a / DM4a) and replace the stub
+    /// with a full task list. Without this mode the gate would see
+    /// fresh `- [ ]` rows (the planned tasks for the downstream
+    /// execution step) and never advance.
+    ///
+    /// When `None`, the walker uses the default execution-step
+    /// semantics: pending iff the file has at least one `- [ ]`
+    /// row, resolved iff every row is `- [x]` / `- [-]`.
+    pub placeholder_marker: Option<&'static str>,
 }
 
 /// Allowed write-path prefixes for the given (step, kind). Work
@@ -135,25 +154,36 @@ pub enum CurrentMilestone {
 
 /// Find the milestone file the next session should target.
 ///
-/// Modes:
-/// - **Fresh / advance** (`prior_critique_has_blockers = false`):
-///   return the FIRST milestone file (lexicographic order) that
-///   has at least one open `- [ ]` row. This is the "no retry,
-///   move forward" path.
-/// - **Retry** (`prior_critique_has_blockers = true`): return the
-///   HIGHEST-NUMBERED milestone file that already has at least
-///   one `- [x]` row (i.e., the agent's most recent target).
-///   The critique flagged BLOCKERs about that milestone and the
-///   retry must address THE SAME milestone, not jump ahead --
-///   even if the agent prematurely flipped its rows to `- [x]`.
-///   Falls back to the first-pending behavior if no `- [x]` rows
-///   exist anywhere (no work has actually started).
+/// Modes (cross-cutting with `MilestoneWalkConfig::placeholder_marker`):
 ///
-/// Filenames are matched case-sensitively against
-/// `<file_prefix><digits>...md`. The lexicographic sort over the
-/// matching subset gives the natural numeric order as long as
-/// callers pad NN to two digits (`01`, `02`, ...), which the
-/// prompts and `plan-management.md` enforce.
+/// **Execution mode** (placeholder_marker = None) -- DM2d / DM3b /
+/// DM3c / DM4b walk over milestone files filling in code:
+/// - **Fresh / advance** (`prior_critique_has_blockers = false`):
+///   return the FIRST milestone file with at least one open `- [ ]`
+///   row.
+/// - **Retry** (`prior_critique_has_blockers = true`): return the
+///   HIGHEST-NUMBERED milestone file with at least one `- [x]` row
+///   (i.e., the agent's most recent target). Even if the agent
+///   prematurely flipped its rows to `- [x]`, the retry stays on
+///   THE SAME milestone the critique fired on. Falls back to
+///   first-pending if no `- [x]` rows exist anywhere.
+///
+/// **Planning-detail mode** (placeholder_marker = Some(s)) --
+/// DM2cd / DM3ad / DM4ad walk over stub milestone files written by
+/// the outline step and replace the stub with a real task list:
+/// - **Fresh / advance**: return the FIRST milestone file whose
+///   body still contains the placeholder.
+/// - **Retry**: return the HIGHEST-NUMBERED milestone whose
+///   placeholder has been removed (= the agent has detailed it; the
+///   critique fired on that milestone). Falls back to
+///   first-pending if no milestone has been detailed yet.
+///
+/// Filenames are matched case-sensitively against any
+/// `<prefix><digits>...md` for `<prefix>` in `walk.file_prefixes`.
+/// The lexicographic sort over the matching subset gives the
+/// natural numeric order as long as callers pad NN to two digits
+/// (`01`, `02`, ...), which the prompts and `plan-management.md`
+/// enforce.
 pub fn find_current_milestone(
     project_dir: &std::path::Path,
     walk: &MilestoneWalkConfig,
@@ -170,13 +200,16 @@ pub fn find_current_milestone(
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        if !name.starts_with(walk.file_prefix) || !name.ends_with(".md") {
+        if !name.ends_with(".md") {
             continue;
         }
+        let Some(prefix) = walk.file_prefixes.iter().find(|p| name.starts_with(**p)) else {
+            continue;
+        };
         // Skip the prefix and require a digit-prefixed remainder
         // so `plan.md` / `plan-management.md` etc. don't sneak in
-        // when the file_prefix is short.
-        let rest = &name[walk.file_prefix.len()..];
+        // when the prefix is short.
+        let rest = &name[prefix.len()..];
         if !rest
             .chars()
             .next()
@@ -192,42 +225,65 @@ pub fn find_current_milestone(
     }
     files.sort_by(|a, b| a.0.cmp(&b.0));
 
+    let join_rel = |name: &str| {
+        format!(
+            "{}{}",
+            if walk.dir.ends_with('/') {
+                walk.dir.to_string()
+            } else {
+                format!("{}/", walk.dir)
+            },
+            name
+        )
+    };
+
     if prior_critique_has_blockers {
-        // Retry mode: highest-numbered milestone with at least
-        // one `- [x]` row.
+        // Retry: highest-numbered milestone the agent has touched.
         for (name, path) in files.iter().rev() {
-            if milestone_has_checked_row(path) {
-                let rel = format!(
-                    "{}{}",
-                    if walk.dir.ends_with('/') {
-                        walk.dir.to_string()
-                    } else {
-                        format!("{}/", walk.dir)
-                    },
-                    name
-                );
-                return CurrentMilestone::File(rel);
+            if milestone_is_touched(walk, path) {
+                return CurrentMilestone::File(join_rel(name));
             }
         }
-        // No `- [x]` anywhere yet: fall through to first-pending.
+        // Nothing touched yet: fall through to first-pending.
     }
 
-    // Fresh / advance: first milestone with at least one `- [ ]`.
     for (name, path) in &files {
-        if milestone_has_pending_row(path) {
-            let rel = format!(
-                "{}{}",
-                if walk.dir.ends_with('/') {
-                    walk.dir.to_string()
-                } else {
-                    format!("{}/", walk.dir)
-                },
-                name
-            );
-            return CurrentMilestone::File(rel);
+        if milestone_is_pending(walk, path) {
+            return CurrentMilestone::File(join_rel(name));
         }
     }
     CurrentMilestone::AllResolved
+}
+
+/// "Pending" means the agent still has work to do on this milestone.
+/// In execution mode that's a `- [ ]` row; in planning-detail mode
+/// that's the placeholder marker still present in the body.
+fn milestone_is_pending(walk: &MilestoneWalkConfig, path: &std::path::Path) -> bool {
+    match walk.placeholder_marker {
+        Some(marker) => milestone_body_contains(path, marker),
+        None => milestone_has_pending_row(path),
+    }
+}
+
+/// "Touched" means the agent has done at least some work on this
+/// milestone -- used as the retry-target picker so a critique
+/// re-runs the milestone the agent JUST attempted, not whichever
+/// one is next pending. In execution mode that's a `- [x]` row
+/// (the agent ticked at least one task); in planning-detail mode
+/// that's the placeholder having been removed (the agent replaced
+/// the stub with real content).
+fn milestone_is_touched(walk: &MilestoneWalkConfig, path: &std::path::Path) -> bool {
+    match walk.placeholder_marker {
+        Some(marker) => !milestone_body_contains(path, marker),
+        None => milestone_has_checked_row(path),
+    }
+}
+
+fn milestone_body_contains(path: &std::path::Path, needle: &str) -> bool {
+    match std::fs::read_to_string(path) {
+        Ok(body) => body.contains(needle),
+        Err(_) => false,
+    }
 }
 
 /// True iff the file at `path` contains at least one line whose
@@ -491,8 +547,9 @@ mod write_path_tests {
     fn dm3b_walk() -> MilestoneWalkConfig {
         MilestoneWalkConfig {
             dir: "docs/test-plan/",
-            file_prefix: "tb-milestone-",
+            file_prefixes: &["tb-milestone-"],
             index_file: "docs/test-plan/test-plan.md",
+            placeholder_marker: None,
         }
     }
 
@@ -611,8 +668,9 @@ mod write_path_tests {
         write_milestone(&dir, "test-milestone-03-stress.md", "- [ ] later\n");
         let walk = MilestoneWalkConfig {
             dir: "docs/test-plan/",
-            file_prefix: "test-milestone-",
+            file_prefixes: &["test-milestone-"],
             index_file: "docs/test-plan/test-plan.md",
+            placeholder_marker: None,
         };
         let result = find_current_milestone(tmp.path(), &walk, false);
         assert_eq!(
@@ -739,5 +797,131 @@ mod write_path_tests {
         };
         let flipped = tick_resolved_milestone_tasks(tmp.path(), &step);
         assert_eq!(flipped, 0);
+    }
+
+    fn placeholder_walk() -> MilestoneWalkConfig {
+        MilestoneWalkConfig {
+            dir: "docs/impl-plan/",
+            file_prefixes: &["milestone-"],
+            index_file: "docs/impl-plan/plan.md",
+            placeholder_marker: Some("<!-- detail-pending -->"),
+        }
+    }
+
+    #[test]
+    fn find_current_milestone_placeholder_mode_picks_first_with_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("docs/impl-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        // milestone-01 already detailed (placeholder gone, real
+        // tasks landed); milestone-02 still a stub.
+        write_milestone(
+            &dir,
+            "milestone-01-payloads.md",
+            "# Milestone 01\n## Tasks\n- [ ] real task\n",
+        );
+        write_milestone(
+            &dir,
+            "milestone-02-skeletons.md",
+            "# Milestone 02\n## Tasks\n<!-- detail-pending -->\n",
+        );
+        let walk = placeholder_walk();
+        let result = find_current_milestone(tmp.path(), &walk, false);
+        assert_eq!(
+            result,
+            CurrentMilestone::File("docs/impl-plan/milestone-02-skeletons.md".into()),
+            "should target the first stub still carrying the placeholder"
+        );
+    }
+
+    #[test]
+    fn find_current_milestone_placeholder_retry_picks_highest_detailed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("docs/impl-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_milestone(
+            &dir,
+            "milestone-01-payloads.md",
+            "# Milestone 01\n## Tasks\n- [ ] real task\n",
+        );
+        write_milestone(
+            &dir,
+            "milestone-02-skeletons.md",
+            "# Milestone 02\n## Tasks\n- [ ] another\n",
+        );
+        write_milestone(
+            &dir,
+            "milestone-03-stages.md",
+            "# Milestone 03\n## Tasks\n<!-- detail-pending -->\n",
+        );
+        let walk = placeholder_walk();
+        // Retry mode: critique fired on the milestone JUST detailed.
+        // The highest-numbered detailed milestone is 02, so we
+        // re-target it.
+        let result = find_current_milestone(tmp.path(), &walk, true);
+        assert_eq!(
+            result,
+            CurrentMilestone::File("docs/impl-plan/milestone-02-skeletons.md".into()),
+            "retry should target highest-numbered milestone whose placeholder is gone"
+        );
+    }
+
+    #[test]
+    fn find_current_milestone_placeholder_all_resolved_when_no_marker_anywhere() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("docs/impl-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_milestone(
+            &dir,
+            "milestone-01-payloads.md",
+            "# Milestone 01\n## Tasks\n- [ ] task\n",
+        );
+        write_milestone(
+            &dir,
+            "milestone-02-skeletons.md",
+            "# Milestone 02\n## Tasks\n- [ ] task\n",
+        );
+        let walk = placeholder_walk();
+        let result = find_current_milestone(tmp.path(), &walk, false);
+        assert_eq!(result, CurrentMilestone::AllResolved);
+    }
+
+    #[test]
+    fn find_current_milestone_walks_multiple_prefixes() {
+        // DM3ad walks tb-milestone-* and test-milestone-* in the
+        // same directory; lexicographic order means tb-* comes
+        // first, then test-*. The first stub with placeholder is
+        // tb-milestone-02, since tb-milestone-01 is already
+        // detailed.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("docs/test-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_milestone(
+            &dir,
+            "tb-milestone-01-payloads.md",
+            "# tb-01\n## Tasks\n- [ ] real\n",
+        );
+        write_milestone(
+            &dir,
+            "tb-milestone-02-drivers.md",
+            "# tb-02\n## Tasks\n<!-- detail-pending -->\n",
+        );
+        write_milestone(
+            &dir,
+            "test-milestone-01-smoke.md",
+            "# test-01\n## Tasks\n<!-- detail-pending -->\n",
+        );
+        let walk = MilestoneWalkConfig {
+            dir: "docs/test-plan/",
+            file_prefixes: &["tb-milestone-", "test-milestone-"],
+            index_file: "docs/test-plan/test-plan.md",
+            placeholder_marker: Some("<!-- detail-pending -->"),
+        };
+        let result = find_current_milestone(tmp.path(), &walk, false);
+        assert_eq!(
+            result,
+            CurrentMilestone::File("docs/test-plan/tb-milestone-02-drivers.md".into()),
+            "lexicographic order across both prefixes; tb-* sorts before test-*"
+        );
     }
 }

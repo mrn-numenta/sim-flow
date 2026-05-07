@@ -1026,7 +1026,7 @@ struct GateCheckOut<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pattern: Option<&'a str>,
+    pattern: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cmd: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1053,7 +1053,7 @@ fn gate_check_to_out(check: &sim_flow::__internal::gate::GateCheck) -> GateCheck
             kind: "file-matches",
             description,
             path: Some(path.display().to_string()),
-            pattern: Some(pattern.as_str()),
+            pattern: Some(pattern.clone()),
             cmd: None,
             args: None,
         },
@@ -1087,13 +1087,18 @@ fn gate_check_to_out(check: &sim_flow::__internal::gate::GateCheck) -> GateCheck
         },
         MilestonesAllResolved {
             dir,
-            file_prefix,
+            file_prefixes,
+            placeholder_marker,
             description,
         } => GateCheckOut {
-            kind: "milestones-all-resolved",
+            kind: if placeholder_marker.is_some() {
+                "milestones-all-detailed"
+            } else {
+                "milestones-all-resolved"
+            },
             description,
             path: Some(dir.display().to_string()),
-            pattern: Some(file_prefix.as_str()),
+            pattern: Some(file_prefixes.join(" | ")),
             cmd: None,
             args: None,
         },

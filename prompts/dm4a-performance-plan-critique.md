@@ -1,18 +1,16 @@
-# DM4a - Performance Analysis Plan (critique session)
+# DM4a - Performance Plan, Outline (critique session)
 
-You are reviewing the DM4a performance-analysis plan. Treat it as
-work produced by a third party even if you produced it yourself
-earlier in this conversation -- the independent-review property
-depends on you bracketing any prior reasoning rather than leaning
-on it. The plan is the contract DM4b will execute against; gaps
-here propagate as missing measurements or under-cited reports. Do
-not modify the plan; evaluate it and write the critique file.
+You are reviewing the DM4a performance-plan OUTLINE. The outline
+is the contract DM4ad will detail against; gaps here propagate
+as missing or mis-shaped milestones.
 
 ## Inputs
 
 - `docs/impl-plan/plan-management.md` -- plan-file conventions.
-- `docs/perf-plan/perf-plan.md` -- plan index + TOC.
-- `docs/perf-plan/perf-milestone-*.md` -- per-milestone task lists.
+- `docs/perf-plan/perf-plan.md` -- the outline index.
+- `docs/perf-plan/perf-milestone-NN-*.md` -- one stub per
+  milestone (Scope / Workloads / Trace +
+  `<!-- detail-pending -->` placeholder).
 - `docs/spec.md`
 - `docs/targets.md`
 - `docs/analysis/decomposition.md`
@@ -21,80 +19,62 @@ not modify the plan; evaluate it and write the critique file.
 
 ## Evaluation
 
-Prefix gate-blocking issues with `BLOCKER:` (DM4b cannot proceed
-until fixed). Prefix informational notes with `UNRESOLVED:`. The
-orchestrator fails the DM4a gate on `BLOCKER:` lines only.
+Prefix gate-blocking issues with `BLOCKER:` (DM4ad cannot
+proceed). Prefix nits with `UNRESOLVED:`. The gate fails on
+`BLOCKER:` lines.
 
-**Finding-marker grammar.** The gate parses lines starting with
-`BLOCKER:` / `RESOLVED:` / `UNRESOLVED:` (case-insensitive,
-plural OK) optionally preceded by list markers (`-`, `*`, `+`,
-`>`), heading markers (`#`+), bold/underline (`**` / `__`), and
-one decoration glyph (e.g. `❌` `✅`). Headings DO match
-(`### BLOCKER: ...`); section titles describing a blocker
-without a colon-after-keyword (e.g. `### BLOCKER 1 - title`)
-do NOT match -- they're prose. Mid-sentence mentions do NOT
-match. ONLY the keyword-colon shape is a finding; pick the form
-deliberately.
+**Finding-marker grammar.** Same as other critiques.
 
-1. Does `docs/perf-plan/perf-plan.md` follow the conventions in
-   `plan-management.md` and `perf-plan.md.tmpl`? Is there an
-   overview and a TOC pointing
-   at each `perf-milestone-NN-<name>.md`?
-2. Are milestones named `Milestone NN: <description>` and saved
-   as `perf-milestone-NN-<name>.md`? Are the numbers contiguous?
-   Is the `perf-` prefix used on milestone files (so they don't
-   collide with DM2c's `milestone-NN-*.md`)?
-3. **Required milestones present**. Does the plan cover (or
-   explicitly justify dropping):
-   - Baseline measurement (canonical workloads, run-ids,
-     core metrics)
-   - Parameter sweeps (or "no sweeps -- design is fixed" with
-     rationale)
-   - Bottleneck analysis (per-module / per-stage)
-   - Target verification (one task per `docs/targets.md` row)
-   - Reporting (`docs/analysis/<topic>.md` files)
-4. **Task concreteness**. Is every task a `[ ]`-prefixed bullet
-   that names a concrete artifact: a specific run-id, a sweep
-   config, a metric extraction, or a `docs/analysis/<topic>.md`
-   report path? Reject vague tasks like "measure performance",
-   "do a sweep", "write a report".
-5. **Target traceability**. Does every row of `docs/targets.md`
-   map to at least one Target-verification task? Does each map
-   also name the measurement task (run-id or sweep cell) that
-   produces the number? Reject unmapped targets and vague
-   mappings ("covered by overall analysis").
-6. **Workload justification**. Does every planned workload or
-   sweep family say why it is representative and which target
-   row(s) or bottleneck question(s) it supports? Reject plans
-   that assume the workload-to-target mapping is self-evident.
-7. **Module / stage coverage**. Does the bottleneck-analysis
-   milestone reference every non-trivial module from
-   `docs/analysis/decomposition.md`? Per-module observations
-   should be planned, not picked-up-as-we-go.
-8. **Run-id scheme**. Is the run-id naming scheme documented and
-   followed (e.g. `baseline-<workload>`, `sweep-<param>-<value>`)?
-   Are run-ids stable enough that DM4b can re-run a single id
-   without ambiguity?
-9. **Milestone ordering**. Is the milestone order justified by
-   data dependencies? Baseline must precede any milestone that
-   depends on baseline numbers; reporting must come after the
-   measurements it cites. Reject unexplained ordering that would
-   force DM4b to use data from a later milestone.
-10. **Stop-points for critique**. Does the plan tell DM4b to stop
-    for a paired critique at each milestone boundary rather than
-    running the entire perf flow unattended? Long perf runs are
-    exactly where milestone critiques are valuable.
-11. **Scope discipline**. Reject tasks that pre-empt DM4b's
-    execution: embedded TOML *bodies*, embedded shell scripts,
-    full report text, fully-realized JSON sweep configs.
-    Naming a planned file (`sweep-throughput.toml`,
-    `docs/analysis/throughput.md`) and saying what will land in
-    it is fine; writing the file's contents inline in the plan
-    is not. The plan describes WHAT will be measured and WHAT
-    reports will be written, not HOW each measurement is run.
+This critique reviews the OUTLINE, not per-milestone task
+lists. Resist reviewing content in `<!-- detail-pending -->`
+placeholders; flag the ABSENCE of one as a `BLOCKER:`.
+
+1. **Index file** (`perf-plan.md`):
+   - Has a perf-analysis strategy overview.
+   - Has a `## Run-ID scheme` section pinning the run-id
+     naming convention. Missing = `BLOCKER:` (DM4ad needs it
+     to write run-recording tasks).
+   - Has a `## Workload registry` listing workloads + their
+     source + which target rows they support. Missing =
+     `BLOCKER:`.
+   - Has a TOC pointing at every `perf-milestone-NN-*.md`.
+   - Each TOC entry has a 1-2 sentence scope blurb.
+2. **Stub structure** (every `perf-milestone-NN-*.md`):
+   - Contains the literal `<!-- detail-pending -->` marker.
+     Missing = `BLOCKER:` (DM4ad's gate keys on it).
+   - Has Scope, Workloads/Sweeps, Trace sections.
+   - Scope blurb names the milestone's slice and acceptance
+     criterion (NOT a task list).
+   - Workloads section references registry entries from the
+     index (rather than redefining them).
+   - Trace section points at SPECIFIC entries in spec.md /
+     targets.md / decomposition.md / test-plan.md. Vague
+     trace = `UNRESOLVED:`; missing trace entirely = `BLOCKER:`.
+3. **Milestone breakdown coverage**:
+   - Baseline measurement milestone present.
+   - Bottleneck analysis milestone present (or explicit
+     `RESOLVED:` line saying the design has only one stage so
+     bottleneck analysis is trivial).
+   - Target verification milestone present and traces every
+     row in `docs/targets.md`. Missing target rows =
+     `BLOCKER:` (every target must be verified).
+   - Reporting milestone present.
+   - Parameter-sweep milestone (or `RESOLVED:` note: design
+     has no parameters).
+4. **Run-ID scheme**:
+   - Names a deterministic naming pattern (e.g.
+     `baseline-<workload>` / `sweep-<param>-<value>`).
+   - Stable enough that DM4ad can pre-fill run-ids in tasks.
+5. **Stub leakage**: does ANY stub leak per-task content
+   (concrete `- [ ]` rows, specific cargo-run invocations,
+   specific metric extractions) into its Scope / Workloads /
+   Trace? That's the detail step's job. Mark `BLOCKER:`.
+6. **Pre-empting DM4b**: does the outline prescribe specific
+   tooling internals (runner-helper names, framework calls)?
+   The plan describes WHAT will be measured / reported; HOW
+   is DM4b's choice. Mark `BLOCKER:` for prescription.
 
 ## Output
 
-Write `docs/critiques/DM4a-critique.md`. Free-form markdown body;
-only line-prefix tokens (`BLOCKER:`, `UNRESOLVED:`, `RESOLVED:`)
-are inspected by the gate.
+Write `docs/critiques/DM4a-critique.md`. Free-form markdown;
+only line-prefix tokens are inspected.

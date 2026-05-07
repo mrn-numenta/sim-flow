@@ -203,6 +203,12 @@ fn dm2b_gate_accepts_pipeline_mapping() {
 /// test-milestone file exist with `- [ ]` checklist rows;
 /// coverage.md names cargo-tarpaulin.
 fn write_minimal_test_plan(project: &Path) {
+    // DM3a now writes only the OUTLINE: index + coverage strategy
+    // + per-milestone STUBS with `<!-- detail-pending -->`
+    // placeholders. The `- [ ]` task rows land later under DM3ad's
+    // milestone-walk. The DM3a gate accepts stubs (placeholder
+    // present); DM3ad's gate is what enforces "every stub
+    // detailed".
     write(
         &project.join("docs/test-plan/test-plan.md"),
         "# Test Plan\n\n\
@@ -212,12 +218,14 @@ fn write_minimal_test_plan(project: &Path) {
     write(
         &project.join("docs/test-plan/tb-milestone-01-payloads-and-sequencers.md"),
         "# Milestone 01: Payloads and Sequencers\n\n\
-         - [ ] `tests/seq.rs::Pixels` -- payload-aware sequencer\n",
+         ## Scope\n\nstub.\n\n\
+         ## Tasks\n\n<!-- detail-pending -->\n",
     );
     write(
         &project.join("docs/test-plan/test-milestone-01-smoke.md"),
         "# Milestone 01: Smoke\n\n\
-         - [ ] elaborates -- covers spec.md section 1\n",
+         ## Scope\n\nstub.\n\n\
+         ## Tasks\n\n<!-- detail-pending -->\n",
     );
     write(
         &project.join("docs/test-plan/coverage.md"),
@@ -226,39 +234,11 @@ fn write_minimal_test_plan(project: &Path) {
 }
 
 #[test]
-fn dm3a_gate_accepts_full_test_plan() {
+fn dm3a_gate_accepts_outline_with_stubs() {
     let (_tmp, project) = new_project();
     write_minimal_test_plan(&project);
     clean_critique(&project, "DM3a");
     assert_clean(evaluate(&project, "DM3a"), "DM3a");
-}
-
-#[test]
-fn dm3a_gate_rejects_plan_without_checklist() {
-    let (_tmp, project) = new_project();
-    // Both milestone files exist but neither carries a `- [ ]`
-    // checklist entry. The directory-wide checklist-glob gate must
-    // catch the omission.
-    write(
-        &project.join("docs/test-plan/test-plan.md"),
-        "# Test Plan\n\nSequencer / Driver / Monitor / Scoreboard.\n\nspec.md\n",
-    );
-    write(
-        &project.join("docs/test-plan/tb-milestone-01-payloads.md"),
-        "# Milestone 01\n\nNo checklist rows here.\n",
-    );
-    write(
-        &project.join("docs/test-plan/test-milestone-01-smoke.md"),
-        "# Milestone 01\n\nNo checklist rows here.\n",
-    );
-    write(
-        &project.join("docs/test-plan/coverage.md"),
-        "# Coverage\n\ntarpaulin threshold 90%.\n",
-    );
-    clean_critique(&project, "DM3a");
-    let report = evaluate(&project, "DM3a");
-    assert!(!report.is_clean());
-    assert_fails_with(&report, "checklist");
 }
 
 #[test]

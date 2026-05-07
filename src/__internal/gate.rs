@@ -38,18 +38,26 @@ pub enum GateCheck {
     /// tracking captured a simulation run before the analysis gate
     /// passes.
     ExperimentsRecorded { description: String },
-    /// Every milestone file under `dir` matching `<file_prefix>NN-*.md`
-    /// must have all `- [ ]` rows resolved (`- [x]` done OR `- [-]`
-    /// deferred). Used by DM2d / DM3b / DM3c / DM4b to enforce that
-    /// the step's gate only passes after EVERY milestone has been
-    /// walked through, not just the first one. Pairs with
-    /// `StepDescriptor::milestone_walk`: the orchestrator scopes
-    /// each work / critique session to one milestone at a time, and
-    /// this check is what prevents the step from advancing while
-    /// other milestone files still hold `- [ ]` rows.
+    /// Every milestone file under `dir` matching one of
+    /// `<file_prefix>NN-*.md` (for any `<file_prefix>` in
+    /// `file_prefixes`) must be resolved.
+    ///
+    /// Two resolution modes, matching `MilestoneWalkConfig`:
+    /// - When `placeholder_marker` is `None` (execution-step gate
+    ///   for DM2d / DM3b / DM3c / DM4b): every `- [ ]` row must be
+    ///   resolved (`- [x]` or `- [-]`). Prevents the step from
+    ///   advancing while any milestone still has pending rows.
+    /// - When `placeholder_marker` is `Some(s)` (planning-detail
+    ///   gate for DM2cd / DM3ad / DM4ad): no milestone body may
+    ///   contain `s`. The detail step replaces the outline's stubs
+    ///   with full task lists; this gate fails until every stub has
+    ///   been replaced, ignoring `- [ ]` row counts (since the
+    ///   detail step's whole purpose is to LAND `- [ ]` rows for
+    ///   the downstream execution step to walk).
     MilestonesAllResolved {
         dir: PathBuf,
-        file_prefix: String,
+        file_prefixes: Vec<String>,
+        placeholder_marker: Option<String>,
         description: String,
     },
 }
@@ -184,7 +192,8 @@ fn evaluate_one(project_dir: &Path, check: &GateCheck) -> Result<Option<GateFail
         }
         GateCheck::MilestonesAllResolved {
             dir,
-            file_prefix,
+            file_prefixes,
+            placeholder_marker,
             description,
         } => {
             let full_dir = project_dir.join(dir);
@@ -203,10 +212,14 @@ fn evaluate_one(project_dir: &Path, check: &GateCheck) -> Result<Option<GateFail
                 let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                     continue;
                 };
-                if !name.starts_with(file_prefix.as_str()) || !name.ends_with(".md") {
+                if !name.ends_with(".md") {
                     continue;
                 }
-                let rest = &name[file_prefix.len()..];
+                let Some(prefix) = file_prefixes.iter().find(|p| name.starts_with(p.as_str()))
+                else {
+                    continue;
+                };
+                let rest = &name[prefix.len()..];
                 if !rest
                     .chars()
                     .next()
@@ -218,11 +231,16 @@ fn evaluate_one(project_dir: &Path, check: &GateCheck) -> Result<Option<GateFail
                 milestones.push((name.to_string(), path));
             }
             if milestones.is_empty() {
+                let prefixes_display = file_prefixes
+                    .iter()
+                    .map(|p| format!("`{p}NN-*.md`"))
+                    .collect::<Vec<_>>()
+                    .join(" or ");
                 return Ok(Some(GateFailure {
                     description: description.clone(),
                     reason: format!(
-                        "no `{}NN-*.md` files found under `{}`",
-                        file_prefix,
+                        "no {} files found under `{}`",
+                        prefixes_display,
                         full_dir.display()
                     ),
                 }));
@@ -238,23 +256,37 @@ fn evaluate_one(project_dir: &Path, check: &GateCheck) -> Result<Option<GateFail
                         }));
                     }
                 };
-                let pending_count = body
-                    .lines()
-                    .filter(|line| line.trim_start().starts_with("- [ ]"))
-                    .count();
-                if pending_count > 0 {
-                    pending.push(format!("  - `{name}`: {pending_count} unresolved row(s)"));
+                match placeholder_marker {
+                    Some(marker) => {
+                        if body.contains(marker) {
+                            pending.push(format!(
+                                "  - `{name}`: still contains placeholder marker (stub not yet detailed)"
+                            ));
+                        }
+                    }
+                    None => {
+                        let pending_count = body
+                            .lines()
+                            .filter(|line| line.trim_start().starts_with("- [ ]"))
+                            .count();
+                        if pending_count > 0 {
+                            pending
+                                .push(format!("  - `{name}`: {pending_count} unresolved row(s)"));
+                        }
+                    }
                 }
             }
             if pending.is_empty() {
                 Ok(None)
             } else {
+                let label = if placeholder_marker.is_some() {
+                    "milestone stubs not yet detailed:"
+                } else {
+                    "milestone files still have unresolved rows:"
+                };
                 Ok(Some(GateFailure {
                     description: description.clone(),
-                    reason: format!(
-                        "milestone files still have unresolved rows:\n{}",
-                        pending.join("\n")
-                    ),
+                    reason: format!("{label}\n{}", pending.join("\n")),
                 }))
             }
         }
@@ -382,7 +414,8 @@ mod tests {
             tmp.path(),
             &[GateCheck::MilestonesAllResolved {
                 dir: PathBuf::from("docs/test-plan/"),
-                file_prefix: "tb-milestone-".into(),
+                file_prefixes: vec!["tb-milestone-".into()],
+                placeholder_marker: None,
                 description: "every tb-milestone resolved".into(),
             }],
         )
@@ -405,7 +438,8 @@ mod tests {
             tmp.path(),
             &[GateCheck::MilestonesAllResolved {
                 dir: PathBuf::from("docs/test-plan/"),
-                file_prefix: "tb-milestone-".into(),
+                file_prefixes: vec!["tb-milestone-".into()],
+                placeholder_marker: None,
                 description: "every tb-milestone resolved".into(),
             }],
         )
@@ -427,7 +461,8 @@ mod tests {
             tmp.path(),
             &[GateCheck::MilestonesAllResolved {
                 dir: PathBuf::from("docs/test-plan/"),
-                file_prefix: "tb-milestone-".into(),
+                file_prefixes: vec!["tb-milestone-".into()],
+                placeholder_marker: None,
                 description: "every tb-milestone resolved".into(),
             }],
         )
@@ -451,7 +486,8 @@ mod tests {
             tmp.path(),
             &[GateCheck::MilestonesAllResolved {
                 dir: PathBuf::from("docs/test-plan/"),
-                file_prefix: "tb-milestone-".into(),
+                file_prefixes: vec!["tb-milestone-".into()],
+                placeholder_marker: None,
                 description: "tb only".into(),
             }],
         )
@@ -461,5 +497,103 @@ mod tests {
             "DM3b's gate should NOT see DM3c's pending rows: {:?}",
             report.failures
         );
+    }
+
+    #[test]
+    fn milestones_all_resolved_placeholder_mode_passes_when_no_marker_left() {
+        // Detail-step gate: every stub has had its placeholder
+        // marker removed (the agent wrote real task lists). Real
+        // `- [ ]` rows in those task lists are FOR the downstream
+        // execution step; the planning-detail gate must ignore
+        // them.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().join("docs/impl-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        write(
+            &dir.join("milestone-01-payloads.md"),
+            "# Milestone 01\n\n## Tasks\n- [ ] real task here\n",
+        );
+        write(
+            &dir.join("milestone-02-skeletons.md"),
+            "# Milestone 02\n\n## Tasks\n- [ ] another task\n- [ ] and another\n",
+        );
+        let report = evaluate(
+            tmp.path(),
+            &[GateCheck::MilestonesAllResolved {
+                dir: PathBuf::from("docs/impl-plan/"),
+                file_prefixes: vec!["milestone-".into()],
+                placeholder_marker: Some("<!-- detail-pending -->".into()),
+                description: "every stub detailed".into(),
+            }],
+        )
+        .unwrap();
+        assert!(
+            report.is_clean(),
+            "placeholder-mode gate should ignore `- [ ]` rows: {:?}",
+            report.failures
+        );
+    }
+
+    #[test]
+    fn milestones_all_resolved_placeholder_mode_fails_when_any_stub_still_has_marker() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().join("docs/impl-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        write(
+            &dir.join("milestone-01-payloads.md"),
+            "# Milestone 01\n\n## Tasks\n- [ ] real task\n",
+        );
+        write(
+            &dir.join("milestone-02-skeletons.md"),
+            "# Milestone 02\n\n## Tasks\n<!-- detail-pending -->\n",
+        );
+        let report = evaluate(
+            tmp.path(),
+            &[GateCheck::MilestonesAllResolved {
+                dir: PathBuf::from("docs/impl-plan/"),
+                file_prefixes: vec!["milestone-".into()],
+                placeholder_marker: Some("<!-- detail-pending -->".into()),
+                description: "every stub detailed".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(report.failures.len(), 1);
+        let reason = &report.failures[0].reason;
+        assert!(reason.contains("milestone-02"), "reason: {reason}");
+        assert!(reason.contains("placeholder"), "reason: {reason}");
+        assert!(!reason.contains("milestone-01"));
+    }
+
+    #[test]
+    fn milestones_all_resolved_walks_multiple_prefixes_in_one_check() {
+        // DM3ad walks BOTH tb-milestone-* and test-milestone-*
+        // files in `docs/test-plan/` -- one gate, two prefixes.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().join("docs/test-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        write(
+            &dir.join("tb-milestone-01-payloads.md"),
+            "# tb-Milestone 01\n## Tasks\n- [ ] task\n",
+        );
+        write(
+            &dir.join("test-milestone-01-smoke.md"),
+            "# test-Milestone 01\n## Tasks\n<!-- detail-pending -->\n",
+        );
+        let report = evaluate(
+            tmp.path(),
+            &[GateCheck::MilestonesAllResolved {
+                dir: PathBuf::from("docs/test-plan/"),
+                file_prefixes: vec!["tb-milestone-".into(), "test-milestone-".into()],
+                placeholder_marker: Some("<!-- detail-pending -->".into()),
+                description: "all detailed".into(),
+            }],
+        )
+        .unwrap();
+        // Only test-milestone-01 has the marker -- the gate should
+        // fail on it but pass tb-milestone-01.
+        assert_eq!(report.failures.len(), 1);
+        let reason = &report.failures[0].reason;
+        assert!(reason.contains("test-milestone-01"), "reason: {reason}");
+        assert!(!reason.contains("tb-milestone-01"));
     }
 }

@@ -1988,19 +1988,35 @@ fn build_session_inputs(
             SessionKind::Work => "work",
             SessionKind::Critique => "critique",
         };
+        // Resolution criterion + sibling-protection wording differ
+        // between execution-mode walks (DM2d / DM3b / DM3c / DM4b)
+        // and planning-detail walks (DM2cd / DM3ad / DM4ad). The
+        // execution-mode prompt talks about `- [ ]` rows resolving;
+        // the detail-mode prompt talks about replacing the
+        // outline's stub with a full task list.
+        let prefix_pattern = walk.file_prefixes.to_vec().join("` / `");
+        let resolution_clause = if let Some(marker) = walk.placeholder_marker {
+            format!(
+                "When the placeholder marker (`{marker}`) is gone from the current \
+                 milestone -- meaning you've replaced the stub with a full task \
+                 list per the format specified by your prompt"
+            )
+        } else {
+            "When all `- [ ]` rows in the current milestone are resolved \
+             (`- [x]` done OR `- [-]` deferred with a `defer reason:` sub-bullet)"
+                .to_string()
+        };
         volatile.push_str(&format!(
             "**Milestone scope (orchestrator-enforced)**: this {session_label} \
              session targets EXACTLY ONE milestone -- `{milestone_rel}`. The plan \
              index `{}` is also inlined for context. You MUST NOT read or modify \
-             any other `{}<NN>-*.md` file in this session; sibling milestones \
-             are intentionally hidden so each gets its own focused critique. \
-             When all `- [ ]` rows in the current milestone are resolved \
-             (`- [x]` done OR `- [-]` deferred with a `defer reason:` \
-             sub-bullet), stop and surface the canonical \
+             any other `{prefix_pattern}<NN>-*.md` file in this session; sibling \
+             milestones are intentionally hidden so each gets its own focused \
+             critique. {resolution_clause}, stop and surface the canonical \
              `<milestone-name> complete; ready for critique.` notice. The \
              auto-driver will run the paired critique, then re-launch a \
              fresh session for the next milestone.\n\n",
-            walk.index_file, walk.file_prefix,
+            walk.index_file,
         ));
     }
     for entry in &volatile_toc {
