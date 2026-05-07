@@ -30,9 +30,25 @@ impl Tool for WriteFileTool {
     }
 
     fn invoke(&self, ctx: &ToolContext, args: &serde_json::Value) -> Result<ToolResult> {
+        // Pedagogical errors. qwen3.6 (and similar verbose-CoT
+        // models) repeatedly emit `{"path": "..."}` without a
+        // `content` field, get the bare "missing arg" error back,
+        // and emit the SAME shape again -- a runaway loop that
+        // burns 5-15 dispatches before the model recovers. Spelling
+        // out the full required shape inline lets the model
+        // self-correct on the first retry instead.
+        const MISSING_PATH_HELP: &str = "write_file: missing `path` arg. \
+             Required shape: \
+             `{\"path\": \"<relative-path>\", \"content\": \"<full file body>\"}`. \
+             Both fields are required; `content` cannot be omitted.";
+        const MISSING_CONTENT_HELP: &str = "write_file: missing `content` arg. \
+             Required shape: \
+             `{\"path\": \"<relative-path>\", \"content\": \"<full file body>\"}`. \
+             You provided `path` but no `content`; include the full file body \
+             as a string literal.";
         let path = match args.get("path").and_then(|v| v.as_str()) {
             Some(s) => s.to_string(),
-            None => return Ok(ToolResult::err("write_file: missing `path` arg")),
+            None => return Ok(ToolResult::err(MISSING_PATH_HELP)),
         };
         if path.starts_with("lib:") {
             return Ok(ToolResult::err(
@@ -51,7 +67,7 @@ impl Tool for WriteFileTool {
         }
         let content = match args.get("content").and_then(|v| v.as_str()) {
             Some(s) => s.to_string(),
-            None => return Ok(ToolResult::err("write_file: missing `content` arg")),
+            None => return Ok(ToolResult::err(MISSING_CONTENT_HELP)),
         };
         let abs = match resolve_safe_path(ctx.project_dir, &path) {
             Ok(p) => p,

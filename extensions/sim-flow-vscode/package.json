@@ -282,6 +282,28 @@
           "default": 3,
           "description": "Maximum number of times the auto driver re-runs a step's work session in response to critique blockers before stopping the auto run."
         },
+        "sim-flow.auto.maxLlmRequests": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 500,
+          "description": "Hard cap on TOTAL LLM requests per work / critique sub-session. Backstop against runaway loops the per-step caps don't catch. Default 500 covers a full 14-step DM flow with retries; was 50 before, which tripped runs that were otherwise progressing fine. 0 disables (NOT recommended)."
+        },
+        "sim-flow.auto.noPreamble": {
+          "type": "boolean",
+          "default": true,
+          "description": "When ON (default), loads the response-shape convention into every session: tool calls first, prose last, no recap, no hedging. Cuts qwen3.6 / nemotron preamble that routinely consumes the full max_tokens budget. Turn OFF when debugging a model's reasoning -- the extra prose IS what you want then."
+        },
+        "sim-flow.auto.healthcheck": {
+          "type": "boolean",
+          "default": true,
+          "description": "Probe `<base_url>/models` before launching the auto run. Catches `vLLM is dead` / `wrong port` / `wrong base_url path` failures up front instead of N minutes in. Disable for backends that don't expose a `/models` endpoint."
+        },
+        "sim-flow.auto.cargoTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 30,
+          "default": 300,
+          "description": "Per-invocation timeout for orchestrator-side cargo runners (cargo build / fmt / clippy / test). Prevents a hung test or a wedged compiler from hanging the whole orchestrator. Wired through SIM_FLOW_CARGO_TIMEOUT_SECS for CLI runs."
+        },
         "sim-flow.debug": {
           "type": "array",
           "items": {

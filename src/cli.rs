@@ -216,8 +216,13 @@ pub(crate) enum Command {
         /// Hard cap on total LLM requests per work / critique
         /// sub-session. Backstop against runaway-loop bugs that the
         /// more specific `max_auto_iters` / `max_critique_iters`
-        /// caps don't catch. 0 disables the check (NOT recommended).
-        #[arg(long, default_value_t = 50)]
+        /// caps don't catch. Default 500 (was 50): a full
+        /// 14-step DM flow with retries can legitimately need 200+
+        /// dispatches, and the prior default tripped runs that
+        /// were otherwise progressing fine. 0 disables the check
+        /// (NOT recommended -- runaway loops will burn tokens
+        /// indefinitely).
+        #[arg(long, default_value_t = 500)]
         max_llm_requests: u32,
         /// Number of structurally-identical assistant responses in a
         /// row that triggers an auto-abort. Digits / whitespace are
@@ -225,6 +230,14 @@ pub(crate) enum Command {
         /// doesn't defeat the check. 0 or 1 disables.
         #[arg(long, default_value_t = 3)]
         max_identical_responses: u32,
+        /// Default ON. Loads the response-shape convention into
+        /// every session's system prompt: tool calls first, prose
+        /// last, no recap, no hedging. Cuts qwen3.6 / nemotron
+        /// preamble that routinely consumes the full max_tokens
+        /// budget. Pass `--preamble` to disable when debugging a
+        /// model's reasoning (extra prose IS what you want then).
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        no_preamble: bool,
     },
     Session {
         /// Step id and kind, e.g. `DM0.work` or `DM2c.critique`.

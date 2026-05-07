@@ -204,17 +204,15 @@ fn work_session_writes_artifacts_and_emits_gate_result() {
 
 #[test]
 fn critique_session_lists_predecessor_inputs_as_toc() {
-    // Predecessors used to be inlined verbatim into the critique
-    // session's system prompt; that burned tokens on long iteration
-    // loops. We now emit a TOC (path + size for files; one-level
-    // expansion for directories) and tell the agent to fetch content
-    // via `read_file`. This test pins the new shape:
-    // - File entries must include the file path and its byte size.
-    // - Directory entries (e.g. `src/`) MUST expand one level deep
-    //   so the model sees the file list and can't hallucinate
-    //   "empty" without calling `list_dir`.
-    // - The verbatim file content must NOT appear in any system
-    //   message.
+    // Inputs are listed as a TOC (path + size for files;
+    // one-level expansion for directories). Small text-shaped
+    // files under SIM_FLOW_INLINE_INPUT_THRESHOLD_BYTES are
+    // ALSO inlined as fenced blocks under the TOC line so the
+    // agent doesn't have to spend a `read_file` tool turn
+    // fetching them. This test pins both shapes:
+    // - File entries must include the path and byte size.
+    // - For small files, the body must follow the TOC line as a
+    //   fenced code block (the agent reads the body inline).
     let tmp = tempfile::tempdir().unwrap();
     let project = init_project(&tmp);
     let spec_body = "# DM0 spec\n\nClock: 2 GHz\nNode: 7 nm\n";
@@ -245,18 +243,71 @@ fn critique_session_lists_predecessor_inputs_as_toc() {
         .map(|m| m.content.as_str())
         .collect::<Vec<_>>()
         .join("\n---\n");
-    let toc_line = format!("- `docs/spec.md` ({} bytes)", spec_body.len());
-    assert!(
-        system_blob.contains(&toc_line),
-        "expected TOC line `{toc_line}` in system messages; got:\n{system_blob}",
+    let toc_line = format!(
+        "- `docs/spec.md` ({} bytes, inlined below)",
+        spec_body.len()
     );
     assert!(
-        !system_blob.contains("# DM0 spec"),
-        "spec.md content should NOT be inlined under the TOC scheme",
+        system_blob.contains(&toc_line),
+        "expected inlined-TOC line `{toc_line}` in system messages; got:\n{system_blob}",
+    );
+    assert!(
+        system_blob.contains("# DM0 spec"),
+        "small predecessor inputs should be inlined as fenced blocks",
     );
 
     let critique = std::fs::read_to_string(project.join("docs/critiques/DM0-critique.md")).unwrap();
     assert!(critique.contains("All clean"));
+}
+
+#[test]
+fn large_predecessor_inputs_stay_as_toc_only() {
+    // Files at or above the 4 KB inline threshold are still
+    // listed as bare TOC entries; the body must NOT appear in
+    // the system prompt. Use a real >4 KB file rather than env
+    // var manipulation so this test stays parallel-safe with the
+    // small-file inlining test.
+    let tmp = tempfile::tempdir().unwrap();
+    let project = init_project(&tmp);
+    let unique_marker = "MARKER_LARGE_SPEC_BODY_DO_NOT_INLINE";
+    let big_chunk = "x".repeat(5000);
+    let spec_body = format!("# DM0 spec\n\n{unique_marker}\n\n{big_chunk}\n");
+    std::fs::write(project.join("docs/spec.md"), &spec_body).unwrap();
+
+    let mut host = TestHost::new();
+    host.enqueue(hello());
+    let critique_body = "All clean, no blockers.\n";
+    let response = format!("```docs/critiques/DM0-critique.md\n{critique_body}```\n",);
+    host.enqueue_llm_response("lr-1", response);
+    host.enqueue(HostEvent::UserMessage {
+        text: "/end-session".into(),
+    });
+
+    run_session(opts(&project, SessionKind::Critique), &mut host).unwrap();
+
+    let messages = host
+        .written
+        .iter()
+        .find_map(|e| match e {
+            Event::RequestLlmResponse { messages, .. } => Some(messages.clone()),
+            _ => None,
+        })
+        .expect("expected at least one RequestLlmResponse");
+    let system_blob = messages
+        .iter()
+        .filter(|m| m.role == sim_flow::session::protocol::LlmRole::System)
+        .map(|m| m.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+    let toc_line = format!("- `docs/spec.md` ({} bytes)", spec_body.len());
+    assert!(
+        system_blob.contains(&toc_line),
+        "expected bare TOC line; got:\n{system_blob}",
+    );
+    assert!(
+        !system_blob.contains(unique_marker),
+        "files over threshold should NOT inline body content",
+    );
 }
 
 #[test]
@@ -1060,6 +1111,7 @@ fn auto_opts(
         max_llm_requests: 50,
         max_identical_responses: 0,
         step_mode: mode,
+        no_preamble: true,
     }
 }
 

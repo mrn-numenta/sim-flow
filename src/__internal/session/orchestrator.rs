@@ -95,6 +95,16 @@ pub struct OrchestratorOptions {
     /// We swap the convention message for instructions that point
     /// at the native tools instead.
     pub agent_has_native_fs_tools: bool,
+    /// When true, load the `_conventions/no-preamble.md` convention
+    /// into every session's system prompt. Tells the agent to lead
+    /// with tool calls, skip recaps / hedging, and defer prose
+    /// until after the work lands. Default true: verbose-CoT
+    /// models (qwen3.6 etc.) routinely burn the full `max_tokens`
+    /// budget on preamble and truncate mid-tool-call, so silencing
+    /// the preamble is the safer baseline. Disable
+    /// (`--preamble`) when debugging a model's reasoning -- the
+    /// extra prose is what you're trying to read in that case.
+    pub no_preamble: bool,
 }
 
 impl Default for OrchestratorOptions {
@@ -112,6 +122,7 @@ impl Default for OrchestratorOptions {
             max_llm_requests: 50,
             max_identical_responses: 3,
             agent_has_native_fs_tools: false,
+            no_preamble: true,
         }
     }
 }
@@ -1587,7 +1598,7 @@ pub fn build_initial_messages(
         "manual-mode notes"
     };
     let combined_system = if opts.agent_has_native_fs_tools {
-        let directives = format!(
+        let mut directives = format!(
             "Before responding, read the conventions file at:\n\n  {}\n\n\
              Treat its content as a system instruction that applies for\n\
              the rest of this session. The file is short (read it in full).\
@@ -1596,14 +1607,25 @@ pub fn build_initial_messages(
             mode_notes_label,
             prompts::convention_path(&opts.foundation_root, mode_notes_name).display(),
         );
+        if opts.no_preamble {
+            directives.push_str(&format!(
+                "\n\nAlso read the response-shape convention at:\n\n  {}\n\n\
+                 Tool calls first, prose last. No recap, no hedging, no preamble.",
+                prompts::convention_path(&opts.foundation_root, "no-preamble").display(),
+            ));
+        }
         format!("{}\n\n---\n\n{}", directives, instruction_body)
     } else {
         let convention = prompts::load_convention(&opts.foundation_root, convention_name)?;
         let mode_notes = prompts::load_convention(&opts.foundation_root, mode_notes_name)?;
-        format!(
-            "{}\n\n---\n\n{}\n\n---\n\n{}",
-            convention, mode_notes, instruction_body
-        )
+        let mut combined = format!("{}\n\n---\n\n{}\n\n---\n\n", convention, mode_notes,);
+        if opts.no_preamble {
+            let no_preamble = prompts::load_convention(&opts.foundation_root, "no-preamble")?;
+            combined.push_str(&no_preamble);
+            combined.push_str("\n\n---\n\n");
+        }
+        combined.push_str(&instruction_body);
+        combined
     };
     messages.push(LlmMessage {
         role: LlmRole::System,
@@ -2274,7 +2296,21 @@ struct TocEntry {
 
 enum TocState {
     Directory,
-    File { bytes: u64 },
+    File {
+        bytes: u64,
+    },
+    /// Small file whose contents are inlined directly into the
+    /// session inputs message so the agent doesn't have to spend a
+    /// `read_file` tool turn fetching it. Used for predecessor
+    /// inputs whose body fits under
+    /// `SIM_FLOW_INLINE_INPUT_THRESHOLD_BYTES` (default 4096).
+    /// Eliminates 5-10 turns of overhead per Critique on a typical
+    /// step that reads spec.md / decomposition.md / data-movement.md
+    /// / etc.
+    InlinedFile {
+        bytes: u64,
+        body: String,
+    },
     Missing,
 }
 
@@ -2283,14 +2319,54 @@ impl TocEntry {
     /// expand one level deep so the model can SEE the file list and
     /// can't hallucinate "empty"; nested directories are still
     /// summarized as `(directory, N entries)` so the prompt doesn't
-    /// recurse without bound.
+    /// recurse without bound. Small files are inlined as fenced code
+    /// blocks so the agent can read them without a tool turn.
     fn render_block(&self, project_dir: &Path) -> String {
         match &self.state {
             TocState::Directory => render_directory_block(project_dir, &self.rel),
             TocState::File { bytes } => format!("- `{}` ({} bytes)\n", self.rel, bytes),
+            TocState::InlinedFile { bytes, body } => {
+                let lang = inline_lang_hint(&self.rel);
+                format!(
+                    "- `{}` ({} bytes, inlined below):\n\n```{}\n{}\n```\n\n",
+                    self.rel,
+                    bytes,
+                    lang,
+                    body.trim_end()
+                )
+            }
             TocState::Missing => format!("- `{}` (not yet on disk)\n", self.rel),
         }
     }
+}
+
+/// Pick a fenced-block language hint from a path. Markdown stays
+/// markdown so nested fences don't break the agent's parser; Rust
+/// gets `rust`; everything else falls back to a generic `text`
+/// fence which is safe for arbitrary content.
+fn inline_lang_hint(rel: &str) -> &'static str {
+    match std::path::Path::new(rel)
+        .extension()
+        .and_then(|e| e.to_str())
+    {
+        Some(ext) if ext.eq_ignore_ascii_case("md") => "markdown",
+        Some(ext) if ext.eq_ignore_ascii_case("rs") => "rust",
+        Some(ext) if ext.eq_ignore_ascii_case("toml") => "toml",
+        Some(ext) if ext.eq_ignore_ascii_case("json") => "json",
+        _ => "text",
+    }
+}
+
+/// Per-file threshold below which `toc_entry_for` inlines the body.
+/// 4 KB ~= 1K tokens. Across 8 predecessor inputs adds ~8K tokens
+/// to the stable prefix but saves 5-10 `read_file` tool turns per
+/// Critique session, each of which costs 3K+ tokens of reasoning.
+/// Set `SIM_FLOW_INLINE_INPUT_THRESHOLD_BYTES=0` to disable.
+fn inline_input_threshold_bytes() -> u64 {
+    std::env::var("SIM_FLOW_INLINE_INPUT_THRESHOLD_BYTES")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(4096)
 }
 
 fn render_directory_block(project_dir: &Path, rel: &str) -> String {
@@ -2360,15 +2436,49 @@ fn toc_entry_for(project_dir: &Path, rel: &str) -> TocEntry {
             rel: rel.to_string(),
             state: TocState::Directory,
         },
-        Ok(meta) => TocEntry {
-            rel: rel.to_string(),
-            state: TocState::File { bytes: meta.len() },
-        },
+        Ok(meta) => {
+            let bytes = meta.len();
+            let threshold = inline_input_threshold_bytes();
+            // Try to inline small text-shaped files. Binary files
+            // (.png, .jpg, .pdf, .db) stay as plain TOC entries
+            // even when small -- they aren't useful to the agent
+            // as fenced text and would corrupt the markdown.
+            if threshold > 0
+                && bytes <= threshold
+                && is_inlinable_extension(rel)
+                && let Ok(body) = std::fs::read_to_string(&abs)
+            {
+                return TocEntry {
+                    rel: rel.to_string(),
+                    state: TocState::InlinedFile { bytes, body },
+                };
+            }
+            TocEntry {
+                rel: rel.to_string(),
+                state: TocState::File { bytes },
+            }
+        }
         Err(_) => TocEntry {
             rel: rel.to_string(),
             state: TocState::Missing,
         },
     }
+}
+
+/// Whitelist of extensions safe to inline as fenced text. Markdown,
+/// Rust source, TOML configs, JSON (e.g. critique.json), shell,
+/// plain text, and the docs we know are always small. Skip
+/// binaries and large generated artifacts even if they happen to
+/// fall under the byte threshold.
+fn is_inlinable_extension(rel: &str) -> bool {
+    let ext = std::path::Path::new(rel)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "md" | "rs" | "toml" | "json" | "txt" | "sh" | "yml" | "yaml" | ""
+    )
 }
 
 fn truncate(s: &str, max: usize) -> String {

@@ -72,6 +72,13 @@ struct Args {
     max_critique_iters: u32,
     max_llm_requests: u32,
     max_identical_responses: u32,
+    no_preamble: bool,
+    /// When true (default for openai-compat backend with an
+    /// explicit base_url), ping `<base_url>/models` before
+    /// launching `run_auto`. Catches "vLLM is dead" up front
+    /// rather than after a 30-minute warm-up + first dispatch
+    /// failure. Disable with `--no-healthcheck`.
+    healthcheck: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -91,8 +98,10 @@ impl Args {
         let mut base_url: Option<String> = None;
         let mut max_auto_iters = 3u32;
         let mut max_critique_iters = 3u32;
-        let mut max_llm_requests = 50u32;
+        let mut max_llm_requests = 500u32;
         let mut max_identical_responses = 3u32;
+        let mut no_preamble = true;
+        let mut healthcheck = true;
         let mut iter = argv.into_iter().skip(1);
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -130,13 +139,19 @@ impl Args {
                         .parse()
                         .map_err(|err| format!("--max-identical-responses: {err}"))?
                 }
+                "--no-preamble" => no_preamble = true,
+                "--preamble" => no_preamble = false,
+                "--no-healthcheck" => healthcheck = false,
+                "--healthcheck" => healthcheck = true,
                 "--help" | "-h" => {
                     println!(
                         "usage: e2e_auto --project-dir <P> --foundation-root <F> \
                          --backend {{openai-compat|ollama|claude}} [--model <M>] \
                          [--base-url <URL>] [--spec <PATH>] \
                          [--max-auto-iters <N>] [--max-critique-iters <N>] \
-                         [--max-llm-requests <N>] [--max-identical-responses <N>]"
+                         [--max-llm-requests <N>] [--max-identical-responses <N>] \
+                         [--preamble | --no-preamble] \
+                         [--healthcheck | --no-healthcheck]"
                     );
                     std::process::exit(0);
                 }
@@ -162,8 +177,45 @@ impl Args {
             max_critique_iters,
             max_llm_requests,
             max_identical_responses,
+            no_preamble,
+            healthcheck,
         })
     }
+}
+
+/// Probe `<base_url>/models` to confirm the LLM server is alive
+/// before launching the multi-hour auto run. Catches "vLLM is
+/// dead" / "wrong port" / "wrong base_url path" failures up
+/// front instead of 30 minutes in. 5-second per-attempt timeout;
+/// 3 attempts with 2-second backoff so a momentarily-laggy server
+/// doesn't fail the run. Returns `Ok` on success, `Err(message)`
+/// on confirmed failure.
+fn vllm_healthcheck(base_url: &str) -> std::result::Result<(), String> {
+    let url = format!("{}/models", base_url.trim_end_matches('/'));
+    let mut last_err: Option<String> = None;
+    for attempt in 1..=3 {
+        match ureq::get(&url)
+            .timeout(std::time::Duration::from_secs(5))
+            .call()
+        {
+            Ok(resp) if resp.status() == 200 => {
+                return Ok(());
+            }
+            Ok(resp) => {
+                last_err = Some(format!(
+                    "GET {url} returned status {}; expected 200",
+                    resp.status()
+                ));
+            }
+            Err(err) => {
+                last_err = Some(format!("GET {url} failed: {err}"));
+            }
+        }
+        if attempt < 3 {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+    }
+    Err(last_err.unwrap_or_else(|| "healthcheck failed (no error captured)".to_string()))
 }
 
 fn run(args: &Args) -> std::result::Result<(), String> {
@@ -202,11 +254,12 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         args.model.as_deref().unwrap_or("(default)")
     );
     println!(
-        "e2e_auto: caps              = max_auto_iters={} max_critique_iters={} max_llm_requests={} max_identical_responses={}",
+        "e2e_auto: caps              = max_auto_iters={} max_critique_iters={} max_llm_requests={} max_identical_responses={} no_preamble={}",
         args.max_auto_iters,
         args.max_critique_iters,
         args.max_llm_requests,
         args.max_identical_responses,
+        args.no_preamble,
     );
     println!();
 
@@ -226,6 +279,30 @@ fn run(args: &Args) -> std::result::Result<(), String> {
                 );
             }
             Err(err) => return Err(format!("ingest_spec_file({}): {err}", spec.display())),
+        }
+    }
+
+    // Healthcheck the LLM server BEFORE launching the auto run.
+    // Skip for Claude backend (no local server); also skip when
+    // `--no-healthcheck` was explicitly set. For OpenAI-compat /
+    // Ollama with a base_url, ping `<base_url>/models` to confirm
+    // the server is alive.
+    if args.healthcheck && !matches!(args.backend, Backend::Claude) {
+        let base_url_for_check = args.base_url.clone().unwrap_or_else(|| match args.backend {
+            Backend::Ollama => "http://localhost:11434/v1".to_string(),
+            _ => "http://localhost:1234/v1".to_string(),
+        });
+        match vllm_healthcheck(&base_url_for_check) {
+            Ok(()) => {
+                println!("e2e_auto: healthcheck       = {base_url_for_check}/models -> 200 OK");
+            }
+            Err(detail) => {
+                return Err(format!(
+                    "LLM healthcheck failed before launch: {detail}\n\
+                     Check that the server is running and the base URL is correct, \
+                     or pass --no-healthcheck to skip this check.",
+                ));
+            }
         }
     }
 
@@ -258,6 +335,7 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         max_llm_requests: args.max_llm_requests,
         max_identical_responses: args.max_identical_responses,
         step_mode: StepMode::Auto,
+        no_preamble: args.no_preamble,
     };
 
     println!("e2e_auto: launching run_auto...\n");

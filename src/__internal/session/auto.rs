@@ -62,6 +62,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
+use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use crate::Result;
@@ -107,6 +108,11 @@ pub struct AutoOptions {
     /// response to host commands. The mode flag is also live-mutable
     /// mid-run via the `SetStepMode` host event.
     pub step_mode: StepMode,
+    /// Forwarded to every sub-session's `OrchestratorOptions`. When
+    /// true (default), loads `_conventions/no-preamble.md` into the
+    /// system prompt so verbose-CoT models lead with tool calls
+    /// instead of preamble.
+    pub no_preamble: bool,
 }
 
 pub fn run_auto<H: Host>(opts: AutoOptions, host: &mut H) -> Result<()> {
@@ -259,14 +265,42 @@ fn run_auto_loop<H: Host>(
     })?;
     let remaining: Vec<&'static str> = order[starting_idx..].to_vec();
 
+    // Resume from checkpoint when one exists for the same step.
+    // The checkpoint persists `(step, critique_iters,
+    // prev_blocker_count)` after every sub-session boundary, so a
+    // process killed mid-retry can pick up where it left off
+    // instead of redoing the prior retries from zero. Stale
+    // checkpoints (different step than state.toml's current_step)
+    // are ignored and cleared.
+    let resumed = load_checkpoint(&opts.project_dir).filter(|c| c.step == starting);
+    if let Some(c) = &resumed {
+        let elapsed_min = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs().saturating_sub(c.timestamp_unix) / 60)
+            .unwrap_or(0);
+        info!(
+            step = %c.step,
+            critique_iters = c.critique_iters,
+            last_kind = %c.last_kind,
+            elapsed_min,
+            "auto: resuming from checkpoint"
+        );
+    } else {
+        // Stale checkpoint (different step) gets cleaned up.
+        clear_checkpoint(&opts.project_dir);
+    }
+
     for (step_pos, step_id) in remaining.iter().enumerate() {
         let is_first_step = step_pos == 0;
-        let mut critique_iters: u32 = 0;
-        // Track the prior critique's blocker count so each retry can
-        // report the delta (`12 -> 4 (-8)`) under
-        // `sim_flow::metrics`. None until the first critique pass
-        // measures.
-        let mut prev_blocker_count: Option<usize> = None;
+        // Resume retry counters from checkpoint when this is the
+        // first step of the resumed run AND the checkpoint matches.
+        let (mut critique_iters, mut prev_blocker_count): (u32, Option<usize>) =
+            if step_pos == 0 && resumed.as_ref().map(|c| c.step.as_str()) == Some(*step_id) {
+                let c = resumed.as_ref().unwrap();
+                (c.critique_iters, c.prev_blocker_count)
+            } else {
+                (0, None)
+            };
         let step_started = std::time::Instant::now();
 
         loop {
@@ -334,6 +368,16 @@ fn run_auto_loop<H: Host>(
             // budget, loop back to work. Otherwise proceed to advance.
             let blockers = read_blockers(&opts.project_dir, step_id);
             let cur_count = blockers.len();
+            // Checkpoint after each Critique boundary so a kill
+            // during the next Work session resumes with the right
+            // retry counter rather than starting the step over.
+            save_checkpoint(
+                &opts.project_dir,
+                step_id,
+                critique_iters,
+                Some(cur_count),
+                "critique",
+            );
             // Per-critique-pass delta. `delta` is signed because a
             // retry can introduce regressions (count strictly
             // increasing) -- worth surfacing so a stuck-loop is
@@ -373,10 +417,22 @@ fn run_auto_loop<H: Host>(
                     wall_ms = step_wall_ms,
                 );
                 match advance_outcome {
-                    AdvanceOutcome::Advanced => break,
+                    AdvanceOutcome::Advanced => {
+                        // Step advanced cleanly; the checkpoint
+                        // belongs to a step we're past, so wipe it.
+                        clear_checkpoint(&opts.project_dir);
+                        break;
+                    }
                     AdvanceOutcome::MoreMilestonesPending => {
                         critique_iters = 0;
                         prev_blocker_count = None;
+                        save_checkpoint(
+                            &opts.project_dir,
+                            step_id,
+                            critique_iters,
+                            prev_blocker_count,
+                            "advance-milestone",
+                        );
                         auto_host.write(&Event::Diagnostic {
                             level: DiagnosticLevel::Info,
                             message: format!(
@@ -428,6 +484,10 @@ fn run_auto_loop<H: Host>(
         // step. Outer for-loop moves to the next step.
     }
 
+    // Clean exit: every step advanced. The checkpoint belongs to
+    // a finished run; remove it so a future invocation against
+    // the same project starts fresh.
+    clear_checkpoint(&opts.project_dir);
     Ok(AutoLoopOutcome::Completed)
 }
 
@@ -530,6 +590,81 @@ fn run_orchestrator_cargo_checks(opts: &AutoOptions, step_id: &str) {
         clippy_ok = report.clippy_ok,
         all_clean = report.all_clean(),
     );
+}
+
+/// Mid-step checkpoint persisted to `.sim-flow/checkpoint.json`
+/// after every sub-session boundary so an interrupted auto run can
+/// resume retry counters instead of starting each step from
+/// scratch. Disk state (milestone-NN-*.md ticks, critique JSONs,
+/// cargo-checks.md) is the primary checkpoint; this file just
+/// captures the in-memory loop counters that would otherwise be
+/// lost when the process dies.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AutoCheckpoint {
+    /// Step the auto loop was processing when the checkpoint was
+    /// written. On restart, the resume logic only restores
+    /// counters when `state.toml::current_step` matches this --
+    /// stale checkpoints from a different step are ignored.
+    step: String,
+    /// Cross-session retry count for the current step. Restored
+    /// on resume so a process that died mid-retry doesn't spin
+    /// `max_critique_iters` extra retries.
+    critique_iters: u32,
+    /// Last critique's blocker count, for the delta-tracking
+    /// metric. Restored on resume so the post-restart pass can
+    /// still compute a sensible delta.
+    prev_blocker_count: Option<usize>,
+    /// Last sub-session kind written ("work" or "critique"). Used
+    /// only for diagnostic logging on resume.
+    last_kind: String,
+    /// Wall-clock timestamp (seconds since epoch) of the
+    /// checkpoint write. Lets the resume log emit a "resuming
+    /// from N minutes ago" line so the user can sanity-check.
+    timestamp_unix: u64,
+}
+
+fn checkpoint_path(project_dir: &Path) -> std::path::PathBuf {
+    project_dir.join(".sim-flow").join("checkpoint.json")
+}
+
+fn save_checkpoint(
+    project_dir: &Path,
+    step: &str,
+    critique_iters: u32,
+    prev_blocker_count: Option<usize>,
+    last_kind: &str,
+) {
+    let timestamp_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let checkpoint = AutoCheckpoint {
+        step: step.to_string(),
+        critique_iters,
+        prev_blocker_count,
+        last_kind: last_kind.to_string(),
+        timestamp_unix,
+    };
+    let path = checkpoint_path(project_dir);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(body) = serde_json::to_string_pretty(&checkpoint) {
+        let _ = std::fs::write(&path, body);
+    }
+}
+
+fn load_checkpoint(project_dir: &Path) -> Option<AutoCheckpoint> {
+    let path = checkpoint_path(project_dir);
+    let body = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&body).ok()
+}
+
+/// Wipe the checkpoint when the auto loop advances to the next
+/// step (the prior step's counters are irrelevant once we're past
+/// it) or when run_auto exits cleanly.
+fn clear_checkpoint(project_dir: &Path) {
+    let _ = std::fs::remove_file(checkpoint_path(project_dir));
 }
 
 fn flip_to_manual<H: Host>(auto_host: &mut AutoHost<H>) -> Result<()> {
@@ -679,6 +814,7 @@ fn run_subsession<H: Host>(
         // ` ```<path>` blocks from each turn and writes them. Use
         // the artifact-write convention.
         agent_has_native_fs_tools: false,
+        no_preamble: opts.no_preamble,
     };
     let result = run_session(session_opts, host);
     host.in_subsession = false;

@@ -121,6 +121,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             step_mode,
             max_llm_requests,
             max_identical_responses,
+            no_preamble,
         } => auto_cmd(
             cli,
             &project_dir,
@@ -135,6 +136,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             (*step_mode).into(),
             *max_llm_requests,
             *max_identical_responses,
+            *no_preamble,
         ),
         Command::Prompts { action } => prompts_cmd(cli, &project_dir, action),
         Command::BlockDiagram {
@@ -396,6 +398,7 @@ fn auto_cmd(
     step_mode: sim_flow::__internal::session::protocol::StepMode,
     max_llm_requests: u32,
     max_identical_responses: u32,
+    no_preamble: bool,
 ) -> sim_flow::Result<()> {
     let foundation = foundation_root::resolve(cli.foundation_root.as_deref())?;
     // Pre-DM0 ingestion hook: ensures `.sim-flow/source-spec*` is up
@@ -445,6 +448,7 @@ fn auto_cmd(
         max_llm_requests,
         max_identical_responses,
         step_mode,
+        no_preamble,
     };
     if let Some(socket_path) = transport_socket {
         run_with_socket_session_end(socket_path, |host| {
