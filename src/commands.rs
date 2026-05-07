@@ -339,6 +339,14 @@ fn auto_cmd(
     no_preamble: bool,
 ) -> sim_flow::Result<()> {
     let foundation = foundation_root::resolve(cli.foundation_root.as_deref())?;
+    // Tooling preflight: DM3c shells out to `cargo tarpaulin` from
+    // inside the agent's work session. If the binary isn't on PATH,
+    // the agent gets a "no such command: tarpaulin" error mid-run
+    // and burns LLM budget retrying. Install once at startup so the
+    // tool is ready by the time the flow reaches DM3c. Failures
+    // are non-fatal -- DS / DM0..DM3b don't touch tarpaulin and a
+    // network outage shouldn't block them.
+    ensure_tarpaulin_available();
     // Pre-DM0 ingestion hook: ensures `.sim-flow/source-spec*` is up
     // to date before the first session's system stack is built. The
     // helper resolves a spec from (1) the CLI `--spec` arg, or (2)
@@ -415,6 +423,39 @@ fn auto_cmd(
 /// Idempotency: when the resolved spec already has a corresponding
 /// `.sim-flow/source-spec.<ext>` whose mtime is at least the source's,
 /// ingestion is skipped to avoid re-paginating large source specs.
+/// Ensure `cargo tarpaulin` is on PATH; install it (via `cargo
+/// install cargo-tarpaulin --locked`) if not. The agent runs
+/// `cargo tarpaulin` during DM3c (Test Execution and Coverage);
+/// pre-installing here means we don't waste an LLM turn on a
+/// "command not found" error and a retry. Failures are non-fatal
+/// -- not every flow uses tarpaulin (DS doesn't), and a transient
+/// network outage shouldn't block flows that don't need it. We
+/// log a warning either way so the user can spot the problem if
+/// DM3c does come around.
+fn ensure_tarpaulin_available() {
+    use sim_flow::__internal::preflight::{
+        SystemRunner, TarpaulinStatus, ensure_tarpaulin_installed,
+    };
+
+    let mut runner = SystemRunner;
+    match ensure_tarpaulin_installed(&mut runner, |line| eprintln!("{line}")) {
+        Ok(TarpaulinStatus::AlreadyInstalled { version }) => {
+            // First-line slice is enough; some installs print
+            // multi-line metadata that we don't need to spam.
+            let first = version.lines().next().unwrap_or(version.as_str());
+            eprintln!("sim-flow: cargo-tarpaulin OK ({first}).");
+        }
+        Ok(TarpaulinStatus::JustInstalled) => {
+            eprintln!("sim-flow: cargo-tarpaulin installed.");
+        }
+        Err(reason) => {
+            eprintln!(
+                "sim-flow: cargo-tarpaulin install failed ({reason}); DM3c will surface a `command not found` error if/when it runs. Install manually with `cargo install cargo-tarpaulin --locked` to recover.",
+            );
+        }
+    }
+}
+
 fn ensure_source_spec_ingested(cli_spec: Option<&Path>, project: &Path) -> sim_flow::Result<()> {
     use sim_flow::__internal::session::ingest_spec_file;
 
