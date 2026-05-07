@@ -38,8 +38,26 @@ export interface DashboardState {
    * Per-milestone progress for the current step, when that step
    * executes a plan (DM2d, DM3c, DM4b). For other steps `kind`
    * is "none" and the dashboard hides the progress row.
+   *
+   * Kept for backwards compatibility with older host snapshots;
+   * new renders prefer `planProgressByKind` so the milestone
+   * pipeline shows up under any plan-related step (DM2c outline,
+   * DM2d execution, DM3a..DM3c, DM4a..DM4b) regardless of which
+   * step is currently active.
    */
   planProgress: PlanProgress;
+  /**
+   * Per-kind plan progress so the dashboard can render the
+   * milestone pipeline under every plan-related step, not just
+   * `current_step`. Each entry is independently scanned from
+   * disk; missing on-disk plan files surface as `kind: "none"`.
+   * Optional so older host snapshots still parse.
+   */
+  planProgressByKind?: {
+    impl: PlanProgress;
+    test: PlanProgress;
+    perf: PlanProgress;
+  };
   /**
    * Persisted spec-path the user typed into the Spec field on a
    * prior session. Empty string when no spec was ever recorded
@@ -99,6 +117,28 @@ export interface DashboardState {
 }
 
 /**
+ * Inline preview block shipped alongside a `DocumentEntry`. The
+ * dashboard renders these under the Open row so the user gets the
+ * file's summary content (table-shaped or full markdown) without an
+ * Open click. See `DocumentEntry.previews` for placement semantics.
+ */
+export type ArtifactPreview =
+  | {
+      kind: "table";
+      /** Section heading the table was extracted from, if any. */
+      caption?: string;
+      /** Header cells (one per column). */
+      headers: string[];
+      /** One row per table row, each cell aligned to `headers`. */
+      rows: string[][];
+    }
+  | {
+      kind: "markdown";
+      /** Markdown source body. The webview renders it inline. */
+      body: string;
+    };
+
+/**
  * One row in the Documents tab. Covers both per-step generated
  * artifacts (work outputs + critique files) and the ingested source
  * spec. The dashboard renders rows in `category` groups, sorted by
@@ -120,14 +160,26 @@ export interface DocumentEntry {
   /** True if the file is on disk; false rows are placeholders for expected outputs. */
   exists: boolean;
   /**
-   * Optional inline preview of the file body, populated by the host
-   * for select small artifacts where the per-step view should show
-   * content directly (e.g. decomposition.md, pipeline-mapping.md
-   * summary tables) so the user gets an overview without clicking
-   * Open. Capped at ~4 KB of original markdown; UI renders inside
-   * a `<pre>`-style code block.
+   * Structured inline preview, populated by the host for select
+   * artifacts so the per-step view shows their summary content
+   * directly (e.g. decomposition.md's "Operation Summary" table,
+   * testbench.md's full body) without an Open round-trip. Two
+   * shapes:
+   *
+   * - `{kind: "table", caption?, headers, rows}` -- a parsed
+   *   markdown table extracted from a named section of the file.
+   *   The webview renders it as a real `<table>` so the user
+   *   sees the rendered shape, not raw `| x | y |` syntax.
+   * - `{kind: "markdown", body}` -- a body of markdown rendered
+   *   inline as HTML. Used for small structured docs where the
+   *   whole file is the value (testbench.md). Capped at ~8 KB of
+   *   source on the host; oversized files truncate with a
+   *   trailing note.
+   *
+   * Multiple previews per file are allowed (one for each table
+   * we extract); they render in source order.
    */
-  previewBody?: string;
+  previews?: ArtifactPreview[];
   /**
    * Line count when the host computed it (currently only for
    * Rust source files under `src/` and `tests/`). The per-step

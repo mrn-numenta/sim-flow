@@ -10,7 +10,7 @@ import type { SimFlowCli } from "../cli/simflow";
 import type { CritiqueFile } from "../state/critiques";
 import { listCritiqueFiles } from "../state/critiques";
 import type { FlowState } from "../state/flowState";
-import { readPlanProgress } from "../state/planProgress";
+import { readAllPlanProgress, readPlanProgress } from "../state/planProgress";
 import { readFlowState } from "../state/flowState";
 import { openExperiments } from "../state/experiments";
 import { createStateWatcher, type SimFlowStateWatcher } from "../state/watcher";
@@ -363,21 +363,13 @@ export class DashboardHost {
       case "set-verilog-sim-enabled":
         await vscode.workspace
           .getConfiguration("sim-flow")
-          .update(
-            "dashboard.verilogSimEnabled",
-            msg.enabled,
-            vscode.ConfigurationTarget.Workspace,
-          );
+          .update("dashboard.verilogSimEnabled", msg.enabled, vscode.ConfigurationTarget.Workspace);
         await this.refresh();
         return;
       case "set-verilog-simulator-path":
         await vscode.workspace
           .getConfiguration("sim-flow")
-          .update(
-            "dashboard.verilogSimulatorPath",
-            msg.path,
-            vscode.ConfigurationTarget.Workspace,
-          );
+          .update("dashboard.verilogSimulatorPath", msg.path, vscode.ConfigurationTarget.Workspace);
         await this.refresh();
         return;
       case "switch-project":
@@ -391,10 +383,7 @@ export class DashboardHost {
         );
         return;
       case "rename-project":
-        await vscode.commands.executeCommand(
-          "sim-flow.renameProject",
-          this.options.projectDir,
-        );
+        await vscode.commands.executeCommand("sim-flow.renameProject", this.options.projectDir);
         return;
       case "set-llm-source": {
         // Persist at workspace scope so the change is project-y by
@@ -635,11 +624,7 @@ export class DashboardHost {
         this.options.projectDir,
       );
     } else {
-      await vscode.commands.executeCommand(
-        "sim-flow.runFlow",
-        trimmed,
-        this.options.projectDir,
-      );
+      await vscode.commands.executeCommand("sim-flow.runFlow", trimmed, this.options.projectDir);
     }
   }
 
@@ -697,16 +682,12 @@ export class DashboardHost {
       return;
     }
     const cfg = vscode.workspace.getConfiguration("sim-flow");
-    const simEnabled =
-      cfg.get<boolean>("dashboard.verilogSimEnabled") ?? false;
+    const simEnabled = cfg.get<boolean>("dashboard.verilogSimEnabled") ?? false;
     const simPath = (cfg.get<string>("dashboard.verilogSimulatorPath") ?? "").trim();
     if (simEnabled && simPath.length > 0) {
       prompt = `${prompt.trimEnd()}\n\n${buildSimulateAndIterateAppendix(simPath)}\n`;
     }
-    await this.sendControlOrFallback(
-      { command: "inject", text: prompt },
-      "generate-verilog",
-    );
+    await this.sendControlOrFallback({ command: "inject", text: prompt }, "generate-verilog");
   }
 
   private async stopAuto(): Promise<void> {
@@ -723,16 +704,10 @@ export class DashboardHost {
       });
       return;
     }
-    await this.sendControlOrFallback(
-      { command: "inject", text: "/exit" },
-      "stop-auto",
-    );
+    await this.sendControlOrFallback({ command: "inject", text: "/exit" }, "stop-auto");
   }
 
-  private async tryControlSocketRunStep(
-    step: string,
-    kind: "work" | "critique",
-  ): Promise<boolean> {
+  private async tryControlSocketRunStep(step: string, kind: "work" | "critique"): Promise<boolean> {
     if (!controlSocketLikelyPresent(this.options.projectDir)) {
       return await this.cliSourceGuard();
     }
@@ -762,10 +737,7 @@ export class DashboardHost {
     if (!controlSocketLikelyPresent(this.options.projectDir)) {
       return false;
     }
-    return await this.sendControlOrFallback(
-      { command: "run-gate", step },
-      "run-gate",
-    );
+    return await this.sendControlOrFallback({ command: "run-gate", step }, "run-gate");
   }
 
   /**
@@ -778,10 +750,7 @@ export class DashboardHost {
     if (!controlSocketLikelyPresent(this.options.projectDir)) {
       return false;
     }
-    return await this.sendControlOrFallback(
-      { command: "advance", step },
-      "advance",
-    );
+    return await this.sendControlOrFallback({ command: "advance", step }, "advance");
   }
 
   /**
@@ -814,9 +783,7 @@ export class DashboardHost {
     if (!isTerminalLlmSource(source)) {
       return false;
     }
-    const sessionMode = (
-      config.get<string>("session.mode") ?? "per-step"
-    ).trim();
+    const sessionMode = (config.get<string>("session.mode") ?? "per-step").trim();
     const tip =
       sessionMode === "single"
         ? "Click 'Run / Resume Automated Flow' first; the agent's control socket only opens when sim-flow is running in single-session mode."
@@ -913,27 +880,26 @@ export class DashboardHost {
       projectDir: this.options.projectDir,
       flow: flow.flow,
     });
-    const planProgress = await readPlanProgress(
-      this.options.projectDir,
-      flow.current_step,
-    );
+    const planProgress = await readPlanProgress(this.options.projectDir, flow.current_step);
+    // All-kinds progress so the dashboard can show milestone
+    // pipelines under any plan-related step (DM2c outline,
+    // DM2cd detail, DM2d execution, etc.) regardless of which
+    // step is current. Each kind is scanned independently so
+    // missing-on-disk plans render as empty boxes rather than
+    // hiding the section.
+    const planProgressByKind = await readAllPlanProgress(this.options.projectDir);
     const specPath = this.readSpecPath();
     const cfg = vscode.workspace.getConfiguration("sim-flow");
-    const fullyAutomatedEnabled =
-      cfg.get<boolean>("dashboard.showFullyAutomated") ?? false;
-    const verilogSimEnabled =
-      cfg.get<boolean>("dashboard.verilogSimEnabled") ?? false;
-    const verilogSimulatorPath = (
-      cfg.get<string>("dashboard.verilogSimulatorPath") ?? ""
-    ).trim();
+    const fullyAutomatedEnabled = cfg.get<boolean>("dashboard.showFullyAutomated") ?? false;
+    const verilogSimEnabled = cfg.get<boolean>("dashboard.verilogSimEnabled") ?? false;
+    const verilogSimulatorPath = (cfg.get<string>("dashboard.verilogSimulatorPath") ?? "").trim();
     // Resolve the step-axis mode: orchestrator's truth when a pump is
     // attached for this project, otherwise the persisted setting. The
     // pump echoes `StepModeChanged` on connect, so once the dashboard
     // has refreshed after the first echo the toggle matches reality
     // even if the user changed the setting after launch.
     const session = this.activeSession();
-    const stepMode: StepMode =
-      session?.pump.stepMode ?? readStepModeSetting(cfg);
+    const stepMode: StepMode = session?.pump.stepMode ?? readStepModeSetting(cfg);
     const sessionActive = !!session;
     // True while the orchestrator is inside a sub-session (Work or
     // Critique). The pump tracks this from the
@@ -949,6 +915,7 @@ export class DashboardHost {
       baselines,
       documents,
       planProgress,
+      planProgressByKind,
       specPath,
       fullyAutomatedEnabled,
       verilogSimEnabled,
@@ -989,9 +956,7 @@ export class DashboardHost {
    * verify presence here so a stray call against the wrong transport
    * still falls through cleanly.
    */
-  private routeManualCommand(
-    dispatch: (pump: ManagedAutoSessionState["pump"]) => void,
-  ): boolean {
+  private routeManualCommand(dispatch: (pump: ManagedAutoSessionState["pump"]) => void): boolean {
     const session = this.activeSession();
     if (!session) {
       return false;
@@ -1185,7 +1150,7 @@ export class DashboardHost {
           message: `No global prompt path is configured.`,
           detail:
             "The CLI did not return a global override location for this prompt. " +
-            "Pick \"Edit (project)\" instead, or set up a user-config directory " +
+            'Pick "Edit (project)" instead, or set up a user-config directory ' +
             "before retrying.",
         });
         return;
@@ -1229,9 +1194,7 @@ export class DashboardHost {
   ): Promise<void> {
     try {
       await this.options.cli.promptReset(slug, kind, scope);
-      void vscode.window.showInformationMessage(
-        `Reset ${slug}.${kind} override (${scope}).`,
-      );
+      void vscode.window.showInformationMessage(`Reset ${slug}.${kind} override (${scope}).`);
       await this.sendPromptsList();
     } catch (err) {
       await this.post({

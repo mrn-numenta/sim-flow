@@ -2,27 +2,30 @@
 // the dashboard to render a milestone progress row + current-task
 // line under the per-step buttons.
 //
-// Three plan shapes coexist in `docs/plan/`:
+// Three plan shapes are walked, all milestone-per-file:
 //
-//   1. Implementation plan (DM2c writes, DM2d executes):
-//      `docs/plan/plan.md` index + `docs/plan/milestone-NN-<name>.md`
-//      files. Each milestone file is one progress box.
+//   1. Implementation plan (DM2c outline + DM2cd detail write,
+//      DM2d executes): `docs/impl-plan/plan.md` index +
+//      `docs/impl-plan/milestone-NN-<name>.md` files. One box
+//      per milestone.
 //
-//   2. Test plan (DM3a writes, DM3c executes):
-//      `docs/plan/test-plan.md` -- a single file with `## Smoke`,
-//      `## Edge`, `## Stress`, `## Random` sections. Each section is
-//      one progress box.
+//   2. Test plan (DM3a outline + DM3ad detail write, DM3b
+//      executes the testbench scaffolding, DM3c executes tests):
+//      `docs/test-plan/test-plan.md` index +
+//      `docs/test-plan/tb-milestone-NN-*.md` (DM3b's slices) AND
+//      `docs/test-plan/test-milestone-NN-*.md` (DM3c's slices).
+//      Each milestone file is one box; both prefixes share the
+//      same kind so the user sees the testbench + test work as
+//      one pipeline.
 //
-//   3. Performance plan (DM4a writes, DM4b executes):
-//      `docs/plan/perf-plan.md` index + `docs/plan/perf-milestone-NN-<name>.md`
-//      files. One box per milestone.
+//   3. Performance plan (DM4a outline + DM4ad detail write, DM4b
+//      executes): `docs/perf-plan/perf-plan.md` index +
+//      `docs/perf-plan/perf-milestone-NN-<name>.md` files.
 //
-// The "current task" is a best-guess heuristic: for plans split
-// across multiple milestone files, we pick the most-recently-modified
-// file and return its first un-checked `- [ ]` row; for the
-// single-file test plan, we walk the file and return the first
-// un-checked row across all sections. Falls back to "first un-checked
-// in plan order" when modification times don't help (e.g. the agent
+// The "current task" is a best-guess heuristic: pick the
+// most-recently-modified milestone file and return its first
+// un-checked `- [ ]` row. Falls back to "first un-checked in plan
+// order" when modification times don't help (e.g. the agent
 // hasn't started yet).
 
 import { existsSync, statSync } from "node:fs";
@@ -44,22 +47,46 @@ const EMPTY: PlanProgress = {
 };
 
 /**
- * Map `current_step` to which plan file applies. Steps that don't
- * execute a plan (DM0/1/2a/2b/2c/3a/3b/4a or any DS step) return
- * "none" so the dashboard hides the progress row.
+ * Map `current_step` to which plan file applies. Outline + detail
+ * steps share their plan with the execution step (DM2c / DM2cd
+ * with DM2d, DM3a / DM3ad with DM3b / DM3c, DM4a / DM4ad with
+ * DM4b), so any step in the phase returns the matching kind.
+ * Steps that don't drive a plan (DM0 / DM1 / DM2a / DM2b or any
+ * DS step) return "none".
  */
 function planKindForStep(currentStep: string): PlanProgress["kind"] {
   switch (currentStep) {
+    case "DM2c":
+    case "DM2cd":
     case "DM2d":
       return "impl";
+    case "DM3a":
+    case "DM3ad":
+    case "DM3b":
     case "DM3c":
       return "test";
+    case "DM4a":
+    case "DM4ad":
     case "DM4b":
       return "perf";
     default:
       return "none";
   }
 }
+
+/** Per-kind config: which directory + filename prefix(es) hold
+ *  the milestone files. Test plan walks two prefixes
+ *  (`tb-milestone-` for DM3b's testbench scaffolding +
+ *  `test-milestone-` for DM3c's test execution); both feed one
+ *  pipeline. */
+const PLAN_DIR_CONFIG: Record<"impl" | "test" | "perf", { dir: string; prefixes: string[] }> = {
+  impl: { dir: path.join("docs", "impl-plan"), prefixes: ["milestone-"] },
+  test: {
+    dir: path.join("docs", "test-plan"),
+    prefixes: ["tb-milestone-", "test-milestone-"],
+  },
+  perf: { dir: path.join("docs", "perf-plan"), prefixes: ["perf-milestone-"] },
+};
 
 /**
  * Compute progress for the project's active plan. Safe to call when
@@ -73,26 +100,43 @@ export async function readPlanProgress(
   if (kind === "none") {
     return EMPTY;
   }
-  if (kind === "impl") {
-    return await readMilestoneDirPlan(projectDir, kind, "milestone-");
-  }
-  if (kind === "perf") {
-    return await readMilestoneDirPlan(projectDir, kind, "perf-milestone-");
-  }
-  // kind === "test": single file with `## <Category>` sections.
-  return await readSectionedTestPlan(projectDir);
+  return await readMilestoneDirPlan(projectDir, kind);
 }
 
 /**
- * Read a milestone-per-file plan: every `<prefix>NN-<name>.md` under
- * `docs/plan/` is one milestone box. Sorted by NN.
+ * Compute progress for ALL plan kinds in one pass. The dashboard
+ * uses this so a click on any plan-related step (outline, detail,
+ * or execution) shows the milestone pipeline regardless of which
+ * step is `current_step`. Each kind's progress is independently
+ * scanned; missing-on-disk plans land as `kind: <kind>` with
+ * empty milestones.
+ */
+export async function readAllPlanProgress(projectDir: string): Promise<{
+  impl: PlanProgress;
+  test: PlanProgress;
+  perf: PlanProgress;
+}> {
+  const [impl, test, perf] = await Promise.all([
+    readMilestoneDirPlan(projectDir, "impl"),
+    readMilestoneDirPlan(projectDir, "test"),
+    readMilestoneDirPlan(projectDir, "perf"),
+  ]);
+  return { impl, test, perf };
+}
+
+/**
+ * Read a milestone-per-file plan: every `<prefix>NN-<name>.md`
+ * under the kind's plan directory is one milestone box. Sorted
+ * lexicographically across all configured prefixes (so
+ * `tb-milestone-01-*.md` comes before `test-milestone-01-*.md`
+ * for the test plan's combined pipeline).
  */
 async function readMilestoneDirPlan(
   projectDir: string,
-  kind: "impl" | "perf",
-  prefix: "milestone-" | "perf-milestone-",
+  kind: "impl" | "test" | "perf",
 ): Promise<PlanProgress> {
-  const planDir = path.join(projectDir, "docs", "plan");
+  const cfg = PLAN_DIR_CONFIG[kind];
+  const planDir = path.join(projectDir, cfg.dir);
   if (!existsSync(planDir)) {
     return { ...EMPTY, kind };
   }
@@ -105,9 +149,9 @@ async function readMilestoneDirPlan(
   const milestoneFiles = entries
     .filter(
       (name) =>
-        name.startsWith(prefix) &&
         name.endsWith(".md") &&
-        !name.endsWith("-critique.md"),
+        !name.endsWith("-critique.md") &&
+        cfg.prefixes.some((p) => name.startsWith(p)),
     )
     .sort();
   if (milestoneFiles.length === 0) {
@@ -127,15 +171,33 @@ async function readMilestoneDirPlan(
       continue;
     }
     const counts = countCheckboxes(body);
-    // Extract `NN` from `<prefix>NN-<name>.md` for the id label.
-    const numMatch = name.slice(prefix.length).match(/^(\d+)-(.+)\.md$/);
+    // Extract the milestone numeric label, allowing letter-suffixed
+    // splits (`tb-milestone-02b-edge.md` -> `M02b`). The matched
+    // prefix is the longest prefix in `cfg.prefixes` that the
+    // filename starts with -- otherwise `tb-milestone-` would
+    // shadow `test-milestone-` for files starting with `tb-`.
+    const matchedPrefix = cfg.prefixes
+      .filter((p) => name.startsWith(p))
+      .reduce((a, b) => (a.length >= b.length ? a : b), "");
+    const remainder = name.slice(matchedPrefix.length);
+    const numMatch = remainder.match(/^(\d+[a-z]?)-(.+)\.md$/);
     const numLabel = numMatch ? `M${numMatch[1]}` : name;
-    const titleSuffix = numMatch
-      ? numMatch[2].replace(/-/g, " ")
-      : name.replace(/\.md$/, "");
+    const titleSuffix = numMatch ? numMatch[2].replace(/-/g, " ") : name.replace(/\.md$/, "");
+    // Differentiate testbench-milestone vs test-execution-milestone
+    // entries in the title so the user can tell them apart at a
+    // glance when both walk the same pipeline.
+    const prefixTag =
+      matchedPrefix === "tb-milestone-"
+        ? "TB"
+        : matchedPrefix === "test-milestone-"
+          ? "Test"
+          : null;
+    const fullTitle = prefixTag
+      ? `${prefixTag} ${numLabel}: ${titleSuffix}`
+      : `${numLabel}: ${titleSuffix}`;
     milestones.push({
       id: numLabel,
-      title: `${numLabel}: ${titleSuffix}`,
+      title: fullTitle,
       filePath,
       fileLine: undefined,
       done: counts.done,
@@ -150,9 +212,7 @@ async function readMilestoneDirPlan(
   }
   // Pick the current-task source: most-recent-with-pending if we
   // saw one, else the first milestone with any pending row.
-  const targetIdx =
-    mostRecent?.index ??
-    milestones.findIndex((m) => m.pending > 0);
+  const targetIdx = mostRecent?.index ?? milestones.findIndex((m) => m.pending > 0);
   if (targetIdx < 0 || targetIdx >= milestones.length) {
     return {
       kind,
@@ -179,122 +239,6 @@ async function readMilestoneDirPlan(
   };
 }
 
-const TEST_SECTIONS: ReadonlyArray<string> = [
-  "Smoke",
-  "Edge",
-  "Stress",
-  "Random",
-];
-
-/**
- * Read DM3a's test plan (single file, `## <Category>` sections).
- * Each of Smoke / Edge / Stress / Random becomes one progress box.
- * Sections we don't recognize (e.g. `## Coverage`, `## Traceability`)
- * are skipped -- those don't have completion semantics.
- */
-async function readSectionedTestPlan(
-  projectDir: string,
-): Promise<PlanProgress> {
-  const filePath = path.join(projectDir, "docs", "plan", "test-plan.md");
-  if (!existsSync(filePath)) {
-    return { ...EMPTY, kind: "test" };
-  }
-  let body: string;
-  try {
-    body = await fs.readFile(filePath, "utf8");
-  } catch {
-    return { ...EMPTY, kind: "test" };
-  }
-  const milestones: PlanMilestone[] = [];
-  let firstPending: { text: string; line: number } | null = null;
-  for (const section of TEST_SECTIONS) {
-    const sliceInfo = sliceSection(body, section);
-    if (!sliceInfo) {
-      // The plan is missing this section. Surface the box as
-      // empty so the user sees the gap.
-      milestones.push({
-        id: section,
-        title: `${section} (section missing)`,
-        filePath,
-        fileLine: undefined,
-        done: 0,
-        deferred: 0,
-        pending: 0,
-      });
-      continue;
-    }
-    const counts = countCheckboxes(sliceInfo.body);
-    milestones.push({
-      id: section,
-      title: section,
-      filePath,
-      fileLine: sliceInfo.headingLine,
-      done: counts.done,
-      deferred: counts.deferred,
-      pending: counts.pending,
-    });
-    if (!firstPending) {
-      const row = firstPendingRow(sliceInfo.body);
-      if (row) {
-        firstPending = {
-          text: row.text,
-          line: sliceInfo.bodyStartLine + row.line,
-        };
-      }
-    }
-  }
-  return {
-    kind: "test",
-    milestones,
-    currentTask: firstPending?.text ?? null,
-    currentTaskFilePath: firstPending ? filePath : null,
-    currentTaskLine: firstPending?.line ?? null,
-  };
-}
-
-interface SectionSlice {
-  /** Section body (everything between this heading and the next). */
-  body: string;
-  /** 0-indexed line number of the `## <name>` heading in the parent file. */
-  headingLine: number;
-  /** 0-indexed line number where `body` begins in the parent file. */
-  bodyStartLine: number;
-}
-
-/**
- * Pull the body of a `## <name>` section out of `text`. Returns
- * `null` if the heading is missing. Heading match is
- * case-insensitive on the section name and tolerates extra heading
- * adornments (e.g. `## Smoke (15 tests)`).
- */
-function sliceSection(text: string, name: string): SectionSlice | null {
-  const lines = text.split("\n");
-  const pattern = new RegExp(`^##\\s+${name}\\b`, "i");
-  let headingLine = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (pattern.test(lines[i])) {
-      headingLine = i;
-      break;
-    }
-  }
-  if (headingLine < 0) {
-    return null;
-  }
-  const bodyStart = headingLine + 1;
-  let bodyEnd = lines.length;
-  for (let i = bodyStart; i < lines.length; i++) {
-    if (/^##\s+/.test(lines[i])) {
-      bodyEnd = i;
-      break;
-    }
-  }
-  return {
-    body: lines.slice(bodyStart, bodyEnd).join("\n"),
-    headingLine,
-    bodyStartLine: bodyStart,
-  };
-}
-
 interface CheckboxCounts {
   done: number;
   deferred: number;
@@ -311,9 +255,13 @@ function countCheckboxes(text: string): CheckboxCounts {
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     const ch = m[1];
-    if (ch === " ") {counts.pending++;}
-    else if (ch === "x" || ch === "X") {counts.done++;}
-    else if (ch === "-") {counts.deferred++;}
+    if (ch === " ") {
+      counts.pending++;
+    } else if (ch === "x" || ch === "X") {
+      counts.done++;
+    } else if (ch === "-") {
+      counts.deferred++;
+    }
   }
   return counts;
 }

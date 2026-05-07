@@ -1022,19 +1022,10 @@ function renderSelectedStepDetail(data: DashboardState): HTMLElement {
       ...(resetBtn ? [resetBtn] : []),
     ),
   ];
-  // Plan-execution progress (DM2d / DM3c / DM4b only). For other
-  // steps `kind` is "none" and we render nothing -- the rest of the
-  // step detail keeps its current look.
-  if (stepId === data.flow.current_step && data.planProgress.kind !== "none") {
-    children.push(renderPlanProgress(data.planProgress));
-  }
-  // Per-step artifact list with sizes + estimated tokens + click-to-
-  // open. For DM2d / DM3b / DM3c (code-touching steps) also surfaces
-  // a one-line code summary (file count + total lines). Replaces the
-  // older "click into Documents tab to find your files" indirection
-  // -- the user wants every step's outputs visible without a tab
-  // round-trip when they click back into the rail.
-  children.push(renderStepArtifacts(data, stepId));
+  // Critique sits FIRST (above plan progress + artifacts) so the
+  // user sees the gate-relevant outcome at a glance when clicking
+  // back into a completed step. Plan progress + artifact list are
+  // supporting context below.
   const critique = findCritique(data.critiques, stepId);
   if (critique) {
     children.push(renderCritiqueSummary(critique));
@@ -1044,16 +1035,69 @@ function renderSelectedStepDetail(data: DashboardState): HTMLElement {
   if (ui.gateReport && ui.gateReport.step === stepId) {
     children.push(renderGateReport(ui.gateReport));
   }
+  // Plan-execution progress for any step whose flow phase has a
+  // plan: DM2c / DM2d (impl), DM3a / DM3b / DM3c (test),
+  // DM4a / DM4b (perf). The host ships a per-kind plan progress
+  // record so the user gets the milestone pipeline view even
+  // after the step has advanced past `current_step`.
+  const planForStep = planProgressForStep(data, stepId);
+  if (planForStep) {
+    children.push(renderPlanProgress(planForStep));
+  }
+  // Per-step artifact list with sizes + estimated tokens + click-to-
+  // open. For DM2d / DM3b / DM3c (code-touching steps) also surfaces
+  // a one-line code summary (file count + total lines).
+  children.push(renderStepArtifacts(data, stepId));
   return el("div", { class: "detail" }, ...children);
+}
+
+/**
+ * Pick which plan progress to render under a given step. Outline +
+ * detail steps share the same plan and milestone files, so they
+ * map to the same plan-progress kind. Steps with no plan return
+ * `null`.
+ */
+function planProgressForStep(
+  data: DashboardState,
+  stepId: string,
+): import("./messages").PlanProgress | null {
+  const planKindForStep: Record<string, "impl" | "test" | "perf"> = {
+    DM2c: "impl",
+    DM2cd: "impl",
+    DM2d: "impl",
+    DM3a: "test",
+    DM3ad: "test",
+    DM3b: "test",
+    DM3c: "test",
+    DM4a: "perf",
+    DM4ad: "perf",
+    DM4b: "perf",
+  };
+  const kind = planKindForStep[stepId];
+  if (!kind) {
+    return null;
+  }
+  // Backwards-compat: when the host hasn't shipped the per-kind
+  // map yet, fall back to the single planProgress field that's
+  // tied to current_step. After the host upgrades, every plan
+  // step gets its own progress regardless of which step is current.
+  const map = data.planProgressByKind;
+  if (map && map[kind] && map[kind].kind !== "none") {
+    return map[kind];
+  }
+  if (data.planProgress.kind === kind) {
+    return data.planProgress;
+  }
+  return null;
 }
 
 /**
  * Per-step artifacts overview. Lists every DocumentEntry whose
  * `step === stepId` (plus the source-spec rows under DM0) with
- * size + estimated tokens + Open button. For files marked with a
- * `previewBody` (decomposition.md / pipeline-mapping.md / etc.),
- * inlines the head of the file as a `<pre>` block so the user
- * gets an at-a-glance summary without an Open round-trip. For
+ * size + estimated tokens + Open button. Files marked with
+ * `previews` (decomposition.md / pipeline-mapping.md / etc.)
+ * inline a rendered table or markdown body under the row so the
+ * user gets the summary without an Open round-trip. For
  * code-touching steps, surfaces a one-line "N files / M lines"
  * code summary above the table.
  *
@@ -1159,23 +1203,236 @@ function renderStepArtifacts(data: DashboardState, stepId: string): HTMLElement 
         el("td", { class: "actions" }, action),
       ),
     );
-    if (entry.previewBody !== undefined && entry.exists) {
-      body.appendChild(
-        el(
-          "tr",
-          { class: "step-artifacts-preview-row" },
+    if (entry.previews !== undefined && entry.exists) {
+      for (const preview of entry.previews) {
+        body.appendChild(
           el(
-            "td",
-            { colspan: "4" },
-            el("pre", { class: "step-artifacts-preview" }, entry.previewBody),
+            "tr",
+            { class: "step-artifacts-preview-row" },
+            el(
+              "td",
+              { colspan: "4" },
+              el("div", { class: "step-artifacts-rendered" }, ...renderPreview(preview)),
+            ),
           ),
-        ),
-      );
+        );
+      }
     }
   }
   table.appendChild(body);
   wrap.appendChild(table);
   return wrap;
+}
+
+type ArtifactPreview = NonNullable<DocumentEntry["previews"]>[number];
+
+/**
+ * Render an `ArtifactPreview` to DOM nodes. Tables get rendered as
+ * real `<table>` elements with caption + headers + rows. Markdown
+ * bodies go through `renderMarkdownBlocks` which handles headings,
+ * paragraphs, lists, code, and inline tables -- enough for the
+ * structured docs we ship as previews (testbench.md is the main
+ * case; agents may add `## Sequencers` / `## Drivers` sections).
+ */
+function renderPreview(preview: ArtifactPreview): Node[] {
+  if (preview.kind === "table") {
+    const out: Node[] = [];
+    if (preview.caption && preview.caption.trim().length > 0) {
+      out.push(el("h4", {}, preview.caption));
+    }
+    const tbl = el("table", {});
+    const thead = el("thead", {}, el("tr", {}, ...preview.headers.map((h) => el("th", {}, h))));
+    tbl.appendChild(thead);
+    const tbody = el("tbody", {});
+    for (const row of preview.rows) {
+      tbody.appendChild(el("tr", {}, ...row.map((cell) => el("td", {}, cell))));
+    }
+    tbl.appendChild(tbody);
+    out.push(tbl);
+    return out;
+  }
+  return renderMarkdownBlocks(preview.body);
+}
+
+/**
+ * Minimal markdown -> DOM renderer covering what our generated
+ * docs actually use: ATX headings (`#`..`######`), paragraphs,
+ * bullet lists (`-` / `*`), numbered lists (`1.`), tables, fenced
+ * code blocks, inline `code`, `**bold**`, `*italic*`. NOT a
+ * spec-conformant renderer -- nested lists, links, blockquotes,
+ * setext headings, etc. fall through as plain text. We never ship
+ * untrusted markdown so the simplification is OK; the goal is
+ * "what does decomposition.md look like" not "render the GFM
+ * spec". HTML-escaping happens via `document.createTextNode` /
+ * the `el` helper, never `innerHTML`.
+ */
+function renderMarkdownBlocks(source: string): Node[] {
+  const lines = source.split("\n");
+  const out: Node[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (trimmed === "") {
+      i++;
+      continue;
+    }
+
+    const headingMatch = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(trimmed);
+    if (headingMatch) {
+      const level = Math.min(6, headingMatch[1].length);
+      const tag = `h${Math.min(4, level)}` as "h1" | "h2" | "h3" | "h4";
+      out.push(el(tag, {}, ...renderInlineMd(headingMatch[2])));
+      i++;
+      continue;
+    }
+
+    if (/^```/.test(trimmed)) {
+      const fenceLines: string[] = [];
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i].trim())) {
+        fenceLines.push(lines[i]);
+        i++;
+      }
+      if (i < lines.length) {
+        i++;
+      }
+      out.push(el("pre", {}, el("code", {}, fenceLines.join("\n"))));
+      continue;
+    }
+
+    // Table block: header + separator + rows.
+    if (
+      /^\|.*\|$/.test(trimmed) &&
+      i + 1 < lines.length &&
+      /^\|[\s|:-]+\|$/.test(lines[i + 1].trim())
+    ) {
+      const headers = splitMdRow(trimmed);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && /^\|.*\|$/.test(lines[i].trim())) {
+        rows.push(splitMdRow(lines[i].trim()));
+        i++;
+      }
+      const tbl = el(
+        "table",
+        {},
+        el("thead", {}, el("tr", {}, ...headers.map((h) => el("th", {}, ...renderInlineMd(h))))),
+        el(
+          "tbody",
+          {},
+          ...rows.map((r) =>
+            el("tr", {}, ...r.map((cell) => el("td", {}, ...renderInlineMd(cell)))),
+          ),
+        ),
+      );
+      out.push(tbl);
+      continue;
+    }
+
+    // List block (bullet or numbered). Consume contiguous list lines.
+    const bulletRe = /^\s*[-*]\s+(.+)$/;
+    const numRe = /^\s*\d+\.\s+(.+)$/;
+    if (bulletRe.test(line) || numRe.test(line)) {
+      const ordered = numRe.test(line) && !bulletRe.test(line);
+      const items: string[] = [];
+      while (i < lines.length) {
+        const m = (ordered ? numRe : bulletRe).exec(lines[i]);
+        if (!m) {
+          break;
+        }
+        items.push(m[1]);
+        i++;
+      }
+      const tag = ordered ? "ol" : "ul";
+      out.push(el(tag, {}, ...items.map((it) => el("li", {}, ...renderInlineMd(it)))));
+      continue;
+    }
+
+    // Paragraph: gather contiguous non-blank, non-block lines.
+    const paragraphLines: string[] = [line];
+    i++;
+    while (i < lines.length) {
+      const next = lines[i];
+      if (next.trim() === "") {
+        break;
+      }
+      if (/^#{1,6}\s+/.test(next.trim())) {
+        break;
+      }
+      if (/^```/.test(next.trim())) {
+        break;
+      }
+      if (/^\s*[-*]\s+/.test(next) || /^\s*\d+\.\s+/.test(next)) {
+        break;
+      }
+      paragraphLines.push(next);
+      i++;
+    }
+    out.push(el("p", {}, ...renderInlineMd(paragraphLines.join(" "))));
+  }
+  return out;
+}
+
+function splitMdRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\||\|$/g, "")
+    .split("|")
+    .map((c) => c.trim());
+}
+
+/**
+ * Inline markdown -> DOM node array. Handles `**bold**`,
+ * `*italic*`, `` `code` ``. Order matters: code first (so its
+ * contents aren't re-parsed for emphasis), then bold (longest
+ * delimiter), then italic. Anything we can't parse falls through
+ * as a text node so the output is always safe to embed.
+ */
+function renderInlineMd(text: string): Node[] {
+  const out: Node[] = [];
+  let rest = text;
+  // Each iteration consumes one syntactic element from the head.
+  while (rest.length > 0) {
+    // Inline code: backticks. Greedy match for `` `text` `` only;
+    // doubled backticks are rare in our generated docs.
+    const codeMatch = /^`([^`]+)`/.exec(rest);
+    if (codeMatch) {
+      out.push(el("code", {}, codeMatch[1]));
+      rest = rest.slice(codeMatch[0].length);
+      continue;
+    }
+    const boldMatch = /^\*\*([^*]+)\*\*/.exec(rest);
+    if (boldMatch) {
+      out.push(el("strong", {}, ...renderInlineMd(boldMatch[1])));
+      rest = rest.slice(boldMatch[0].length);
+      continue;
+    }
+    const italicMatch = /^\*([^*]+)\*/.exec(rest);
+    if (italicMatch) {
+      out.push(el("em", {}, ...renderInlineMd(italicMatch[1])));
+      rest = rest.slice(italicMatch[0].length);
+      continue;
+    }
+    // Consume up to the next inline marker (or to end of string)
+    // as a literal text node. The lookbehind on `**` prevents the
+    // `*` branch from also matching it twice.
+    const nextMarker = rest.search(/[`*]/);
+    if (nextMarker < 0) {
+      out.push(document.createTextNode(rest));
+      rest = "";
+    } else if (nextMarker === 0) {
+      // Unmatched `*` / `` ` `` -- emit it as plain text and
+      // advance one char so we don't loop forever.
+      out.push(document.createTextNode(rest[0]));
+      rest = rest.slice(1);
+    } else {
+      out.push(document.createTextNode(rest.slice(0, nextMarker)));
+      rest = rest.slice(nextMarker);
+    }
+  }
+  return out;
 }
 
 /** Estimate tokens at ~4 characters per token. Rough but

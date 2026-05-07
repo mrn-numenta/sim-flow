@@ -824,37 +824,21 @@ button:hover {
   background: var(--vscode-button-hoverBackground, #dcdcdc);
 }
 button:disabled {
-  background: color-mix(
-    in srgb,
-    var(--vscode-button-background, #eee) 35%,
-    transparent
-  );
+  background: color-mix(in srgb, var(--vscode-button-background, #eee) 35%, transparent);
   color: var(--vscode-disabledForeground, #8a8a8a);
-  border-color: color-mix(
-    in srgb,
-    var(--vscode-button-background, #eee) 45%,
-    transparent
-  );
+  border-color: color-mix(in srgb, var(--vscode-button-background, #eee) 45%, transparent);
   cursor: default;
   opacity: 1;
   filter: none;
 }
 button:disabled:hover {
-  background: color-mix(
-    in srgb,
-    var(--vscode-button-background, #eee) 35%,
-    transparent
-  );
+  background: color-mix(in srgb, var(--vscode-button-background, #eee) 35%, transparent);
 }
 button.secondary {
   background: transparent;
 }
 button.secondary:disabled {
-  background: color-mix(
-    in srgb,
-    var(--vscode-button-background, #eee) 35%,
-    transparent
-  );
+  background: color-mix(in srgb, var(--vscode-button-background, #eee) 35%, transparent);
 }
 
 .critique {
@@ -963,33 +947,46 @@ tbody tr:hover {
   letter-spacing: 0.06em;
 }
 .step-artifacts {
-  margin-top: 12px;
-  padding: 10px 12px;
+  margin-top: 8px;
+  padding: 6px 8px;
   border: 1px solid var(--border-color);
   border-radius: 4px;
   background: rgba(0, 0, 0, 0.02);
 }
 .step-artifacts-heading {
-  margin: 0 0 8px;
-  font-size: 12px;
+  margin: 0 0 4px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
 .step-artifacts-summary {
-  margin: 0 0 8px;
+  margin: 0 0 4px;
   font-size: 11px;
+}
+.step-artifacts-table {
+  margin-top: 2px;
 }
 .step-artifacts-table th,
 .step-artifacts-table td {
   font-size: 11px;
-  padding: 3px 6px;
+  padding: 2px 6px;
+  /* Drop the global `border-bottom: 1px solid var(--border-color)`
+     that bleeds out from under the right-aligned Open button as
+     a stray "underline" on the bottom-right corner. The table
+     reads cleaner without row separators at this size; if rows
+     ever need visual division they can come back as a subtle
+     alternating background. */
+  border-bottom: none;
+}
+.step-artifacts-table tbody tr:hover {
+  background: rgba(0, 0, 0, 0.03);
 }
 .step-artifacts-preview-row td {
   background: rgba(0, 0, 0, 0.03);
   padding: 0;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: none;
 }
 .step-artifacts-preview {
   margin: 0;
@@ -1002,12 +999,80 @@ tbody tr:hover {
   overflow-y: auto;
   color: var(--vscode-editor-foreground, inherit);
 }
+/* Rendered-markdown / rendered-table previews land in a normal
+   block element rather than a <pre>; size them down to match the
+   compact step-artifacts feel and keep tables readable. */
+.step-artifacts-rendered {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.step-artifacts-rendered table {
+  border-collapse: collapse;
+  margin: 4px 0;
+  font-size: 11px;
+}
+.step-artifacts-rendered th,
+.step-artifacts-rendered td {
+  border: 1px solid var(--border-color);
+  padding: 2px 6px;
+  text-align: left;
+}
+.step-artifacts-rendered th {
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.step-artifacts-rendered h1,
+.step-artifacts-rendered h2,
+.step-artifacts-rendered h3,
+.step-artifacts-rendered h4 {
+  margin: 8px 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.step-artifacts-rendered ul,
+.step-artifacts-rendered ol {
+  margin: 4px 0 4px 16px;
+  padding: 0;
+}
+.step-artifacts-rendered li {
+  margin: 1px 0;
+}
+.step-artifacts-rendered code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.05);
+  padding: 0 3px;
+  border-radius: 2px;
+}
+.step-artifacts-rendered pre {
+  margin: 4px 0;
+  padding: 4px 6px;
+  background: rgba(0, 0, 0, 0.04);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  white-space: pre-wrap;
+  border-radius: 2px;
+}
+.step-artifacts-rendered p {
+  margin: 4px 0;
+}
 .critique-summary {
-  margin-top: 12px;
-  padding: 10px 12px;
+  margin-top: 8px;
+  padding: 6px 8px;
   border: 1px solid var(--border-color);
   border-radius: 4px;
   background: rgba(0, 0, 0, 0.02);
+}
+.critique-summary .critique-list {
+  margin: 4px 0 0;
 }
 .milestone-row {
   display: flex;

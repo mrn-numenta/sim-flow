@@ -80,49 +80,159 @@ export interface EnumerateInput {
 }
 
 /**
- * Files for which the per-step dashboard view inlines a content
- * preview (capped at PREVIEW_CAP_BYTES). The user wants
- * decomposition + pipeline-mapping summary tables visible at a
- * glance from the step rail without an "Open" click round-trip.
- * Other markdown artifacts stay link-only -- inlining everything
- * would balloon the dashboard payload.
+ * Per-file preview rule. Each rule names either:
+ *  - `tableSection`: extract the FIRST markdown table that follows
+ *    a `## <section>` heading. The dashboard renders it as a real
+ *    HTML table (no raw `| col |` markdown leaking through).
+ *  - `markdown`: ship the full file body as a single markdown
+ *    preview, rendered inline by the webview.
+ *
+ * Anything not in the rules ships without `previews`; the
+ * dashboard falls back to a TOC-only entry with an Open button.
  */
-const PREVIEW_PATHS = new Set<string>([
-  "docs/analysis/decomposition.md",
-  "docs/analysis/pipeline-mapping.md",
-  "docs/analysis/data-movement.md",
-  "docs/targets.md",
-  "docs/testbench.md",
-]);
-const PREVIEW_CAP_BYTES = 4096;
+type PreviewRule = { kind: "tableSection"; section: string } | { kind: "markdown" };
+
+const PREVIEW_RULES: Record<string, PreviewRule> = {
+  // DM1 sets up targets + testbench strategy. The user wants the
+  // Target Summary table rendered (not the surrounding prose) and
+  // the testbench file rendered fully -- it's small + structured
+  // and the user wants the whole document at a glance.
+  "docs/targets.md": { kind: "tableSection", section: "Target Summary" },
+  "docs/testbench.md": { kind: "markdown" },
+  // DM2a writes decomposition + data-movement. The user wants the
+  // Operation Summary and Edge Summary tables specifically, not
+  // the full files (which contain free-form narrative + multiple
+  // tables -- only the named summary belongs in the dashboard).
+  "docs/analysis/decomposition.md": {
+    kind: "tableSection",
+    section: "Operation Summary",
+  },
+  "docs/analysis/data-movement.md": {
+    kind: "tableSection",
+    section: "Edge Summary",
+  },
+  // DM2b writes pipeline-mapping. Same pattern: Stage Summary
+  // table only.
+  "docs/analysis/pipeline-mapping.md": {
+    kind: "tableSection",
+    section: "Stage Summary",
+  },
+};
+
+const PREVIEW_FULL_CAP_BYTES = 8192;
 
 /** Extensions for which the per-step view shows a "files / lines"
  *  code summary (DM2d / DM3b / DM3c). Markdown / TOML are excluded
  *  -- those are docs, not code. */
 const CODE_EXTENSIONS = new Set<string>([".rs"]);
 
-function readPreview(abs: string, sizeBytes: number): string | undefined {
-  if (sizeBytes === 0) {
+import type { ArtifactPreview } from "../webview/messages";
+
+/**
+ * Build the inline preview list for `rel`. Returns `undefined`
+ * when no rule matches; an empty array when a rule matches but
+ * the file's content didn't yield extractable content (caller
+ * should treat as "preview attempted but empty").
+ */
+function buildPreviews(rel: string, abs: string, sizeBytes: number): ArtifactPreview[] | undefined {
+  const rule = PREVIEW_RULES[rel];
+  if (!rule || sizeBytes === 0) {
     return undefined;
   }
+  let body: string;
   try {
-    if (sizeBytes <= PREVIEW_CAP_BYTES) {
-      return fs.readFileSync(abs, "utf8");
-    }
-    // Larger files: read the head only. Capped reads keep dashboard
-    // refresh cheap even when a generated artifact grows past the
-    // cap (rare in practice -- most plans stay small).
-    const fd = fs.openSync(abs, "r");
-    try {
-      const buf = Buffer.alloc(PREVIEW_CAP_BYTES);
-      const read = fs.readSync(fd, buf, 0, PREVIEW_CAP_BYTES, 0);
-      return buf.subarray(0, read).toString("utf8") + "\n... (truncated)";
-    } finally {
-      fs.closeSync(fd);
-    }
+    body = fs.readFileSync(abs, "utf8");
   } catch {
     return undefined;
   }
+  if (rule.kind === "markdown") {
+    const truncated =
+      body.length > PREVIEW_FULL_CAP_BYTES
+        ? body.slice(0, PREVIEW_FULL_CAP_BYTES) + "\n\n_... (truncated for preview)_"
+        : body;
+    return [{ kind: "markdown", body: truncated }];
+  }
+  const table = extractTableUnderHeading(body, rule.section);
+  if (!table) {
+    return undefined;
+  }
+  return [{ kind: "table", caption: rule.section, headers: table.headers, rows: table.rows }];
+}
+
+/**
+ * Find a `## <heading>` line (any level >= 1, case-insensitive)
+ * and return the FIRST markdown table that follows. Returns
+ * `null` when the heading is missing or no table follows before
+ * the next heading. Tolerates extra heading adornment (e.g.
+ * `### Target Summary (3 rows)`).
+ */
+function extractTableUnderHeading(
+  body: string,
+  heading: string,
+): { headers: string[]; rows: string[][] } | null {
+  const lines = body.split("\n");
+  const headingPattern = new RegExp(
+    `^#{1,6}\\s+${heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
+    "i",
+  );
+  let i = 0;
+  while (i < lines.length && !headingPattern.test(lines[i])) {
+    i++;
+  }
+  if (i >= lines.length) {
+    return null;
+  }
+  i++;
+  // Walk to the first table-shaped line under this heading,
+  // stopping at the next heading.
+  while (i < lines.length) {
+    if (/^#{1,6}\s+/.test(lines[i])) {
+      return null;
+    }
+    if (isTableRow(lines[i]) && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+      return parseTable(lines, i);
+    }
+    i++;
+  }
+  return null;
+}
+
+function isTableRow(line: string): boolean {
+  const t = line.trim();
+  return t.startsWith("|") && t.endsWith("|");
+}
+
+function isTableSeparator(line: string): boolean {
+  const t = line.trim();
+  if (!t.startsWith("|") || !t.endsWith("|")) {
+    return false;
+  }
+  // Cells should contain only `-`, `:`, and whitespace.
+  return /^\|[\s|:-]+\|$/.test(t);
+}
+
+function splitRow(line: string): string[] {
+  // Trim outer pipes before splitting so a leading/trailing `|`
+  // doesn't add empty cells.
+  const t = line.trim().replace(/^\||\|$/g, "");
+  return t.split("|").map((c) => c.trim());
+}
+
+function parseTable(lines: string[], startIdx: number): { headers: string[]; rows: string[][] } {
+  const headers = splitRow(lines[startIdx]);
+  const rows: string[][] = [];
+  let i = startIdx + 2; // skip header + separator
+  while (i < lines.length && isTableRow(lines[i])) {
+    const cells = splitRow(lines[i]);
+    // Pad missing cells / trim extras to match the header count
+    // so the renderer doesn't have to defend against ragged rows.
+    while (cells.length < headers.length) {
+      cells.push("");
+    }
+    rows.push(cells.slice(0, headers.length));
+    i++;
+  }
+  return { headers, rows };
 }
 
 function countLines(abs: string): number | undefined {
@@ -204,8 +314,7 @@ export function enumerateProjectDocuments(input: EnumerateInput): DocumentEntry[
       }
       const abs = path.join(input.projectDir, rel);
       const stats = safeStat(abs);
-      const previewBody =
-        stats !== null && PREVIEW_PATHS.has(rel) ? readPreview(abs, stats.size) : undefined;
+      const previews = stats !== null ? buildPreviews(rel, abs, stats.size) : undefined;
       const ext = path.extname(rel).toLowerCase();
       const lineCount = stats !== null && CODE_EXTENSIONS.has(ext) ? countLines(abs) : undefined;
       out.push({
@@ -216,7 +325,7 @@ export function enumerateProjectDocuments(input: EnumerateInput): DocumentEntry[
         bytes: stats?.size ?? null,
         modifiedAt: stats?.mtime.toISOString() ?? null,
         exists: stats !== null,
-        ...(previewBody !== undefined ? { previewBody } : {}),
+        ...(previews !== undefined ? { previews } : {}),
         ...(lineCount !== undefined ? { lineCount } : {}),
       });
     }

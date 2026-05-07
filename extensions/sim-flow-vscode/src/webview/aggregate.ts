@@ -16,6 +16,18 @@ export interface AggregateInput {
   baselines: BaselineRecord[];
   documents: DocumentEntry[];
   planProgress: PlanProgress;
+  /**
+   * Per-kind plan progress so the dashboard's per-step view can
+   * surface the milestone pipeline under any plan-related step
+   * (DM2c outline / DM2cd detail / DM2d execution, etc.) regardless
+   * of `current_step`. Optional so older / partial host snapshots
+   * still aggregate without it.
+   */
+  planProgressByKind?: {
+    impl: PlanProgress;
+    test: PlanProgress;
+    perf: PlanProgress;
+  };
   /** Persisted spec path; empty string when nothing is recorded. */
   specPath?: string;
   /** Mirrors `sim-flow.dashboard.showFullyAutomated`. Defaults to false. */
@@ -58,6 +70,9 @@ export function aggregateDashboardState(input: AggregateInput): DashboardState {
     baselines: input.baselines,
     documents: input.documents,
     planProgress: input.planProgress,
+    ...(input.planProgressByKind !== undefined
+      ? { planProgressByKind: input.planProgressByKind }
+      : {}),
     specPath: input.specPath ?? "",
     fullyAutomatedEnabled: input.fullyAutomatedEnabled ?? false,
     verilogSimEnabled: input.verilogSimEnabled ?? false,
