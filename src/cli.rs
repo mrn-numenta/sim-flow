@@ -175,9 +175,11 @@ pub(crate) enum Command {
         /// Optional model identifier.
         #[arg(long)]
         llm_model: Option<String>,
-        /// Base URL override for OpenAI-compatible local backends
-        /// (`ollama`, `lmstudio`, `vllm`, `openai-compat`). Format
-        /// is whatever the server documents -- typically
+        /// Base URL override for the local-server backends
+        /// (`ollama`, `lmstudio`, `vllm`, `openai-compat`). Each
+        /// of these speaks an OpenAI-compatible chat-completions
+        /// endpoint (Ollama exposes its compat shim at `/v1`).
+        /// Format is whatever the server documents -- typically
         /// `http://<host>:<port>/v1`. When omitted, each backend
         /// falls back to its conventional default
         /// (`http://localhost:11434/v1` for Ollama,
@@ -276,16 +278,26 @@ pub(crate) enum Command {
         #[arg(long)]
         llm_model: Option<String>,
         /// Override the Ollama base URL (default
-        /// `http://localhost:11434/v1`). Only meaningful when
-        /// `--llm-backend ollama`.
+        /// `http://localhost:11434/v1` — Ollama's OpenAI-compat
+        /// shim; the native API at `/api` isn't used). Only
+        /// meaningful when `--llm-backend ollama`. Superseded by
+        /// `--llm-base-url` when both are set.
         #[arg(long)]
         ollama_base_url: Option<String>,
         /// Override the OpenAI-compat base URL (default
         /// `http://localhost:1234/v1` — LM Studio's port). Only
         /// meaningful when `--llm-backend openai-compat`. Set to
-        /// vLLM / llama.cpp / TGI's port as needed.
+        /// vLLM / llama.cpp / TGI's port as needed. Superseded by
+        /// `--llm-base-url` when both are set.
         #[arg(long)]
         openai_base_url: Option<String>,
+        /// Generic base-URL override that applies to whichever
+        /// backend is selected -- mirrors `sim-flow auto`'s flag.
+        /// Wins over `--ollama-base-url` / `--openai-base-url` when
+        /// both are set. Format is whatever the server documents,
+        /// typically `http://<host>:<port>/v1`.
+        #[arg(long)]
+        llm_base_url: Option<String>,
         /// Candidate scope for per-candidate steps (DSF).
         #[arg(long)]
         candidate: Option<String>,
@@ -484,6 +496,178 @@ impl From<FlowArg> for Flow {
         match value {
             FlowArg::DirectModeling => Flow::DirectModeling,
             FlowArg::DesignStudy => Flow::DesignStudy,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn parse(argv: &[&str]) -> Cli {
+        Cli::try_parse_from(argv).expect("clap should accept the test argv")
+    }
+
+    // ---------- StepMode / FlowArg conversions ----------
+
+    #[test]
+    fn step_mode_into_protocol_round_trips() {
+        assert_eq!(
+            sim_flow::__internal::session::protocol::StepMode::from(StepMode::Auto),
+            sim_flow::__internal::session::protocol::StepMode::Auto,
+        );
+        assert_eq!(
+            sim_flow::__internal::session::protocol::StepMode::from(StepMode::Manual),
+            sim_flow::__internal::session::protocol::StepMode::Manual,
+        );
+    }
+
+    #[test]
+    fn flow_arg_into_state_flow_round_trips() {
+        assert!(matches!(
+            Flow::from(FlowArg::DirectModeling),
+            Flow::DirectModeling
+        ));
+        assert!(matches!(
+            Flow::from(FlowArg::DesignStudy),
+            Flow::DesignStudy
+        ));
+    }
+
+    // ---------- Auto subcommand: --llm-base-url plumbing ----------
+
+    #[test]
+    fn auto_default_omits_llm_base_url() {
+        let cli = parse(&["sim-flow", "auto"]);
+        match cli.command {
+            Command::Auto {
+                llm_base_url,
+                llm_backend,
+                ..
+            } => {
+                assert_eq!(llm_base_url, None);
+                assert_eq!(llm_backend, "vscode");
+            }
+            other => panic!("expected Command::Auto, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn auto_accepts_llm_base_url_flag() {
+        let cli = parse(&[
+            "sim-flow",
+            "auto",
+            "--llm-base-url",
+            "http://my-vllm:8000/v1",
+        ]);
+        match cli.command {
+            Command::Auto { llm_base_url, .. } => {
+                assert_eq!(llm_base_url.as_deref(), Some("http://my-vllm:8000/v1"));
+            }
+            other => panic!("expected Command::Auto, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn auto_accepts_llm_base_url_with_other_llm_flags() {
+        let cli = parse(&[
+            "sim-flow",
+            "auto",
+            "--llm-backend",
+            "vllm",
+            "--llm-model",
+            "qwen3.6:32b",
+            "--llm-base-url",
+            "http://prod-vllm:8000/v1",
+        ]);
+        match cli.command {
+            Command::Auto {
+                llm_backend,
+                llm_model,
+                llm_base_url,
+                ..
+            } => {
+                assert_eq!(llm_backend, "vllm");
+                assert_eq!(llm_model.as_deref(), Some("qwen3.6:32b"));
+                assert_eq!(llm_base_url.as_deref(), Some("http://prod-vllm:8000/v1"));
+            }
+            other => panic!("expected Command::Auto, got {other:?}"),
+        }
+    }
+
+    // ---------- Session subcommand: --llm-base-url plumbing ----------
+
+    #[test]
+    fn session_default_omits_all_base_url_flags() {
+        let cli = parse(&["sim-flow", "session", "DM0.work"]);
+        match cli.command {
+            Command::Session {
+                step_kind,
+                ollama_base_url,
+                openai_base_url,
+                llm_base_url,
+                ..
+            } => {
+                assert_eq!(step_kind, "DM0.work");
+                assert_eq!(ollama_base_url, None);
+                assert_eq!(openai_base_url, None);
+                assert_eq!(llm_base_url, None);
+            }
+            other => panic!("expected Command::Session, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn session_accepts_all_three_url_flags_independently() {
+        // Setting all three is unusual but legal -- the precedence
+        // resolution happens later in `commands.rs::session_cmd` and
+        // is exercised by the agent-side `resolved_base_url` tests.
+        let cli = parse(&[
+            "sim-flow",
+            "session",
+            "DM2c.critique",
+            "--llm-backend",
+            "vllm",
+            "--llm-base-url",
+            "http://generic",
+            "--ollama-base-url",
+            "http://o:11434/v1",
+            "--openai-base-url",
+            "http://lm:1234/v1",
+        ]);
+        match cli.command {
+            Command::Session {
+                ollama_base_url,
+                openai_base_url,
+                llm_base_url,
+                llm_backend,
+                ..
+            } => {
+                assert_eq!(llm_backend, "vllm");
+                assert_eq!(llm_base_url.as_deref(), Some("http://generic"));
+                assert_eq!(ollama_base_url.as_deref(), Some("http://o:11434/v1"));
+                assert_eq!(openai_base_url.as_deref(), Some("http://lm:1234/v1"));
+            }
+            other => panic!("expected Command::Session, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn auto_default_session_mode_is_per_step() {
+        let cli = parse(&["sim-flow", "auto"]);
+        match cli.command {
+            Command::Auto {
+                session_mode,
+                step_mode,
+                no_preamble,
+                ..
+            } => {
+                assert_eq!(session_mode, SessionMode::PerStep);
+                assert_eq!(step_mode, StepMode::Auto);
+                assert!(no_preamble);
+            }
+            other => panic!("expected Command::Auto, got {other:?}"),
         }
     }
 }

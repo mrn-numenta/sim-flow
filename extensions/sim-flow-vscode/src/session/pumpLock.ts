@@ -5,6 +5,7 @@
 // extension host at a time. Stale lock files (left behind by an
 // extension-host crash) are detected via pid liveness and reclaimed.
 
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -19,6 +20,14 @@ interface LockRecord {
   sessionId: string;
   /** Wall-clock acquisition time, ms since epoch. */
   acquiredAtMs: number;
+  /**
+   * Random per-acquisition tag. The release path requires the
+   * file's nonce to match the one we wrote at acquire -- this
+   * prevents stealing a successor lock (same sessionId, different
+   * acquisition) when our dispose runs after a sibling already
+   * re-acquired in the same host.
+   */
+  nonce: string;
 }
 
 export interface PumpLock {
@@ -70,11 +79,13 @@ export function acquirePumpLock(
   // don't loop indefinitely -- a third collision means another
   // window won the race during step 2.
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    const nonce = crypto.randomBytes(8).toString("hex");
     try {
       const record: LockRecord = {
         pid: process.pid,
         sessionId,
         acquiredAtMs: Date.now(),
+        nonce,
       };
       const fd = fs.openSync(lockPath, "wx");
       try {
@@ -82,7 +93,7 @@ export function acquirePumpLock(
       } finally {
         fs.closeSync(fd);
       }
-      return { ok: true, lock: makeLock(lockPath, sessionId) };
+      return { ok: true, lock: makeLock(lockPath, nonce) };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
         throw err;
@@ -100,7 +111,11 @@ export function acquirePumpLock(
           "Disconnect it from the other window before launching a second flow here.",
       };
     }
-    // Stale or our own (host re-entry); remove and retry once.
+    // Either the holder pid is dead (stale, e.g. extension-host
+    // crash) or the holder is our own process (host re-entry after
+    // the previous owner released without the file being removed --
+    // can happen if the unlink lost a race but wx then succeeded).
+    // Remove and retry once.
     try {
       fs.unlinkSync(lockPath);
     } catch (err) {
@@ -118,7 +133,7 @@ export function acquirePumpLock(
   };
 }
 
-function makeLock(lockPath: string, sessionId: string): PumpLock {
+function makeLock(lockPath: string, ourNonce: string): PumpLock {
   let released = false;
   return {
     release() {
@@ -128,10 +143,10 @@ function makeLock(lockPath: string, sessionId: string): PumpLock {
       released = true;
       try {
         const record = readLockRecord(lockPath);
-        if (record && record.sessionId !== sessionId) {
-          // Someone else's lock won the race after our session
-          // released and was re-acquired. Don't unlink -- that
-          // would steal their lock.
+        if (record && record.nonce !== ourNonce) {
+          // Someone re-acquired the lock after we released. Their
+          // record overwrote ours; unlinking now would steal their
+          // lock. Bail out silently -- the file is theirs.
           return;
         }
         fs.unlinkSync(lockPath);
@@ -152,12 +167,14 @@ function readLockRecord(lockPath: string): LockRecord | null {
     if (
       typeof parsed.pid === "number" &&
       typeof parsed.sessionId === "string" &&
-      typeof parsed.acquiredAtMs === "number"
+      typeof parsed.acquiredAtMs === "number" &&
+      typeof parsed.nonce === "string"
     ) {
       return {
         pid: parsed.pid,
         sessionId: parsed.sessionId,
         acquiredAtMs: parsed.acquiredAtMs,
+        nonce: parsed.nonce,
       };
     }
     return null;

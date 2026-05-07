@@ -75,6 +75,19 @@ export class SocketSessionPump implements LiveSessionTransport {
   /** True after we've reaped `<project>/.sim-flow/pids/<id>.json`. */
   private pidRecordCleared = false;
   /**
+   * True after `dispose()` has run. Idempotency guard: stopAuto and
+   * the chat panel can both reach `dispose` (or `disconnectWithEscalation`,
+   * which calls dispose) concurrently during teardown.
+   */
+  private disposed = false;
+  /**
+   * True when the constructor's launch path bailed out (lock acquire
+   * failure). `dispose()` skips the child / pid / lock cleanup in
+   * that case so we don't log spurious spawn/exit pairs for a child
+   * that never existed.
+   */
+  private neverSpawned = false;
+  /**
    * Per-project flock guarding against a second window racing this
    * pump for the same project. `null` in attach-only mode (no spawn,
    * lock is somebody else's responsibility) or when the spawn was
@@ -115,6 +128,7 @@ export class SocketSessionPump implements LiveSessionTransport {
       // race us for the JSONL socket and `.sim-flow/state.toml`.
       const lockResult = acquirePumpLock(llm.projectDir, options.sessionId);
       if (!lockResult.ok) {
+        this.neverSpawned = true;
         this.markTerminated({
           status: "ended",
           endReason: "spawn-error",
@@ -385,6 +399,32 @@ export class SocketSessionPump implements LiveSessionTransport {
       this.dispose();
       return "already-gone";
     }
+    // If the socket never actually connected (attach timeout, refused,
+    // failed handshake), `shutdown()` over a dead socket is a no-op
+    // and waiting `cleanTimeoutMs` for a clean exit is dead time.
+    // Skip straight to SIGTERM in that case. `terminated` is set by
+    // `markTerminated` on every transport-level failure, so it's a
+    // reliable proxy for "socket isn't usable."
+    const socketUsable = !this.terminated && this.socket !== undefined && !this.socket.destroyed;
+    if (!socketUsable) {
+      try {
+        this.child?.kill("SIGTERM");
+      } catch {
+        // child already gone
+      }
+      if (await this.waitForChildExit(termTimeoutMs)) {
+        this.dispose();
+        return "sigterm";
+      }
+      try {
+        this.child?.kill("SIGKILL");
+      } catch {
+        // child already gone
+      }
+      await this.waitForChildExit(1_000);
+      this.dispose();
+      return "sigkill";
+    }
     this.shutdown();
     if (await this.waitForChildExit(cleanTimeoutMs)) {
       this.dispose();
@@ -442,34 +482,43 @@ export class SocketSessionPump implements LiveSessionTransport {
   }
 
   dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
     if (this.socket && !this.socket.destroyed) {
       this.socket.destroy();
     }
     this.socket = undefined;
-    // Tear down the spawned `sim-flow` child so it doesn't outlive
-    // the pump. Socket close usually causes the orchestrator to exit
-    // on its own (the JsonlHost / SocketHost reads return None), but
-    // a stuck orchestrator (e.g. blocked in an LLM call) won't
-    // notice for a while. SIGTERM is the polite kick. The child's
-    // `exit` handler will clear the pid record.
-    if (this.child && this.child.exitCode === null && this.child.signalCode === null) {
-      try {
-        this.child.kill("SIGTERM");
-      } catch {
-        // child already gone
+    // Skip the child / pid / lock cleanup when the constructor never
+    // got past the lock-acquire step -- there's no child, no pid
+    // record was written, and no lock was acquired by us.
+    if (!this.neverSpawned) {
+      // Tear down the spawned `sim-flow` child so it doesn't outlive
+      // the pump. Socket close usually causes the orchestrator to
+      // exit on its own (the JsonlHost / SocketHost reads return
+      // None), but a stuck orchestrator (e.g. blocked in an LLM
+      // call) won't notice for a while. SIGTERM is the polite kick.
+      // The child's `exit` handler will clear the pid record.
+      if (this.child && this.child.exitCode === null && this.child.signalCode === null) {
+        try {
+          this.child.kill("SIGTERM");
+        } catch {
+          // child already gone
+        }
       }
-    }
-    this.child = null;
-    // Defensive: if the exit handler never fires (e.g. test harnesses
-    // that mock spawn), reap the pid record here too.
-    this.clearPidRecord();
-    if (this.pumpLock) {
-      try {
-        this.pumpLock.release();
-      } catch {
-        // Already logged; never throw out of dispose.
+      this.child = null;
+      // Defensive: if the exit handler never fires (e.g. test
+      // harnesses that mock spawn), reap the pid record here too.
+      this.clearPidRecord();
+      if (this.pumpLock) {
+        try {
+          this.pumpLock.release();
+        } catch {
+          // Already logged; never throw out of dispose.
+        }
+        this.pumpLock = null;
       }
-      this.pumpLock = null;
     }
     this.debugLog.dispose();
   }

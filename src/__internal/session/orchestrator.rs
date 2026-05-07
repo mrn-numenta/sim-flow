@@ -55,11 +55,16 @@ pub struct OrchestratorOptions {
     pub llm_backend: String,
     /// Optional model identifier the host should pass to its client.
     pub llm_model: Option<String>,
-    /// Optional base URL override for OpenAI-compatible local
-    /// backends (`ollama`, `lmstudio`, `vllm`, `openai-compat`).
-    /// Echoed back inside `RequestLlmResponse` so JSONL hosts
-    /// know which endpoint to dispatch against. `None` means the
-    /// host picks the conventional default for the backend.
+    /// Optional base URL override for the local-server backends
+    /// (`ollama`, `lmstudio`, `vllm`, `openai-compat`). Forwarded
+    /// here for parity with `AutoOptions::llm_base_url`, but the
+    /// orchestrator itself doesn't read it -- the JSONL host picks
+    /// its endpoint from the dashboard's `sim-flow.llm.servers`
+    /// setting, and the in-process `session_cmd` path consumes the
+    /// flag directly into `AgentConfig::base_url`. The field is
+    /// retained on `OrchestratorOptions` so future host
+    /// implementations that want to surface it can do so without
+    /// another schema change.
     pub llm_base_url: Option<String>,
     /// Run this session unattended. The agent is told not to ask the
     /// user any questions; on each turn that writes artifacts we

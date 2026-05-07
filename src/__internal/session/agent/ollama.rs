@@ -20,6 +20,16 @@ impl OllamaAgent {
             model: model.unwrap_or_else(|| DEFAULT_MODEL.into()),
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    #[cfg(test)]
+    pub(crate) fn model(&self) -> &str {
+        &self.model
+    }
 }
 
 impl CliAgent for OllamaAgent {

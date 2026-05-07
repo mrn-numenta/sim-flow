@@ -92,50 +92,56 @@ pub struct AgentConfig {
 /// OpenAI-compat shim it serves.
 pub const VLLM_DEFAULT_BASE_URL: &str = "http://localhost:8000/v1";
 
+/// Resolve the `base_url` an agent named `name` would be constructed
+/// with, given the supplied `config`. Returns `None` for backend
+/// names that don't take a base URL (claude / codex / gh-copilot)
+/// or for an unknown backend name.
+///
+/// Precedence (when applicable):
+///   1. `config.base_url` (the generic `--llm-base-url` flag)
+///   2. The matching legacy per-backend URL
+///      (`config.ollama_base_url` for ollama, `config.openai_base_url`
+///      for the openai-compat family)
+///   3. Backend-specific default (only `vllm` substitutes here;
+///      ollama / lmstudio / openai-compat fall through to `None`,
+///      letting the agent constructor pick its own conventional
+///      default).
+///
+/// Lifted out of `build_cli_agent` so tests can verify precedence
+/// without having to reach inside the boxed trait object.
+pub(crate) fn resolved_base_url(name: &str, config: &AgentConfig) -> Option<String> {
+    let pick = |fallback: Option<String>| config.base_url.clone().or(fallback);
+    match name {
+        "ollama" => pick(config.ollama_base_url.clone()),
+        "lmstudio" | "lm-studio" | "openai-compat" | "openai_compat" | "openai" => {
+            pick(config.openai_base_url.clone())
+        }
+        "vllm" => {
+            pick(config.openai_base_url.clone()).or_else(|| Some(VLLM_DEFAULT_BASE_URL.to_string()))
+        }
+        _ => None,
+    }
+}
+
 /// Build a `CliAgent` from a backend name. Returns `None` when the
 /// name doesn't match a known agent so callers can surface a helpful
 /// error listing available choices.
 pub fn build_cli_agent(name: &str, config: AgentConfig) -> Option<Box<dyn CliAgent>> {
-    // The generic `base_url` field wins over the legacy per-
-    // backend fields. Callers using `--llm-base-url` set
-    // `config.base_url`; older callers using
-    // `--ollama-base-url` etc. still work via the fallbacks.
-    let pick = |fallback: Option<String>| config.base_url.clone().or(fallback);
+    let resolved = resolved_base_url(name, &config);
     match name {
         "claude" | "claude-cli" => Some(Box::new(ClaudeAgent::new(config.model))),
         "codex" | "codex-cli" => Some(Box::new(CodexAgent::new(config.model))),
         "gh-copilot" | "gh_copilot" => Some(Box::new(GhCopilotAgent::new())),
-        "ollama" => Some(Box::new(OllamaAgent::new(
-            pick(config.ollama_base_url),
-            config.model,
-        ))),
+        "ollama" => Some(Box::new(OllamaAgent::new(resolved, config.model))),
         // LM Studio uses the OpenAI-compat agent with its
         // conventional `:1234/v1` default. Aliasing it explicitly
         // (rather than asking users to type `openai-compat`) makes
         // the dashboard's Source dropdown read naturally.
-        "lmstudio" | "lm-studio" => Some(Box::new(OpenAiCompatAgent::new(
-            pick(config.openai_base_url),
-            config.model,
-        ))),
-        // vLLM is also OpenAI-compat but defaults to `:8000/v1`.
-        // The `base_url` override path (when set) wins; otherwise
-        // we substitute the vLLM default before falling through
-        // to whatever else the AgentConfig has.
-        "vllm" => Some(Box::new(OpenAiCompatAgent::new(
-            config
-                .base_url
-                .clone()
-                .or(config.openai_base_url)
-                .or_else(|| Some(VLLM_DEFAULT_BASE_URL.to_string())),
-            config.model,
-        ))),
-        // Generic openai-compat backend: matches anyone running an
-        // OpenAI-compat server somewhere. Defaults to LM Studio's
-        // `:1234/v1` for back-compat with existing flows.
-        "openai-compat" | "openai_compat" | "openai" => Some(Box::new(OpenAiCompatAgent::new(
-            pick(config.openai_base_url),
-            config.model,
-        ))),
+        // vLLM uses the same OpenAI-compat path with a `:8000/v1`
+        // default that `resolved_base_url` substitutes.
+        "lmstudio" | "lm-studio" | "vllm" | "openai-compat" | "openai_compat" | "openai" => {
+            Some(Box::new(OpenAiCompatAgent::new(resolved, config.model)))
+        }
         _ => None,
     }
 }
@@ -151,3 +157,210 @@ pub const KNOWN_AGENTS: &[&str] = &[
     "vllm",
     "openai-compat",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(
+        base: Option<&str>,
+        ollama: Option<&str>,
+        openai: Option<&str>,
+        model: Option<&str>,
+    ) -> AgentConfig {
+        AgentConfig {
+            model: model.map(String::from),
+            base_url: base.map(String::from),
+            ollama_base_url: ollama.map(String::from),
+            openai_base_url: openai.map(String::from),
+        }
+    }
+
+    // ---------- resolved_base_url ----------
+
+    #[test]
+    fn resolved_base_url_unknown_backend_returns_none() {
+        assert_eq!(
+            resolved_base_url("nope", &cfg(None, None, None, None)),
+            None
+        );
+    }
+
+    #[test]
+    fn resolved_base_url_subprocess_backends_return_none() {
+        for name in [
+            "claude",
+            "claude-cli",
+            "codex",
+            "codex-cli",
+            "gh-copilot",
+            "gh_copilot",
+        ] {
+            assert_eq!(
+                resolved_base_url(name, &cfg(Some("http://x"), None, None, None)),
+                None,
+                "{name} should not resolve a base url",
+            );
+        }
+    }
+
+    #[test]
+    fn resolved_base_url_ollama_uses_ollama_field_when_no_generic() {
+        let r = resolved_base_url("ollama", &cfg(None, Some("http://o:1/v1"), None, None));
+        assert_eq!(r.as_deref(), Some("http://o:1/v1"));
+    }
+
+    #[test]
+    fn resolved_base_url_ollama_falls_through_to_none_without_overrides() {
+        // `OllamaAgent::new` is what substitutes the conventional default.
+        let r = resolved_base_url("ollama", &cfg(None, None, None, None));
+        assert_eq!(r, None);
+    }
+
+    #[test]
+    fn resolved_base_url_generic_wins_over_ollama_field() {
+        let r = resolved_base_url(
+            "ollama",
+            &cfg(Some("http://generic"), Some("http://legacy"), None, None),
+        );
+        assert_eq!(r.as_deref(), Some("http://generic"));
+    }
+
+    #[test]
+    fn resolved_base_url_lmstudio_uses_openai_field() {
+        let r = resolved_base_url(
+            "lmstudio",
+            &cfg(None, None, Some("http://lm:1234/v1"), None),
+        );
+        assert_eq!(r.as_deref(), Some("http://lm:1234/v1"));
+        // Alias spelling produces the same answer.
+        let r2 = resolved_base_url(
+            "lm-studio",
+            &cfg(None, None, Some("http://lm:1234/v1"), None),
+        );
+        assert_eq!(r2, r);
+    }
+
+    #[test]
+    fn resolved_base_url_generic_wins_over_openai_field() {
+        let r = resolved_base_url(
+            "openai-compat",
+            &cfg(Some("http://generic"), None, Some("http://legacy"), None),
+        );
+        assert_eq!(r.as_deref(), Some("http://generic"));
+    }
+
+    #[test]
+    fn resolved_base_url_openai_compat_aliases_match() {
+        let c = cfg(None, None, Some("http://x/v1"), None);
+        assert_eq!(
+            resolved_base_url("openai-compat", &c).as_deref(),
+            Some("http://x/v1")
+        );
+        assert_eq!(
+            resolved_base_url("openai_compat", &c).as_deref(),
+            Some("http://x/v1")
+        );
+        assert_eq!(
+            resolved_base_url("openai", &c).as_deref(),
+            Some("http://x/v1")
+        );
+    }
+
+    #[test]
+    fn resolved_base_url_vllm_substitutes_default_when_nothing_provided() {
+        let r = resolved_base_url("vllm", &cfg(None, None, None, None));
+        assert_eq!(r.as_deref(), Some(VLLM_DEFAULT_BASE_URL));
+    }
+
+    #[test]
+    fn resolved_base_url_vllm_openai_field_wins_over_default() {
+        let r = resolved_base_url("vllm", &cfg(None, None, Some("http://my-vllm/v1"), None));
+        assert_eq!(r.as_deref(), Some("http://my-vllm/v1"));
+    }
+
+    #[test]
+    fn resolved_base_url_vllm_generic_wins_over_openai_field_and_default() {
+        let r = resolved_base_url(
+            "vllm",
+            &cfg(Some("http://generic"), None, Some("http://legacy"), None),
+        );
+        assert_eq!(r.as_deref(), Some("http://generic"));
+    }
+
+    // ---------- build_cli_agent ----------
+
+    #[test]
+    fn build_cli_agent_unknown_returns_none() {
+        assert!(build_cli_agent("does-not-exist", AgentConfig::default()).is_none());
+    }
+
+    #[test]
+    fn build_cli_agent_known_names_round_trip() {
+        for name in KNOWN_AGENTS {
+            let agent = build_cli_agent(name, AgentConfig::default());
+            assert!(agent.is_some(), "{name} should build a CliAgent");
+        }
+    }
+
+    #[test]
+    fn build_cli_agent_subprocess_backends_ignore_urls() {
+        // The `ClaudeAgent` / `CodexAgent` / `GhCopilotAgent`
+        // constructors don't take a base_url, so we just confirm
+        // the trait `name()` matches the requested backend.
+        let claude = build_cli_agent(
+            "claude",
+            cfg(
+                Some("http://nope"),
+                Some("http://nope"),
+                Some("http://nope"),
+                Some("opus"),
+            ),
+        )
+        .expect("claude should build");
+        assert_eq!(claude.name(), "claude");
+        let codex = build_cli_agent("codex-cli", AgentConfig::default()).expect("codex");
+        assert_eq!(codex.name(), "codex");
+        let copilot = build_cli_agent("gh_copilot", AgentConfig::default()).expect("copilot");
+        assert_eq!(copilot.name(), "gh-copilot");
+    }
+
+    // ---------- agent constructors ----------
+
+    #[test]
+    fn ollama_agent_substitutes_default_url_and_model() {
+        let a = OllamaAgent::new(None, None);
+        assert_eq!(a.base_url(), super::ollama::DEFAULT_BASE_URL);
+        assert_eq!(a.model(), super::ollama::DEFAULT_MODEL);
+    }
+
+    #[test]
+    fn ollama_agent_respects_overrides() {
+        let a = OllamaAgent::new(Some("http://x:9/v1".into()), Some("qwen3.6".into()));
+        assert_eq!(a.base_url(), "http://x:9/v1");
+        assert_eq!(a.model(), "qwen3.6");
+    }
+
+    #[test]
+    fn openai_compat_agent_substitutes_default_url() {
+        let a = OpenAiCompatAgent::new(None, None);
+        assert_eq!(a.base_url(), super::openai_compat::DEFAULT_BASE_URL);
+        assert_eq!(a.model(), super::openai_compat::DEFAULT_MODEL);
+    }
+
+    #[test]
+    fn openai_compat_agent_respects_overrides() {
+        let a = OpenAiCompatAgent::new(
+            Some("http://lm-studio:1234/v1".into()),
+            Some("custom".into()),
+        );
+        assert_eq!(a.base_url(), "http://lm-studio:1234/v1");
+        assert_eq!(a.model(), "custom");
+    }
+
+    #[test]
+    fn vllm_default_url_constant_is_well_formed() {
+        // Trivial guard against accidental edits to the vLLM default.
+        assert_eq!(VLLM_DEFAULT_BASE_URL, "http://localhost:8000/v1");
+    }
+}

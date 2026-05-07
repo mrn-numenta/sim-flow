@@ -96,6 +96,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             llm_model,
             ollama_base_url,
             openai_base_url,
+            llm_base_url,
             candidate,
         } => session_cmd(
             cli,
@@ -107,6 +108,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             llm_model.as_deref(),
             ollama_base_url.as_deref(),
             openai_base_url.as_deref(),
+            llm_base_url.as_deref(),
             candidate.as_deref(),
         ),
         Command::Auto {
@@ -488,6 +490,7 @@ fn session_cmd(
     llm_model: Option<&str>,
     ollama_base_url: Option<&str>,
     openai_base_url: Option<&str>,
+    llm_base_url: Option<&str>,
     candidate: Option<&str>,
 ) -> sim_flow::Result<()> {
     let (step_id, kind_str) = step_kind.split_once('.').ok_or_else(|| {
@@ -525,7 +528,7 @@ fn session_cmd(
     } else {
         let agent_config = sim_flow::__internal::session::AgentConfig {
             model: llm_model.map(String::from),
-            base_url: None,
+            base_url: llm_base_url.map(String::from),
             ollama_base_url: ollama_base_url.map(String::from),
             openai_base_url: openai_base_url.map(String::from),
         };
