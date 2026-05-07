@@ -199,28 +199,49 @@
         },
         "sim-flow.llm.source": {
           "type": "string",
-          "enum": [
-            "vscode",
-            "anthropic",
-            "openai",
-            "ollama",
-            "lmstudio",
-            "claude-cli",
-            "codex-cli",
-            "gh-copilot-cli"
-          ],
-          "enumDescriptions": [
-            "Use VS Code's built-in Language Model API (requires Copilot or another provider).",
-            "Call the Anthropic API directly; requires an API key in SecretStorage.",
-            "Call the OpenAI API directly; requires an API key in SecretStorage.",
-            "Call a local Ollama server via its OpenAI-compatible endpoint.",
-            "Call a local LM Studio server via its OpenAI-compatible endpoint.",
-            "Anthropic Claude CLI (terminal-only). Runs `sim-flow auto --llm-backend claude` in a VS Code terminal; uses the user's `claude /login` (Pro/Team).",
-            "OpenAI Codex CLI (terminal-only). Runs `sim-flow auto --llm-backend codex` in a VS Code terminal; uses the user's `codex login`.",
-            "GitHub Copilot CLI (terminal-only). Runs `sim-flow auto --llm-backend gh-copilot` in a VS Code terminal; uses the user's `gh auth login`."
-          ],
           "default": "vscode",
-          "description": "Which language model source to use. The first five run inside the @sim-flow chat pane; the `*-cli` variants run `sim-flow auto` in a terminal tab and bypass the chat participant -- pick one when you want to use your existing CLI auth instead of API keys."
+          "description": "Which language model source to use. Built-in choices are `vscode`, `anthropic`, `openai`, `ollama`, `lmstudio`, `vllm`, `claude-cli`, `codex-cli`, `gh-copilot-cli`. You can also reference a user-defined server by its `name` from `sim-flow.llm.servers` -- those entries override the conventional default host/port for `ollama` / `lmstudio` / `vllm` / generic openai-compat backends."
+        },
+        "sim-flow.llm.servers": {
+          "type": "array",
+          "default": [],
+          "description": "User-defined OpenAI-compatible LLM servers. Each entry adds a row to the dashboard's Source dropdown that maps to the matching `kind` agent with the entry's `host` + `port` overriding the conventional default. Use this to point sim-flow at a remote vLLM / Ollama / LM Studio host, or to keep multiple local servers configured side-by-side.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "kind", "host", "port"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Human-readable label shown in the dashboard's Source dropdown (e.g. `vllm-bigbox`, `ollama-laptop`). Must be unique within the array."
+              },
+              "kind": {
+                "type": "string",
+                "enum": ["ollama", "lmstudio", "vllm", "openai-compat"],
+                "description": "Backend protocol. `ollama` / `lmstudio` / `vllm` are convenience aliases for OpenAI-compat servers running those products' default paths; `openai-compat` is the generic fallback."
+              },
+              "host": {
+                "type": "string",
+                "default": "localhost",
+                "description": "Hostname or IP address of the server."
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535,
+                "description": "TCP port the server listens on (Ollama 11434, LM Studio 1234, vLLM 8000)."
+              },
+              "model": {
+                "type": "string",
+                "description": "Optional model identifier (overrides `sim-flow.llm.model` for this server)."
+              },
+              "path": {
+                "type": "string",
+                "default": "/v1",
+                "description": "URL path prefix served by the OpenAI-compat shim. Default `/v1` works for every supported product. Override for non-standard mounts."
+              }
+            }
+          }
         },
         "sim-flow.chat.scope": {
           "type": "string",

@@ -112,6 +112,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
         Command::Auto {
             llm_backend,
             llm_model,
+            llm_base_url,
             max_auto_iters,
             max_critique_iters,
             dm0_interactive,
@@ -127,6 +128,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             &project_dir,
             llm_backend,
             llm_model.as_deref(),
+            llm_base_url.as_deref(),
             *max_auto_iters,
             *max_critique_iters,
             *dm0_interactive,
@@ -322,6 +324,7 @@ fn auto_cmd(
     project: &Path,
     llm_backend: &str,
     llm_model: Option<&str>,
+    llm_base_url: Option<&str>,
     max_auto_iters: u32,
     max_critique_iters: u32,
     dm0_interactive: bool,
@@ -375,6 +378,7 @@ fn auto_cmd(
         foundation_root: foundation,
         llm_backend: llm_backend.to_string(),
         llm_model: llm_model.map(String::from),
+        llm_base_url: llm_base_url.map(String::from),
         max_auto_iters,
         max_critique_iters,
         dm0_interactive,
@@ -521,6 +525,7 @@ fn session_cmd(
     } else {
         let agent_config = sim_flow::__internal::session::AgentConfig {
             model: llm_model.map(String::from),
+            base_url: None,
             ollama_base_url: ollama_base_url.map(String::from),
             openai_base_url: openai_base_url.map(String::from),
         };

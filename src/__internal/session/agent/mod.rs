@@ -76,24 +76,64 @@ pub trait CliAgent: Send {
 #[derive(Debug, Clone, Default)]
 pub struct AgentConfig {
     pub model: Option<String>,
+    /// Generic base-URL override. Wins over the per-backend
+    /// `ollama_base_url` / `openai_base_url` fields when set.
+    /// Use this for `vllm` / generic openai-compat servers and
+    /// for any user-defined endpoint that doesn't fit the
+    /// conventional default. None means "use the backend's
+    /// conventional default".
+    pub base_url: Option<String>,
     pub ollama_base_url: Option<String>,
     pub openai_base_url: Option<String>,
 }
+
+/// Default OpenAI-compatible base URL for a vLLM server. vLLM
+/// listens on port 8000 by default; the `/v1` path is the
+/// OpenAI-compat shim it serves.
+pub const VLLM_DEFAULT_BASE_URL: &str = "http://localhost:8000/v1";
 
 /// Build a `CliAgent` from a backend name. Returns `None` when the
 /// name doesn't match a known agent so callers can surface a helpful
 /// error listing available choices.
 pub fn build_cli_agent(name: &str, config: AgentConfig) -> Option<Box<dyn CliAgent>> {
+    // The generic `base_url` field wins over the legacy per-
+    // backend fields. Callers using `--llm-base-url` set
+    // `config.base_url`; older callers using
+    // `--ollama-base-url` etc. still work via the fallbacks.
+    let pick = |fallback: Option<String>| config.base_url.clone().or(fallback);
     match name {
         "claude" | "claude-cli" => Some(Box::new(ClaudeAgent::new(config.model))),
         "codex" | "codex-cli" => Some(Box::new(CodexAgent::new(config.model))),
         "gh-copilot" | "gh_copilot" => Some(Box::new(GhCopilotAgent::new())),
         "ollama" => Some(Box::new(OllamaAgent::new(
-            config.ollama_base_url,
+            pick(config.ollama_base_url),
             config.model,
         ))),
+        // LM Studio uses the OpenAI-compat agent with its
+        // conventional `:1234/v1` default. Aliasing it explicitly
+        // (rather than asking users to type `openai-compat`) makes
+        // the dashboard's Source dropdown read naturally.
+        "lmstudio" | "lm-studio" => Some(Box::new(OpenAiCompatAgent::new(
+            pick(config.openai_base_url),
+            config.model,
+        ))),
+        // vLLM is also OpenAI-compat but defaults to `:8000/v1`.
+        // The `base_url` override path (when set) wins; otherwise
+        // we substitute the vLLM default before falling through
+        // to whatever else the AgentConfig has.
+        "vllm" => Some(Box::new(OpenAiCompatAgent::new(
+            config
+                .base_url
+                .clone()
+                .or(config.openai_base_url)
+                .or_else(|| Some(VLLM_DEFAULT_BASE_URL.to_string())),
+            config.model,
+        ))),
+        // Generic openai-compat backend: matches anyone running an
+        // OpenAI-compat server somewhere. Defaults to LM Studio's
+        // `:1234/v1` for back-compat with existing flows.
         "openai-compat" | "openai_compat" | "openai" => Some(Box::new(OpenAiCompatAgent::new(
-            config.openai_base_url,
+            pick(config.openai_base_url),
             config.model,
         ))),
         _ => None,
@@ -102,4 +142,12 @@ pub fn build_cli_agent(name: &str, config: AgentConfig) -> Option<Box<dyn CliAge
 
 /// Names accepted by `build_cli_agent`. Stable for help text /
 /// error messages.
-pub const KNOWN_AGENTS: &[&str] = &["claude", "codex", "gh-copilot", "ollama", "openai-compat"];
+pub const KNOWN_AGENTS: &[&str] = &[
+    "claude",
+    "codex",
+    "gh-copilot",
+    "ollama",
+    "lmstudio",
+    "vllm",
+    "openai-compat",
+];

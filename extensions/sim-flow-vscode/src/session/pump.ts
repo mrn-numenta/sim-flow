@@ -68,6 +68,14 @@ export interface SessionPumpOptions {
 export interface PumpLlmConfig {
   source: LlmSource;
   model?: string;
+  /**
+   * Generic base-URL override for OpenAI-compat backends. Set when
+   * the user picks a custom server (`server:<name>` in the source
+   * picker). Wins over `ollamaBaseUrl` / `lmstudioBaseUrl` and
+   * gets passed through as `--llm-base-url` to the spawned
+   * `sim-flow auto`.
+   */
+  baseUrl?: string;
   ollamaBaseUrl?: string;
   lmstudioBaseUrl?: string;
   secrets?: SecretStorage;
@@ -124,6 +132,17 @@ export interface LiveSessionTransport {
   advance?(step: string): void;
   reset?(step: string): void;
   shutdown?(): void;
+  /**
+   * Graceful-then-forceful disconnect. Sends `shutdown`, waits for
+   * the orchestrator child to exit cleanly, escalates to SIGTERM,
+   * then SIGKILL. Returns the path that ended the child. Only the
+   * JSONL transport implements this; PTY / mock transports omit it
+   * and callers fall back to the control-socket `/exit` injection.
+   */
+  disconnectWithEscalation?(
+    cleanTimeoutMs?: number,
+    termTimeoutMs?: number,
+  ): Promise<"clean" | "sigterm" | "sigkill" | "already-gone">;
   /**
    * Sub-session bracketing surface. `inSubSession` is true while the
    * orchestrator is inside a Work / Critique sub-session and false

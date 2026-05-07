@@ -55,6 +55,12 @@ pub struct OrchestratorOptions {
     pub llm_backend: String,
     /// Optional model identifier the host should pass to its client.
     pub llm_model: Option<String>,
+    /// Optional base URL override for OpenAI-compatible local
+    /// backends (`ollama`, `lmstudio`, `vllm`, `openai-compat`).
+    /// Echoed back inside `RequestLlmResponse` so JSONL hosts
+    /// know which endpoint to dispatch against. `None` means the
+    /// host picks the conventional default for the backend.
+    pub llm_base_url: Option<String>,
     /// Run this session unattended. The agent is told not to ask the
     /// user any questions; on each turn that writes artifacts we
     /// re-evaluate the structural gate (CritiqueClean is excluded
@@ -117,6 +123,7 @@ impl Default for OrchestratorOptions {
             candidate: None,
             llm_backend: String::new(),
             llm_model: None,
+            llm_base_url: None,
             auto: false,
             max_auto_iters: 3,
             max_llm_requests: 50,

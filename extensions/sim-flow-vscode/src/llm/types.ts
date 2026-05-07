@@ -44,6 +44,8 @@ export type LlmSource =
   | "openai"
   | "ollama"
   | "lmstudio"
+  | "vllm"
+  | "openai-compat"
   | "claude-cli"
   | "codex-cli"
   | "gh-copilot-cli";

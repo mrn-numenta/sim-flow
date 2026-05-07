@@ -168,12 +168,25 @@ pub(crate) enum Command {
     /// render a single continuous chat.
     Auto {
         /// LLM backend label echoed to the host (e.g. `vscode`,
-        /// `anthropic`, `ollama`).
+        /// `anthropic`, `ollama`, `lmstudio`, `vllm`,
+        /// `openai-compat`).
         #[arg(long, default_value = "vscode")]
         llm_backend: String,
         /// Optional model identifier.
         #[arg(long)]
         llm_model: Option<String>,
+        /// Base URL override for OpenAI-compatible local backends
+        /// (`ollama`, `lmstudio`, `vllm`, `openai-compat`). Format
+        /// is whatever the server documents -- typically
+        /// `http://<host>:<port>/v1`. When omitted, each backend
+        /// falls back to its conventional default
+        /// (`http://localhost:11434/v1` for Ollama,
+        /// `http://localhost:1234/v1` for LM Studio,
+        /// `http://localhost:8000/v1` for vLLM). Ignored for
+        /// `vscode` / `anthropic` / `openai` (those use
+        /// hosted-API endpoints) and the `*-cli` backends.
+        #[arg(long)]
+        llm_base_url: Option<String>,
         /// Per-session structural-gate iteration cap.
         #[arg(long, default_value_t = 3)]
         max_auto_iters: u32,

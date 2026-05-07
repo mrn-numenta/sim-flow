@@ -86,6 +86,13 @@ export interface DashboardState {
   /** Mirrors `sim-flow.dashboard.verilogSimulatorPath`; empty when unset. */
   verilogSimulatorPath: string;
   /**
+   * Mirrors `sim-flow.llm.servers`. Empty when no user-defined
+   * servers are configured. The dashboard surfaces these in the
+   * Settings tab (add / edit / remove) and inlines them into the
+   * Source dropdown alongside the built-in `LlmSourceTag`s.
+   */
+  llmServers: LlmServerEntry[];
+  /**
    * Current step-axis mode. When a manual-mode pump is attached this
    * is the orchestrator's truth (last `StepModeChanged` echo);
    * otherwise it falls back to the `sim-flow.flow.stepMode` setting.
@@ -217,8 +224,9 @@ export type HostMessage =
  *     - vscode (VS Code Language Model API; usually Copilot)
  *     - anthropic (Anthropic Messages API)
  *     - openai (OpenAI Chat Completions)
- *     - ollama (local OpenAI-compat server)
- *     - lmstudio (local OpenAI-compat server)
+ *     - ollama (OpenAI-compat server -- localhost:11434 default)
+ *     - lmstudio (OpenAI-compat server -- localhost:1234 default)
+ *     - vllm (OpenAI-compat server -- localhost:8000 default)
  *
  * - **CLI agents** -- driven by `sim-flow auto --llm-backend <name>`
  *   in a VS Code terminal tab. They use whatever auth the user's
@@ -227,6 +235,12 @@ export type HostMessage =
  *     - claude-cli (Anthropic's `claude` CLI; uses Pro/Team)
  *     - codex-cli (OpenAI's `codex` CLI)
  *     - gh-copilot-cli (`gh copilot` CLI)
+ *
+ * Users can ALSO add `LlmServerEntry` rows in
+ * `sim-flow.llm.servers` -- those reference a `kind` (ollama /
+ * lmstudio / vllm / openai-compat) but supply a custom host +
+ * port, so a remote vLLM box or a non-default-port Ollama can
+ * be selected from the same Source dropdown.
  */
 export type LlmSourceTag =
   | "vscode"
@@ -234,6 +248,7 @@ export type LlmSourceTag =
   | "openai"
   | "ollama"
   | "lmstudio"
+  | "vllm"
   | "claude-cli"
   | "codex-cli"
   | "gh-copilot-cli";
@@ -242,11 +257,47 @@ export const LLM_SOURCE_LABELS: Record<LlmSourceTag, string> = {
   vscode: "VS Code (Copilot)",
   anthropic: "Anthropic",
   openai: "OpenAI",
-  ollama: "Ollama (local)",
-  lmstudio: "LM Studio (local)",
+  ollama: "Ollama",
+  lmstudio: "LM Studio",
+  vllm: "vLLM",
   "claude-cli": "Claude CLI (terminal)",
   "codex-cli": "Codex CLI (terminal)",
   "gh-copilot-cli": "GitHub Copilot CLI (terminal)",
+};
+
+/**
+ * One row in `sim-flow.llm.servers`. The dashboard's Source
+ * dropdown shows these alongside the built-in tags; selecting one
+ * dispatches against `kind` with `host:port` overriding the
+ * conventional default. Stored as plain JSON so the value works
+ * with VS Code's settings UI.
+ */
+export interface LlmServerEntry {
+  name: string;
+  kind: "ollama" | "lmstudio" | "vllm" | "openai-compat";
+  host: string;
+  port: number;
+  model?: string;
+  path?: string;
+}
+
+/** Compose `host` + `port` + (optional) `path` into the OpenAI-
+ *  compat base URL the agent expects (`http://host:port/v1`).
+ *  Defaults `path` to `/v1` -- every supported backend serves
+ *  there. */
+export function llmServerBaseUrl(entry: LlmServerEntry): string {
+  const path = entry.path && entry.path.length > 0 ? entry.path : "/v1";
+  const normalisedPath = path.startsWith("/") ? path : `/${path}`;
+  return `http://${entry.host}:${entry.port}${normalisedPath}`;
+}
+
+/** Conventional default port per kind, used when seeding a new
+ *  servers entry. */
+export const LLM_SERVER_DEFAULT_PORT: Record<LlmServerEntry["kind"], number> = {
+  ollama: 11434,
+  lmstudio: 1234,
+  vllm: 8000,
+  "openai-compat": 8000,
 };
 
 /** True when the source must be driven via a terminal, not the chat pane. */
@@ -305,10 +356,11 @@ export type WebviewMessage =
   | { type: "switch-project" }
   | { type: "new-project"; name: string }
   | { type: "rename-project" }
-  | { type: "set-llm-source"; source: LlmSourceTag }
+  | { type: "set-llm-source"; source: LlmSourceTag | string }
   | { type: "set-llm-model"; model: string }
-  | { type: "request-model-list"; source: LlmSourceTag }
+  | { type: "request-model-list"; source: LlmSourceTag | string }
   | { type: "set-llm-verbose"; verbose: boolean }
+  | { type: "set-llm-servers"; servers: LlmServerEntry[] }
   | { type: "prompts-list" }
   /**
    * Open a prompt override in a regular VS Code editor tab. The host

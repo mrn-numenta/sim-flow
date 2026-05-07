@@ -28,6 +28,14 @@ export interface EnumerateOptions {
   source: LlmSource;
   ollamaBaseUrl?: string;
   lmstudioBaseUrl?: string;
+  /**
+   * Generic OpenAI-compat base URL override. When set, takes
+   * precedence over `ollamaBaseUrl` / `lmstudioBaseUrl` for the
+   * `ollama` / `lmstudio` / `vllm` / `openai-compat` sources.
+   * Used when the dashboard resolved a `server:<name>` entry to
+   * a `host:port` pair.
+   */
+  baseUrl?: string;
   /** Injectable for tests. */
   fetchImpl?: typeof fetch;
   /** Injectable for tests; defaults to `vscode.lm.selectChatModels`. */
@@ -47,11 +55,23 @@ export async function enumerateModels(opts: EnumerateOptions): Promise<Enumerate
     case "vscode":
       return await enumerateVscode(opts);
     case "lmstudio": {
-      const url = (opts.lmstudioBaseUrl ?? "http://localhost:1234/v1").replace(/\/+$/, "") + "/models";
+      const base = opts.baseUrl ?? opts.lmstudioBaseUrl ?? "http://localhost:1234/v1";
+      const url = base.replace(/\/+$/, "") + "/models";
       return await fetchOpenAiModels(url, opts.fetchImpl);
     }
     case "ollama": {
-      const url = (opts.ollamaBaseUrl ?? "http://localhost:11434/v1").replace(/\/+$/, "") + "/models";
+      const base = opts.baseUrl ?? opts.ollamaBaseUrl ?? "http://localhost:11434/v1";
+      const url = base.replace(/\/+$/, "") + "/models";
+      return await fetchOpenAiModels(url, opts.fetchImpl);
+    }
+    case "vllm": {
+      const base = opts.baseUrl ?? "http://localhost:8000/v1";
+      const url = base.replace(/\/+$/, "") + "/models";
+      return await fetchOpenAiModels(url, opts.fetchImpl);
+    }
+    case "openai-compat": {
+      const base = opts.baseUrl ?? "http://localhost:1234/v1";
+      const url = base.replace(/\/+$/, "") + "/models";
       return await fetchOpenAiModels(url, opts.fetchImpl);
     }
     case "openai":

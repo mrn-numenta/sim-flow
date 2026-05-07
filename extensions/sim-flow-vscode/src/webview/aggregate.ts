@@ -6,7 +6,7 @@
 import type { BaselineRecord, RunRow } from "../cli/types";
 import type { StepMode } from "../session/protocol-types";
 import type { CritiqueFile, FlowState, PlanProgress } from "../state/types";
-import type { DashboardState, DocumentEntry } from "./messages";
+import type { DashboardState, DocumentEntry, LlmServerEntry } from "./messages";
 
 export interface AggregateInput {
   projectDir: string;
@@ -36,6 +36,8 @@ export interface AggregateInput {
   verilogSimEnabled?: boolean;
   /** Mirrors `sim-flow.dashboard.verilogSimulatorPath`. Defaults to "". */
   verilogSimulatorPath?: string;
+  /** Mirrors `sim-flow.llm.servers`. Defaults to []. */
+  llmServers?: LlmServerEntry[];
   /**
    * Resolved step-axis mode: orchestrator's last `StepModeChanged`
    * truth when a session is attached, otherwise the persisted
@@ -77,6 +79,7 @@ export function aggregateDashboardState(input: AggregateInput): DashboardState {
     fullyAutomatedEnabled: input.fullyAutomatedEnabled ?? false,
     verilogSimEnabled: input.verilogSimEnabled ?? false,
     verilogSimulatorPath: input.verilogSimulatorPath ?? "",
+    llmServers: input.llmServers ?? [],
     stepMode: input.stepMode ?? "manual",
     sessionActive: input.sessionActive ?? false,
     inSubSession: input.inSubSession ?? false,

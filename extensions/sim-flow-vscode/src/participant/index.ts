@@ -181,6 +181,9 @@ async function runStepCommand(
   if (llmConfig.model) {
     args.push("--llm-model", llmConfig.model);
   }
+  if (llmConfig.baseUrl) {
+    args.push("--llm-base-url", llmConfig.baseUrl);
+  }
   if (candidate) {
     args.push("--candidate", candidate);
   }
@@ -238,6 +241,9 @@ async function runAutoCommand(
   args.push("--llm-backend", llmConfig.source);
   if (llmConfig.model) {
     args.push("--llm-model", llmConfig.model);
+  }
+  if (llmConfig.baseUrl) {
+    args.push("--llm-base-url", llmConfig.baseUrl);
   }
   args.push("--max-auto-iters", String(maxWorkIters));
   args.push("--max-critique-iters", String(maxCritiqueIters));
@@ -335,8 +341,33 @@ function buildPumpLlmConfig(
   secrets: SecretStorage,
   config: vscode.WorkspaceConfiguration,
 ): PumpLlmConfig {
-  const source = (config.get<LlmSource>("llm.source") ?? "vscode") as LlmSource;
-  const model = (config.get<string>("llm.model") ?? "").trim() || undefined;
+  const rawSource = (config.get<string>("llm.source") ?? "vscode").trim();
+  let source: LlmSource = "vscode";
+  let model = (config.get<string>("llm.model") ?? "").trim() || undefined;
+  let baseUrl: string | undefined;
+  // `server:<name>` references a row in `sim-flow.llm.servers`.
+  // Resolve to the server's `kind` (passed to sim-flow as
+  // `--llm-backend`) plus a derived base URL from host + port.
+  if (rawSource.startsWith("server:")) {
+    const name = rawSource.slice("server:".length);
+    const servers = (config.get<unknown>("llm.servers") as
+      | import("../webview/messages").LlmServerEntry[]
+      | undefined) ?? [];
+    const entry = servers.find((s) => s.name === name);
+    if (entry) {
+      source = entry.kind as LlmSource;
+      const path = entry.path && entry.path.length > 0 ? entry.path : "/v1";
+      const normalisedPath = path.startsWith("/") ? path : `/${path}`;
+      baseUrl = `http://${entry.host}:${entry.port}${normalisedPath}`;
+      if (!model && entry.model && entry.model.length > 0) {
+        model = entry.model;
+      }
+    } else {
+      source = "vscode";
+    }
+  } else {
+    source = rawSource as LlmSource;
+  }
   const ollamaBaseUrl = (config.get<string>("llm.ollama.baseUrl") ?? "").trim() || undefined;
   const lmstudioBaseUrl = (config.get<string>("llm.lmstudio.baseUrl") ?? "").trim() || undefined;
   // Setting takes precedence; fall back to the env var so a CLI
@@ -347,6 +378,7 @@ function buildPumpLlmConfig(
   return {
     source,
     model,
+    baseUrl,
     ollamaBaseUrl,
     lmstudioBaseUrl,
     secrets,

@@ -411,6 +411,11 @@ export class DashboardHost {
           .getConfiguration("sim-flow")
           .update("llm.verbose", msg.verbose, vscode.ConfigurationTarget.Workspace);
         return;
+      case "set-llm-servers":
+        await vscode.workspace
+          .getConfiguration("sim-flow")
+          .update("llm.servers", msg.servers, vscode.ConfigurationTarget.Workspace);
+        return;
       case "request-model-list":
         await this.sendModelList(msg.source);
         return;
@@ -691,6 +696,37 @@ export class DashboardHost {
   }
 
   private async stopAuto(): Promise<void> {
+    // Routing order:
+    // 1. JSONL transport — when a `SocketSessionPump` is attached
+    //    for this project, use its escalation path: clean shutdown
+    //    over the socket, then SIGTERM, then SIGKILL. This is the
+    //    only path that guarantees the spawned `sim-flow auto`
+    //    child is reaped (the control-socket `/exit` inject only
+    //    nudges the inner CLI agent and can leave a zombie if the
+    //    orchestrator is blocked in an LLM call).
+    // 2. PTY control socket — single-session CLI-agent mode where
+    //    we inject `/exit` to the terminal. Falls through.
+    // 3. No socket reachable — surface an error.
+    const session = this.activeSession();
+    if (session && typeof session.pump.disconnectWithEscalation === "function") {
+      try {
+        const outcome = await session.pump.disconnectWithEscalation();
+        if (outcome === "sigkill") {
+          await this.post({
+            type: "error",
+            message: "Disconnect required SIGKILL.",
+            detail:
+              "The orchestrator did not exit after `shutdown` and SIGTERM " +
+              "within the timeout. The child has been killed; check the " +
+              "debug log if this happens repeatedly.",
+          });
+        }
+      } finally {
+        await this.options.autoSessions?.clearIfActive(session);
+        await this.refresh();
+      }
+      return;
+    }
     if (!controlSocketLikelyPresent(this.options.projectDir)) {
       await this.post({
         type: "error",
@@ -920,6 +956,9 @@ export class DashboardHost {
       fullyAutomatedEnabled,
       verilogSimEnabled,
       verilogSimulatorPath,
+      llmServers: cfg.get<unknown>("llm.servers") as
+        | import("./messages").LlmServerEntry[]
+        | undefined,
       stepMode,
       sessionActive,
       inSubSession,
@@ -1073,18 +1112,38 @@ export class DashboardHost {
    * the dashboard. Called both on the dashboard's explicit
    * `request-model-list` and on source changes.
    */
-  private async sendModelList(source: LlmSourceTag): Promise<void> {
+  private async sendModelList(source: LlmSourceTag | string): Promise<void> {
     const config = vscode.workspace.getConfiguration("sim-flow");
     const ollamaBaseUrl = config.get<string>("llm.ollama.baseUrl") ?? undefined;
     const lmstudioBaseUrl = config.get<string>("llm.lmstudio.baseUrl") ?? undefined;
+    // Resolve `server:<name>` against the user-defined servers
+    // array so we enumerate against the right host/port. Falls
+    // back to the built-in source enumerators when no server
+    // matches.
+    let resolvedSource: LlmSource = source as LlmSource;
+    let baseUrl: string | undefined;
+    if (typeof source === "string" && source.startsWith("server:")) {
+      const name = source.slice("server:".length);
+      const servers = (config.get<unknown>("llm.servers") as
+        | import("./messages").LlmServerEntry[]
+        | undefined) ?? [];
+      const entry = servers.find((s) => s.name === name);
+      if (entry) {
+        resolvedSource = entry.kind as LlmSource;
+        const path = entry.path && entry.path.length > 0 ? entry.path : "/v1";
+        const normalisedPath = path.startsWith("/") ? path : `/${path}`;
+        baseUrl = `http://${entry.host}:${entry.port}${normalisedPath}`;
+      }
+    }
     const result = await enumerateModels({
-      source: source as LlmSource,
+      source: resolvedSource,
       ollamaBaseUrl,
       lmstudioBaseUrl,
+      baseUrl,
     });
     await this.post({
       type: "model-list",
-      source,
+      source: source as LlmSourceTag,
       models: result.models,
       emptyReason: result.emptyReason,
       error: result.error,

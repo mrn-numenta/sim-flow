@@ -14,6 +14,7 @@ import {
 import { estimateMessagesTokens } from "../llm/tokenEstimate";
 import { DebugLog } from "./debug-log";
 import { removePidRecord, writePidRecord } from "./processRegistry";
+import { acquirePumpLock, type PumpLock } from "./pumpLock";
 import {
   BREVITY_DIRECTIVE,
   type LiveSessionTransport,
@@ -74,6 +75,14 @@ export class SocketSessionPump implements LiveSessionTransport {
   /** True after we've reaped `<project>/.sim-flow/pids/<id>.json`. */
   private pidRecordCleared = false;
   /**
+   * Per-project flock guarding against a second window racing this
+   * pump for the same project. `null` in attach-only mode (no spawn,
+   * lock is somebody else's responsibility) or when the spawn was
+   * blocked by an existing live holder. `release()` runs from
+   * `dispose()`.
+   */
+  private pumpLock: PumpLock | null = null;
+  /**
    * Last `StepModeChanged` value the orchestrator emitted. The
    * orchestrator echoes the initial mode as soon as it's spawned and
    * re-emits on every flip (user toggle, cap exceeded, gate failure
@@ -101,6 +110,24 @@ export class SocketSessionPump implements LiveSessionTransport {
     this.debugLog = DebugLog.fromTokens(llm.debugTokens, llm.projectDir);
     this.attachTimeoutMs = options.attachTimeoutMs ?? 5000;
     if (options.launch) {
+      // Acquire the per-project pump lock BEFORE spawning. A second
+      // VS Code window with the same project open would otherwise
+      // race us for the JSONL socket and `.sim-flow/state.toml`.
+      const lockResult = acquirePumpLock(llm.projectDir, options.sessionId);
+      if (!lockResult.ok) {
+        this.markTerminated({
+          status: "ended",
+          endReason: "spawn-error",
+          endMessage: lockResult.message,
+        });
+        this.connectionReady = Promise.reject(new Error(lockResult.message));
+        // Swallow the unhandled rejection -- callers observe the
+        // terminal state via `settle()`, which checks
+        // `terminationReason` first.
+        this.connectionReady.catch(() => undefined);
+        return;
+      }
+      this.pumpLock = lockResult.lock;
       // Mirror SessionPump's env wiring so the spawned `sim-flow auto`
       // process sees the same `SIM_FOUNDATION_DEBUG` value that drives
       // the extension-side DebugLog. Without this the orchestrator's
@@ -335,6 +362,74 @@ export class SocketSessionPump implements LiveSessionTransport {
     this.sendHostEventAfterReady({ event: "shutdown" });
   }
 
+  /**
+   * Graceful disconnect with escalation. Sequence:
+   *   1. Send `shutdown` over the socket so the orchestrator
+   *      finishes its current turn and exits cleanly.
+   *   2. Wait up to `cleanTimeoutMs` for the child to exit.
+   *   3. If still alive, send SIGTERM (`dispose` already does
+   *      this on its own; we wait again afterward).
+   *   4. Wait up to `termTimeoutMs` for SIGTERM to take effect.
+   *   5. If still alive, SIGKILL.
+   *
+   * Returns once the child is reaped or after the worst-case
+   * deadline. Safe to call concurrently with `dispose`; the
+   * second-arrival-loses race is handled by the underlying
+   * `terminated` flag.
+   */
+  async disconnectWithEscalation(
+    cleanTimeoutMs = 5_000,
+    termTimeoutMs = 2_000,
+  ): Promise<"clean" | "sigterm" | "sigkill" | "already-gone"> {
+    if (!this.child || this.child.exitCode !== null || this.child.signalCode !== null) {
+      this.dispose();
+      return "already-gone";
+    }
+    this.shutdown();
+    if (await this.waitForChildExit(cleanTimeoutMs)) {
+      this.dispose();
+      return "clean";
+    }
+    try {
+      this.child?.kill("SIGTERM");
+    } catch {
+      // child already gone
+    }
+    if (await this.waitForChildExit(termTimeoutMs)) {
+      this.dispose();
+      return "sigterm";
+    }
+    try {
+      this.child?.kill("SIGKILL");
+    } catch {
+      // child already gone
+    }
+    // Best-effort wait for the kill to land. Clean up regardless.
+    await this.waitForChildExit(1_000);
+    this.dispose();
+    return "sigkill";
+  }
+
+  /** Resolve true when the child has exited within `ms`, false on timeout. */
+  private waitForChildExit(ms: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (!this.child || this.child.exitCode !== null || this.child.signalCode !== null) {
+        resolve(true);
+        return;
+      }
+      const child = this.child;
+      const timer = setTimeout(() => {
+        child.removeListener("exit", onExit);
+        resolve(false);
+      }, ms);
+      const onExit = (): void => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      child.once("exit", onExit);
+    });
+  }
+
   private sendHostEventAfterReady(event: HostEvent): void {
     void this.connectionReady
       .then(() => {
@@ -368,6 +463,14 @@ export class SocketSessionPump implements LiveSessionTransport {
     // Defensive: if the exit handler never fires (e.g. test harnesses
     // that mock spawn), reap the pid record here too.
     this.clearPidRecord();
+    if (this.pumpLock) {
+      try {
+        this.pumpLock.release();
+      } catch {
+        // Already logged; never throw out of dispose.
+      }
+      this.pumpLock = null;
+    }
     this.debugLog.dispose();
   }
 

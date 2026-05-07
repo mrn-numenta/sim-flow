@@ -10,8 +10,10 @@ import type { DashboardState, HostMessage, WebviewMessage } from "./messages";
 import type { BaselineRecord, GateFailure, GateResult, RunRow } from "../cli/types";
 import type { CritiqueFile, Finding } from "../state/types";
 import {
+  LLM_SERVER_DEFAULT_PORT,
   LLM_SOURCE_LABELS,
   type DocumentEntry,
+  type LlmServerEntry,
   type LlmSourceTag,
   type PromptListEntry,
 } from "./messages";
@@ -428,6 +430,17 @@ function renderSettingsTab(): Node[] {
     el(
       "div",
       { class: "settings-section" },
+      el("h3", {}, "Custom LLM servers"),
+      el(
+        "p",
+        { class: "muted" },
+        "Add OpenAI-compat servers (vLLM / Ollama / LM Studio / generic) by hostname + port. Saved entries appear in the Source dropdown above; pick one and the dashboard dispatches against it. Empty list = use built-in defaults (localhost + each kind's conventional port).",
+      ),
+      renderLlmServersTable(),
+    ),
+    el(
+      "div",
+      { class: "settings-section" },
       el("h3", {}, "Output style"),
       el("div", { class: "settings-row" }, renderVerboseToggle()),
     ),
@@ -498,6 +511,210 @@ function renderVerilogSimulatorPath(): HTMLElement {
   });
   wrap.appendChild(input);
   return wrap;
+}
+
+/**
+ * Render the user-defined LLM servers table. Each row shows the
+ * entry's name / kind / host / port / model and exposes a Remove
+ * button. A trailing "Add server" button appends a new row with
+ * the kind's conventional default port. Edits flow through
+ * `set-llm-servers` which writes the whole array back to the
+ * `sim-flow.llm.servers` workspace setting.
+ */
+function renderLlmServersTable(): HTMLElement {
+  const wrap = el("div", { class: "llm-servers" });
+  const servers: LlmServerEntry[] = (ui.data?.llmServers ?? []).slice();
+
+  const commit = (next: LlmServerEntry[]): void => {
+    send({ type: "set-llm-servers", servers: next });
+  };
+
+  if (servers.length === 0) {
+    wrap.appendChild(
+      el(
+        "p",
+        { class: "muted" },
+        "No custom servers configured. Click Add server to point sim-flow at a remote vLLM / Ollama / LM Studio host or a non-default port.",
+      ),
+    );
+  } else {
+    const table = el("table", { class: "llm-servers-table" });
+    table.appendChild(
+      el(
+        "thead",
+        {},
+        el(
+          "tr",
+          {},
+          el("th", {}, "Name"),
+          el("th", {}, "Kind"),
+          el("th", {}, "Host"),
+          el("th", {}, "Port"),
+          el("th", {}, "Model (optional)"),
+          el("th", {}, ""),
+        ),
+      ),
+    );
+    const body = el("tbody", {});
+    for (let i = 0; i < servers.length; i++) {
+      const entry = servers[i];
+      const updateAt = (patch: Partial<LlmServerEntry>): void => {
+        const next = servers.slice();
+        next[i] = { ...next[i], ...patch };
+        commit(next);
+      };
+      const removeAt = (): void => {
+        commit(servers.filter((_, idx) => idx !== i));
+      };
+      body.appendChild(
+        el(
+          "tr",
+          {},
+          el(
+            "td",
+            {},
+            llmServerTextInput(entry.name, "name (e.g. vllm-bigbox)", (v) => updateAt({ name: v })),
+          ),
+          el(
+            "td",
+            {},
+            llmServerKindSelect(entry.kind, (kind) => {
+              const patch: Partial<LlmServerEntry> = { kind };
+              if (entry.port === LLM_SERVER_DEFAULT_PORT[entry.kind]) {
+                patch.port = LLM_SERVER_DEFAULT_PORT[kind];
+              }
+              updateAt(patch);
+            }),
+          ),
+          el(
+            "td",
+            {},
+            llmServerTextInput(entry.host, "host or IP", (v) =>
+              updateAt({ host: v.length === 0 ? "localhost" : v }),
+            ),
+          ),
+          el(
+            "td",
+            {},
+            llmServerNumberInput(entry.port, (n) => updateAt({ port: n })),
+          ),
+          el(
+            "td",
+            {},
+            llmServerTextInput(entry.model ?? "", "default", (v) =>
+              updateAt({ model: v.length === 0 ? undefined : v }),
+            ),
+          ),
+          el(
+            "td",
+            { class: "actions" },
+            actionButton("Remove", `llm-server-remove-${i}`, removeAt, "secondary"),
+          ),
+        ),
+      );
+    }
+    table.appendChild(body);
+    wrap.appendChild(table);
+  }
+
+  const addBtn = actionButton(
+    "Add server",
+    "llm-server-add",
+    () => {
+      const next: LlmServerEntry = {
+        name: `server-${servers.length + 1}`,
+        kind: "vllm",
+        host: "localhost",
+        port: LLM_SERVER_DEFAULT_PORT.vllm,
+      };
+      commit(servers.concat(next));
+    },
+    "secondary",
+  );
+  addBtn.title = "Append a new row. Defaults to vLLM on localhost:8000; edit in place to point elsewhere.";
+  wrap.appendChild(el("div", { class: "llm-servers-actions" }, addBtn));
+  return wrap;
+}
+
+function llmServerTextInput(
+  value: string,
+  placeholder: string,
+  onCommit: (value: string) => void,
+): HTMLInputElement {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "llm-server-input";
+  input.value = value;
+  input.placeholder = placeholder;
+  const commit = (): void => {
+    if (input.value.trim() !== value.trim()) {
+      onCommit(input.value.trim());
+    }
+  };
+  input.addEventListener("blur", commit);
+  input.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commit();
+    }
+  });
+  return input;
+}
+
+function llmServerNumberInput(
+  value: number,
+  onCommit: (value: number) => void,
+): HTMLInputElement {
+  const input = document.createElement("input");
+  input.type = "number";
+  input.className = "llm-server-input llm-server-port";
+  input.min = "1";
+  input.max = "65535";
+  input.value = String(value);
+  const commit = (): void => {
+    const parsed = parseInt(input.value, 10);
+    if (Number.isFinite(parsed) && parsed > 0 && parsed <= 65535 && parsed !== value) {
+      onCommit(parsed);
+    } else if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 65535) {
+      // Reset on invalid input so the user sees the rejection.
+      input.value = String(value);
+    }
+  };
+  input.addEventListener("blur", commit);
+  input.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commit();
+    }
+  });
+  return input;
+}
+
+function llmServerKindSelect(
+  current: LlmServerEntry["kind"],
+  onChange: (value: LlmServerEntry["kind"]) => void,
+): HTMLSelectElement {
+  const select = document.createElement("select");
+  select.className = "llm-server-input";
+  const kinds: ReadonlyArray<{ id: LlmServerEntry["kind"]; label: string }> = [
+    { id: "vllm", label: "vLLM" },
+    { id: "ollama", label: "Ollama" },
+    { id: "lmstudio", label: "LM Studio" },
+    { id: "openai-compat", label: "OpenAI-compat" },
+  ];
+  for (const kind of kinds) {
+    const opt = document.createElement("option");
+    opt.value = kind.id;
+    opt.textContent = kind.label;
+    if (kind.id === current) {
+      opt.selected = true;
+    }
+    select.appendChild(opt);
+  }
+  select.addEventListener("change", () => {
+    onChange(select.value as LlmServerEntry["kind"]);
+  });
+  return select;
 }
 
 function renderFullyAutomatedToggle(): HTMLElement {
@@ -605,6 +822,10 @@ function renderLlmSourcePicker(): HTMLElement {
   const wrap = el("label", { class: "llm-source" }, "Agent: ");
   const select = document.createElement("select");
   select.className = "llm-source-select";
+  // Built-in tags first, then a divider + user-defined servers
+  // from `sim-flow.llm.servers`. Matching by `name` instead of
+  // tag means the dashboard remembers the chosen server across
+  // reloads (the persisted value is the entry name).
   for (const id of Object.keys(LLM_SOURCE_LABELS) as LlmSourceTag[]) {
     const opt = document.createElement("option");
     opt.value = id;
@@ -614,6 +835,24 @@ function renderLlmSourcePicker(): HTMLElement {
     }
     select.appendChild(opt);
   }
+  const userServers = ui.data?.llmServers ?? [];
+  if (userServers.length > 0) {
+    const sep = document.createElement("option");
+    sep.disabled = true;
+    sep.textContent = "─── custom servers ───";
+    select.appendChild(sep);
+    for (const entry of userServers) {
+      const opt = document.createElement("option");
+      // Prefix the value so the host can route by name rather
+      // than colliding with a built-in tag of the same string.
+      opt.value = `server:${entry.name}`;
+      opt.textContent = `${entry.name} (${entry.kind} @ ${entry.host}:${entry.port})`;
+      if (ui.llmSource === `server:${entry.name}`) {
+        opt.selected = true;
+      }
+      select.appendChild(opt);
+    }
+  }
   if (ui.llmSource === null) {
     // Loading state -- disable until the host posts the live value.
     select.disabled = true;
@@ -621,15 +860,15 @@ function renderLlmSourcePicker(): HTMLElement {
   select.title =
     "Active LLM backend. Changing this here writes through to `sim-flow.llm.source` (workspace scope) and takes effect on the next LLM call -- you can switch mid-run if e.g. tokens are exhausted.";
   select.addEventListener("change", () => {
-    const value = select.value as LlmSourceTag;
-    ui.llmSource = value;
+    const value = select.value;
+    ui.llmSource = value as LlmSourceTag;
     // Kick off the source-local model refresh immediately. The host
     // echoes the chosen source back via `llm-config`, but by then the
     // optimistic local `ui.llmSource` update means a pure
     // "did-source-change?" check would not fire.
     ui.llmModel = "";
     ui.llmModelList = [];
-    ui.llmModelListSource = value;
+    ui.llmModelListSource = value as LlmSourceTag;
     ui.llmModelListPending = true;
     ui.llmModelListNote = null;
     render();

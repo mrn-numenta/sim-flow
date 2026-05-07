@@ -329,6 +329,7 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         foundation_root: args.foundation_root.clone(),
         llm_backend: backend_label.to_string(),
         llm_model: args.model.clone(),
+        llm_base_url: args.base_url.clone(),
         max_auto_iters: args.max_auto_iters,
         max_critique_iters: args.max_critique_iters,
         dm0_interactive: false,

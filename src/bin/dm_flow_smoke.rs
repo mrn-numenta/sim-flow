@@ -161,6 +161,7 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         foundation_root: args.foundation_root.clone(),
         llm_backend: "claude".into(),
         llm_model: args.model.clone(),
+        llm_base_url: None,
         max_auto_iters: 3,
         max_critique_iters: 3,
         dm0_interactive: false,

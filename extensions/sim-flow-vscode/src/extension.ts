@@ -138,6 +138,32 @@ function disposeAllResources(): void {
     term.dispose();
   }
   terminals.clear();
+  // Dispose the AutoSessionManager and ChatPanelProvider explicitly
+  // so any active JSONL pumps get SIGTERM before VS Code finishes
+  // tearing down the extension host. They're also in
+  // `context.subscriptions`, but the order in which subscriptions
+  // are disposed isn't guaranteed; running them here makes sure the
+  // pump children are signaled even when `deactivate()` fires first.
+  if (autoSessionManager) {
+    try {
+      autoSessionManager.dispose();
+    } catch (err) {
+      console.error(
+        `sim-flow: autoSessionManager dispose failed: ${(err as Error).message ?? String(err)}`,
+      );
+    }
+    autoSessionManager = undefined;
+  }
+  if (chatPanelProvider) {
+    try {
+      chatPanelProvider.dispose();
+    } catch (err) {
+      console.error(
+        `sim-flow: chatPanelProvider dispose failed: ${(err as Error).message ?? String(err)}`,
+      );
+    }
+    chatPanelProvider = undefined;
+  }
 }
 
 /**

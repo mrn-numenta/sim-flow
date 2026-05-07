@@ -24,6 +24,8 @@ export interface FactoryOptions {
   ollamaBaseUrl?: string;
   /** Base URL override for the LM Studio backend. */
   lmstudioBaseUrl?: string;
+  /** Generic OpenAI-compat base URL override (vllm / openai-compat / user-defined servers). */
+  baseUrl?: string;
 }
 
 export function createBackend(options: FactoryOptions): LlmBackend {
@@ -50,7 +52,26 @@ export function createBackend(options: FactoryOptions): LlmBackend {
       return new LMStudioBackend({
         model: options.model,
         secrets: options.secrets,
-        baseUrl: options.lmstudioBaseUrl,
+        baseUrl: options.baseUrl ?? options.lmstudioBaseUrl,
+      });
+    case "vllm":
+      // vLLM speaks OpenAI-compat at `:8000/v1` by default. Reuse
+      // the LM Studio backend (same wire format); only the
+      // default URL differs. Custom servers route here too via
+      // `kind: "vllm"` in the user's `sim-flow.llm.servers` array.
+      return new LMStudioBackend({
+        model: options.model,
+        secrets: options.secrets,
+        baseUrl: options.baseUrl ?? "http://localhost:8000/v1",
+      });
+    case "openai-compat":
+      // Generic openai-compat fallback. Defaults to LM Studio's
+      // `:1234/v1` so the conventional case still works without
+      // the user typing a base URL.
+      return new LMStudioBackend({
+        model: options.model,
+        secrets: options.secrets,
+        baseUrl: options.baseUrl ?? options.lmstudioBaseUrl ?? "http://localhost:1234/v1",
       });
     case "claude-cli":
     case "codex-cli":

@@ -1105,6 +1105,7 @@ fn auto_opts(
         foundation_root: foundation_root(),
         llm_backend: "test".into(),
         llm_model: None,
+        llm_base_url: None,
         max_auto_iters: 3,
         max_critique_iters: 2,
         dm0_interactive: false,

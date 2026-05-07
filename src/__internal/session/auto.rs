@@ -84,6 +84,12 @@ pub struct AutoOptions {
     pub foundation_root: PathBuf,
     pub llm_backend: String,
     pub llm_model: Option<String>,
+    /// Optional base URL override for OpenAI-compatible local
+    /// backends (`ollama`, `lmstudio`, `vllm`, `openai-compat`).
+    /// Forwarded into each sub-session's `OrchestratorOptions`
+    /// and consumed by the agent constructors. `None` means
+    /// "use the backend's conventional default".
+    pub llm_base_url: Option<String>,
     /// Per-session structural-gate iteration cap (forwarded to the
     /// orchestrator's auto mode).
     pub max_auto_iters: u32,
@@ -806,6 +812,7 @@ fn run_subsession<H: Host>(
         candidate: None,
         llm_backend: opts.llm_backend.clone(),
         llm_model: opts.llm_model.clone(),
+        llm_base_url: opts.llm_base_url.clone(),
         auto,
         max_auto_iters: opts.max_auto_iters,
         max_llm_requests: opts.max_llm_requests,
