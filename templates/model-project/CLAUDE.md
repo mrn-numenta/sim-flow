@@ -67,11 +67,20 @@ This project is managed by the sim-flow orchestrator. Check
 
 `main.rs` flattens `foundation_framework::TopologyDumpArgs`, so the
 binary accepts `--dump-hierarchy`, `--dump-dot`, `--dump-mermaid`,
-`--render-mermaid`, and `--dump-netlist-json <PATH>`. Once DM2d defines
-the model's topology, the wiring becomes
-`cli.dump.elaborate_root("<root>", top)?`.
+`--render-mermaid`, and `--dump-netlist-json <PATH>`. Dispatch is
+unconditional: when any `--dump-*` flag is set, `main` calls
+`crate::dump_topology(&cli.dump)` which lives in `src/lib.rs` and
+elaborates `model::top::Top::default()`. The template ships a stub
+`Top` so the dump path works before DM2d implements the model
+body; DM2d replaces the stub body but keeps the type name, the
+`Default` impl, and the trait impls so `dump_topology` stays
+callable. **Do not edit `dump_topology` or the
+`if cli.dump.should_dump_any()` dispatch in `main.rs`**. The
+sim-flow orchestrator's block-diagram auto-render hook keys on
+that signature.
 
 The sim-flow extension's Block Diagram tab runs `sim-flow block-diagram`,
 which shells out to `cargo run -- --dump-netlist-json …` and feeds the
-JSON through `tools/block-diagram` (Sugiyama -> SVG). Until DM2d wires
-`elaborate_root`, the diagram tab will report a generation error.
+JSON through `tools/block-diagram` (Sugiyama -> SVG). The orchestrator
+also auto-renders the diagram on the DM2d -> DM3a advance boundary, so
+a current netlist + SVG land in `.sim-flow/` without a manual click.

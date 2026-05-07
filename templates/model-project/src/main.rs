@@ -5,6 +5,17 @@
 //! 04-experiment-tracking.md), it passes the run id here. The run id is
 //! threaded into Foundation's RunManifest and ObservabilityRunWriter by
 //! the model's simulation harness in `sim.rs` (filled in during DM2d).
+//!
+//! `--dump-netlist-json <path>` and the other topology dumps in
+//! `TopologyDumpArgs` are wired UNCONDITIONALLY through
+//! `{{crate_name}}::dump_topology`. The orchestrator (and the
+//! Block Diagram tab in the dashboard) call this binary with
+//! `--dump-netlist-json` and rely on the netlist being written
+//! regardless of whether DM2d has filled in the model body yet --
+//! the template ships a stub `model::top::Top` so an empty
+//! diagram renders before the agent does any work, and the agent
+//! replaces the stub body in DM2d while keeping the same type
+//! name + `Default` impl.
 
 use clap::Parser;
 use foundation_framework::TopologyDumpArgs;
@@ -21,23 +32,29 @@ struct Cli {
     run_id: String,
 
     /// Topology dump flags: `--dump-hierarchy`, `--dump-netlist-json <PATH>`,
-    /// `--dump-dot`, `--dump-mermaid`, `--render-mermaid`. DM2d wires these
-    /// into `TopologyDumpArgs::elaborate_root(...)` once a topology exists.
-    /// The sim-flow extension's Block Diagram tab calls
-    /// `--dump-netlist-json` to render the design.
+    /// `--dump-dot`, `--dump-mermaid`, `--render-mermaid`. The dispatch
+    /// below threads them into `{{crate_name}}::dump_topology` so the
+    /// netlist lands on disk without the agent having to wire
+    /// `cli.dump.elaborate_root(...)` manually.
     #[command(flatten)]
     dump: TopologyDumpArgs,
 }
 
 fn main() {
     let cli = Cli::parse();
-    println!("{{project-name}}: run_id = {}", cli.run_id);
     if cli.dump.should_dump_any() {
-        eprintln!(
-            "(no topology to dump yet; DM2d wires `cli.dump.elaborate_root(...)` once \
-             the model's topology is defined)"
-        );
-    } else {
-        println!("(simulation harness not yet implemented; see DM2d)");
+        // Topology dump path. Never depends on the agent's main.rs
+        // edits -- `lib.rs::dump_topology` elaborates
+        // `model::top::Top::default()` (a stub before DM2d, the
+        // real model after) and emits the requested artifacts.
+        match {{crate_name}}::dump_topology(&cli.dump) {
+            Ok(_) => return,
+            Err(err) => {
+                eprintln!("{{crate_name}}: dump_topology failed: {err}");
+                std::process::exit(1);
+            }
+        }
     }
+    println!("{{project-name}}: run_id = {}", cli.run_id);
+    println!("(simulation harness not yet implemented; see DM2d)");
 }

@@ -362,6 +362,25 @@ fn dm2d() -> StepDescriptor {
                 &["-r", "--include=*.rs", "-q", "impl HasLogic", "src"],
                 "src/ implements HasLogic",
             ),
+            // Block-diagram contract. The orchestrator auto-renders
+            // the block diagram on the DM2d -> DM3a advance via
+            // `crate::dump_topology(&args)`. The two greps below
+            // pin the contract DM2d must keep intact: the dump
+            // helper in lib.rs and the stub `Top` (or its
+            // post-DM2d replacement) under model/.
+            file_matches(
+                "src/lib.rs",
+                r"pub\s+fn\s+dump_topology",
+                "src/lib.rs exports dump_topology(&TopologyDumpArgs) (template contract)",
+            ),
+            shell(
+                "sh",
+                &[
+                    "-c",
+                    "grep -q 'pub struct Top' src/model/top.rs && grep -q 'impl Module for Top' src/model/top.rs",
+                ],
+                "src/model/top.rs defines `pub struct Top` with `impl Module for Top` (block-diagram contract)",
+            ),
             milestones_all_resolved(
                 "docs/impl-plan/",
                 "milestone-",

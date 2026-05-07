@@ -552,10 +552,27 @@ h2 {
   border-color: rgba(51, 102, 204, 0.6);
   box-shadow: 0 0 0 2px rgba(51, 102, 204, 0.4);
 }
-.step.disabled-ahead {
+/* Steps ahead of `current_step` (or any step without a `passed` /
+   `current` class) appear dimmed so the rail visually communicates
+   "these aren't reachable yet". The `.step-locked` class is added
+   by the rail renderer when `isStepSelectableInRail` returns false;
+   the styles below cover the default-state path for other ahead
+   steps too -- everything that isn't passed or current falls
+   through to the disabled look. */
+.step:not(.passed):not(.current) {
+  background: var(--step-bg-disabled-ahead);
+  color: var(--step-fg-disabled-ahead);
+}
+.step.step-locked {
   background: var(--step-bg-disabled-ahead);
   color: var(--step-fg-disabled-ahead);
   cursor: default;
+  opacity: 0.85;
+}
+.step.step-locked:hover {
+  /* Suppress the lift animation on locked rows so the user
+     doesn't get tactile feedback that suggests it's clickable. */
+  transform: none;
 }
 
 /* Selected = the rail row the user clicked. We override the base

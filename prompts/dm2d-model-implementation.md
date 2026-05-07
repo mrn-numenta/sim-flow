@@ -209,6 +209,24 @@ modification-friendly across iterations.
 
 ## Constraints
 
+- **Block-diagram contract**. The orchestrator auto-renders the
+  block diagram on the DM2d -> DM3a advance via
+  `crate::dump_topology(&args)` defined in `src/lib.rs`.
+  The contract DM2d MUST keep intact:
+  - `pub struct Top` (or whatever name the template ships)
+    stays in `src/model/top.rs` with `Default + Module +
+    HasInstances + HasLogic` impls.
+  - `dump_topology` in `src/lib.rs` stays callable with
+    `&TopologyDumpArgs`. Don't rename, delete, or change its
+    signature.
+  - `src/main.rs`'s top-of-`fn main` dispatch (which calls
+    `dump_topology` when any `--dump-*` flag is passed) stays
+    in place.
+  Replace the stub `Top` body with the real model -- add
+  fields, child modules, port wiring, evaluate/settle/update
+  bodies -- but keep the type name + `Default::default()`
+  constructibility so the orchestrator's auto-render keeps
+  working through the entire flow.
 - Do not bypass the Foundation port system.
 - Do not implement custom scheduling.
 - Do not alter the `Module` phase order (evaluate -> settle -> update).
