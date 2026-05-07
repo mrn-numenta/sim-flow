@@ -46,20 +46,12 @@ regress earlier milestones.
 
 ## Evaluation
 
-Prefix gate-blocking issues with `BLOCKER:` (DM4 cannot proceed
-until fixed). Prefix informational notes with `UNRESOLVED:`. The
-orchestrator fails the DM3c gate on `BLOCKER:` lines only.
-
-**Finding-marker grammar.** The gate parses lines starting with
-`BLOCKER:` / `RESOLVED:` / `UNRESOLVED:` (case-insensitive,
-plural OK) optionally preceded by list markers (`-`, `*`, `+`,
-`>`), heading markers (`#`+), bold/underline (`**` / `__`), and
-one decoration glyph (e.g. `❌` `✅`). Headings DO match
-(`### BLOCKER: ...`); section titles describing a blocker
-without a colon-after-keyword (e.g. `### BLOCKER 1 - title`)
-do NOT match -- they're prose. Mid-sentence mentions do NOT
-match. ONLY the keyword-colon shape is a finding; pick the form
-deliberately.
+Record findings in the critique JSON (see "Output" below for the
+schema). Use `kind: "blocker"` for gate-blocking issues (DM4
+cannot proceed until fixed), `"unresolved"` for informational
+notes, `"resolved"` for historical / retry-mode acknowledgements.
+The orchestrator fails the DM3c gate on `"blocker"` findings
+only.
 
 1. **Milestone completeness**. Identify the just-completed
    milestone. Is every row in that file `- [x]` or `- [-]` with
@@ -158,6 +150,28 @@ deliberately.
 
 ## Output
 
-Write `docs/critiques/DM3c-critique.md`. Free-form markdown body;
-only line-prefix tokens (`BLOCKER:`, `UNRESOLVED:`, `RESOLVED:`)
-are inspected by the gate.
+Write the critique as JSON to
+`docs/critiques/DM3c-critique.json`. The orchestrator renders a
+human-readable `docs/critiques/DM3c-critique.md` from that JSON
+automatically; do NOT write the markdown yourself.
+
+### JSON schema
+
+```json
+{
+  "step": "DM3c",
+  "summary": "1-paragraph summary of the critique outcome.",
+  "findings": [
+    {
+      "kind": "blocker",
+      "section": "free-form section name",
+      "title": "one-line summary of the finding",
+      "body": "multi-line markdown explanation"
+    }
+  ],
+  "notes": "optional free-form trailing prose"
+}
+```
+
+`kind` values: `"blocker"`, `"unresolved"`, `"resolved"`. Schema
+is strict (`deny_unknown_fields`); typos fail the parse.

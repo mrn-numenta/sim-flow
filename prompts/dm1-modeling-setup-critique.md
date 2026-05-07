@@ -15,19 +15,10 @@ evaluate them and write the critique file.
 
 ## Evaluation
 
-Prefix unresolved issues with `UNRESOLVED:` and gate-blocking issues with
-`BLOCKER:`.
-
-**Finding-marker grammar.** The gate parses lines starting with
-`BLOCKER:` / `RESOLVED:` / `UNRESOLVED:` (case-insensitive,
-plural OK) optionally preceded by list markers (`-`, `*`, `+`,
-`>`), heading markers (`#`+), bold/underline (`**` / `__`), and
-one decoration glyph (e.g. `❌` `✅`). Headings DO match
-(`### BLOCKER: ...`); section titles describing a blocker
-without a colon-after-keyword (e.g. `### BLOCKER 1 - title`)
-do NOT match -- they're prose. Mid-sentence mentions do NOT
-match. ONLY the keyword-colon shape is a finding; pick the form
-deliberately.
+Record findings in the critique JSON. Use `kind: "blocker"` for
+gate-blocking issues, `"unresolved"` for non-blocking notes,
+`"resolved"` for informational acknowledgements (ignored by the
+gate). See "Output" below for the schema.
 
 1. Does every target in `docs/targets.md` trace back to a specific line or
    section of `docs/spec.md`?
@@ -60,4 +51,29 @@ deliberately.
 
 ## Output
 
-Write `docs/critiques/DM1-critique.md`.
+Write the critique as JSON to `docs/critiques/DM1-critique.json`.
+The orchestrator renders a human-readable
+`docs/critiques/DM1-critique.md` from that JSON automatically; do
+NOT write the markdown yourself.
+
+### JSON schema
+
+```json
+{
+  "step": "DM1",
+  "summary": "1-paragraph summary of the critique outcome.",
+  "findings": [
+    {
+      "kind": "blocker",
+      "section": "free-form section name",
+      "title": "one-line summary of the finding",
+      "body": "multi-line markdown explanation; quote offending lines, list remediation"
+    }
+  ],
+  "notes": "optional free-form trailing prose"
+}
+```
+
+`kind` values: `"blocker"` (gate-blocking), `"unresolved"`
+(informational), `"resolved"` (historical / retry-mode). The
+schema is strict (`deny_unknown_fields`); typos fail the parse.

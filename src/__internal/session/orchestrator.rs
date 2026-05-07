@@ -1837,19 +1837,20 @@ fn build_session_inputs(
     //     critique-iteration budget.
     let critique_rel = format!("docs/critiques/{}-critique.md", step.id);
     let critique_abs = project_dir.join(&critique_rel);
+    // Read the rendered markdown body for legacy fallback / first-
+    // pass critique inlining; the JSON sibling (when present) is
+    // the source of truth for the BLOCKER list. `critique_body` is
+    // None when neither artifact is on disk yet.
     let critique_body = std::fs::read_to_string(&critique_abs).ok();
     // Critique-retry detection: the file exists AND it's a critique
-    // session AND we're not on the first pass. The first-pass test is
-    // "no BLOCKER lines at all" -- a fresh critique file from a prior
-    // run that already evaluated cleanly wouldn't have any. We guard
-    // on BLOCKER presence so a previously-clean critique doesn't
-    // suppress the full evaluation when the agent legitimately needs
-    // it (e.g. the work session was edited externally between
-    // runs).
-    let prior_critique_blockers: Vec<String> = critique_body
-        .as_deref()
-        .map(parse_blocker_lines)
-        .unwrap_or_default();
+    // session AND we're not on the first pass. The first-pass test
+    // is "no BLOCKER findings at all" -- a fresh critique file from
+    // a prior run that already evaluated cleanly wouldn't have any.
+    // We guard on BLOCKER presence so a previously-clean critique
+    // doesn't suppress the full evaluation when the agent
+    // legitimately needs it (e.g. the work session was edited
+    // externally between runs).
+    let prior_critique_blockers = retry_blocker_blocks(project_dir, step.id);
     let is_critique_retry = kind == SessionKind::Critique && !prior_critique_blockers.is_empty();
     let inline_critique = kind == SessionKind::Work || is_critique_retry;
 
@@ -2023,10 +2024,14 @@ fn build_session_inputs(
         volatile.push_str(&entry.render_block(project_dir));
     }
 
-    if inline_critique && let Some(body) = &critique_body {
+    if inline_critique && (critique_body.is_some() || is_critique_retry) {
         volatile.push_str("\n---\n\n");
         if is_critique_retry {
-            let blocks = extract_blocker_blocks(body);
+            // `prior_critique_blockers` was already JSON-first
+            // resolved at the top of the function; reuse it so the
+            // inline blocks match the count the gate / auto driver
+            // see.
+            let blocks = &prior_critique_blockers;
             volatile.push_str(&format!(
                 "Critique-retry mode. The prior pass flagged the BLOCKER(s) below; \
                  the work session has since re-run. Your task on THIS pass is FOCUSED:\n\n\
@@ -2078,7 +2083,7 @@ fn build_session_inputs(
                 }
                 volatile.push_str("\n\n");
             }
-        } else {
+        } else if let Some(body) = &critique_body {
             volatile.push_str(
                 "Latest critique for this step (inlined because addressing these findings is your immediate task):\n\n",
             );
@@ -2111,6 +2116,37 @@ fn build_session_inputs(
         Some(volatile)
     };
     Some(SessionInputs { stable, volatile })
+}
+
+/// JSON-first blocker extractor for the retry-inline path. When
+/// `<step>-critique.json` exists, parse it and return one
+/// formatted block per `kind == blocker` finding (header line +
+/// body, mirroring the markdown shape so the agent's retry context
+/// reads naturally). Falls back to the legacy markdown regex
+/// (`extract_blocker_blocks`) when no JSON sibling is on disk so
+/// projects mid-flight before the migration keep working.
+fn retry_blocker_blocks(project_dir: &Path, step_id: &str) -> Vec<String> {
+    let json_rel = format!("docs/critiques/{step_id}-critique.json");
+    let json_abs = project_dir.join(&json_rel);
+    if let Ok(text) = std::fs::read_to_string(&json_abs)
+        && let Ok(parsed) = serde_json::from_str::<crate::critique::CritiqueJson>(&text)
+    {
+        return parsed
+            .findings
+            .iter()
+            .filter(|f| f.kind == crate::critique::FindingKind::Blocker)
+            .map(|f| {
+                if f.body.trim().is_empty() {
+                    format!("**BLOCKER: {}**", f.title.trim())
+                } else {
+                    format!("**BLOCKER: {}**\n\n{}", f.title.trim(), f.body.trim())
+                }
+            })
+            .collect();
+    }
+    let md_abs = project_dir.join(format!("docs/critiques/{step_id}-critique.md"));
+    let body = std::fs::read_to_string(&md_abs).unwrap_or_default();
+    extract_blocker_blocks(&body)
 }
 
 /// Pull each `BLOCKER:` block out of a critique markdown file as a
@@ -2523,6 +2559,15 @@ fn write_artifact(
         path: abs.clone(),
         source,
     })?;
+    // When the agent writes a critique JSON, render the markdown
+    // sibling immediately. The agent only emits the canonical JSON;
+    // humans (and the gate's grep-the-md fallback for legacy
+    // projects) read the rendered markdown. Render errors surface
+    // as protocol errors so a malformed critique fails loud rather
+    // than silently leaving a stale `.md` on disk.
+    if crate::critique::is_critique_json_path(&art.relative_path) {
+        crate::critique::render_critique_markdown_to_disk(project_dir, &art.relative_path)?;
+    }
     Ok(art.content.len() as u64)
 }
 

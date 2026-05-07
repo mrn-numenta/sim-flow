@@ -30,9 +30,9 @@ Prefix gate-blocking issues with `BLOCKER:` (DM2cd cannot
 advance past this milestone until fixed). Prefix informational
 notes with `UNRESOLVED:`. The gate fails on `BLOCKER:` lines.
 
-**Finding-marker grammar.** Same as DM2c critique -- the gate
-parses `BLOCKER:` / `RESOLVED:` / `UNRESOLVED:` lines optionally
-preceded by list / heading / bold / one-glyph decoration.
+Record findings in the critique JSON (see "Output" below for the
+schema). `kind: "blocker"` blocks the gate; `"unresolved"` is
+informational; `"resolved"` is historical / retry-mode.
 
 This critique reviews ONE milestone's detailed task list. Do
 NOT review other milestones; sibling stubs are intentionally
@@ -83,6 +83,28 @@ hidden so each milestone gets a focused review.
 
 ## Output
 
-Write `docs/critiques/DM2cd-critique.md`. Free-form markdown
-body; only line-prefix tokens (`BLOCKER:`, `UNRESOLVED:`,
-`RESOLVED:`) are inspected by the gate.
+Write the critique as JSON to
+`docs/critiques/DM2cd-critique.json`. The orchestrator renders a
+human-readable `docs/critiques/DM2cd-critique.md` from that JSON
+automatically; do NOT write the markdown yourself.
+
+### JSON schema
+
+```json
+{
+  "step": "DM2cd",
+  "summary": "1-paragraph summary of the critique outcome.",
+  "findings": [
+    {
+      "kind": "blocker",
+      "section": "free-form section name",
+      "title": "one-line summary of the finding",
+      "body": "multi-line markdown explanation"
+    }
+  ],
+  "notes": "optional free-form trailing prose"
+}
+```
+
+`kind` values: `"blocker"`, `"unresolved"`, `"resolved"`. Schema
+is strict (`deny_unknown_fields`); typos fail the parse.

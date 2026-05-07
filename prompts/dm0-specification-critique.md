@@ -27,21 +27,11 @@ Judge `docs/spec.md` by this standard:
 - A missing detail is `UNRESOLVED:` when it is real but safely inferable,
   deferrable, or unlikely to materially change the model.
 
-For each question below, write a one-line answer in the critique file.
-Prefix gate-blocking issues with `BLOCKER:` and non-blocking issues with
-`UNRESOLVED:`. `RESOLVED:` lines are informational acknowledgements and
-are ignored by the gate.
-
-**Finding-marker grammar.** The gate parses lines starting with
-`BLOCKER:` / `RESOLVED:` / `UNRESOLVED:` (case-insensitive,
-plural OK) optionally preceded by list markers (`-`, `*`, `+`,
-`>`), heading markers (`#`+), bold/underline (`**` / `__`), and
-one decoration glyph (e.g. `❌` `✅`). Headings DO match
-(`### BLOCKER: ...`); section titles describing a blocker
-without a colon-after-keyword (e.g. `### BLOCKER 1 - title`)
-do NOT match -- they're prose. Mid-sentence mentions do NOT
-match. ONLY the keyword-colon shape is a finding; pick the form
-deliberately.
+For each question below, record a finding in the critique JSON.
+Use `kind: "blocker"` for gate-blocking issues, `"unresolved"`
+for non-blocking notes, `"resolved"` for informational
+acknowledgements (ignored by the gate). See "Output" below for
+the schema.
 
 1. Does `docs/spec.md` declare a clock frequency? (regex `\d+\s*(MHz|GHz)`)
 2. Does it declare a technology node? (regex `\d+\s*nm`)
@@ -79,11 +69,36 @@ deliberately.
     applicable" or an explicit open question?
 
 When you raise a finding, say why it matters to later steps when that is
-not obvious (for example: "BLOCKER: external request ordering semantics
-are missing; DM2a/DM2c could build materially different queueing
-behavior").
+not obvious -- the finding's `body` field is the right place for the
+"why" prose.
 
 ## Output
 
-Write `docs/critiques/DM0-critique.md`. The body format is
-free-form markdown; only line-prefix tokens matter to the gate.
+Write the critique as JSON to `docs/critiques/DM0-critique.json`.
+The orchestrator renders a human-readable
+`docs/critiques/DM0-critique.md` from that JSON automatically; do
+NOT write the markdown yourself.
+
+### JSON schema
+
+```json
+{
+  "step": "DM0",
+  "summary": "1-paragraph summary of the critique outcome.",
+  "findings": [
+    {
+      "kind": "blocker",
+      "section": "free-form section name (e.g. \"External Interfaces\")",
+      "title": "one-line summary of the finding",
+      "body": "multi-line markdown explanation; quote offending lines, list remediation"
+    }
+  ],
+  "notes": "optional free-form trailing prose"
+}
+```
+
+`kind` values: `"blocker"` (gate-blocking), `"unresolved"`
+(informational), `"resolved"` (historical / retry-mode). The
+schema is strict (`deny_unknown_fields`); typos fail the parse
+and the orchestrator surfaces "malformed critique JSON". Use the
+exact field names listed.

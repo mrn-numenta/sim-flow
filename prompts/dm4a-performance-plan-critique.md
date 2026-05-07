@@ -23,7 +23,9 @@ Prefix gate-blocking issues with `BLOCKER:` (DM4ad cannot
 proceed). Prefix nits with `UNRESOLVED:`. The gate fails on
 `BLOCKER:` lines.
 
-**Finding-marker grammar.** Same as other critiques.
+Record findings in the critique JSON (see "Output" below for the
+schema). `kind: "blocker"` blocks the gate; `"unresolved"` is
+informational; `"resolved"` is historical / retry-mode.
 
 This critique reviews the OUTLINE, not per-milestone task
 lists. Resist reviewing content in `<!-- detail-pending -->`
@@ -76,5 +78,28 @@ placeholders; flag the ABSENCE of one as a `BLOCKER:`.
 
 ## Output
 
-Write `docs/critiques/DM4a-critique.md`. Free-form markdown;
-only line-prefix tokens are inspected.
+Write the critique as JSON to
+`docs/critiques/DM4a-critique.json`. The orchestrator renders a
+human-readable `docs/critiques/DM4a-critique.md` from that JSON
+automatically; do NOT write the markdown yourself.
+
+### JSON schema
+
+```json
+{
+  "step": "DM4a",
+  "summary": "1-paragraph summary of the critique outcome.",
+  "findings": [
+    {
+      "kind": "blocker",
+      "section": "free-form section name",
+      "title": "one-line summary of the finding",
+      "body": "multi-line markdown explanation"
+    }
+  ],
+  "notes": "optional free-form trailing prose"
+}
+```
+
+`kind` values: `"blocker"`, `"unresolved"`, `"resolved"`. Schema
+is strict (`deny_unknown_fields`); typos fail the parse.

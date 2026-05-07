@@ -66,10 +66,24 @@ impl Tool for WriteFileTool {
             )));
         }
         match std::fs::write(&abs, content.as_bytes()) {
-            Ok(()) => Ok(ToolResult::ok(format!(
-                "[write_file `{path}`] {} bytes",
-                content.len()
-            ))),
+            Ok(()) => {
+                // Render the critique markdown sibling when the
+                // agent writes a critique JSON. Mirrors the
+                // fenced-block path in `orchestrator::write_artifact`
+                // so both write surfaces produce both files.
+                if crate::critique::is_critique_json_path(&path)
+                    && let Err(err) =
+                        crate::critique::render_critique_markdown_to_disk(ctx.project_dir, &path)
+                {
+                    return Ok(ToolResult::err(format!(
+                        "write_file: critique JSON written to `{path}` but markdown render failed: {err}"
+                    )));
+                }
+                Ok(ToolResult::ok(format!(
+                    "[write_file `{path}`] {} bytes",
+                    content.len()
+                )))
+            }
             Err(err) => Ok(ToolResult::err(format!(
                 "write_file: cannot write `{path}`: {err}"
             ))),

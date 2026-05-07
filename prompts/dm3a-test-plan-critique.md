@@ -31,9 +31,9 @@ Prefix gate-blocking issues with `BLOCKER:` (DM3ad cannot
 proceed). Prefix nits with `UNRESOLVED:`. The gate fails on
 `BLOCKER:` lines.
 
-**Finding-marker grammar.** Same as other critiques -- list /
-heading / bold / decoration prefix optional, only
-`<keyword>:` form is recognized.
+Record findings in the critique JSON (see "Output" below for the
+schema). `kind: "blocker"` blocks the gate; `"unresolved"` is
+informational; `"resolved"` is historical / retry-mode.
 
 This critique reviews the OUTLINE, not per-milestone task
 lists. Resist reviewing content that lives in
@@ -110,6 +110,28 @@ themselves.
 
 ## Output
 
-Write `docs/critiques/DM3a-critique.md`. Free-form markdown
-body; only line-prefix tokens (`BLOCKER:`, `UNRESOLVED:`,
-`RESOLVED:`) are inspected.
+Write the critique as JSON to
+`docs/critiques/DM3a-critique.json`. The orchestrator renders a
+human-readable `docs/critiques/DM3a-critique.md` from that JSON
+automatically; do NOT write the markdown yourself.
+
+### JSON schema
+
+```json
+{
+  "step": "DM3a",
+  "summary": "1-paragraph summary of the critique outcome.",
+  "findings": [
+    {
+      "kind": "blocker",
+      "section": "free-form section name",
+      "title": "one-line summary of the finding",
+      "body": "multi-line markdown explanation"
+    }
+  ],
+  "notes": "optional free-form trailing prose"
+}
+```
+
+`kind` values: `"blocker"`, `"unresolved"`, `"resolved"`. Schema
+is strict (`deny_unknown_fields`); typos fail the parse.

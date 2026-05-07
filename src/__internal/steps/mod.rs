@@ -116,9 +116,11 @@ pub struct MilestoneWalkConfig {
 
 /// Allowed write-path prefixes for the given (step, kind). Work
 /// sessions return the step's `work_write_paths`; critique sessions
-/// always return a single-entry list with the canonical critique
-/// filename. Path enforcement uses prefix-match for entries ending in
-/// `/` and exact-match otherwise.
+/// allow the canonical critique filename in BOTH JSON form (the
+/// shape the agent emits) and markdown form (the shape the
+/// orchestrator renders post-write for human review). Path
+/// enforcement uses prefix-match for entries ending in `/` and
+/// exact-match otherwise.
 pub fn allowed_write_paths(step: &StepDescriptor, kind: crate::client::SessionKind) -> Vec<String> {
     match kind {
         crate::client::SessionKind::Work => step
@@ -127,7 +129,10 @@ pub fn allowed_write_paths(step: &StepDescriptor, kind: crate::client::SessionKi
             .map(|s| (*s).to_string())
             .collect(),
         crate::client::SessionKind::Critique => {
-            vec![format!("docs/critiques/{}-critique.md", step.id)]
+            vec![
+                format!("docs/critiques/{}-critique.json", step.id),
+                format!("docs/critiques/{}-critique.md", step.id),
+            ]
         }
     }
 }
