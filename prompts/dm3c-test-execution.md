@@ -5,17 +5,32 @@ Direct Modeling Flow. Prerequisite: DM3b gate passed.
 
 ## Goal
 
-Implement and run every test enumerated in `docs/plan/test-plan.md`
-across all four categories (smoke, edge, stress, random) using the
+Implement and run every test enumerated across DM3a's
+`docs/test-plan/test-milestone-NN-<name>.md` files using the
 UVM-lite testbench DM3b landed. Then measure coverage with
-`cargo-tarpaulin` and meet the threshold the plan specified
-(default 90% line coverage on `src/`, or whatever the plan
-declared).
+`cargo-tarpaulin` and meet the threshold `coverage.md`
+specified.
+
+DM3c is milestone-driven: walk each
+`test-milestone-NN-<name>.md` file in order, complete one
+milestone at a time, stop for the paired critique after each.
+Do NOT chain milestones.
 
 ## Inputs
 
-- `docs/plan/test-plan.md` -- the test enumeration; you tick off
-  each `- [ ]` row as you implement and pass that test.
+- `docs/impl-plan/plan-management.md` -- plan-file conventions
+  (task states, ordering, the 10-task cap).
+- `docs/test-plan/test-plan.md` -- index. Read first to orient
+  on testbench architecture and the TOC of milestone files.
+- `docs/test-plan/test-milestone-NN-<name>.md` -- per-milestone
+  task lists. The first file with at least one `- [ ]` row is
+  your current milestone.
+- `docs/test-plan/coverage.md` -- coverage strategy (threshold,
+  exclusions, run command, report path). Consumed by the
+  coverage milestone.
+- `docs/testbench.md` -- testbench architecture; useful when a
+  test failure raises questions about what a Monitor should
+  observe.
 - `tests/` -- the testbench scaffolding DM3b produced. You add
   test bodies but do NOT modify the scaffolding (Sequencers,
   Drivers, Monitors, Scoreboards, `SimEnvBuilder` helper). If
@@ -26,110 +41,128 @@ declared).
 
 ## Procedure
 
-1. Read `docs/plan/test-plan.md`. Implement tests in the order
-   they appear, category by category: `## Smoke` first
-   (scaffolding sanity), then `## Edge`, then `## Stress`, then
-   `## Random`. The basic data-flow smoke test is already passing
-   from DM3b -- start with the next smoke entry.
+1. **Pick the current milestone**. Walk
+   `docs/test-plan/test-milestone-NN-<name>.md` files in
+   lexicographic filename order, which IS the canonical category
+   order: **smoke (01) -> edge (02) -> stress (03) -> random
+   (04) -> coverage (05)**. The first file with at least one
+   open `- [ ]` row is your current milestone. Do NOT skip ahead
+   to a later category because the current one looks done at a
+   glance -- a missed `- [ ]` in smoke / edge gets caught at the
+   per-milestone critique, and the order matters because smoke
+   is a precondition for edge, stress is a precondition for
+   random, etc. Read ONLY that milestone file and any supporting
+   context its tasks reference -- do NOT bulk-read later
+   milestones; that defeats the small-context-per-review point.
 
-   Treat each `## <Category>` as a milestone. When every `- [ ]`
-   row in a category is resolved (`- [x]` done OR `- [-]`
-   deferred), **STOP**. Surface a clear notice -- `<Category>
-   tests complete; ready for critique.` followed by a one-line
-   summary (count of new tests, design fixes that landed, any
-   deferred items) -- and wait for user input before starting the
-   paired critique session before starting the next category. Do
-   NOT chain categories. The critique is the primary correctness
-   check for each category; user review may happen around it, but
-   you should assume advancement depends on the critique passing.
-
-   See "Order, jumping, and deferring" below for what to do when
-   a test row depends on another row's fix, when you discover a
-   test that wasn't in the plan, or when a test should be
-   deferred.
-2. For each test row:
+2. **Walk the tasks in this milestone IN ORDER**. For each
+   `- [ ]` row:
    - Write the test body using the testbench helpers DM3b
      defined; do not invent new components.
-   - Run `cargo test <test_name>` (via `run_cargo` if the agent
-     has it; otherwise the equivalent shell invocation).
+   - Run `run_cargo({"command": "test", "args": ["<test_name>"]})`
+     (or the equivalent shell invocation if `run_cargo` is
+     unavailable).
    - If the test fails because of a design bug in `src/`, fix
      the model and re-run; record the fix in the test row's
-     "fix:" sub-bullet.
+     `- fix:` sub-bullet.
    - If the test fails because of a test bug, fix the test.
-   - Once passing, flip the row's `- [ ]` to `- [x]` in
-     `docs/plan/test-plan.md`.
-3. **Random tests**: every random test must pin a seed in its
-   name (`<test>_seed_<N>`) per the plan. Failures must be
-   reproducible from the seed alone -- never use uncontrolled
-   randomness.
-4. After every category's `- [ ]` is `- [x]`, run the full suite
-   once more to confirm nothing regressed:
-   `run_cargo({"command": "test"})`.
-5. **Coverage with `cargo-tarpaulin`**:
+   - Once passing, flip the row's `- [ ]` to `- [x]` in the
+     milestone file. ONLY change the checkbox; do NOT modify
+     the task text or reorder rows.
+
+3. **Random-test reproducibility**. Random milestones must pin
+   a seed in each test name (`<test>_seed_<N>`) per the plan.
+   A failure of `foo_seed_42` should be reproducible from the
+   seed alone; never use uncontrolled randomness.
+
+4. **Coverage milestone**. The final test-execution milestone
+   (typically `test-milestone-05-coverage.md`) walks
+   `coverage.md`'s run command:
    - Install if missing: `cargo install cargo-tarpaulin`
      (one-time per environment).
-   - Run the command from the plan (typically
-     `cargo tarpaulin --out Html --out Lcov --output-dir target/coverage`).
+   - Run the command from `coverage.md` (typically
+     `cargo tarpaulin --out Html --out Lcov --output-dir
+     target/coverage` plus the `--exclude-files` flags).
    - Read the line-coverage percentage from the output.
-   - If at or above the plan's threshold, write the report path
-     and the measured percentage into the `## Coverage` section
-     of `docs/plan/test-plan.md` (e.g. `coverage report:
-     target/coverage/tarpaulin-report.html (line: 92.4%)`).
-   - If below threshold, identify uncovered lines (open the HTML
-     report) and either:
-     - add tests to cover them (preferred -- adds new
-       `- [x]` rows to the appropriate category), or
-     - mark them as intentional exclusions in the plan's
-       `## Coverage > Exclusions` list, with a one-line reason.
-       The reason must be specific (e.g. "platform-gated
-       Windows path under `cfg(windows)`"), not vague
-       ("unimportant").
+   - If at or above `coverage.md`'s declared threshold, record
+     the measured percentage and report path in
+     `docs/test-plan/test-plan.md`'s `## Coverage` section
+     (e.g. `coverage report: target/coverage/lcov.info
+     (line: 92.4%)`). Strategy stays in `coverage.md`; the
+     measured result goes in the index.
+   - If below threshold, identify uncovered lines (open the
+     HTML report) and either:
+     - add tests to cover them (preferred -- adds new `- [x]`
+       rows to the appropriate test-milestone file), or
+     - extend `coverage.md`'s `## Exclusions` list with the
+       specific file / module + a one-line reason. The reason
+       must be specific (e.g. "platform-gated Windows path
+       under `cfg(windows)`"), not vague ("unimportant").
+       Adding exclusions in DM3c is allowed only when the
+       coverage gap is genuinely test-resistant.
 
-## Order, jumping, and deferring
+5. **Verify and stop**. When every `- [ ]` row in the current
+   milestone is resolved (`- [x]` done OR `- [-]` deferred with
+   a `- defer reason:` sub-bullet), run a sanity pass:
+   - `run_cargo({"command": "test"})` -- the full suite still
+     passes (no regression).
 
-`docs/plan/plan-management.md` is the source of truth: task
+   Then **STOP**. Surface a clear notice:
+
+   > `test-milestone NN: <name> complete; ready for critique.`
+   > `<one-line summary: count of tests added, design fixes
+   > that landed, deferred items>`
+
+   Do NOT roll into the next milestone. The paired critique is
+   the gate; a clean critique advances DM3c, a critique with
+   `BLOCKER:` items sends you back into the same milestone with
+   focused feedback.
+
+### Order, jumping, and deferring
+
+`docs/impl-plan/plan-management.md` is the source of truth: task
 states (`- [ ]` / `- [x]` / `- [-]` with `defer reason:`),
 out-of-order work (`order swap:` sub-bullet), and additions
-(`added:` sub-bullet). Read it before starting; the conventions
-apply to test rows in `docs/plan/test-plan.md` exactly as they do
-to milestone tasks in DM2c's plan.
+(`added:` sub-bullet). Read it before starting.
 
-DM3c-specific note: deferred (`- [-]`) rows count as resolved for
-the category-completion check, but they do NOT contribute to the
-coverage threshold's pass criterion. A category where every row
-was deferred is a `BLOCKER:` for the critique to flag.
+DM3c-specific note: deferred (`- [-]`) rows count as resolved
+for milestone-completion, but they do NOT contribute to the
+coverage threshold's pass criterion. A milestone where every row
+was deferred is a `BLOCKER:` for the critique to flag because
+the flow has no meaningful execution signal for that class of
+behavior, even though the file itself is "complete" by the
+row-count rule. If you find yourself deferring more than ~25% of
+a milestone's rows, stop and surface the trend rather than
+coasting -- the critique flags a "mostly-deferred milestone" as
+a `BLOCKER:` even when individual defer reasons read fine.
 
 ## Re-entry
 
-If the suite is large, DM3c may run across multiple work +
-critique sessions. The gate stays open until every plan row is
-`- [x]` or `- [-]` (with a documented `defer reason:`) and the
-coverage threshold is met. Restart from the highest-numbered
-category that still has open rows.
+If DM3c runs across multiple work + critique sessions, restart
+by walking the `test-milestone-NN-*.md` files in numeric order.
+The first one with at least one `- [ ]` row -- or any test
+whose name has no matching `#[test]` function in `tests/` -- is
+your current milestone, and you start at the first such row in
+that file.
 
 ## Output
 
+When the artifacts in the current milestone are complete and
+verified, stop with the milestone-complete notice. Do not write
+`docs/critiques/DM3c-critique.md`; the critique is a distinct
+task. Do not `/exit` on your own -- the user and the orchestrator
+control session boundaries.
+
+Final output, after all milestones are complete and the final
+critique has passed:
+
 - `cargo test` passes (every implemented test).
-- `cargo tarpaulin` reports line coverage at or above the plan's
-  threshold.
-- Every row in `docs/plan/test-plan.md` is `- [x]` or `- [-]`
-  with a specific `defer reason:`.
+- `cargo tarpaulin` reports line coverage at or above
+  `coverage.md`'s threshold.
+- Every row in every `test-milestone-NN-*.md` is `- [x]` or
+  `- [-]` with a `defer reason:`.
 - The coverage report path + measured percentage is recorded in
-  the plan's `## Coverage` section.
-- Any uncovered lines that are intentionally left below direct test
-  coverage are recorded in `## Coverage > Exclusions` with a
-  concrete reason.
-
-Category completion and step completion are different:
-
-- After each category is complete, stop and wait for the paired
-  category critique before starting the next category.
-- After the final category, the full-suite rerun, and coverage work are
-  complete, stop for the final DM3c critique. That final critique is the
-  end-to-end regression/coverage pass, not the first time the tests are
-  being reviewed.
-
-When the artifacts above are complete, stop. Do not write
-`docs/critiques/DM3c-critique.md`; the critique is a distinct task.
-Do not `/exit` on your own -- the user and the orchestrator control
-session boundaries.
+  `docs/test-plan/test-plan.md`'s `## Coverage` section.
+- Any uncovered lines that are intentionally left below direct
+  coverage are recorded in `coverage.md`'s `## Exclusions` list
+  with a concrete reason.

@@ -17,9 +17,9 @@ in your reports must trace to a recorded experiment in
 
 ## Inputs
 
-- `docs/plan/perf-plan.md` -- the milestone index. Read this first
+- `docs/perf-plan/perf-plan.md` -- the milestone index. Read this first
   to orient.
-- `docs/plan/perf-milestone-*.md` -- per-milestone task lists.
+- `docs/perf-plan/perf-milestone-*.md` -- per-milestone task lists.
   Walk them in order.
 - `docs/targets.md` -- the targets the plan traces back to.
 - `docs/analysis/decomposition.md`,
@@ -39,8 +39,8 @@ Reference material (read on demand):
 
 ## Procedure
 
-1. Read `docs/plan/perf-plan.md`. Then process each milestone in
-   order from `docs/plan/perf-milestone-*.md`.
+1. Read `docs/perf-plan/perf-plan.md`. Then process each milestone in
+   order from `docs/perf-plan/perf-milestone-*.md`.
 2. **For each milestone**:
    - Read its `perf-milestone-NN-<name>.md` file.
    - Work through tasks IN ORDER. As you complete each task,
@@ -83,7 +83,7 @@ Reference material (read on demand):
 
 ## Order, jumping, and deferring
 
-`docs/plan/plan-management.md` is the source of truth: task
+`docs/impl-plan/plan-management.md` is the source of truth: task
 states (`- [ ]` / `- [x]` / `- [-]` with `defer reason:`),
 out-of-order work (`order swap:` sub-bullet), and additions
 (`added:` sub-bullet). Read it before starting; the conventions
@@ -106,7 +106,7 @@ it as a `BLOCKER:`.
   critique each one's runs / reports. Auto-mode should still
   honor the stop -- emit the "milestone complete" notice and
   let the critique run before advancing.
-- Do NOT modify `docs/plan/perf-plan.md`'s structure (only
+- Do NOT modify `docs/perf-plan/perf-plan.md`'s structure (only
   flip `[ ]` to `[x]` and append run-id / measurement notes
   inside task lines). Re-architecting the plan is DM4a's job.
 
@@ -127,6 +127,20 @@ Milestone completion and step completion are different:
 - After the final milestone is complete, stop for the final DM4b
   critique. That final critique is the end-to-end performance
   analysis / reporting gate, not the first serious review.
+
+## Re-entry
+
+If DM4b runs across multiple work + critique sessions (a milestone
+critique flagged something, or the session was killed mid-run),
+restart by walking the `docs/perf-plan/perf-milestone-NN-*.md`
+files in numeric order. The first one with at least one `- [ ]`
+row -- or any task whose run-id is missing from
+`.sim-flow/experiments.db` -- is your current milestone, and you
+start at the first such row in that file. Do NOT skip a
+milestone just because its rows are all `[x]` -- if a cited
+run-id has no row in `experiments.db`, the prior milestone's
+claim of completeness was wrong; back up and reopen the
+affected tasks before moving forward.
 
 When the artifacts above are complete, stop. Do not write
 `docs/critiques/DM4b-critique.md`; the critique is a distinct task.

@@ -77,10 +77,14 @@ the name; do not conflate them:
    steps to infer the rest reasonably. That usually means:
    - **Technology node** matching regex `\d+\s*nm`
    - **Clock frequency** matching regex `\d+\s*(MHz|GHz)`
-   - **Gate budget per cycle** as either:
-     - an explicit target stated by the user or source material, or
-     - enough information to derive a reasonable estimate, which usually
-       means the frequency and technology target above
+   - **Gate budget per cycle** as a single concrete line in the spec.
+     If the source material gives an explicit value, copy it verbatim.
+     Otherwise, derive one from the frequency + technology node and
+     write it explicitly using a "Derived gate budget per cycle" line,
+     e.g.:
+     `Derived gate budget per cycle: ~50–100 (1 GHz at 7 nm, FO4 ~10 ps).`
+     Either form satisfies the requirement; downstream steps and the
+     critique gate look for the number, not the wording around it.
    - **External interfaces** with names, widths, protocols, direction,
      and semantics
    - **Functional behavior** detailed enough to derive named operations
@@ -97,11 +101,14 @@ the name; do not conflate them:
    section truly does not apply, say so explicitly rather than leaving
    the placeholder in place.
 8. The gate-budget requirement is hard because DM2 needs it to reason
-   about functional decomposition and pipeline staging. If the user or
-   source material gives an explicit gates-per-cycle or logic-budget
-   target, preserve it. Otherwise, make sure the spec includes the
-   frequency and technology information needed for DM1 to derive a
-   reasonable estimate.
+   about functional decomposition and pipeline staging. ALWAYS land a
+   concrete number in `docs/spec.md` — either copied from the source
+   material or computed from the frequency + technology target via the
+   "Derived gate budget per cycle: ..." line shown above. Do not leave
+   the budget implicit and rely on a downstream step to do the
+   derivation; weaker critique models read the absence of a literal
+   number as a blocker even when the surrounding context allows
+   derivation.
 9. Do not stop after creating a partially filled scaffold. The goal of
    this step is a model-ready `docs/spec.md` that preserves explicit
    requirements and makes downstream inference safe and bounded.

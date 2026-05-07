@@ -32,6 +32,17 @@ Prefix gate-blocking issues with `BLOCKER:` and non-blocking issues with
 `UNRESOLVED:`. `RESOLVED:` lines are informational acknowledgements and
 are ignored by the gate.
 
+**Finding-marker grammar.** The gate parses lines starting with
+`BLOCKER:` / `RESOLVED:` / `UNRESOLVED:` (case-insensitive,
+plural OK) optionally preceded by list markers (`-`, `*`, `+`,
+`>`), heading markers (`#`+), bold/underline (`**` / `__`), and
+one decoration glyph (e.g. `❌` `✅`). Headings DO match
+(`### BLOCKER: ...`); section titles describing a blocker
+without a colon-after-keyword (e.g. `### BLOCKER 1 - title`)
+do NOT match -- they're prose. Mid-sentence mentions do NOT
+match. ONLY the keyword-colon shape is a finding; pick the form
+deliberately.
+
 1. Does `docs/spec.md` declare a clock frequency? (regex `\d+\s*(MHz|GHz)`)
 2. Does it declare a technology node? (regex `\d+\s*nm`)
 3. Does it either declare an explicit gate budget per cycle or provide

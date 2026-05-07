@@ -264,6 +264,39 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
         std::collections::VecDeque::with_capacity(opts.max_identical_responses.max(1) as usize);
     let mut loop_hint_pending: bool = false;
 
+    // No-progress cap. The auto driver's existing `max_auto_iters`
+    // counter measures turns that produced no artifact -- but a code
+    // step that's iterating on `cargo test` fixes per turn DOES
+    // produce artifacts (the rewritten test / source file) every
+    // turn, so that counter never fires. The agent can spend
+    // arbitrarily many turns chasing the same set of failures.
+    //
+    // This second counter watches `run_cargo` test outcomes
+    // (populated by `RunCargoTool`) and counts CONSECUTIVE turns
+    // where the failing-test count did NOT strictly decrease. A
+    // strictly-decreasing count resets the counter (the agent is
+    // making real progress, give it room to keep going). Hitting
+    // `max_auto_iters` consecutive no-progress turns trips the same
+    // flip-to-manual path the older cap uses (the diagnostic
+    // intentionally includes `max_auto_iters` so the AutoHost
+    // wrapper's existing substring match cancels the in-flight
+    // sub-session cleanly).
+    let mut last_test_failure_count: Option<usize> = None;
+    let mut no_progress_iters: u32 = 0;
+
+    // Tool-error-streak guard. Catches a failure mode the
+    // identical-response check misses: the model keeps emitting
+    // *slightly different* tool calls (different prose, different
+    // reasoning, same broken `path:` or same allowlist-rejected
+    // target) so the response-hash comparison sees variation but
+    // no useful work happens. We count CONSECUTIVE turns where
+    // every tool dispatch / artifact write the agent attempted
+    // failed; a single success on either path resets the counter,
+    // and a pure-chat turn (no tool / artifact actions) leaves it
+    // unchanged so the agent isn't penalized for thinking.
+    const MAX_CONSECUTIVE_TOOL_ERROR_TURNS: u32 = 5;
+    let mut consecutive_tool_error_turns: u32 = 0;
+
     // 5c. Turn loop.
     let mut turn_index: u32 = 0;
     loop {
@@ -290,7 +323,37 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             })?;
             return Ok(());
         }
+        // Tool-error-streak cap. See the declaration of
+        // `consecutive_tool_error_turns` for the failure mode this
+        // catches.
+        if consecutive_tool_error_turns >= MAX_CONSECUTIVE_TOOL_ERROR_TURNS {
+            host.write(&Event::Diagnostic {
+                level: DiagnosticLevel::Error,
+                message: format!(
+                    "session aborted: agent burned {} consecutive turns where every tool / \
+                     artifact-write attempt failed -- tool-error-streak guard. Inspect the \
+                     recent ToolInvoked events; the agent is likely retrying the same broken \
+                     call shape (wrong path, allowlist rejection, malformed args) without \
+                     correcting it.",
+                    consecutive_tool_error_turns,
+                ),
+            })?;
+            host.write(&Event::SessionEnd {
+                reason: SessionEndReason::RunawayGuard,
+                message: Some(format!(
+                    "{} consecutive failed-tool turns",
+                    consecutive_tool_error_turns
+                )),
+            })?;
+            return Ok(());
+        }
         let request_id = format!("lr-{turn_index}");
+        // Per-turn wall-time tracking. Hosts emit per-call token /
+        // wall metrics at the dispatch site (TerminalHost via
+        // `agent.dispatch`); the orchestrator measures end-to-end
+        // round-trip including chunk streaming and protocol
+        // serialization, which can differ from the host-side view.
+        let turn_started = std::time::Instant::now();
         host.write(&Event::RequestLlmResponse {
             request_id: request_id.clone(),
             backend: opts.llm_backend.clone(),
@@ -322,6 +385,17 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         text: String::new(),
                         final_chunk: true,
                     })?;
+                    let turn_wall_ms = turn_started.elapsed().as_millis() as u64;
+                    tracing::info!(
+                        target: "sim_flow::metrics",
+                        event = "turn_end",
+                        step = step.id,
+                        kind = ?opts.kind,
+                        request_id = %request_id,
+                        turn_index,
+                        assistant_bytes = assistant_text.len(),
+                        wall_ms = turn_wall_ms,
+                    );
                     break;
                 }
                 Some(HostEvent::LlmError {
@@ -482,21 +556,75 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 && pre_check_tool_calls.is_empty()
                 && !assistant_text.trim().is_empty()
             {
-                let path = format!("docs/critiques/{}-critique.md", step.id);
-                host.write(&Event::Diagnostic {
-                    level: DiagnosticLevel::Warning,
-                    message: format!(
-                        "{}: critique response had no fenced artifact-write block; \
-                         saving the full response body as `{}`. The agent ignored \
-                         the artifact-write convention -- tighten the critique \
-                         system prompt if this is recurrent.",
-                        step.id, path,
-                    ),
-                })?;
-                artifacts.push(ExtractedArtifact {
-                    relative_path: path,
-                    content: assistant_text.clone(),
-                });
+                // Auto-save the response as the critique IFF it
+                // contains at least one structured finding marker
+                // (BLOCKER / RESOLVED / UNRESOLVED). A pure-prose
+                // response with no markers ("everything looks fine,
+                // nothing to flag.") would otherwise be saved as
+                // an empty critique that the gate parses as zero
+                // blockers and waves through -- exactly the
+                // ghost-pass mode we don't want. Reject those and
+                // feed the agent back a corrective User turn.
+                let has_findings = parse_blocker_lines(&assistant_text).len()
+                    + assistant_text
+                        .lines()
+                        .filter(|l| {
+                            matches!(
+                                line_kind(l),
+                                Some(FindingKind::Resolved | FindingKind::Unresolved)
+                            )
+                        })
+                        .count()
+                    > 0;
+                if has_findings {
+                    let path = format!("docs/critiques/{}-critique.md", step.id);
+                    host.write(&Event::Diagnostic {
+                        level: DiagnosticLevel::Warning,
+                        message: format!(
+                            "{}: critique response had no fenced artifact-write block; \
+                             saving the full response body as `{}`. The agent ignored \
+                             the artifact-write convention -- tighten the critique \
+                             system prompt if this is recurrent.",
+                            step.id, path,
+                        ),
+                    })?;
+                    artifacts.push(ExtractedArtifact {
+                        relative_path: path,
+                        content: assistant_text.clone(),
+                    });
+                } else {
+                    // No fenced block AND no findings: refuse to
+                    // commit. Push a corrective User turn so the
+                    // agent retries with proper structure rather
+                    // than the gate clearing on a no-op.
+                    host.write(&Event::Diagnostic {
+                        level: DiagnosticLevel::Error,
+                        message: format!(
+                            "{}: critique response had no fenced artifact-write block AND \
+                             no `BLOCKER:` / `RESOLVED:` / `UNRESOLVED:` finding lines. \
+                             Refusing to auto-save -- a critique with no findings would \
+                             ghost-pass the gate. Re-prompting the agent.",
+                            step.id,
+                        ),
+                    })?;
+                    messages.push(LlmMessage {
+                        role: LlmRole::User,
+                        content: format!(
+                            "Your previous response did not contain a fenced \
+                             ```docs/critiques/{}-critique.md`` block AND it did not contain \
+                             any `BLOCKER:` / `RESOLVED:` / `UNRESOLVED:` finding lines. \
+                             A critique with no findings would silently pass the gate. \
+                             Re-emit the critique now: either as a fenced artifact-write \
+                             block at the path above, or as free-form markdown that \
+                             contains explicit finding-marker lines. At minimum every \
+                             evaluation question should produce one `RESOLVED:` or \
+                             `UNRESOLVED:` line, and any gap is a `BLOCKER:`.",
+                            step.id,
+                        ),
+                        attachments: Vec::new(),
+                    });
+                    continue;
+                }
             }
             // Track artifact-write failures so we can feed them back
             // as a User turn below. Without this, a rejected write
@@ -508,10 +636,12 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             // the same pattern the tool-call dispatcher already uses
             // for tool errors: visible failure → next-turn correction.
             let mut artifact_write_failures: Vec<(String, String)> = Vec::new();
+            let mut artifact_write_successes: u32 = 0;
             for art in &artifacts {
                 let started = std::time::Instant::now();
                 match write_artifact(&opts.project_dir, &write_paths, art) {
                     Ok(bytes) => {
+                        artifact_write_successes += 1;
                         host.write(&Event::ArtifactWritten {
                             path: art.relative_path.clone(),
                             bytes,
@@ -539,7 +669,21 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     }
                 }
             }
+            // Tool-error-streak: clean turn (>=1 artifact written,
+            // no failures) is real progress -- reset the counter.
+            // Mixed-or-all-failed cases are handled in the
+            // failure branch below.
+            if artifact_write_successes > 0 && artifact_write_failures.is_empty() {
+                consecutive_tool_error_turns = 0;
+            }
             if !artifact_write_failures.is_empty() {
+                // Any-failed turn with no successes -> bump streak;
+                // mixed turn (some succeeded) -> reset.
+                if artifact_write_successes == 0 {
+                    consecutive_tool_error_turns += 1;
+                } else {
+                    consecutive_tool_error_turns = 0;
+                }
                 // Feed rejections back as the next User turn so the
                 // agent can correct (e.g. retarget a path, drop a
                 // disallowed write) instead of marching into the
@@ -581,6 +725,13 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 }
                 feedback.push_str("Tool results:\n\n");
                 let mut tool_attachments: Vec<crate::session::protocol::LlmAttachment> = Vec::new();
+                // Take the LAST test_failure_count seen this turn.
+                // Multiple `run_cargo test` calls in one turn (e.g.
+                // the agent re-runs after a fix) collapse to the
+                // most recent measurement.
+                let mut this_turn_test_count: Option<usize> = None;
+                let mut tool_successes: u32 = 0;
+                let mut tool_failures: u32 = 0;
                 for call in &tool_calls {
                     let started = std::time::Instant::now();
                     let ctx = tools::ToolContext::new(
@@ -592,6 +743,11 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     .with_write_paths(&write_paths);
                     let outcome = invoke_tool(&dispatcher, &ctx, call);
                     let status = if outcome.ok { "ok" } else { "error" };
+                    if outcome.ok {
+                        tool_successes += 1;
+                    } else {
+                        tool_failures += 1;
+                    }
                     host.write(&Event::ToolInvoked {
                         name: call.name.clone(),
                         args_summary: tool_args_summary(call),
@@ -600,6 +756,9 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     })?;
                     feedback.push_str(&outcome.display);
                     feedback.push_str("\n\n---\n\n");
+                    if let Some(c) = outcome.test_failure_count {
+                        this_turn_test_count = Some(c);
+                    }
                     for att in outcome.attachments {
                         tool_attachments.push(crate::session::protocol::LlmAttachment {
                             mime: att.mime,
@@ -608,12 +767,61 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         });
                     }
                 }
+                // Tool-error-streak tracking. All-failed turn -> bump
+                // streak; any-succeeded turn -> reset.
+                if tool_failures > 0 && tool_successes == 0 {
+                    consecutive_tool_error_turns += 1;
+                } else if tool_successes > 0 {
+                    consecutive_tool_error_turns = 0;
+                }
                 messages.push(LlmMessage {
                     role: LlmRole::User,
                     content: feedback,
                     attachments: tool_attachments,
                 });
-                continue; // Don't ask for user input; LLM continues.
+
+                // No-progress tracker. Strictly-decreasing failure
+                // count = real progress; reset to 0. Same / higher
+                // count = stuck; increment. No measurement this
+                // turn (no run_cargo test call) leaves the state
+                // untouched.
+                if let Some(cur) = this_turn_test_count {
+                    let made_progress = matches!(last_test_failure_count, Some(prev) if cur < prev);
+                    if made_progress {
+                        no_progress_iters = 0;
+                    } else {
+                        no_progress_iters += 1;
+                    }
+                    last_test_failure_count = Some(cur);
+                }
+
+                // Bail if we've burned `max_auto_iters` consecutive
+                // turns with no test-failure improvement. The
+                // diagnostic embeds `max_auto_iters` so the
+                // AutoHost wrapper's existing substring matcher
+                // cancels the in-flight sub-session and the auto
+                // driver flips to manual mode -- no separate
+                // signal-path to keep in sync.
+                if opts.auto
+                    && this_turn_test_count.is_some()
+                    && no_progress_iters >= opts.max_auto_iters
+                {
+                    let cur = last_test_failure_count.unwrap_or(0);
+                    host.write(&Event::Diagnostic {
+                        level: DiagnosticLevel::Error,
+                        message: format!(
+                            "auto: {} hit no-progress cap (max_auto_iters={}): {} consecutive \
+                             cargo-test runs with the failure count not strictly decreasing \
+                             (current: {} test(s) failing). The agent is iterating without \
+                             measurable improvement; switching to interactive.",
+                            step.id, opts.max_auto_iters, no_progress_iters, cur,
+                        ),
+                    })?;
+                    // Fall through (no `continue`) so the auto-iter
+                    // / RequestUserInput tail of the loop runs.
+                } else {
+                    continue; // Tool calls succeeded; LLM continues.
+                }
             }
 
             // 5f. If artifacts were written, run validators for the
@@ -733,13 +941,41 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
         }
 
         // Auto-mode and no artifact written this turn: the agent is
-        // either thinking, asking, or stuck. Nudge it to produce the
-        // artifact rather than wait for a user that won't speak. Cap
-        // by the same auto_iters budget. We mirror the
-        // critique-session fallback rule from 5d so a turn that
-        // produced inline critique prose (saved via the fallback)
-        // doesn't get re-counted as "no artifact" here.
+        // either thinking, asking, stuck, OR genuinely done.
+        //
+        // Genuinely-done case: the agent has already produced the
+        // step's artifact(s) on a prior turn, run cargo verify /
+        // test as the prompt requires, and is now winding down with
+        // a "ready for gate-check" summary. If the structural gate
+        // is clean, ending the session here lets the critique
+        // session start. Without this check the wind-down turns
+        // (cargo build / cargo test / summary, all of which produce
+        // no NEW artifact) burn `max_auto_iters` and the agent's
+        // completed work gets cancelled with a runaway-guard error.
+        // Nudge cases (asking, stuck) still hit the cap path
+        // because the structural gate fails when the artifact isn't
+        // on disk yet.
         if opts.auto && effective_artifacts_empty(&assistant_text, opts.kind) && !llm_failed {
+            // Work sessions: if the structural gate is already
+            // clean, the work is done -- end so the auto driver
+            // can launch the critique session. (Critique sessions
+            // don't have this exit; they end via the regular
+            // empty-artifact path because their gate check is
+            // file-existence on the critique markdown, which is
+            // already evaluated by the time we reach here.)
+            if opts.kind == SessionKind::Work {
+                let report = evaluate_structural_gate(&opts.project_dir, &step)?;
+                if report.is_clean() {
+                    host.write(&Event::SessionEnd {
+                        reason: SessionEndReason::Completed,
+                        message: Some(format!(
+                            "auto: {} structural gate clean (no-artifact wind-down)",
+                            step.id
+                        )),
+                    })?;
+                    return Ok(());
+                }
+            }
             auto_iterations += 1;
             if auto_iterations >= opts.max_auto_iters {
                 host.write(&Event::Diagnostic {
@@ -1044,12 +1280,57 @@ fn tool_args_from_body(name: &str, body: &str) -> std::result::Result<serde_json
              Prefer native tool-use when the backend supports it."
                 .into(),
         ),
-        "write_file" => Err(
-            "write_file as a fenced tool call is not supported; use the artifact-write convention (fenced block whose info-string is the file path)."
-                .into(),
-        ),
+        "write_file" => {
+            // Permissive fallback: treat the fenced body as
+            // "path on the first non-empty line, content as the
+            // rest" so an agent that reaches for `tool:write_file`
+            // (the natural function-call shape) doesn't get
+            // bounced when the body isn't JSON-wrapped. The JSON
+            // path above still works; this branch covers backends
+            // that emit bare path + content lines.
+            let mut lines = body.lines();
+            let path = loop {
+                match lines.next() {
+                    Some(l) if !l.trim().is_empty() => break Some(l.trim().to_string()),
+                    Some(_) => continue,
+                    None => break None,
+                }
+            };
+            let Some(path) = path else {
+                return Err(write_file_help("empty body"));
+            };
+            // Drop the leading blank line(s) commonly written
+            // between the path and the content block.
+            let mut content_lines: Vec<&str> = lines.collect();
+            while content_lines.first().is_some_and(|l| l.trim().is_empty()) {
+                content_lines.remove(0);
+            }
+            if content_lines.is_empty() {
+                return Err(write_file_help(&format!(
+                    "missing file content for `{path}`"
+                )));
+            }
+            let content = content_lines.join("\n");
+            Ok(serde_json::json!({ "path": path, "content": content }))
+        }
         other => Err(format!("unknown tool: {other}")),
     }
+}
+
+/// Helper text rendered when a `tool:write_file` fenced call lacks
+/// the path-then-content body. Includes a concrete artifact-write
+/// example so the agent can recover in one read instead of
+/// trial-and-error.
+fn write_file_help(reason: &str) -> String {
+    format!(
+        "write_file: {reason}. The fenced-tool body must be \"path on \
+         line 1, blank line, content below\". For multi-line content \
+         prefer the artifact-write convention -- the fence info-string \
+         is the file path and the body is the file content:\n\n\
+         ```src/model/mod.rs\npub mod foo;\npub mod bar;\n```\n\n\
+         Or pass JSON args directly: \
+         `{{\"path\": \"<rel>\", \"content\": \"<text>\"}}`."
+    )
 }
 
 fn tool_args_summary(call: &tools::ParsedToolCall) -> String {
@@ -1428,15 +1709,99 @@ fn build_session_inputs(
     // immediate context the agent must act on:
     //
     //   - the active <step>-critique.md file on a work re-run
-    //     (the findings the agent must address this turn).
+    //     (the findings the agent must address this turn);
+    //   - the same file on a CRITIQUE re-run, to scope the second
+    //     pass to "are the prior BLOCKERs resolved?" instead of
+    //     repeating the full structural-question evaluation. Without
+    //     this the second-pass critique re-derives every question
+    //     from scratch and weaker models routinely flag new blockers
+    //     that didn't exist in the first pass, blowing the
+    //     critique-iteration budget.
     let critique_rel = format!("docs/critiques/{}-critique.md", step.id);
-    let inline_critique = kind == SessionKind::Work;
+    let critique_abs = project_dir.join(&critique_rel);
+    let critique_body = std::fs::read_to_string(&critique_abs).ok();
+    // Critique-retry detection: the file exists AND it's a critique
+    // session AND we're not on the first pass. The first-pass test is
+    // "no BLOCKER lines at all" -- a fresh critique file from a prior
+    // run that already evaluated cleanly wouldn't have any. We guard
+    // on BLOCKER presence so a previously-clean critique doesn't
+    // suppress the full evaluation when the agent legitimately needs
+    // it (e.g. the work session was edited externally between
+    // runs).
+    let prior_critique_blockers: Vec<String> = critique_body
+        .as_deref()
+        .map(parse_blocker_lines)
+        .unwrap_or_default();
+    let is_critique_retry = kind == SessionKind::Critique && !prior_critique_blockers.is_empty();
+    let inline_critique = kind == SessionKind::Work || is_critique_retry;
+
+    // Milestone-walk scoping. When a step's descriptor binds it to
+    // a milestone-walk (DM2d, DM3b, DM3c, DM4b), the orchestrator
+    // shows the agent ONLY the current milestone file plus the
+    // plan's index, not the whole milestone directory. The
+    // auto-driver iterates work-then-critique sessions; each
+    // iteration the orchestrator picks the right milestone (same
+    // one for retry, next pending one for advance). Without this
+    // scoping the agent sees every milestone file at once and
+    // chains them in a single work session, defeating the
+    // per-milestone critique pattern.
+    //
+    // The current-milestone choice depends on retry state: a
+    // critique with prior BLOCKERs means we're retrying THE SAME
+    // milestone (the one whose tasks the agent already touched);
+    // a clean prior critique (or no critique) means we're advancing
+    // to the FIRST pending milestone.
+    let milestone_scope: Option<String> = match step.milestone_walk {
+        Some(walk) => {
+            let prior_has_blockers = !prior_critique_blockers.is_empty();
+            match crate::__internal::steps::find_current_milestone(
+                project_dir,
+                &walk,
+                prior_has_blockers,
+            ) {
+                crate::__internal::steps::CurrentMilestone::File(rel) => Some(rel),
+                // AllResolved / NoMilestonesPresent: don't inject a
+                // milestone scope. The structural gate
+                // (MilestonesAllResolved) decides whether the step
+                // can advance.
+                _ => None,
+            }
+        }
+        None => None,
+    };
 
     let mut toc_entries: Vec<TocEntry> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut consider: Vec<String> = Vec::new();
-    consider.extend(step.predecessor_inputs.iter().map(|s| (*s).to_string()));
-    consider.extend(step.work_artifacts.iter().map(|s| (*s).to_string()));
+    if let (Some(walk), Some(milestone_rel)) = (step.milestone_walk, &milestone_scope) {
+        // Keep predecessor inputs / work_artifacts that are NOT
+        // inside the milestone directory (e.g. docs/spec.md,
+        // docs/testbench.md, src/, tests/), drop everything that
+        // points at or into walk.dir, then explicitly add the
+        // plan index and the SINGLE current milestone file. The
+        // agent never sees other milestone files exist (beyond
+        // any TOC inside the index).
+        let walk_dir = walk.dir.trim_end_matches('/');
+        let inside_walk = |rel: &str| {
+            let r = rel.trim_end_matches('/');
+            r == walk_dir || r.starts_with(&format!("{walk_dir}/"))
+        };
+        for rel in step.predecessor_inputs {
+            if !inside_walk(rel) {
+                consider.push((*rel).to_string());
+            }
+        }
+        for rel in step.work_artifacts {
+            if !inside_walk(rel) {
+                consider.push((*rel).to_string());
+            }
+        }
+        consider.push(walk.index_file.to_string());
+        consider.push(milestone_rel.clone());
+    } else {
+        consider.extend(step.predecessor_inputs.iter().map(|s| (*s).to_string()));
+        consider.extend(step.work_artifacts.iter().map(|s| (*s).to_string()));
+    }
 
     for rel in consider {
         if !seen.insert(rel.clone()) {
@@ -1461,22 +1826,221 @@ fn build_session_inputs(
          claim a directory is empty unless its expansion below is empty.\n\n",
         step.id
     );
+    // Milestone-scope preamble. The agent's prompt already mentions
+    // milestone walking, but the orchestrator-injected preamble
+    // makes the CURRENT milestone unambiguous and tells the agent
+    // not to read or write any sibling milestone file -- the
+    // structural enforcement that the prompt-only "STOP after each
+    // milestone" instruction failed to deliver in earlier runs.
+    if let (Some(walk), Some(milestone_rel)) = (step.milestone_walk, &milestone_scope) {
+        let session_label = match kind {
+            SessionKind::Work => "work",
+            SessionKind::Critique => "critique",
+        };
+        out.push_str(&format!(
+            "**Milestone scope (orchestrator-enforced)**: this {session_label} \
+             session targets EXACTLY ONE milestone -- `{milestone_rel}`. The plan \
+             index `{}` is also inlined for context. You MUST NOT read or modify \
+             any other `{}<NN>-*.md` file in this session; sibling milestones \
+             are intentionally hidden so each gets its own focused critique. \
+             When all `- [ ]` rows in the current milestone are resolved \
+             (`- [x]` done OR `- [-]` deferred with a `defer reason:` \
+             sub-bullet), stop and surface the canonical \
+             `<milestone-name> complete; ready for critique.` notice. The \
+             auto-driver will run the paired critique, then re-launch a \
+             fresh session for the next milestone.\n\n",
+            walk.index_file, walk.file_prefix,
+        ));
+    }
     for entry in &toc_entries {
         out.push_str(&entry.render_block(project_dir));
     }
 
-    if inline_critique {
-        let abs = project_dir.join(&critique_rel);
-        if let Ok(body) = std::fs::read_to_string(&abs) {
-            out.push_str("\n---\n\n");
+    if inline_critique && let Some(body) = &critique_body {
+        out.push_str("\n---\n\n");
+        if is_critique_retry {
+            let blocks = extract_blocker_blocks(body);
             out.push_str(&format!(
-                "Latest critique for this step (inlined because addressing these findings is your immediate task):\n\n### `{critique_rel}`\n\n{}",
-                truncate(&body, 16_000),
+                "Critique-retry mode. The prior pass flagged the BLOCKER(s) below; \
+                 the work session has since re-run. Your task on THIS pass is FOCUSED:\n\n\
+                 - For each prior BLOCKER, decide whether the work session's updated \
+                   artifact resolves it. Quote the gap from the prior block if it is \
+                   still applicable so the resolution is traceable.\n\
+                 - Write the new critique fresh: emit `RESOLVED:` / `BLOCKER:` / \
+                   `UNRESOLVED:` lines for the items below. Do NOT carry over the \
+                   prior pass's RESOLVED / UNRESOLVED items verbatim -- those have \
+                   been intentionally OMITTED from this context to keep your scope \
+                   tight. They were closed in the prior pass; only re-flag if the \
+                   new work introduced a regression.\n\
+                 - Do NOT re-derive the full structural evaluation. Do NOT raise NEW \
+                   `BLOCKER:` items unless the work session introduced a fresh \
+                   problem (e.g. broke a previously-clean section). New `UNRESOLVED:` \
+                   items surfaced by this turn's changes are fine.\n\n\
+                 Prior BLOCKER(s) ({}) to re-evaluate:\n\n",
+                blocks.len(),
+            ));
+            const RETRY_BLOCK_CAP: usize = 4_000;
+            for (i, block) in blocks.iter().enumerate() {
+                out.push_str(&format!(
+                    "#### Prior BLOCKER {} of {}\n\n",
+                    i + 1,
+                    blocks.len()
+                ));
+                if block.len() <= RETRY_BLOCK_CAP {
+                    out.push_str(block);
+                } else {
+                    // Surface truncation explicitly so the agent
+                    // doesn't silently fix the wrong part of the
+                    // BLOCKER, and log a metric so the cap can be
+                    // raised if it bites recurrently.
+                    tracing::warn!(
+                        target: "sim_flow::metrics",
+                        event = "critique_retry_block_truncated",
+                        step = step.id,
+                        block_index = i,
+                        block_bytes = block.len(),
+                        cap_bytes = RETRY_BLOCK_CAP,
+                    );
+                    out.push_str(&block[..RETRY_BLOCK_CAP]);
+                    out.push_str(&format!(
+                        "\n\n... [truncated to {RETRY_BLOCK_CAP} chars; original was {} chars. \
+                         The full BLOCKER body is in the prior critique file -- \
+                         re-read `{critique_rel}` if you need the tail.]",
+                        block.len(),
+                    ));
+                }
+                out.push_str("\n\n");
+            }
+        } else {
+            out.push_str(
+                "Latest critique for this step (inlined because addressing these findings is your immediate task):\n\n",
+            );
+            out.push_str(&format!(
+                "### `{critique_rel}`\n\n{}",
+                truncate(body, 16_000),
             ));
         }
     }
 
     Some(out)
+}
+
+/// Pull each `BLOCKER:` block out of a critique markdown file as a
+/// MULTI-LINE string covering the line that opens with `BLOCKER:`
+/// (after stripping list-markers / bold) plus every following line
+/// until the next finding marker (`BLOCKER:` / `UNRESOLVED:` /
+/// `RESOLVED:`), a markdown heading, a horizontal rule, or EOF. The
+/// header line is included so the agent sees the prefix verbatim;
+/// sub-bullets and explanatory prose that follow stay attached.
+///
+/// `extract_blocker_blocks().len()` is the gate-relevant count of
+/// blockers and replaces the older single-line `parse_blocker_lines`
+/// helper. Whole blocks (rather than just header lines) are what we
+/// inline into a focused critique-retry: a multi-bullet BLOCKER
+/// describing three sub-gaps loses all the actionable detail if
+/// only the first line survives.
+fn extract_blocker_blocks(body: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let lines: Vec<&str> = body.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        if line_kind(lines[i]) == Some(FindingKind::Blocker) {
+            let start = i;
+            let mut j = i + 1;
+            while j < lines.len() && !is_block_terminator(lines[j]) {
+                j += 1;
+            }
+            // Trim trailing blank lines so blocks read cleanly when
+            // joined back together.
+            let mut end = j;
+            while end > start + 1 && lines[end - 1].trim().is_empty() {
+                end -= 1;
+            }
+            out.push(lines[start..end].join("\n"));
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum FindingKind {
+    Blocker,
+    Unresolved,
+    Resolved,
+}
+
+/// Match a finding marker at the start of a line. The recognized
+/// shapes (after lenient prefix-stripping) are:
+///
+/// - `BLOCKER:` / `BLOCKERS:` / case-variants
+/// - `UNRESOLVED:` / `UNRESOLVEDS:` / case-variants
+/// - `RESOLVED:` / `RESOLVEDS:` / case-variants
+///
+/// The leading prefix-strip allows: list markers (`-`, `*`, `+`),
+/// markdown headings (`#`+), whitespace, bold/underline (`**` /
+/// `__`), and one stray non-alphanumeric "decoration" character
+/// (emoji like `❌`, dingbats, checkmarks). Today's qwen run emitted
+/// `### ❌ BLOCKER: ...` as a heading-with-emoji and the prior
+/// strict-list-only matcher silently passed the gate; this is the
+/// fix.
+static FINDING_MARKER_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(
+        // MUST stay in sync with `__internal/critique.rs::FINDING_MARKER_RE`.
+        // See that comment for the prefix ordering rationale.
+        r"^[\s\-\*\+#>]*(?:\d+\.\s+)?(?:\*\*|__)?\s*[^\w\s]*\s*(?P<kind>(?i)blockers?|unresolveds?|resolveds?):"
+    )
+    .expect("finding-marker regex compiles")
+});
+
+fn line_kind(line: &str) -> Option<FindingKind> {
+    let m = FINDING_MARKER_RE.captures(line)?;
+    let kind = m.name("kind")?.as_str().to_ascii_lowercase();
+    if kind.starts_with("blocker") {
+        Some(FindingKind::Blocker)
+    } else if kind.starts_with("unresolved") {
+        Some(FindingKind::Unresolved)
+    } else if kind.starts_with("resolved") {
+        Some(FindingKind::Resolved)
+    } else {
+        None
+    }
+}
+
+fn is_block_terminator(line: &str) -> bool {
+    if line_kind(line).is_some() {
+        return true;
+    }
+    // A heading is a terminator unless `line_kind` already claimed
+    // it as a finding (handled above): `### Section header` ends a
+    // prior block; `### ❌ BLOCKER: ...` IS a block-start, not a
+    // terminator.
+    let trimmed = line.trim_start();
+    if trimmed.starts_with('#') {
+        return true;
+    }
+    let only_dashes = line.trim();
+    if (only_dashes.starts_with("---") || only_dashes.starts_with("***"))
+        && only_dashes
+            .chars()
+            .all(|c| c == '-' || c == '*' || c == ' ')
+    {
+        return true;
+    }
+    false
+}
+
+/// Backwards-compatible single-line view: each entry is the
+/// `BLOCKER:` header line (without its body) for callers that just
+/// want a count or a one-line summary. Internally implemented on
+/// top of `extract_blocker_blocks` so both helpers agree.
+fn parse_blocker_lines(body: &str) -> Vec<String> {
+    extract_blocker_blocks(body)
+        .iter()
+        .filter_map(|block| block.lines().next().map(String::from))
+        .collect()
 }
 
 struct TocEntry {
@@ -1799,12 +2363,71 @@ mod tests {
     }
 
     #[test]
-    fn tool_args_from_body_rejects_write_file_without_json_body() {
-        // Single-line bare-arg form can't carry write_file's content
-        // safely, so the line-based fallback still rejects it. The
-        // user error is clear about the expected shape.
+    fn tool_args_from_body_rejects_write_file_without_content() {
+        // A bare path line with nothing after it has no content to
+        // write. The fallback must surface a help message including
+        // a concrete artifact-write example so the agent can recover
+        // in one turn instead of guessing.
         let err = tool_args_from_body("write_file", "docs/targets.md\n").unwrap_err();
-        assert!(err.contains("not supported"), "unexpected error: {err}");
+        assert!(
+            err.contains("missing file content"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.contains("```src/model/mod.rs"),
+            "expected example: {err}"
+        );
+        assert!(err.contains("artifact-write"), "expected guidance: {err}");
+    }
+
+    #[test]
+    fn tool_args_from_body_accepts_write_file_path_then_content() {
+        // Permissive fallback: agents that emit `tool:write_file`
+        // with a bare path + blank line + content body get treated
+        // as if they had passed JSON args. Native-tool-use backends
+        // synthesize this shape constantly; rejecting it cost
+        // auto-iters in the e2e flow. `body.lines()` strips trailing
+        // newlines, so the joined content matches that view.
+        let body = "src/model/mod.rs\n\npub mod payloads;\npub mod stages;\n";
+        let value =
+            tool_args_from_body("write_file", body).expect("path + content body must be accepted");
+        assert_eq!(
+            value.get("path").and_then(|v| v.as_str()),
+            Some("src/model/mod.rs")
+        );
+        assert_eq!(
+            value.get("content").and_then(|v| v.as_str()),
+            Some("pub mod payloads;\npub mod stages;")
+        );
+    }
+
+    #[test]
+    fn tool_args_from_body_accepts_write_file_path_with_no_blank_separator() {
+        // Some agents skip the blank line between path and content.
+        // The fallback should still recover -- treat the rest of the
+        // body as content directly.
+        let body = "src/lib.rs\nfn main() {}\n";
+        let value = tool_args_from_body("write_file", body)
+            .expect("path + immediate content must be accepted");
+        assert_eq!(
+            value.get("path").and_then(|v| v.as_str()),
+            Some("src/lib.rs")
+        );
+        assert_eq!(
+            value.get("content").and_then(|v| v.as_str()),
+            Some("fn main() {}")
+        );
+    }
+
+    #[test]
+    fn tool_args_from_body_rejects_write_file_with_only_blank_lines() {
+        // Path line followed only by blank lines = no actual content
+        // to write. Surface the same help message as an empty body.
+        let err = tool_args_from_body("write_file", "src/foo.rs\n\n\n").unwrap_err();
+        assert!(
+            err.contains("missing file content"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -1975,5 +2598,238 @@ mod tests {
             msg.contains("write allowlist"),
             "expected allowlist rejection, got: {msg}",
         );
+    }
+
+    #[test]
+    fn parse_blocker_lines_handles_common_shapes() {
+        // The critique format is free-form markdown; agents have
+        // emitted blockers as `- BLOCKER: ...`, `* **BLOCKER:** ...`,
+        // and `BLOCKER: ...` (bare) across runs. The retry-detection
+        // path must recognize all of them so a critique-retry doesn't
+        // silently fall back to the full evaluation just because a
+        // model preferred bold-font BLOCKER markers.
+        let body = "\
+# DM0 Critique\n\
+\n\
+- BLOCKER: missing gate budget\n\
+* **BLOCKER:** ambiguous reset semantics\n\
+BLOCKER: no examples for stage 2\n\
+- UNRESOLVED: layout details\n\
+- RESOLVED: clock domain decision\n\
+random text BLOCKER: not a heading\n\
+";
+        let blockers = parse_blocker_lines(body);
+        assert_eq!(blockers.len(), 3, "got {blockers:?}");
+        assert!(blockers[0].contains("missing gate budget"));
+        assert!(blockers[1].contains("ambiguous reset semantics"));
+        assert!(blockers[2].contains("no examples for stage 2"));
+    }
+
+    #[test]
+    fn parse_blocker_lines_returns_empty_when_clean() {
+        // A critique that resolved cleanly emits only RESOLVED /
+        // UNRESOLVED lines. The retry-detection path keys off "any
+        // BLOCKER present" -- empty here means the next critique
+        // pass should run the full evaluation, not the focused-retry
+        // shortcut.
+        let body = "- RESOLVED: clock domain.\n- UNRESOLVED: stage 2 timing.\n";
+        assert!(parse_blocker_lines(body).is_empty());
+    }
+
+    #[test]
+    fn parse_blocker_lines_ignores_inline_mentions() {
+        // Don't trigger on prose that mentions the word BLOCKER
+        // mid-sentence; we only care about heading-shaped lines.
+        let body = "We discussed the BLOCKER: marker convention earlier.\n";
+        assert!(parse_blocker_lines(body).is_empty());
+    }
+
+    #[test]
+    fn extract_blocker_blocks_captures_multi_line_body() {
+        // Real DM3a critiques emit a single BLOCKER followed by
+        // sub-bullets and a fix recipe. The whole block must come
+        // through so the focused-retry context still contains the
+        // actionable detail.
+        let body = "\
+### BLOCKER 2 - coverage.md incomplete\n\
+\n\
+BLOCKER: `coverage.md` was partially updated, but gaps persist:\n\
+\n\
+- **Numeric threshold** - still absent.\n\
+- **Exclusions with reasons** - command-line flags are not prose.\n\
+- **Report path** - only the directory is named.\n\
+\n\
+The fix is to update `coverage.md` to add (a) ... (b) ... (c) ...\n\
+\n\
+### BLOCKER 3 - traceability table\n\
+\n\
+RESOLVED: traceability section satisfies check 11.\n\
+";
+        let blocks = extract_blocker_blocks(body);
+        assert_eq!(blocks.len(), 1, "got {blocks:?}");
+        let block = &blocks[0];
+        assert!(block.starts_with("BLOCKER: `coverage.md` was partially updated"));
+        assert!(block.contains("Numeric threshold"));
+        assert!(block.contains("Exclusions with reasons"));
+        assert!(block.contains("Report path"));
+        assert!(block.contains("The fix is to update"));
+        // Must stop before the next heading.
+        assert!(!block.contains("### BLOCKER 3"));
+        assert!(!block.contains("RESOLVED: traceability"));
+    }
+
+    #[test]
+    fn extract_blocker_blocks_terminates_on_finding_marker() {
+        // A bare BLOCKER followed by a sibling RESOLVED on the next
+        // line should yield exactly the BLOCKER body up to (not
+        // including) the RESOLVED line.
+        let body = "\
+- BLOCKER: missing gate budget. The spec lacks a hard cycle\n\
+  bound for the worst-case path through stage 2.\n\
+- RESOLVED: clock domain decision recorded.\n\
+- UNRESOLVED: stage 2 timing still pending.\n\
+";
+        let blocks = extract_blocker_blocks(body);
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].contains("missing gate budget"));
+        assert!(blocks[0].contains("worst-case path"));
+        assert!(!blocks[0].contains("RESOLVED"));
+        assert!(!blocks[0].contains("UNRESOLVED"));
+    }
+
+    #[test]
+    fn extract_blocker_blocks_terminates_on_horizontal_rule() {
+        // Markdown horizontal rules (`---`, `***`) commonly delimit
+        // sections in our critique template; they end a BLOCKER body.
+        let body = "\
+BLOCKER: foo is broken because of bar.\n\
+\n\
+Fix it by doing X.\n\
+\n\
+---\n\
+\n\
+## Carried-Forward Items\n\
+\n\
+UNRESOLVED: shorthand references.\n\
+";
+        let blocks = extract_blocker_blocks(body);
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].contains("foo is broken"));
+        assert!(blocks[0].contains("Fix it by doing X"));
+        assert!(!blocks[0].contains("---"));
+        assert!(!blocks[0].contains("Carried-Forward"));
+    }
+
+    #[test]
+    fn extract_blocker_blocks_handles_header_shaped_body_lines() {
+        // `### BLOCKER 1` is a heading describing a finding, not a
+        // finding line itself. The actual `BLOCKER:` marker lives on
+        // a later line. The header should NOT be captured as a
+        // separate finding, and it terminates the prior block.
+        let body = "\
+### BLOCKER 1 - stress.md target coverage\n\
+\n\
+RESOLVED: stress.md exercises every target.\n\
+\n\
+### BLOCKER 2 - coverage.md\n\
+\n\
+BLOCKER: numeric threshold missing.\n\
+";
+        let blocks = extract_blocker_blocks(body);
+        assert_eq!(blocks.len(), 1, "got {blocks:?}");
+        assert!(blocks[0].starts_with("BLOCKER: numeric threshold"));
+    }
+
+    #[test]
+    fn extract_blocker_blocks_trims_trailing_blank_lines() {
+        // Blocks are joined back together when inlined into the
+        // retry prompt; trailing blank lines would compound into
+        // visual noise. Trim them.
+        let body = "\
+BLOCKER: thing is wrong.\n\
+\n\
+Some explanation.\n\
+\n\
+\n\
+\n\
+## Next Section\n\
+";
+        let blocks = extract_blocker_blocks(body);
+        assert_eq!(blocks.len(), 1);
+        assert!(!blocks[0].ends_with('\n'));
+        assert!(blocks[0].ends_with("Some explanation."));
+    }
+
+    #[test]
+    fn line_kind_matches_heading_with_emoji() {
+        // The actual qwen run today emitted `### ❌ BLOCKER:` --
+        // markdown H3 + dingbat + finding marker. The strict matcher
+        // returned None, the gate saw zero blockers, and the step
+        // advanced clean. Heading-style findings MUST match now.
+        assert_eq!(
+            line_kind("### ❌ BLOCKER: Report output path missing"),
+            Some(FindingKind::Blocker),
+        );
+        assert_eq!(line_kind("# BLOCKER: foo"), Some(FindingKind::Blocker));
+        assert_eq!(
+            line_kind("## ✅ RESOLVED: clock-domain decision recorded"),
+            Some(FindingKind::Resolved),
+        );
+    }
+
+    #[test]
+    fn line_kind_matches_plural_and_case_variants() {
+        // Agents drift across forms; the gate parser must be lenient
+        // in the FINDING half so blockers aren't silently dropped on
+        // a case slip or a stray plural.
+        assert_eq!(line_kind("BLOCKERS: two open"), Some(FindingKind::Blocker));
+        assert_eq!(line_kind("Blocker: foo"), Some(FindingKind::Blocker));
+        assert_eq!(line_kind("blocker: foo"), Some(FindingKind::Blocker));
+        assert_eq!(
+            line_kind("- **BLOCKER:** ambiguous reset"),
+            Some(FindingKind::Blocker),
+        );
+        assert_eq!(
+            line_kind("> BLOCKER: blockquote-styled finding"),
+            Some(FindingKind::Blocker),
+        );
+    }
+
+    #[test]
+    fn line_kind_rejects_inline_mentions_and_section_titles() {
+        // Section heading discussing a blocker (no colon-after) is
+        // NOT a finding -- it's prose. And mid-sentence mentions
+        // never count.
+        assert_eq!(line_kind("### BLOCKER 1 - stress.md target coverage"), None,);
+        assert_eq!(
+            line_kind("We discussed the BLOCKER: marker convention earlier."),
+            None,
+        );
+        assert_eq!(line_kind(""), None);
+        assert_eq!(line_kind("## Carried-Forward Items"), None);
+    }
+
+    #[test]
+    fn extract_blocker_blocks_captures_heading_style_finding() {
+        // End-to-end: a heading-with-emoji BLOCKER is correctly
+        // extracted as a multi-line block (the regression that
+        // motivated this change).
+        let body = "\
+## Prior BLOCKER 1: coverage.md\n\
+\n\
+### ❌ BLOCKER: Report output path missing\n\
+\n\
+The run command names a directory, not a file.\n\
+\n\
+The fix is to add a Report Output section.\n\
+\n\
+### ✅ RESOLVED: numeric threshold\n\
+";
+        let blocks = extract_blocker_blocks(body);
+        assert_eq!(blocks.len(), 1, "got {blocks:?}");
+        assert!(blocks[0].contains("Report output path missing"));
+        assert!(blocks[0].contains("The run command names a directory"));
+        assert!(blocks[0].contains("The fix is to add"));
+        assert!(!blocks[0].contains("RESOLVED"));
     }
 }

@@ -29,8 +29,8 @@ pub use control_socket::{ControlCommand, ControlEvent, ControlListener, default_
 pub use spec_ingest::{SpecIngestSummary, ingest_spec_file};
 
 pub use agent::{
-    AgentConfig, ClaudeAgent, CliAgent, CodexAgent, GhCopilotAgent, KNOWN_AGENTS, LmStudioAgent,
-    MockAgent, OllamaAgent, build_cli_agent,
+    AgentConfig, ClaudeAgent, CliAgent, CodexAgent, GhCopilotAgent, KNOWN_AGENTS, LlmCallMetrics,
+    MockAgent, OllamaAgent, OpenAiCompatAgent, build_cli_agent,
 };
 pub use host::{Host, JsonlHost, TerminalHost, TestHost};
 pub use orchestrator::{OrchestratorOptions, run_session};

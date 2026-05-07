@@ -1,33 +1,63 @@
 # Plan Management
 
-This file describes how plans under `docs/plan/` are written and
-worked through. It applies to every plan in this project:
+This file describes how plans are written and worked through.
+There are three sibling plan directories, one per planning step:
 
-- `plan.md` + `milestone-NN-<name>.md` -- the implementation plan
-  written by DM2c, executed by DM2d.
-- `test-plan.md` -- the test plan written by DM3a, executed by
-  DM3b (testbench scaffolding) and DM3c (test cases + coverage).
-  The plan groups tests into `## Smoke`, `## Edge`, `## Stress`,
-  and `## Random` sections; each section is treated like a
-  milestone for execution and review.
-- `perf-plan.md` + `perf-milestone-NN-<name>.md` -- the
-  performance-analysis plan written by DM4a, executed by DM4b.
+- `docs/impl-plan/` (DM2c) -- implementation plan for DM2d.
+  - `plan.md` -- index + brief overview pointing at milestone files.
+  - `milestone-NN-<name>.md` -- per-milestone task list executed
+    by DM2d.
+- `docs/test-plan/` (DM3a) -- verification plan for DM3b/DM3c. Two
+  parallel milestone sequences live here so each step (DM3b, DM3c)
+  walks its own slice without merging anything across consumers:
+  - `test-plan.md` -- index + testbench architecture + traceability
+    table back to spec / targets.
+  - `tb-milestone-NN-<name>.md` -- per-milestone task lists for
+    DM3b. Each milestone covers one slice of testbench scaffolding
+    (a Sequencer + Driver + Monitor pair, a Scoreboard family,
+    `SimEnvBuilder` wiring, etc.). DM3b walks these in order and
+    stops for the paired critique after each.
+  - `test-milestone-NN-<name>.md` -- per-milestone task lists for
+    DM3c. Each milestone covers one slice of test execution
+    (a smoke batch, an edge batch, a stress batch, a random
+    batch, the coverage measurement). DM3c walks these in order
+    and stops for the paired critique after each.
+  - `coverage.md` -- coverage-tooling strategy (cargo-tarpaulin
+    threshold, exclusions, run command, report path).
+- `docs/perf-plan/` (DM4a) -- performance-analysis plan for DM4b.
+  - `perf-plan.md` -- index + brief overview.
+  - `perf-milestone-NN-<name>.md` -- per-milestone task list
+    executed by DM4b.
 
 `NN` refers to a two-digit integer number (`01`, `02`, ...) so the
 files sort in plan order.
 
+The three plan directories are siblings under `docs/` so that each
+plan's working set stays small and reviewable, even on large
+designs. Tools that consume a plan should walk a single directory
+and merge nothing across directories.
+
 ## Plan structure
 
-A plan starts with a `plan.md` (or `test-plan.md` / `perf-plan.md`)
-that gives a brief overview and a table of contents pointing at the
-milestone files. Each milestone is named `Milestone NN: brief
-description` and lives in `milestone-NN-<name>.md` (or
-`perf-milestone-NN-<name>.md` for performance plans -- the prefix
-keeps the two trees from colliding when both exist).
+A plan starts with a top-level index file (`plan.md` /
+`test-plan.md` / `perf-plan.md`) that gives a brief overview and a
+table of contents pointing at the per-section sibling files. The
+index lives at the top of its plan directory; per-section files
+sit beside it.
 
 A milestone holds a list of tasks. Each task is a bullet line
 prefixed with a checkbox so it can be marked off as work
 progresses.
+
+**Milestone size cap: 10 tasks maximum.** A milestone with more
+than 10 `- [ ]` rows is too large to keep in the LLM's working
+memory cleanly and forces the agent to either skim or chain
+work-then-critique-then-work loops that defeat the per-milestone
+review. If a slice of work needs more than 10 tasks, split it
+into multiple milestones with a clear axis (one
+component-class per milestone, one test-category-batch per
+milestone, etc.) and document the split in the index. Critiques
+flag any milestone file that exceeds the cap as a `BLOCKER:`.
 
 ## Task states
 

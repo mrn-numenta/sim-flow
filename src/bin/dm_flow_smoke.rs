@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
-use sim_flow::session::agent::CliAgent;
+use sim_flow::session::agent::{CliAgent, LlmCallMetrics};
 use sim_flow::session::host::TerminalHost;
 use sim_flow::session::protocol::LlmMessage;
 use sim_flow::session::{AutoOptions, ClaudeAgent, run_auto};
@@ -292,7 +292,7 @@ impl CliAgent for BoxedAgent {
     fn name(&self) -> &str {
         self.0.name()
     }
-    fn dispatch(&self, messages: &[LlmMessage]) -> sim_flow::Result<String> {
+    fn dispatch(&self, messages: &[LlmMessage]) -> sim_flow::Result<(String, LlmCallMetrics)> {
         self.0.dispatch(messages)
     }
 }

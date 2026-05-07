@@ -1,0 +1,115 @@
+# Test Plan
+
+## Purpose
+
+Summarize what DM3b will build and what DM3c will run. Name the
+documents this plan traces back to:
+
+- `docs/spec.md`
+- `docs/targets.md`
+- `docs/testbench.md`
+- `docs/analysis/decomposition.md`
+- `docs/analysis/pipeline-mapping.md`
+- `docs/analysis/data-movement.md`
+
+## Testbench Architecture
+
+Describe the UVM-lite topology DM3b will implement. Cover, at a
+minimum:
+
+- Each Sequencer (one per stimulus class) -- name, payload type,
+  what it generates.
+- Each Driver (one per external interface) -- name, target port,
+  handshake protocol.
+- Each Monitor (one per observable signal / port) -- name,
+  observed port, which Scoreboard(s) it feeds.
+- Each Scoreboard (one per correctness invariant) -- name,
+  invariant in plain English, monitor inputs, comparison
+  strategy.
+- The `SimEnvBuilder` wiring helper that returns a fully
+  assembled `SimEnv`.
+
+## Implementation Baseline
+
+Inherit `docs/testbench.md`'s `## Implementation Baseline`:
+
+- **Baseline**: `lib:examples/<NN-name>/test/`
+- DM3b copies the baseline's file structure as a starting point.
+
+## Testbench Implementation Milestones (DM3b)
+
+Walk these in order. DM3b stops for a paired critique after each.
+
+1. [Milestone 01: Payloads and Sequencers](./tb-milestone-01-payloads-and-sequencers.md)
+2. [Milestone 02: Drivers](./tb-milestone-02-drivers.md)
+3. [Milestone 03: Monitors](./tb-milestone-03-monitors.md)
+4. [Milestone 04: Scoreboards](./tb-milestone-04-scoreboards.md)
+5. [Milestone 05: SimEnv and Smoke](./tb-milestone-05-simenv-and-smoke.md)
+
+Replace, merge, split, or drop milestones only when justified by
+the design (e.g. no Scoreboard invariants -> merge 04 into 05);
+document the rationale here. Each file holds at most 10 tasks.
+
+## Test Execution Milestones (DM3c)
+
+Walk these in order. DM3c stops for a paired critique after each.
+The four canonical categories (smoke, edge, stress, random) are
+each required and each maps to ONE OR MORE consecutive milestones;
+the coverage milestone closes the step. A milestone file covers
+exactly one category -- never mix.
+
+1. [Milestone 01: Smoke](./test-milestone-01-smoke.md)
+2. [Milestone 02: Edge](./test-milestone-02-edge.md)
+3. [Milestone 03: Stress](./test-milestone-03-stress.md)
+4. [Milestone 04: Random](./test-milestone-04-random.md)
+5. [Milestone 05: Coverage](./test-milestone-05-coverage.md)
+
+When a category exceeds the 10-task cap, split it with a letter
+suffix on NN and an axis tag (e.g.
+`test-milestone-02a-edge-arithmetic.md`,
+`test-milestone-02b-edge-flow-control.md`). Letters contiguous
+from `a`. All splits for a category walk before the next category
+begins.
+
+Categories that are genuinely N/A for this design (e.g. smoke for
+a combinational design with no flow-control) still get a milestone
+file -- with an explicit `RESOLVED:` line inside explaining the
+omission. Don't silently skip a category.
+
+## Traceability
+
+Map every spec requirement / target / decomposition operation to a
+specific task in a specific milestone file.
+
+| Spec requirement | Milestone file :: task |
+| --- | --- |
+| `<quote requirement>` | `<milestone-file>::<task>` |
+
+| Target row | Milestone file :: task |
+| --- | --- |
+| `<target>` | `test-milestone-03-stress.md::<task>` |
+
+| Decomposition operation | Milestone file :: task |
+| --- | --- |
+| `<operation>` | `<milestone-file>::<task>` |
+
+## Coverage
+
+Strategy lives in [`coverage.md`](./coverage.md). DM3c writes the
+measured percentage and report path here once the coverage
+milestone runs:
+
+- Coverage report:
+  `<path>` (line: `<percentage>`%)
+- Run command: see `coverage.md`.
+
+## Notes
+
+- DM3b walks `tb-milestone-NN-*.md` one at a time, stopping for a
+  critique after each milestone. Final tb-milestone owns the
+  basic data-flow smoke test.
+- DM3c walks `test-milestone-NN-*.md` one at a time, stopping for
+  a critique after each. Final test-milestone runs
+  `cargo-tarpaulin` and records the coverage outcome above.
+- No file may carry more than 10 `- [ ]` rows
+  (`docs/impl-plan/plan-management.md` enforces the cap).

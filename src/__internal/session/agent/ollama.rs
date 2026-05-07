@@ -1,7 +1,7 @@
 //! `OllamaAgent` - Ollama's local OpenAI-compatible endpoint.
 
-use super::CliAgent;
 use super::openai_compatible::{OpenAiCompatibleRequest, dispatch_chat};
+use super::{CliAgent, LlmCallMetrics};
 use crate::Result;
 use crate::session::protocol::LlmMessage;
 
@@ -27,7 +27,7 @@ impl CliAgent for OllamaAgent {
         "ollama"
     }
 
-    fn dispatch(&self, messages: &[LlmMessage]) -> Result<String> {
+    fn dispatch(&self, messages: &[LlmMessage]) -> Result<(String, LlmCallMetrics)> {
         dispatch_chat(OpenAiCompatibleRequest::new(
             &self.base_url,
             &self.model,

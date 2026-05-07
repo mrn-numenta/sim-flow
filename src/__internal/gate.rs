@@ -38,6 +38,20 @@ pub enum GateCheck {
     /// tracking captured a simulation run before the analysis gate
     /// passes.
     ExperimentsRecorded { description: String },
+    /// Every milestone file under `dir` matching `<file_prefix>NN-*.md`
+    /// must have all `- [ ]` rows resolved (`- [x]` done OR `- [-]`
+    /// deferred). Used by DM2d / DM3b / DM3c / DM4b to enforce that
+    /// the step's gate only passes after EVERY milestone has been
+    /// walked through, not just the first one. Pairs with
+    /// `StepDescriptor::milestone_walk`: the orchestrator scopes
+    /// each work / critique session to one milestone at a time, and
+    /// this check is what prevents the step from advancing while
+    /// other milestone files still hold `- [ ]` rows.
+    MilestonesAllResolved {
+        dir: PathBuf,
+        file_prefix: String,
+        description: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -168,6 +182,82 @@ fn evaluate_one(project_dir: &Path, check: &GateCheck) -> Result<Option<GateFail
                 })),
             }
         }
+        GateCheck::MilestonesAllResolved {
+            dir,
+            file_prefix,
+            description,
+        } => {
+            let full_dir = project_dir.join(dir);
+            let entries = match std::fs::read_dir(&full_dir) {
+                Ok(e) => e,
+                Err(err) => {
+                    return Ok(Some(GateFailure {
+                        description: description.clone(),
+                        reason: format!("milestone dir missing: {}: {err}", full_dir.display()),
+                    }));
+                }
+            };
+            let mut milestones: Vec<(String, PathBuf)> = Vec::new();
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                if !name.starts_with(file_prefix.as_str()) || !name.ends_with(".md") {
+                    continue;
+                }
+                let rest = &name[file_prefix.len()..];
+                if !rest
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_digit())
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                milestones.push((name.to_string(), path));
+            }
+            if milestones.is_empty() {
+                return Ok(Some(GateFailure {
+                    description: description.clone(),
+                    reason: format!(
+                        "no `{}NN-*.md` files found under `{}`",
+                        file_prefix,
+                        full_dir.display()
+                    ),
+                }));
+            }
+            let mut pending: Vec<String> = Vec::new();
+            for (name, path) in &milestones {
+                let body = match std::fs::read_to_string(path) {
+                    Ok(b) => b,
+                    Err(err) => {
+                        return Ok(Some(GateFailure {
+                            description: description.clone(),
+                            reason: format!("read {}: {err}", path.display()),
+                        }));
+                    }
+                };
+                let pending_count = body
+                    .lines()
+                    .filter(|line| line.trim_start().starts_with("- [ ]"))
+                    .count();
+                if pending_count > 0 {
+                    pending.push(format!("  - `{name}`: {pending_count} unresolved row(s)"));
+                }
+            }
+            if pending.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(GateFailure {
+                    description: description.clone(),
+                    reason: format!(
+                        "milestone files still have unresolved rows:\n{}",
+                        pending.join("\n")
+                    ),
+                }))
+            }
+        }
         GateCheck::CritiqueClean { path, description } => {
             let full = project_dir.join(path);
             if !full.exists() {
@@ -269,5 +359,107 @@ mod tests {
         )
         .unwrap();
         assert_eq!(report.failures.len(), 1);
+    }
+
+    fn write(path: &Path, body: &str) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, body).unwrap();
+    }
+
+    #[test]
+    fn milestones_all_resolved_passes_when_every_row_is_checked() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().join("docs/test-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        write(
+            &dir.join("tb-milestone-01.md"),
+            "- [x] done\n- [-] deferred\n  - defer reason: skipped\n",
+        );
+        write(&dir.join("tb-milestone-02.md"), "- [x] done\n");
+        let report = evaluate(
+            tmp.path(),
+            &[GateCheck::MilestonesAllResolved {
+                dir: PathBuf::from("docs/test-plan/"),
+                file_prefix: "tb-milestone-".into(),
+                description: "every tb-milestone resolved".into(),
+            }],
+        )
+        .unwrap();
+        assert!(report.is_clean(), "got failures: {:?}", report.failures);
+    }
+
+    #[test]
+    fn milestones_all_resolved_fails_when_any_pending_row_remains() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().join("docs/test-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        write(&dir.join("tb-milestone-01.md"), "- [x] done\n");
+        write(
+            &dir.join("tb-milestone-02.md"),
+            "- [ ] still pending\n- [x] done\n",
+        );
+        write(&dir.join("tb-milestone-03.md"), "- [ ] also pending\n");
+        let report = evaluate(
+            tmp.path(),
+            &[GateCheck::MilestonesAllResolved {
+                dir: PathBuf::from("docs/test-plan/"),
+                file_prefix: "tb-milestone-".into(),
+                description: "every tb-milestone resolved".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(report.failures.len(), 1);
+        let reason = &report.failures[0].reason;
+        assert!(reason.contains("tb-milestone-02"), "reason: {reason}");
+        assert!(reason.contains("tb-milestone-03"), "reason: {reason}");
+        assert!(!reason.contains("tb-milestone-01"));
+    }
+
+    #[test]
+    fn milestones_all_resolved_fails_when_no_milestone_files_exist() {
+        // Configuration error case: the planning step (DM3a) didn't
+        // produce any milestone files, but the dir exists.
+        let tmp = tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("docs/test-plan")).unwrap();
+        let report = evaluate(
+            tmp.path(),
+            &[GateCheck::MilestonesAllResolved {
+                dir: PathBuf::from("docs/test-plan/"),
+                file_prefix: "tb-milestone-".into(),
+                description: "every tb-milestone resolved".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(report.failures.len(), 1);
+        assert!(report.failures[0].reason.contains("no `tb-milestone-NN-"));
+    }
+
+    #[test]
+    fn milestones_all_resolved_isolates_to_one_file_prefix() {
+        // Same dir holds DM3b's tb-milestone-* AND DM3c's
+        // test-milestone-* files. The check must only inspect the
+        // files matching its own prefix, so DM3b's gate doesn't
+        // fail because DM3c hasn't started yet (or vice versa).
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().join("docs/test-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        write(&dir.join("tb-milestone-01.md"), "- [x] done\n");
+        write(&dir.join("test-milestone-01.md"), "- [ ] DM3c pending\n");
+        let report = evaluate(
+            tmp.path(),
+            &[GateCheck::MilestonesAllResolved {
+                dir: PathBuf::from("docs/test-plan/"),
+                file_prefix: "tb-milestone-".into(),
+                description: "tb only".into(),
+            }],
+        )
+        .unwrap();
+        assert!(
+            report.is_clean(),
+            "DM3b's gate should NOT see DM3c's pending rows: {:?}",
+            report.failures
+        );
     }
 }

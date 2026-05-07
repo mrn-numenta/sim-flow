@@ -10,14 +10,14 @@ not modify the plan; evaluate it and write the critique file.
 
 ## Inputs
 
-- `docs/plan/plan-management.md` -- plan-file conventions.
-- `docs/plan/perf-plan.md` -- plan index + TOC.
-- `docs/plan/perf-milestone-*.md` -- per-milestone task lists.
+- `docs/impl-plan/plan-management.md` -- plan-file conventions.
+- `docs/perf-plan/perf-plan.md` -- plan index + TOC.
+- `docs/perf-plan/perf-milestone-*.md` -- per-milestone task lists.
 - `docs/spec.md`
 - `docs/targets.md`
 - `docs/analysis/decomposition.md`
 - `docs/analysis/pipeline-mapping.md`
-- `docs/plan/test-plan.md`
+- `docs/test-plan/test-plan.md`
 
 ## Evaluation
 
@@ -25,7 +25,18 @@ Prefix gate-blocking issues with `BLOCKER:` (DM4b cannot proceed
 until fixed). Prefix informational notes with `UNRESOLVED:`. The
 orchestrator fails the DM4a gate on `BLOCKER:` lines only.
 
-1. Does `docs/plan/perf-plan.md` follow the conventions in
+**Finding-marker grammar.** The gate parses lines starting with
+`BLOCKER:` / `RESOLVED:` / `UNRESOLVED:` (case-insensitive,
+plural OK) optionally preceded by list markers (`-`, `*`, `+`,
+`>`), heading markers (`#`+), bold/underline (`**` / `__`), and
+one decoration glyph (e.g. `❌` `✅`). Headings DO match
+(`### BLOCKER: ...`); section titles describing a blocker
+without a colon-after-keyword (e.g. `### BLOCKER 1 - title`)
+do NOT match -- they're prose. Mid-sentence mentions do NOT
+match. ONLY the keyword-colon shape is a finding; pick the form
+deliberately.
+
+1. Does `docs/perf-plan/perf-plan.md` follow the conventions in
    `plan-management.md` and `perf-plan.md.tmpl`? Is there an
    overview and a TOC pointing
    at each `perf-milestone-NN-<name>.md`?
@@ -74,8 +85,12 @@ orchestrator fails the DM4a gate on `BLOCKER:` lines only.
     running the entire perf flow unattended? Long perf runs are
     exactly where milestone critiques are valuable.
 11. **Scope discipline**. Reject tasks that pre-empt DM4b's
-    execution (specific scripts, embedded TOML, full report
-    text). The plan describes WHAT will be measured and WHAT
+    execution: embedded TOML *bodies*, embedded shell scripts,
+    full report text, fully-realized JSON sweep configs.
+    Naming a planned file (`sweep-throughput.toml`,
+    `docs/analysis/throughput.md`) and saying what will land in
+    it is fine; writing the file's contents inline in the plan
+    is not. The plan describes WHAT will be measured and WHAT
     reports will be written, not HOW each measurement is run.
 
 ## Output

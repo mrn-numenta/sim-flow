@@ -18,7 +18,7 @@ test).
 
 Read these before writing the plan:
 
-- `docs/plan/plan-management.md` -- the plan-file conventions
+- `docs/impl-plan/plan-management.md` -- the plan-file conventions
   (`plan.md` index + per-milestone files, milestone / task numbering,
   `[ ]` checkbox format).
 - `docs/spec.md` -- the specification.
@@ -50,11 +50,23 @@ step.
      decomposition stubbed out and wired per `pipeline-mapping.md`,
      elaboration succeeds.
    - **per-stage logic** -- one milestone per pipeline stage (or one
-     per cluster of related stages) that fills in `evaluate()` for
-     the modules in that stage.
+     per cluster of related stages). The milestone NAMES the modules
+     whose `evaluate()` body DM2d will write; it does NOT spell out
+     the algorithm. Each task is one line: which module, which file,
+     which input/output payloads. DM2d picks the algorithm. Acceptable
+     task: `Implement evaluate() in src/model/avg_stage.rs (consumes
+     pixel_in_a + pixel_in_b, produces averaged_pixel).` NOT
+     acceptable: shift-and-mask recipes, intermediate variable names,
+     loop-vs-vectorized choices, packing-format decisions.
    - **smoke + unit tests** -- elaboration test, basic data-flow
-     test, backpressure test, idle-cycle test, and per-module unit
-     tests for representative inputs.
+     test, plus any flow-control / idle-cycle tests **explicitly
+     called out by `docs/testbench.md`**. Per-module unit tests for
+     representative inputs. If the design is purely combinational
+     with no ready/valid handshake or stall semantics, do NOT add
+     backpressure or idle-cycle tests just because they're listed
+     here -- write a one-line "RESOLVED: design has no flow-control
+     surface, backpressure / idle tests do not apply" entry in the
+     plan instead so the critique sees the deliberate choice.
 
    Do not include exhaustive verification (directed sequences,
    coverage targets, scoreboards) -- that belongs in DM3, NOT here.
@@ -66,17 +78,33 @@ step.
    not vague phrases like "implement the pipeline".
 4. Trace every operation in `decomposition.md` and every payload in
    `data-movement.md` to at least one task. Tasks the agent can't
-   complete without making decisions outside the analysis -- e.g.
-   "decide the buffer depth for stage X" -- belong in the plan as
-   explicit decision tasks (or are flagged `OPEN:` for DM3 to
-   resolve).
+   complete without making decisions outside the analysis are
+   FIRST-CLASS plan entries with this exact shape:
+
+   `- [ ] DECIDE: <short question> -- options: <A | B | ...>; default: <pick>; rationale: <one line>.`
+
+   Example:
+   `- [ ] DECIDE: pixel-port type -- options: u32 | PixelRGBA; default: PixelRGBA; rationale: typed payload catches RGBA-vs-ABGR mistakes at the type level.`
+
+   Decisions DM3 must resolve (rather than DM2d) get the same line
+   shape with `OPEN:` instead of `DECIDE:`. Do NOT bury ambiguity in
+   parenthetical asides like `(u32 or PixelRGBA?)` inside other
+   tasks -- the critique will treat that as unresolved.
 5. Make sure the plan accounts for target- and verification-sensitive
    implementation work where it materially affects DM2d:
    - gate-budget-sensitive stage structure or buffering decisions
-   - smoke tests that exercise the critical liveness / backpressure /
-     idle behavior implied by DM1
-   - any observability or structural hooks DM3 will rely on later,
-     when those hooks must be designed in during implementation
+   - flow-control / idle-cycle smoke tests **only when
+     `docs/testbench.md` explicitly defines them** for this design;
+     otherwise the RESOLVED entry described above is the correct
+     output.
+   - **internal-signal observability**: read `docs/testbench.md` and
+     translate every "observe internal register / signal" requirement
+     into a concrete task naming the signal and the module that
+     exposes it (e.g. `Expose pipeline-register avg_to_gray on
+     AvgStage for testbench observation`). Do NOT specify the
+     framework mechanism (`SignalTrace`, test-only output ports,
+     etc.) -- that's DM2d's choice. The plan only names WHAT must be
+     observable.
    Do not pre-empt full DM3 verification planning, but do not ignore
    DM1's strategy artifacts either.
 6. Order milestones so that each one's tasks have all their
@@ -86,11 +114,11 @@ step.
 
 ## Output
 
-Per `docs/plan/plan-management.md`:
+Per `docs/impl-plan/plan-management.md`:
 
-- `docs/plan/plan.md` -- the index. Brief overview, then a TOC
+- `docs/impl-plan/plan.md` -- the index. Brief overview, then a TOC
   pointing at each `milestone-NN-<name>.md`.
-- `docs/plan/milestone-NN-<name>.md` -- one file per milestone with
+- `docs/impl-plan/milestone-NN-<name>.md` -- one file per milestone with
   the milestone's task list (`[ ]` bullets).
 
 Use two-digit milestone numbers (`milestone-01-payload-types.md`,

@@ -2,31 +2,47 @@
 
 You are reviewing the DM3c test-execution and coverage results.
 Treat them as work produced by a third party even if you produced
-them yourself earlier in this conversation -- the independent-review
-property depends on you bracketing any prior reasoning rather than
-leaning on it. Do not modify the test artifacts; evaluate them and
-write the critique file.
+them yourself earlier in this conversation -- the
+independent-review property depends on you bracketing any prior
+reasoning rather than leaning on it. Do not modify the test
+artifacts; evaluate them and write the critique file.
 
 This critique runs more than once:
 
-- after each category-complete checkpoint (`Smoke`, `Edge`,
-  `Stress`, `Random`) before the next category begins
-- once after the final category and coverage pass, as the final
-  DM3c integration/regression review
+- after each `test-milestone-NN-*.md` is checked off, to validate
+  the just-landed slice before the next milestone starts
+- once after the FINAL test-milestone (typically the coverage
+  milestone), as the lighter end-to-end regression / coverage
+  review
 
-Determine which category was just completed from the plan state,
-review that category in detail, and also sanity-check that the new
-tests did not regress earlier categories. On the final review,
-evaluate the full plan, full suite, and coverage outcome.
+Determine which milestone was just completed by walking
+`docs/test-plan/test-milestone-NN-*.md` files in numeric order
+and finding the highest-numbered one whose rows are all resolved
+(`- [x]` or `- [-]` with a defer-reason). Review that milestone
+in detail, and also sanity-check that the new tests didn't
+regress earlier milestones.
 
 ## Inputs
 
-- `docs/plan/test-plan.md` -- the plan; check that every `- [ ]`
-  is now `- [x]` or `- [-]` with a `defer reason:`, and that the
-  `## Coverage` section names a measured percentage + report path.
+- `docs/impl-plan/plan-management.md` -- plan-file conventions
+  including the 10-task cap.
+- `docs/test-plan/test-plan.md` -- index. Verify the
+  `## Coverage` section names a measured percentage + report
+  path once DM3c reaches the coverage milestone.
+- `docs/test-plan/test-milestone-NN-<name>.md` -- per-milestone
+  task lists. Verify every `- [ ]` in the just-completed
+  milestone is now `- [x]` or `- [-]` with a `- defer reason:`
+  sub-bullet.
+- `docs/test-plan/coverage.md` -- coverage strategy (threshold,
+  exclusions, run command, report path). Verify any new
+  exclusions DM3c added are justified.
+- `docs/testbench.md` -- testbench architecture; useful when
+  judging whether a test exercises the behaviors DM1 said the
+  testbench must verify.
 - `tests/` source tree.
-- Coverage report (path recorded in `docs/plan/test-plan.md`'s
-  `## Coverage` section).
+- Coverage report (path recorded in
+  `docs/test-plan/test-plan.md`'s `## Coverage` section once the
+  coverage milestone has run).
 
 ## Evaluation
 
@@ -34,49 +50,76 @@ Prefix gate-blocking issues with `BLOCKER:` (DM4 cannot proceed
 until fixed). Prefix informational notes with `UNRESOLVED:`. The
 orchestrator fails the DM3c gate on `BLOCKER:` lines only.
 
-1. **Plan completion**. Is every row in
-   `docs/plan/test-plan.md` either `- [x]` or `- [-]` with a
-   specific `defer reason:`? Reject silently-skipped rows.
-2. **Category coverage**. Are all four categories (smoke, edge,
-   stress, random) represented in the implemented suite, with at
-   least the test counts the plan declared? The four categories
-   exercise different failure modes; missing categories means
-   missing coverage.
-3. **Test pass state**. Does `cargo test` succeed end-to-end? If
-   any failure is documented as known, is the rationale concrete
-   (a specific design limitation tracked elsewhere) rather than
-   vague ("flaky")?
-4. **Random reproducibility**. Does every random test pin a
-   specific seed in its name? A failure of `foo_seed_42` should
-   be re-runnable as `cargo test foo_seed_42` and reproduce
-   deterministically.
-5. **Coverage threshold**. Is `cargo-tarpaulin` line coverage at
-   or above the plan's declared threshold (default 90% on
-   `src/`)? Is the measured percentage written into the plan's
-   `## Coverage` section?
-6. **Coverage exclusions**. Are uncovered lines justified --
-   each exclusion names a specific file / module and a concrete
-   reason (dead code, platform-gated, generated)? Reject vague
-   exclusions ("unimportant", "we'll get to it"); they must
-   either be tested or have a real reason.
+**Finding-marker grammar.** The gate parses lines starting with
+`BLOCKER:` / `RESOLVED:` / `UNRESOLVED:` (case-insensitive,
+plural OK) optionally preceded by list markers (`-`, `*`, `+`,
+`>`), heading markers (`#`+), bold/underline (`**` / `__`), and
+one decoration glyph (e.g. `❌` `✅`). Headings DO match
+(`### BLOCKER: ...`); section titles describing a blocker
+without a colon-after-keyword (e.g. `### BLOCKER 1 - title`)
+do NOT match -- they're prose. Mid-sentence mentions do NOT
+match. ONLY the keyword-colon shape is a finding; pick the form
+deliberately.
+
+1. **Milestone completeness**. Identify the just-completed
+   milestone. Is every row in that file `- [x]` or `- [-]` with
+   a specific `- defer reason:` sub-bullet? Reject
+   silently-skipped rows. On the FINAL critique, all
+   test-milestone files must be fully resolved.
+
+2. **Task fidelity**. For each `- [x]` row in the just-completed
+   milestone, does a matching `#[test]`-annotated function exist
+   in `tests/` with the name the task said it would? Quote the
+   row and the implementing source location. Reject rows
+   ticked off without the test landing.
+
+3. **Test pass state**. Does `cargo test` succeed end-to-end at
+   the milestone-complete checkpoint? If any failure is
+   documented as known, is the rationale concrete (a specific
+   design limitation tracked elsewhere) rather than vague
+   ("flaky")?
+
+4. **Random reproducibility** (random milestones only). Does
+   every random test pin a specific seed in its name? A failure
+   of `foo_seed_42` should be re-runnable as `cargo test
+   foo_seed_42` and reproduce deterministically.
+
+5. **Coverage threshold** (coverage milestone only). Is
+   `cargo-tarpaulin` line coverage at or above `coverage.md`'s
+   declared threshold (default 90%)? Is the measured percentage
+   written into `test-plan.md`'s `## Coverage` section?
+
+6. **Coverage exclusions** (coverage milestone only). Are any
+   new exclusions DM3c added to `coverage.md` justified -- each
+   names a specific file / module and a concrete reason (dead
+   code, platform-gated, generated)? Reject vague exclusions
+   ("unimportant", "we'll get to it"); they must either be
+   tested or have a real reason.
+
 7. **Bug-fix discipline**. When a design bug in `src/` was
-   discovered during testing, was the fix re-verified by re-
-   running the failing test? Reject "test was wrong" rationales
-   that turn out to mask real bugs.
+   discovered during testing, was the fix re-verified by
+   re-running the failing test? Reject "test was wrong"
+   rationales that turn out to mask real bugs.
+
 8. **Scaffolding integrity**. Did DM3c add tests using DM3b's
    testbench helpers, or did it modify or grow the scaffolding?
    Scaffolding changes here are a `BLOCKER:` -- the testbench
    architecture is owned by DM3b's gate.
-9. **Deferred-row discipline**. Is there any category where every
-   planned row was deferred? That is a `BLOCKER:` -- a fully
-   deferred category means the flow has no meaningful execution
-   signal for that class of behavior.
-10. **Checkpoint discipline**. If this is a category checkpoint
-    rather than the final DM3c review, is the just-completed
-    category solid enough that the next category can build on it?
-    If this is the final review, do the category-local test
-    additions compose into a clean end-to-end suite and coverage
-    result without regression?
+
+9. **Deferred-row discipline**. Is the just-completed milestone
+   one where every planned row was deferred? That is a
+   `BLOCKER:` -- a fully deferred milestone means the flow has
+   no meaningful execution signal for that class of behavior.
+   Mostly-deferred (>25%) milestones are also a `BLOCKER:`
+   even when individual defer reasons look fine in isolation.
+
+10. **Milestone composability**. If this is a milestone
+    checkpoint critique rather than the final DM3c review, is
+    the just-completed milestone solid enough that the next
+    test-milestone can safely build on it? If this is the final
+    review (typically after the coverage milestone), do the
+    milestone-local test additions compose into a clean
+    end-to-end suite + coverage result without regression?
 
 ## Output
 

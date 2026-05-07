@@ -20,6 +20,17 @@ critique file.
 Prefix unresolved issues with `UNRESOLVED:` and gate-blocking issues with
 `BLOCKER:`.
 
+**Finding-marker grammar.** The gate parses lines starting with
+`BLOCKER:` / `RESOLVED:` / `UNRESOLVED:` (case-insensitive,
+plural OK) optionally preceded by list markers (`-`, `*`, `+`,
+`>`), heading markers (`#`+), bold/underline (`**` / `__`), and
+one decoration glyph (e.g. `❌` `✅`). Headings DO match
+(`### BLOCKER: ...`); section titles describing a blocker
+without a colon-after-keyword (e.g. `### BLOCKER 1 - title`)
+do NOT match -- they're prose. Mid-sentence mentions do NOT
+match. ONLY the keyword-colon shape is a finding; pick the form
+deliberately.
+
 1. Does the mapping use the canonical gate-budget-per-cycle target or
    estimate from `docs/targets.md`, and is that usage clearly stated?
 2. Does the mapping respect the target frequency and technology node

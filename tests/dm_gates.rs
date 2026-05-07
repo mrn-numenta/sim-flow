@@ -117,10 +117,33 @@ fn dm1_gate_accepts_basic_setup() {
     );
     write(
         &project.join("docs/testbench.md"),
-        "Sequencer: uniform\nDriver: ingress\nMonitor: egress\nScoreboard: ordering\n",
+        "Sequencer: uniform\nDriver: ingress\nMonitor: egress\nScoreboard: ordering\n\
+         \n## Implementation Baseline\n\nBaseline: lib:examples/01-three-stage-pipeline/test/\n",
     );
     clean_critique(&project, "DM1");
     assert_clean(evaluate(&project, "DM1"), "DM1");
+}
+
+#[test]
+fn dm1_gate_rejects_missing_implementation_baseline() {
+    // testbench.md names UVM-lite components (Sequencer, Driver,
+    // Monitor, Scoreboard) but never picks a `lib:examples/...`
+    // baseline. DM3b inherits the baseline choice from DM1's
+    // testbench.md; the check enforces that the choice is made
+    // upfront rather than re-derived at DM3b time under a tighter
+    // context budget.
+    let (_tmp, project) = new_project();
+    write(
+        &project.join("docs/targets.md"),
+        "# Targets\n\n| metric | value |\n| ------ | ----- |\n| throughput | 1.0 items/cycle |\n",
+    );
+    write(
+        &project.join("docs/testbench.md"),
+        "Sequencer: uniform\nDriver: ingress\nMonitor: egress\nScoreboard: ordering\n",
+    );
+    clean_critique(&project, "DM1");
+    let report = evaluate(&project, "DM1");
+    assert_fails_with(&report, "lib:examples/<NN-name>/test/ baseline");
 }
 
 #[test]
@@ -174,30 +197,38 @@ fn dm2b_gate_accepts_pipeline_mapping() {
     assert_clean(evaluate(&project, "DM2b"), "DM2b");
 }
 
-/// Helper: a minimal test-plan body that satisfies every DM3a
-/// gate regex (UVM-lite components, four required sections,
-/// `tarpaulin`, checklist row, spec/targets reference).
-fn minimal_test_plan() -> &'static str {
-    "## Testbench\n\
-     Sequencer drives a Driver into the DUT; Monitor and Scoreboard observe.\n\n\
-     ## Smoke\n\
-     - [ ] elaborates -- covers spec.md section 1\n\n\
-     ## Edge\n\
-     - [ ] zero_input -- covers targets.md row 2\n\n\
-     ## Stress\n\
-     - [ ] long_run_1k_cycles -- covers targets.md throughput row\n\n\
-     ## Random\n\
-     - [ ] sweep_seed_42 -- covers spec.md section 2\n\n\
-     ## Coverage\n\
-     Run `cargo tarpaulin --out Html`; threshold 90%.\n\n\
-     ## Traceability\n\
-     spec.md, targets.md.\n"
+/// Helper: write a minimal-but-passing test-plan directory at
+/// `docs/test-plan/`. Index names UVM-lite components and traces
+/// back to spec.md / targets.md; at least one tb-milestone and one
+/// test-milestone file exist with `- [ ]` checklist rows;
+/// coverage.md names cargo-tarpaulin.
+fn write_minimal_test_plan(project: &Path) {
+    write(
+        &project.join("docs/test-plan/test-plan.md"),
+        "# Test Plan\n\n\
+         Sequencer drives a Driver into the DUT; Monitor and Scoreboard observe.\n\n\
+         ## Traceability\n\nspec.md, targets.md.\n",
+    );
+    write(
+        &project.join("docs/test-plan/tb-milestone-01-payloads-and-sequencers.md"),
+        "# Milestone 01: Payloads and Sequencers\n\n\
+         - [ ] `tests/seq.rs::Pixels` -- payload-aware sequencer\n",
+    );
+    write(
+        &project.join("docs/test-plan/test-milestone-01-smoke.md"),
+        "# Milestone 01: Smoke\n\n\
+         - [ ] elaborates -- covers spec.md section 1\n",
+    );
+    write(
+        &project.join("docs/test-plan/coverage.md"),
+        "# Coverage\n\nRun `cargo tarpaulin --out Html`; threshold 90%.\n",
+    );
 }
 
 #[test]
 fn dm3a_gate_accepts_full_test_plan() {
     let (_tmp, project) = new_project();
-    write(&project.join("docs/plan/test-plan.md"), minimal_test_plan());
+    write_minimal_test_plan(&project);
     clean_critique(&project, "DM3a");
     assert_clean(evaluate(&project, "DM3a"), "DM3a");
 }
@@ -205,11 +236,24 @@ fn dm3a_gate_accepts_full_test_plan() {
 #[test]
 fn dm3a_gate_rejects_plan_without_checklist() {
     let (_tmp, project) = new_project();
-    // Has every required section header but no `- [ ]` rows.
+    // Both milestone files exist but neither carries a `- [ ]`
+    // checklist entry. The directory-wide checklist-glob gate must
+    // catch the omission.
     write(
-        &project.join("docs/plan/test-plan.md"),
-        "## Testbench\nSequencer.\n## Smoke\n## Edge\n## Stress\n## Random\n\
-         ## Coverage\ntarpaulin\n## Traceability\nspec.md\n",
+        &project.join("docs/test-plan/test-plan.md"),
+        "# Test Plan\n\nSequencer / Driver / Monitor / Scoreboard.\n\nspec.md\n",
+    );
+    write(
+        &project.join("docs/test-plan/tb-milestone-01-payloads.md"),
+        "# Milestone 01\n\nNo checklist rows here.\n",
+    );
+    write(
+        &project.join("docs/test-plan/test-milestone-01-smoke.md"),
+        "# Milestone 01\n\nNo checklist rows here.\n",
+    );
+    write(
+        &project.join("docs/test-plan/coverage.md"),
+        "# Coverage\n\ntarpaulin threshold 90%.\n",
     );
     clean_critique(&project, "DM3a");
     let report = evaluate(&project, "DM3a");
@@ -218,33 +262,54 @@ fn dm3a_gate_rejects_plan_without_checklist() {
 }
 
 #[test]
-fn dm3a_gate_rejects_plan_missing_random_category() {
+fn dm3a_gate_rejects_plan_missing_test_milestone_files() {
     let (_tmp, project) = new_project();
-    // Drops the Random section; the four-categories gate must
-    // catch the omission.
-    write(
-        &project.join("docs/plan/test-plan.md"),
-        "## Testbench\nSequencer.\n\
-         ## Smoke\n- [ ] s\n## Edge\n- [ ] e\n## Stress\n- [ ] x\n\
-         ## Coverage\ntarpaulin\n## Traceability\nspec.md\n",
-    );
+    // Drops every test-milestone-NN-*.md file. The directory-glob
+    // gate must catch that DM3c has no slices to walk.
+    write_minimal_test_plan(&project);
+    for entry in std::fs::read_dir(project.join("docs/test-plan/")).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with("test-milestone-") {
+            std::fs::remove_file(entry.path()).unwrap();
+        }
+    }
     clean_critique(&project, "DM3a");
     let report = evaluate(&project, "DM3a");
     assert!(!report.is_clean());
-    assert_fails_with(&report, "Random");
+    assert_fails_with(&report, "test-milestone");
+}
+
+#[test]
+fn dm3a_gate_rejects_plan_missing_tb_milestone_files() {
+    let (_tmp, project) = new_project();
+    // Drops every tb-milestone-NN-*.md file. DM3b would have no
+    // slices to walk; the directory-glob gate must catch this.
+    write_minimal_test_plan(&project);
+    for entry in std::fs::read_dir(project.join("docs/test-plan/")).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with("tb-milestone-") {
+            std::fs::remove_file(entry.path()).unwrap();
+        }
+    }
+    clean_critique(&project, "DM3a");
+    let report = evaluate(&project, "DM3a");
+    assert!(!report.is_clean());
+    assert_fails_with(&report, "tb-milestone");
 }
 
 #[test]
 fn dm3a_gate_rejects_plan_without_tarpaulin_strategy() {
     let (_tmp, project) = new_project();
-    // Has all sections but doesn't name `tarpaulin` in the
-    // Coverage section -- the gate enforces the chosen tool.
+    // coverage.md exists but doesn't name `tarpaulin`. The gate
+    // enforces the chosen tool.
+    write_minimal_test_plan(&project);
     write(
-        &project.join("docs/plan/test-plan.md"),
-        "## Testbench\nSequencer.\n\
-         ## Smoke\n- [ ] s\n## Edge\n- [ ] e\n## Stress\n- [ ] x\n## Random\n- [ ] r\n\
-         ## Coverage\nWe will pick a coverage tool later.\n\
-         ## Traceability\nspec.md\n",
+        &project.join("docs/test-plan/coverage.md"),
+        "# Coverage\n\nWe will pick a coverage tool later.\n",
     );
     clean_critique(&project, "DM3a");
     let report = evaluate(&project, "DM3a");
@@ -286,13 +351,39 @@ fn stage_experiments_db(project: &Path) {
 /// `perf-milestone-NN-*.md` file).
 fn stage_perf_plan(project: &Path) {
     write(
-        &project.join("docs/plan/perf-plan.md"),
+        &project.join("docs/perf-plan/perf-plan.md"),
         "# Performance Plan\n\nMilestone 01: Baseline measurement.\n",
     );
     write(
-        &project.join("docs/plan/perf-milestone-01-baseline.md"),
+        &project.join("docs/perf-plan/perf-milestone-01-baseline.md"),
+        // DM4a's gate requires the milestone files to exist with at
+        // least one task row; DM4b's gate (MilestonesAllResolved)
+        // requires every `- [ ]` to be resolved before DM4b can
+        // advance. The pending row is what DM4a's checklist gate
+        // looks for; DM4b-specific tests below override the body to
+        // mark rows complete (`- [x]`) before running DM4b's gate.
         "# Milestone 01\n- [ ] run baseline workload\n",
     );
+}
+
+/// Mark every row in every `perf-milestone-NN-*.md` file as
+/// resolved (`- [x]`). DM4b's `MilestonesAllResolved` gate check
+/// only passes once every row is `- [x]` or `- [-]`.
+fn complete_perf_milestones(project: &Path) {
+    let dir = project.join("docs/perf-plan");
+    let entries = std::fs::read_dir(&dir).unwrap();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("perf-milestone-") || !name.ends_with(".md") {
+            continue;
+        }
+        let body = std::fs::read_to_string(&path).unwrap();
+        let resolved = body.replace("- [ ]", "- [x]");
+        std::fs::write(&path, resolved).unwrap();
+    }
 }
 
 #[test]
@@ -307,7 +398,7 @@ fn dm4a_gate_accepts_perf_plan_with_milestone() {
 fn dm4a_gate_rejects_perf_plan_without_milestone_files() {
     let (_tmp, project) = new_project();
     write(
-        &project.join("docs/plan/perf-plan.md"),
+        &project.join("docs/perf-plan/perf-plan.md"),
         "# Performance Plan\n\nMilestone 01: Baseline measurement.\n",
     );
     clean_critique(&project, "DM4a");
@@ -321,12 +412,32 @@ fn dm4b_gate_accepts_analysis_report_with_tracked_run() {
     let (_tmp, project) = new_project();
     stage_experiments_db(&project);
     stage_perf_plan(&project);
+    complete_perf_milestones(&project);
     write(
         &project.join("docs/analysis/summary.md"),
         "# Analysis\nThroughput: 1.0 items/cycle\nLatency p99: 12 cycles\n",
     );
     clean_critique(&project, "DM4b");
     assert_clean(evaluate(&project, "DM4b"), "DM4b");
+}
+
+#[test]
+fn dm4b_gate_rejects_unresolved_milestone_rows() {
+    // The new MilestonesAllResolved gate check on DM4b: even when
+    // experiments.db has rows, the analysis report exists, and the
+    // critique is clean, DM4b cannot advance while any
+    // perf-milestone task row is still `- [ ]`.
+    let (_tmp, project) = new_project();
+    stage_experiments_db(&project);
+    stage_perf_plan(&project); // leaves a `- [ ]` row in milestone-01
+    write(
+        &project.join("docs/analysis/summary.md"),
+        "# Analysis\nThroughput: 1.0\nLatency p99: 12 cycles\n",
+    );
+    clean_critique(&project, "DM4b");
+    let report = evaluate(&project, "DM4b");
+    assert!(!report.is_clean());
+    assert_fails_with(&report, "perf-milestone-01-baseline");
 }
 
 #[test]

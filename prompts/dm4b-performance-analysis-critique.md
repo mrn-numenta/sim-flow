@@ -21,11 +21,14 @@ new work did not regress earlier milestones.
 
 ## Inputs
 
-- `docs/plan/perf-plan.md` -- the plan; check that every
+- `docs/perf-plan/perf-plan.md` -- the plan; check that every
   `- [ ]` is now `- [x]` (or documented as deferred), and that
   run-ids cited in milestones tie back to rows in
   `.sim-flow/experiments.db`.
-- `docs/plan/perf-milestone-*.md` -- per-milestone task lists.
+- `docs/perf-plan/perf-milestone-*.md` -- per-milestone task lists.
+- `docs/spec.md` -- workload assumptions and intended behavior;
+  needed to judge whether the reported numbers are consistent
+  with the design intent (check 5).
 - `docs/targets.md`
 - `docs/analysis/` report markdown
 - `.sim-flow/experiments.db` (the experiments index) if populated
@@ -39,6 +42,17 @@ lines only. If experiment tracking infrastructure is not yet
 available (Phase 4 not landed), emit
 `BLOCKER: experiment tracking unavailable (Phase 4 pending)`
 and stop.
+
+**Finding-marker grammar.** The gate parses lines starting with
+`BLOCKER:` / `RESOLVED:` / `UNRESOLVED:` (case-insensitive,
+plural OK) optionally preceded by list markers (`-`, `*`, `+`,
+`>`), heading markers (`#`+), bold/underline (`**` / `__`), and
+one decoration glyph (e.g. `❌` `✅`). Headings DO match
+(`### BLOCKER: ...`); section titles describing a blocker
+without a colon-after-keyword (e.g. `### BLOCKER 1 - title`)
+do NOT match -- they're prose. Mid-sentence mentions do NOT
+match. ONLY the keyword-colon shape is a finding; pick the form
+deliberately.
 
 1. **Plan completion**. Is every task in the
    `perf-milestone-NN-*.md` files either `[x]` or documented as
@@ -61,15 +75,22 @@ and stop.
    `.sim-flow/experiments.db` for this project? Do the run-ids
    in the reports match rows in the index, and do they follow
    the naming scheme declared in `perf-plan.md`?
-8. **Milestone stop-points**. Did DM4b honor the milestone stop
-   points (one stop per milestone boundary), or did it chain
-   straight through? The workflow is meant to critique between
-   milestones; chaining them silently regresses the workflow.
+8. **Milestone stop-points (proxy check)**. The artifacts alone
+   can't tell whether DM4b paused at each milestone boundary or
+   chained them in one session, but a structural proxy works:
+   does each `perf-milestone-NN-*.md` file have its task rows
+   ticked off in roughly chronological order with the run-ids
+   they cite landing in `.sim-flow/experiments.db` in matching
+   order, or do all rows flip in one burst at the end? An
+   all-at-once flip (every milestone's last-task timestamp
+   close together; no per-milestone summary notice in the
+   transcript) is a `BLOCKER:` because the workflow's
+   milestone-by-milestone critique signal was bypassed.
 9. **Report-per-topic structure**. Is `docs/analysis/` organized
    by topic (throughput, latency, sweeps, bottlenecks) rather
    than one mega-report?
 10. **Plan fidelity**. If the analysis deviated from
-    `docs/plan/perf-plan.md` (skipped milestones, renamed
+    `docs/perf-plan/perf-plan.md` (skipped milestones, renamed
     run-ids, ignored bottleneck modules), flag every deviation.
 11. **Checkpoint discipline**. If this is a milestone critique
     rather than the final DM4b review, is the just-completed

@@ -84,6 +84,19 @@ plan and tests; DM4 will measure against the targets.
    - **testbench architecture**: the likely Sequencers, Drivers,
      Monitors, Agents, Envs, and Scoreboards, mapped to the interfaces
      and behaviors in `docs/spec.md`
+   - **implementation baseline**: name the closest-matching worked
+     example -- `lib:examples/<NN-name>/test/` -- whose UVM-lite
+     layout this testbench will mirror at DM3b. Browse
+     `lib:examples/README.md`, then read the `tests/` of two or three
+     candidates whose port shape and stage count match the design;
+     pick the closest. Record the chosen baseline path, a one-line
+     rationale (why the topology / port shape matches), and the
+     expected adaptations DM3b will need (extra Monitors / Scoreboards
+     for design-specific invariants, renamed components, etc.).
+     DM3b copies that example's `test/` file structure as a starting
+     point and adapts the component bodies; getting this right at DM1
+     saves DM3b from re-deriving the choice from spec under a tighter
+     context budget.
    - **target traceability**: which parts of the testbench strategy
      support which items in `docs/targets.md`
 9. Keep the two files distinct:

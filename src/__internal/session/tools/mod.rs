@@ -117,6 +117,14 @@ pub struct ToolResult {
     pub ok: bool,
     pub display: String,
     pub attachments: Vec<ToolAttachment>,
+    /// Number of failing tests reported by `run_cargo` when the
+    /// command was `test`. `None` for every other tool, and for
+    /// successful test runs. The orchestrator's auto-iter loop reads
+    /// this to detect progress: a strictly-decreasing count between
+    /// turns resets the no-artifact iteration counter, so an agent
+    /// that fixes one of N test failures per turn isn't bailed out
+    /// by the per-session cap when it's still making progress.
+    pub test_failure_count: Option<usize>,
 }
 
 /// Internal-only; never serialized over the JSONL protocol. The
@@ -135,6 +143,7 @@ impl ToolResult {
             ok: true,
             display: display.into(),
             attachments: Vec::new(),
+            test_failure_count: None,
         }
     }
     pub fn err(display: impl Into<String>) -> Self {
@@ -142,6 +151,7 @@ impl ToolResult {
             ok: false,
             display: display.into(),
             attachments: Vec::new(),
+            test_failure_count: None,
         }
     }
     pub fn ok_with_attachment(
@@ -158,7 +168,12 @@ impl ToolResult {
                 bytes,
                 source_path: source_path.into(),
             }],
+            test_failure_count: None,
         }
+    }
+    pub fn with_test_failure_count(mut self, count: usize) -> Self {
+        self.test_failure_count = Some(count);
+        self
     }
 }
 

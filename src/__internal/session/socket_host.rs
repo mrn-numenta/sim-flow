@@ -442,7 +442,7 @@ mod tests {
         let writer = std::thread::spawn(move || {
             host.write(&Event::RequestLlmResponse {
                 request_id: "lr-1".into(),
-                backend: "lmstudio".into(),
+                backend: "openai-compat".into(),
                 model: Some("qwen/qwen3-coder-next".into()),
                 messages: vec![LlmMessage {
                     role: LlmRole::System,
@@ -479,7 +479,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(request_id, "lr-1");
-                assert_eq!(backend, "lmstudio");
+                assert_eq!(backend, "openai-compat");
                 assert_eq!(model.as_deref(), Some("qwen/qwen3-coder-next"));
                 assert_eq!(messages.len(), 1);
                 assert_eq!(messages[0].content.len(), 32 * 1024);

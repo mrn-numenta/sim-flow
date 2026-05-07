@@ -980,9 +980,10 @@ fn ollama_agent_round_trips_against_mock_chat_completions_server() {
         }],
     )
     .expect("agent dispatch should succeed against mock server");
+    let (text, _metrics) = response;
     assert!(
-        response.contains("Hello from mock Ollama."),
-        "expected response from mock server, got: {response}"
+        text.contains("Hello from mock Ollama."),
+        "expected response from mock server, got: {text}"
     );
     server_handle.join().unwrap();
 }

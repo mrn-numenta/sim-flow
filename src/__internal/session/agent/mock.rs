@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 
-use super::CliAgent;
+use super::{CliAgent, LlmCallMetrics};
 use crate::Result;
 use crate::session::protocol::LlmMessage;
 
@@ -48,12 +48,12 @@ impl CliAgent for MockAgent {
         &self.label
     }
 
-    fn dispatch(&self, messages: &[LlmMessage]) -> Result<String> {
+    fn dispatch(&self, messages: &[LlmMessage]) -> Result<(String, LlmCallMetrics)> {
         self.seen.borrow_mut().push(messages.to_vec());
-        match self.responses.borrow_mut().pop_front() {
-            Some(text) => Ok(text),
-            None => Ok(String::new()),
-        }
+        let text = self.responses.borrow_mut().pop_front().unwrap_or_default();
+        // Mock agent: no real LLM call; emit zeroed metrics so
+        // tests that aggregate per-session totals stay deterministic.
+        Ok((text, LlmCallMetrics::default()))
     }
 }
 

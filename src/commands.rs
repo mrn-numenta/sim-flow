@@ -95,7 +95,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             llm_backend,
             llm_model,
             ollama_base_url,
-            lmstudio_base_url,
+            openai_base_url,
             candidate,
         } => session_cmd(
             cli,
@@ -106,7 +106,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             llm_backend,
             llm_model.as_deref(),
             ollama_base_url.as_deref(),
-            lmstudio_base_url.as_deref(),
+            openai_base_url.as_deref(),
             candidate.as_deref(),
         ),
         Command::Auto {
@@ -546,7 +546,7 @@ fn session_cmd(
     llm_backend: &str,
     llm_model: Option<&str>,
     ollama_base_url: Option<&str>,
-    lmstudio_base_url: Option<&str>,
+    openai_base_url: Option<&str>,
     candidate: Option<&str>,
 ) -> sim_flow::Result<()> {
     let (step_id, kind_str) = step_kind.split_once('.').ok_or_else(|| {
@@ -585,7 +585,7 @@ fn session_cmd(
         let agent_config = sim_flow::__internal::session::AgentConfig {
             model: llm_model.map(String::from),
             ollama_base_url: ollama_base_url.map(String::from),
-            lmstudio_base_url: lmstudio_base_url.map(String::from),
+            openai_base_url: openai_base_url.map(String::from),
         };
         let agent = match sim_flow::__internal::session::build_cli_agent(llm_backend, agent_config)
         {
@@ -683,7 +683,7 @@ impl sim_flow::__internal::session::CliAgent for BoxedAgent {
     fn dispatch(
         &self,
         messages: &[sim_flow::__internal::session::LlmMessage],
-    ) -> sim_flow::Result<String> {
+    ) -> sim_flow::Result<(String, sim_flow::__internal::session::agent::LlmCallMetrics)> {
         self.0.dispatch(messages)
     }
 }
@@ -1085,6 +1085,18 @@ fn gate_check_to_out(check: &sim_flow::__internal::gate::GateCheck) -> GateCheck
             cmd: None,
             args: None,
         },
+        MilestonesAllResolved {
+            dir,
+            file_prefix,
+            description,
+        } => GateCheckOut {
+            kind: "milestones-all-resolved",
+            description,
+            path: Some(dir.display().to_string()),
+            pattern: Some(file_prefix.as_str()),
+            cmd: None,
+            args: None,
+        },
     }
 }
 
@@ -1184,9 +1196,38 @@ fn reset(project: &Path, step_id: &str) -> sim_flow::Result<()> {
     let mut state = State::load(&dot)?;
     let registry = registry_for(state.flow);
     let order: Vec<&'static str> = registry.order_for(state.flow);
+    let Some(idx) = order.iter().position(|s| *s == step_id) else {
+        return Err(sim_flow::Error::InvalidStep(format!(
+            "reset: `{step_id}` is not a {} step",
+            state.flow.as_str()
+        )));
+    };
+    // Delete every step's work artifacts AND critique file for the
+    // reset target and downstream steps BEFORE we rewind state, so a
+    // failure mid-cleanup leaves the gate flags intact (the user can
+    // re-run `reset` cleanly). Same logic the in-session Reset event
+    // uses, so `sim-flow reset` and the dashboard's reset button
+    // produce identical disk state.
+    let (deleted, failures) = sim_flow::__internal::session::auto::clear_step_collateral_forward(
+        project, idx, &order, &registry,
+    );
     state.reset(step_id, &order)?;
     state.save(&dot)?;
-    println!("reset to {step_id}; downstream gates cleared");
+    let cleared = order.len() - idx;
+    println!("reset to {step_id}; cleared {cleared} gate flag(s)");
+    if deleted.is_empty() {
+        println!("no generated collateral found to delete");
+    } else {
+        println!("deleted {} file(s) / directory(ies):", deleted.len());
+        for path in &deleted {
+            let rel = path.strip_prefix(project).unwrap_or(path).display();
+            println!("  - {rel}");
+        }
+    }
+    for (path, err) in &failures {
+        let rel = path.strip_prefix(project).unwrap_or(path).display();
+        eprintln!("warn: failed to delete {rel}: {err}");
+    }
     Ok(())
 }
 

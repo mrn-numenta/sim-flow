@@ -359,7 +359,23 @@ where
                     .map_err(write_err)?;
                 self.stderr.flush().map_err(write_err)?;
                 match self.agent.dispatch(messages) {
-                    Ok(text) => {
+                    Ok((text, metrics)) => {
+                        // Per-call metrics: token usage (when the
+                        // backend reports it) + wall time. Live
+                        // visibility via `RUST_LOG=sim_flow::metrics=info`;
+                        // aggregation across a sub-session happens
+                        // upstream in the orchestrator / auto driver
+                        // by adding up these fields.
+                        tracing::info!(
+                            target: "sim_flow::metrics",
+                            event = "llm_call",
+                            request_id = %request_id,
+                            agent = %self.agent.name(),
+                            tokens_in = ?metrics.tokens_in,
+                            tokens_out = ?metrics.tokens_out,
+                            wall_ms = metrics.wall_ms,
+                            content_bytes = text.len(),
+                        );
                         // Synthesize the chunk + end pair the
                         // orchestrator's loop expects.
                         self.pending.push_back(HostEvent::LlmChunk {

@@ -41,6 +41,7 @@ pub fn register(reg: &mut StepRegistry) {
             work_write_paths: &["docs/"],
             work_phases: &["chat"],
             critique_phases: &["chat"],
+            milestone_walk: None,
         });
     }
 }

@@ -1,0 +1,45 @@
+# Coverage Strategy
+
+## Tool
+
+- **cargo-tarpaulin** -- install once with
+  `cargo install cargo-tarpaulin`.
+
+## Threshold
+
+- **Line-coverage threshold: 90%** on all files under `src/model/`.
+  Adjust this number explicitly with a one-paragraph rationale if
+  the design genuinely cannot reach 90% (e.g. platform-gated code
+  paths). Do NOT silently lower the threshold.
+
+## Exclusions
+
+List files / modules excluded from coverage measurement, with a
+prose rationale per entry. Exclusions land in the
+`--exclude-files` flags of the run command below.
+
+- `src/main.rs` -- `<reason: CLI harness, no model logic>`
+- `src/sim.rs` -- `<reason: simulation wrapper, delegates to
+  framework>`
+- `src/lib.rs` -- `<reason: crate root / module re-exports>`
+
+## Run Command
+
+```bash
+cargo tarpaulin --out Html --out Lcov --output-dir target/coverage \
+  --exclude-files "src/main.rs" --exclude-files "src/sim.rs" \
+  --exclude-files "src/lib.rs"
+```
+
+## Report Output
+
+DM3c writes the machine-readable coverage artifact to:
+
+- **LCOV report**: `target/coverage/lcov.info` -- the
+  threshold-comparison input the coverage gate consumes.
+- **HTML report**: `target/coverage/tarpaulin-report.html` --
+  human-readable dashboard for inspecting uncovered lines.
+
+DM3c records the measured line-coverage percentage and the report
+path in `docs/test-plan/test-plan.md`'s `## Coverage` section
+once the coverage milestone runs.

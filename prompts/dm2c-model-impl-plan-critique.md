@@ -10,9 +10,9 @@ Do not modify the plan; evaluate it and write the critique file.
 
 ## Inputs
 
-- `docs/plan/plan-management.md` -- plan-file conventions.
-- `docs/plan/plan.md` -- plan index + TOC.
-- `docs/plan/milestone-*.md` -- per-milestone task lists.
+- `docs/impl-plan/plan-management.md` -- plan-file conventions.
+- `docs/impl-plan/plan.md` -- plan index + TOC.
+- `docs/impl-plan/milestone-*.md` -- per-milestone task lists.
 - `docs/spec.md`
 - `docs/targets.md`
 - `docs/testbench.md`
@@ -27,7 +27,18 @@ until fixed). Prefix informational notes -- nits, follow-up
 questions, things DM2d can work around -- with `UNRESOLVED:`. The
 orchestrator fails the DM2c gate on `BLOCKER:` lines only.
 
-1. Does `docs/plan/plan.md` follow the conventions in
+**Finding-marker grammar.** The gate parses lines starting with
+`BLOCKER:` / `RESOLVED:` / `UNRESOLVED:` (case-insensitive,
+plural OK) optionally preceded by list markers (`-`, `*`, `+`,
+`>`), heading markers (`#`+), bold/underline (`**` / `__`), and
+one decoration glyph (e.g. `❌` `✅`). Headings DO match
+(`### BLOCKER: ...`); section titles describing a blocker
+without a colon-after-keyword (e.g. `### BLOCKER 1 - title`)
+do NOT match -- they're prose. Mid-sentence mentions do NOT
+match. ONLY the keyword-colon shape is a finding; pick the form
+deliberately.
+
+1. Does `docs/impl-plan/plan.md` follow the conventions in
    `plan-management.md`? Is there an overview and a TOC pointing at
    each milestone file?
 2. Are milestones named `Milestone NN: <description>` and saved as
@@ -43,23 +54,45 @@ orchestrator fails the DM2c gate on `BLOCKER:` lines only.
    modules, skeletons + connectivity before per-stage logic, logic
    before its tests? Flag tasks whose dependencies live in later
    milestones.
-7. Does the plan cover the four required smoke tests (elaboration,
-   data flow, backpressure, idle cycles) and at least one unit test
-   per non-trivial module?
+7. Does the plan cover the elaboration smoke test, the basic
+   data-flow smoke test, AND any flow-control / idle-cycle tests
+   **explicitly required by `docs/testbench.md`** for this design?
+   When the design is purely combinational with no ready/valid or
+   stall semantics, the absence of backpressure / idle-cycle tests
+   is **RESOLVED**, not BLOCKER, provided the plan contains a
+   one-line note acknowledging the choice (e.g. "design has no
+   flow-control surface, backpressure / idle tests do not apply").
+   Per-module unit tests should cover at least one representative
+   input per non-trivial module.
 8. Does the plan account for target-sensitive and verification-sensitive
    implementation concerns from `docs/targets.md` and `docs/testbench.md`
    where they materially affect DM2d structure, without turning DM2c
-   into a full DM3 verification-plan step?
+   into a full DM3 verification-plan step? When `docs/testbench.md`
+   names internal signals to observe, does the plan list the signals
+   AND the modules that expose them (without prescribing the
+   framework mechanism -- naming `SignalTrace` / `test-only port` /
+   etc. is a NIT, not a BLOCKER)?
 9. Does the plan stay within DM2d scope? Reject tasks that pre-empt
    DM3 (directed verification suites, coverage targets,
    scoreboards, randomized stimulus).
-10. Does the plan avoid prescribing specific framework APIs? It
-   should describe WHAT will be built and IN WHAT ORDER, not HOW
-   each module's `evaluate()` is implemented -- those decisions
-   belong to DM2d.
-11. Are open decisions (e.g. buffer depths, fanouts not pinned by
-    analysis) called out as explicit decision-tasks rather than
-    silently deferred?
+10. Does the plan describe WHAT will be built and IN WHAT ORDER,
+   without prescribing the algorithm inside each module's
+   `evaluate()`? Tasks may name the function and the module file;
+   they MUST NOT include shift-and-mask recipes, intermediate
+   variable names, packing-format choices, or loop-vs-vectorized
+   decisions. Acceptable: `Implement evaluate() in
+   src/model/avg_stage.rs (consumes pixel_in_a + pixel_in_b,
+   produces averaged_pixel).` Unacceptable: `Compute per-channel
+   average: (a.r + b.r) >> 1, similarly for g, b, a / Pack the
+   result into a u32...`. Flag the latter as BLOCKER and quote the
+   offending lines.
+11. Are open decisions (data types, buffer depths, fanouts not
+    pinned by analysis) surfaced as explicit `DECIDE:` (or `OPEN:`
+    for DM3-bound items) tasks with the format
+    `- [ ] DECIDE: <question> -- options: <A | B>; default: <pick>;
+    rationale: <one line>`? Decisions buried as parenthetical
+    asides inside other tasks (e.g. `(u32 or PixelRGBA?)`) are
+    BLOCKER -- name the offending lines.
 
 ## Output
 

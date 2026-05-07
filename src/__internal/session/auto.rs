@@ -262,6 +262,12 @@ fn run_auto_loop<H: Host>(
     for (step_pos, step_id) in remaining.iter().enumerate() {
         let is_first_step = step_pos == 0;
         let mut critique_iters: u32 = 0;
+        // Track the prior critique's blocker count so each retry can
+        // report the delta (`12 -> 4 (-8)`) under
+        // `sim_flow::metrics`. None until the first critique pass
+        // measures.
+        let mut prev_blocker_count: Option<usize> = None;
+        let step_started = std::time::Instant::now();
 
         loop {
             if let Some(o) = check_pre_subsession(auto_host) {
@@ -309,6 +315,22 @@ fn run_auto_loop<H: Host>(
             // Did the critique flag any blockers? If yes and we have
             // budget, loop back to work. Otherwise proceed to advance.
             let blockers = read_blockers(&opts.project_dir, step_id);
+            let cur_count = blockers.len();
+            // Per-critique-pass delta. `delta` is signed because a
+            // retry can introduce regressions (count strictly
+            // increasing) -- worth surfacing so a stuck-loop is
+            // visible without parsing the critique file.
+            let delta = prev_blocker_count.map(|prev| cur_count as i64 - prev as i64);
+            tracing::info!(
+                target: "sim_flow::metrics",
+                event = "critique_pass",
+                step = %step_id,
+                pass_index = critique_iters,
+                blockers = cur_count,
+                prev_blockers = ?prev_blocker_count,
+                delta = ?delta,
+            );
+            prev_blocker_count = Some(cur_count);
             if blockers.is_empty() {
                 break;
             }
@@ -349,6 +371,15 @@ fn run_auto_loop<H: Host>(
         // current_step. If not clean, flip to manual so the user can
         // inspect and decide.
         let advanced = try_advance(&opts.project_dir, step_id, auto_host)?;
+        let step_wall_ms = step_started.elapsed().as_millis() as u64;
+        tracing::info!(
+            target: "sim_flow::metrics",
+            event = "step_end",
+            step = %step_id,
+            critique_iters,
+            advanced,
+            wall_ms = step_wall_ms,
+        );
         if !advanced {
             flip_to_manual(auto_host)?;
             return Ok(AutoLoopOutcome::FlippedToManual);
@@ -799,28 +830,12 @@ fn run_manual_reset<H: Host>(
         return Ok(());
     };
 
-    // Step 1: delete generated collateral for `step_id` and every
-    // downstream step. Source spec, conversation transcript, git
-    // history, and `.sim-flow/` are not touched. Files / dirs that
-    // don't exist are silently skipped; deletion failures are
-    // collected and reported alongside the success summary.
-    let mut deleted: Vec<PathBuf> = Vec::new();
-    let mut delete_failures: Vec<(PathBuf, String)> = Vec::new();
-    for downstream in &order[idx..] {
-        let Some(step) = registry.get(downstream) else {
-            continue;
-        };
-        for art in step.work_artifacts {
-            collect_collateral_deletion(&opts.project_dir, art, &mut deleted, &mut delete_failures);
-        }
-        let critique_rel = format!("docs/critiques/{}-critique.md", step.id);
-        collect_collateral_deletion(
-            &opts.project_dir,
-            &critique_rel,
-            &mut deleted,
-            &mut delete_failures,
-        );
-    }
+    // Step 1: delete generated collateral (artifacts + critiques)
+    // for `step_id` and every downstream step. Shared with the
+    // CLI-side `sim-flow reset` so both entry points clear the
+    // same set of files.
+    let (deleted, delete_failures) =
+        clear_step_collateral_forward(&opts.project_dir, idx, &order, &registry);
 
     // Step 2: clear gate flags + rewind current_step.
     if let Err(err) = state.reset(step_id, &order) {
@@ -867,32 +882,234 @@ fn run_manual_reset<H: Host>(
     Ok(())
 }
 
-/// Best-effort delete of one collateral path under `project_dir`. A
-/// trailing `/` (or an actual directory on disk) triggers
-/// `remove_dir_all`; anything else is treated as a single file.
-/// Missing paths are silently skipped — the registry's
-/// `work_artifacts` lists every output the step *might* produce, but
-/// optional ones (per-candidate dirs, conditional outputs) won't
-/// always be present.
-fn collect_collateral_deletion(
+/// Delete every step's `work_artifacts` AND its critique file for
+/// the reset target step (`order[idx]`) and every downstream step.
+/// Returns (deleted_paths, failures). Source spec, conversation
+/// transcript, git history, and `.sim-flow/` are not touched. Files
+/// / dirs that don't exist are silently skipped; deletion failures
+/// are collected for the caller to surface.
+///
+/// **Upstream-protection**: paths claimed by steps UPSTREAM of the
+/// reset target are never deleted, even when a downstream step's
+/// `work_artifacts` declaration would otherwise sweep them. The
+/// concrete bug this guards against: DM4b's `work_artifacts` is
+/// `["docs/analysis/"]` (the whole directory) but DM2a writes
+/// `docs/analysis/decomposition.md` and DM2b writes
+/// `docs/analysis/pipeline-mapping.md` into the same directory.
+/// Without protection a reset to DM3a walks DM3a -> DM3b -> DM3c
+/// -> DM4a -> DM4b and `remove_dir_all`s the whole directory,
+/// taking DM2a/DM2b's outputs with it. The protection logic here
+/// scans `docs/analysis/` for upstream-owned children and either
+/// (a) skips the directory delete entirely if any child is
+/// upstream-owned, doing a selective per-file walk instead, or
+/// (b) does a full `remove_dir_all` only when nothing inside is
+/// upstream-owned. Same logic applies to `tests/` (shared by
+/// DM2d/DM3b/DM3c) and any other coarse work_artifact declaration
+/// that's also touched by an earlier step.
+///
+/// Shared between the auto-driver's in-session `Reset` HostEvent
+/// handler and the CLI-side `sim-flow reset` command so both entry
+/// points clear the same set of files. Without this sharing the CLI
+/// reset would only clear gate flags, leaving stale critiques + work
+/// artifacts on disk that confuse the next auto run (the agent reads
+/// "DM3a-critique.md" left over from the prior pass and thinks it's
+/// in critique-retry mode for a step it just reset).
+pub fn clear_step_collateral_forward(
+    project_dir: &Path,
+    idx: usize,
+    order: &[&'static str],
+    registry: &crate::__internal::steps::StepRegistry,
+) -> (Vec<PathBuf>, Vec<(PathBuf, String)>) {
+    use std::collections::HashSet;
+
+    // Build the upstream-protected set: every work_artifact +
+    // critique file from steps[0..idx]. Trailing-slash directory
+    // markers are normalized off so we can do exact-equality
+    // matches against `Path::join(rel)`.
+    let mut protected: HashSet<PathBuf> = HashSet::new();
+    for upstream in &order[..idx] {
+        let Some(step) = registry.get(upstream) else {
+            continue;
+        };
+        for art in step.work_artifacts {
+            protected.insert(project_dir.join(art.trim_end_matches('/')));
+        }
+        protected.insert(project_dir.join(format!("docs/critiques/{}-critique.md", step.id)));
+    }
+
+    let mut deleted: Vec<PathBuf> = Vec::new();
+    let mut failures: Vec<(PathBuf, String)> = Vec::new();
+    for downstream in &order[idx..] {
+        let Some(step) = registry.get(downstream) else {
+            continue;
+        };
+        for art in step.work_artifacts {
+            delete_with_upstream_protection(
+                project_dir,
+                art,
+                &protected,
+                &mut deleted,
+                &mut failures,
+            );
+        }
+        let critique_rel = format!("docs/critiques/{}-critique.md", step.id);
+        delete_with_upstream_protection(
+            project_dir,
+            &critique_rel,
+            &protected,
+            &mut deleted,
+            &mut failures,
+        );
+    }
+    (deleted, failures)
+}
+
+/// File names / extensions that always survive a reset, regardless
+/// of which work_artifact directory they sit in. These are project
+/// scaffolding (templates seeded from `templates/model-project/`
+/// during `sim-flow new model`, gitkeep markers) that no flow step
+/// claims as its output -- so a reset cascade should not sweep
+/// them when it's selectively cleaning a shared directory.
+fn is_reset_scaffolding(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if name == ".gitkeep" || name == ".gitignore" {
+        return true;
+    }
+    // Conservative extension list: only the ones we ship as
+    // scaffolding from templates/model-project/. Adding more is
+    // safe; flagging an output as scaffolding by mistake would
+    // leak stale state into the next run.
+    matches!(path.extension().and_then(|e| e.to_str()), Some("tmpl"))
+}
+
+/// True iff `dir` contains any file (recursively) that
+/// `is_reset_scaffolding` accepts. Triggers the selective-walk
+/// branch in `delete_with_upstream_protection` so a coarse
+/// `remove_dir_all` can't blow away `.tmpl` / `.gitkeep` files
+/// the project seeds at creation time.
+fn dir_has_scaffolding(dir: &Path) -> bool {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return false,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if is_reset_scaffolding(&path) {
+            return true;
+        }
+        if path.is_dir() && dir_has_scaffolding(&path) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Delete one collateral path under `project_dir`, honoring an
+/// upstream-protected set. See `clear_step_collateral_forward` for
+/// the rationale.
+///
+/// Behavior:
+/// - Path missing -> no-op.
+/// - Path is reset-scaffolding (`.gitkeep`, `*.tmpl`) -> skip.
+/// - Path exact-matches a protected entry -> skip (upstream owns
+///   this file/dir entirely).
+/// - Path is a regular file and not protected -> remove_file.
+/// - Path is a directory:
+///   - If no protected entry is a descendant -> remove_dir_all.
+///   - Otherwise: walk the directory recursively, deleting only
+///     entries that aren't protected, aren't scaffolding, and
+///     aren't ancestors of a protected entry. The directory
+///     itself is left in place because protected children still
+///     need a parent.
+fn delete_with_upstream_protection(
     project_dir: &Path,
     rel: &str,
+    protected: &std::collections::HashSet<PathBuf>,
     deleted: &mut Vec<PathBuf>,
     failures: &mut Vec<(PathBuf, String)>,
 ) {
-    let path = project_dir.join(rel);
+    let path = project_dir.join(rel.trim_end_matches('/'));
     if !path.exists() {
         return;
     }
+    if protected.contains(&path) {
+        return;
+    }
+    if is_reset_scaffolding(&path) {
+        return;
+    }
     let is_dir = rel.ends_with('/') || path.is_dir();
-    let result = if is_dir {
-        std::fs::remove_dir_all(&path)
-    } else {
-        std::fs::remove_file(&path)
+    if !is_dir {
+        match std::fs::remove_file(&path) {
+            Ok(()) => deleted.push(path),
+            Err(err) => failures.push((path, err.to_string())),
+        }
+        return;
+    }
+    // Directory: switch to a selective walk if EITHER any
+    // protected file lives inside (upstream-owned children we
+    // must preserve) OR any scaffolding file (`.gitkeep`,
+    // `*.tmpl`) lives inside. Without the scaffolding check a
+    // `remove_dir_all` here would sweep the .tmpl files that
+    // `sim-flow new model` seeded -- the agent would lose the
+    // copy-then-fill template DM3a/DM1 prompts depend on.
+    let has_protected_descendant = protected.iter().any(|p| p.starts_with(&path) && p != &path);
+    let has_scaffolding_descendant = dir_has_scaffolding(&path);
+    if !has_protected_descendant && !has_scaffolding_descendant {
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => deleted.push(path),
+            Err(err) => failures.push((path, err.to_string())),
+        }
+        return;
+    }
+    // Selective walk: read children, recurse on subdirs, delete
+    // files that aren't protected. Don't `remove_dir_all` the
+    // parent because protected children must survive.
+    let entries = match std::fs::read_dir(&path) {
+        Ok(e) => e,
+        Err(err) => {
+            failures.push((path, err.to_string()));
+            return;
+        }
     };
-    match result {
-        Ok(()) => deleted.push(path),
-        Err(err) => failures.push((path, err.to_string())),
+    for entry in entries {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let child = entry.path();
+        if protected.contains(&child) {
+            continue;
+        }
+        if is_reset_scaffolding(&child) {
+            continue;
+        }
+        // If a protected entry is below `child`, recurse into
+        // `child` rather than removing it wholesale.
+        let child_has_protected_descendant = protected
+            .iter()
+            .any(|p| p.starts_with(&child) && p != &child);
+        if child_has_protected_descendant {
+            // Build a child rel-path-suffix to recurse with. We
+            // don't strictly need the rel string for behavior but
+            // keep the signature consistent.
+            let child_rel = match child.strip_prefix(project_dir) {
+                Ok(p) => format!("{}/", p.display()),
+                Err(_) => continue,
+            };
+            delete_with_upstream_protection(project_dir, &child_rel, protected, deleted, failures);
+            continue;
+        }
+        let result = if child.is_dir() {
+            std::fs::remove_dir_all(&child)
+        } else {
+            std::fs::remove_file(&child)
+        };
+        match result {
+            Ok(()) => deleted.push(child),
+            Err(err) => failures.push((child, err.to_string())),
+        }
     }
 }
 
@@ -940,64 +1157,27 @@ fn kind_label_for_manual(kind: crate::client::SessionKind) -> &'static str {
 /// `Finding::is_blocking` in `tools/sim-flow/src/critique.rs` (which
 /// the gate's `CritiqueClean` check uses) or it will loop on issues
 /// the gate would happily pass.
+/// Returns the BLOCKER finding texts the gate's
+/// `CritiqueClean` check would flag. Delegates to `Critique::parse`
+/// (the gate-side parser) so the auto-driver and gate can never
+/// disagree about what counts as a finding. Without this sharing
+/// the auto-driver could decide a critique was clean and advance
+/// while the gate held it back, or vice versa -- exactly the bug
+/// that let DM3b advance past 5 heading-style `## BLOCKER:`
+/// findings the gate-side parser missed.
 fn read_blockers(project_dir: &Path, step_id: &str) -> Vec<String> {
     let path = project_dir
         .join("docs/critiques")
         .join(format!("{step_id}-critique.md"));
-    let body = match std::fs::read_to_string(&path) {
-        Ok(b) => b,
+    let critique = match crate::critique::Critique::load(&path) {
+        Ok(c) => c,
         Err(_) => return Vec::new(),
     };
-    let mut blockers = Vec::new();
-    for line in body.lines() {
-        let stripped = strip_finding_prefix(line);
-        if let Some(text) = stripped.strip_prefix("BLOCKER:") {
-            blockers.push(format!("BLOCKER: {}", text.trim()));
-        }
-    }
-    blockers
-}
-
-/// Mirror of the extension's parser: tolerate leading whitespace,
-/// list markers (`- `, `* `, `12. `), and bold-wrap (`**...**`).
-fn strip_finding_prefix(raw: &str) -> String {
-    let mut s = raw.trim_start().to_string();
-    if let Some(rest) = strip_list_marker(&s) {
-        s = rest;
-    }
-    if let Some(rest) = s.strip_prefix("**") {
-        s = rest.to_string();
-        if let Some(close) = s.rfind("**") {
-            let mut tmp = String::with_capacity(s.len());
-            tmp.push_str(&s[..close]);
-            tmp.push_str(&s[close + 2..]);
-            s = tmp;
-        }
-    }
-    s
-}
-
-fn strip_list_marker(s: &str) -> Option<String> {
-    if let Some(rest) = s.strip_prefix("- ") {
-        return Some(rest.to_string());
-    }
-    if let Some(rest) = s.strip_prefix("* ") {
-        return Some(rest.to_string());
-    }
-    let mut last_digit_end = None;
-    for (i, c) in s.char_indices() {
-        if c.is_ascii_digit() {
-            last_digit_end = Some(i + c.len_utf8());
-        } else {
-            break;
-        }
-    }
-    if let Some(end) = last_digit_end
-        && let Some(rest) = s[end..].strip_prefix(". ")
-    {
-        return Some(rest.to_string());
-    }
-    None
+    critique
+        .blocking()
+        .into_iter()
+        .map(|f| format!("BLOCKER: {}", f.text()))
+        .collect()
 }
 
 fn current_iso8601() -> String {
@@ -1196,25 +1376,38 @@ mod tests {
     use crate::session::host::TestHost;
 
     #[test]
-    fn strip_finding_prefix_handles_numbered_bold_markdown() {
-        // Mirrors the extension's parser regression test in
-        // critiques.test.ts ("handles numbered markdown lists with
-        // bold-wrapped headings"). Keeps the two parsers in sync.
-        let cases = [
-            ("- BLOCKER: foo", "BLOCKER: foo"),
-            ("* BLOCKER: foo", "BLOCKER: foo"),
-            ("  - UNRESOLVED: bar", "UNRESOLVED: bar"),
-            (
-                "1. **BLOCKER: testbench file missing entirely.**",
-                "BLOCKER: testbench file missing entirely.",
-            ),
-            ("12. **UNRESOLVED: ...**", "UNRESOLVED: ..."),
-            ("BLOCKER: raw", "BLOCKER: raw"),
-            ("not a finding", "not a finding"),
-        ];
-        for (input, expected) in cases {
-            assert_eq!(strip_finding_prefix(input), expected, "input={input}");
-        }
+    fn read_blockers_handles_numbered_bold_markdown() {
+        // Replaces the old `strip_finding_prefix` test. Now that
+        // `read_blockers` delegates to `Critique::parse`, the
+        // expectations cover every form the gate parser
+        // recognizes. Mirrors the extension's parser regression
+        // test in critiques.test.ts.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("docs/critiques");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("DM0-critique.md"),
+            "\
+- BLOCKER: list-style finding
+* BLOCKER: asterisk-list finding
+  - UNRESOLVED: ignored (not a blocker)
+1. **BLOCKER: numbered + bold finding**
+12. **UNRESOLVED: also ignored**
+BLOCKER: bare-line finding
+## BLOCKER: heading-style finding
+### ❌ BLOCKER: heading + emoji finding
+not a finding
+",
+        )
+        .unwrap();
+        let blockers = read_blockers(tmp.path(), "DM0");
+        assert_eq!(blockers.len(), 6, "got {blockers:?}");
+        assert!(blockers.iter().any(|b| b.contains("list-style")));
+        assert!(blockers.iter().any(|b| b.contains("asterisk-list")));
+        assert!(blockers.iter().any(|b| b.contains("numbered + bold")));
+        assert!(blockers.iter().any(|b| b.contains("bare-line")));
+        assert!(blockers.iter().any(|b| b.contains("heading-style")));
+        assert!(blockers.iter().any(|b| b.contains("heading + emoji")));
     }
 
     #[test]
@@ -1438,5 +1631,318 @@ mod tests {
             .iter()
             .any(|e| matches!(e, Event::SessionEnd { .. }));
         assert!(saw, "manual-mode SessionEnd should reach the host");
+    }
+
+    /// Both reset entry points (`Reset` HostEvent + CLI `sim-flow
+    /// reset`) must clear `docs/critiques/<step>-critique.md` for
+    /// the reset target step AND every downstream step. The bug
+    /// this guards against: a stale DM3a-critique.md left on disk
+    /// after a reset to DM3a makes the next critique session
+    /// trigger focused-retry mode against the prior pass's
+    /// blockers, which were rendered moot by the reset.
+    #[test]
+    fn clear_step_collateral_forward_deletes_critiques_for_target_and_downstream() {
+        use crate::__internal::steps::registry_for;
+        use crate::state::Flow;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path();
+        std::fs::create_dir_all(project.join("docs/critiques")).unwrap();
+        // Stage critiques for several DM steps. Reset to DM3a
+        // should clear DM3a / DM3b / DM3c / DM4a / DM4b but leave
+        // DM0-DM2d alone.
+        for step in [
+            "DM0", "DM1", "DM2a", "DM2b", "DM2c", "DM2d", "DM3a", "DM3b", "DM3c", "DM4a", "DM4b",
+        ] {
+            std::fs::write(
+                project.join(format!("docs/critiques/{step}-critique.md")),
+                format!("# {step} critique\n\n- RESOLVED: stub\n"),
+            )
+            .unwrap();
+        }
+
+        let registry = registry_for(Flow::DirectModeling);
+        let order: Vec<&'static str> = registry.order_for(Flow::DirectModeling);
+        let idx = order.iter().position(|s| *s == "DM3a").unwrap();
+        let (deleted, failures) = clear_step_collateral_forward(project, idx, &order, &registry);
+
+        assert!(failures.is_empty(), "got failures: {failures:?}");
+
+        // Deleted set must include every DM3a-onwards critique.
+        for step in ["DM3a", "DM3b", "DM3c", "DM4a", "DM4b"] {
+            let p = project.join(format!("docs/critiques/{step}-critique.md"));
+            assert!(
+                !p.exists(),
+                "{step}-critique.md should be deleted by reset to DM3a"
+            );
+            assert!(
+                deleted.iter().any(|d| d == &p),
+                "{step}-critique.md should be in the deleted list"
+            );
+        }
+        // Upstream critiques must survive untouched.
+        for step in ["DM0", "DM1", "DM2a", "DM2b", "DM2c", "DM2d"] {
+            let p = project.join(format!("docs/critiques/{step}-critique.md"));
+            assert!(
+                p.exists(),
+                "{step}-critique.md should NOT be deleted by reset to DM3a"
+            );
+        }
+    }
+
+    /// Upstream-protection: when DM4b's coarse `["docs/analysis/"]`
+    /// `work_artifact` would otherwise sweep DM2a/DM2b's specific
+    /// files (`decomposition.md`, `pipeline-mapping.md`,
+    /// `data-movement.md`), the cleanup walker must do a selective
+    /// per-file delete instead of `remove_dir_all`. Same idea for
+    /// any other coarse-claim overlap.
+    #[test]
+    fn clear_step_collateral_forward_protects_upstream_files_inside_shared_dirs() {
+        use crate::__internal::steps::registry_for;
+        use crate::state::Flow;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path();
+        std::fs::create_dir_all(project.join("docs/analysis")).unwrap();
+        std::fs::create_dir_all(project.join("docs/critiques")).unwrap();
+        // Upstream-owned (DM2a / DM2b).
+        std::fs::write(project.join("docs/analysis/decomposition.md"), "DM2a\n").unwrap();
+        std::fs::write(project.join("docs/analysis/pipeline-mapping.md"), "DM2b\n").unwrap();
+        std::fs::write(project.join("docs/analysis/data-movement.md"), "DM2a\n").unwrap();
+        // DM4b-era report file that DOES belong to the reset scope.
+        std::fs::write(project.join("docs/analysis/throughput.md"), "DM4b report\n").unwrap();
+        // Auxiliary file that's not in any work_artifact set.
+        // Conservative behavior: leave it alone (the directory has
+        // upstream-protected children, so we don't `remove_dir_all`).
+        std::fs::write(project.join("docs/analysis/.gitkeep"), "").unwrap();
+
+        let registry = registry_for(Flow::DirectModeling);
+        let order: Vec<&'static str> = registry.order_for(Flow::DirectModeling);
+        let idx = order.iter().position(|s| *s == "DM3a").unwrap();
+        let (_deleted, failures) = clear_step_collateral_forward(project, idx, &order, &registry);
+        assert!(failures.is_empty(), "got failures: {failures:?}");
+
+        // Upstream files survive.
+        assert!(
+            project.join("docs/analysis/decomposition.md").exists(),
+            "DM2a's decomposition.md must survive a reset to DM3a"
+        );
+        assert!(
+            project.join("docs/analysis/pipeline-mapping.md").exists(),
+            "DM2b's pipeline-mapping.md must survive a reset to DM3a"
+        );
+        assert!(
+            project.join("docs/analysis/data-movement.md").exists(),
+            "DM2a's data-movement.md must survive a reset to DM3a"
+        );
+        // DM4b's report inside the same dir gets cleaned up.
+        assert!(
+            !project.join("docs/analysis/throughput.md").exists(),
+            "DM4b's throughput.md must be deleted by reset to DM3a"
+        );
+        // The directory itself stays in place because protected
+        // children still need a parent.
+        assert!(
+            project.join("docs/analysis").is_dir(),
+            "docs/analysis/ must stay as a directory; protected children need it"
+        );
+    }
+
+    /// Scaffolding files inside a step's exclusive work_artifact
+    /// directory must survive a reset. The bug this regression-
+    /// tests: when `docs/test-plan/` is DM3a's work_artifact and
+    /// nothing upstream lives inside it, the directory delete
+    /// path would `remove_dir_all` the whole directory -- sweeping
+    /// the `coverage.md.tmpl` and other `.tmpl` scaffolding the
+    /// project seeded at `sim-flow new model` time. The reset must
+    /// fall back to a selective walk when scaffolding files are
+    /// present, even with no upstream-protected descendants.
+    #[test]
+    fn clear_step_collateral_forward_preserves_tmpl_inside_exclusive_dir() {
+        use crate::__internal::steps::registry_for;
+        use crate::state::Flow;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path();
+        std::fs::create_dir_all(project.join("docs/test-plan")).unwrap();
+        std::fs::create_dir_all(project.join("docs/critiques")).unwrap();
+        // DM3a's work_artifact (entire docs/test-plan/ dir).
+        std::fs::write(project.join("docs/test-plan/test-plan.md"), "# old\n").unwrap();
+        std::fs::write(
+            project.join("docs/test-plan/test-milestone-01-smoke.md"),
+            "- [ ] from prior pass\n",
+        )
+        .unwrap();
+        // Scaffolding seeded by sim-flow new model. Must survive.
+        std::fs::write(
+            project.join("docs/test-plan/coverage.md.tmpl"),
+            "template body\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.join("docs/test-plan/test-plan.md.tmpl"),
+            "template body\n",
+        )
+        .unwrap();
+        std::fs::write(project.join("docs/test-plan/.gitkeep"), "").unwrap();
+
+        let registry = registry_for(Flow::DirectModeling);
+        let order: Vec<&'static str> = registry.order_for(Flow::DirectModeling);
+        let idx = order.iter().position(|s| *s == "DM3a").unwrap();
+        let (_deleted, failures) = clear_step_collateral_forward(project, idx, &order, &registry);
+        assert!(failures.is_empty(), "got failures: {failures:?}");
+
+        // Generated artifacts gone.
+        assert!(
+            !project.join("docs/test-plan/test-plan.md").exists(),
+            "test-plan.md (generated) should be deleted"
+        );
+        assert!(
+            !project
+                .join("docs/test-plan/test-milestone-01-smoke.md")
+                .exists(),
+            "milestone files (generated) should be deleted"
+        );
+        // Scaffolding must survive.
+        assert!(
+            project.join("docs/test-plan/coverage.md.tmpl").exists(),
+            "coverage.md.tmpl is scaffolding; reset must NOT delete it"
+        );
+        assert!(
+            project.join("docs/test-plan/test-plan.md.tmpl").exists(),
+            "test-plan.md.tmpl is scaffolding; reset must NOT delete it"
+        );
+        assert!(
+            project.join("docs/test-plan/.gitkeep").exists(),
+            ".gitkeep is scaffolding; reset must NOT delete it"
+        );
+        // The dir itself stays because the scaffolding files need a parent.
+        assert!(
+            project.join("docs/test-plan").is_dir(),
+            "docs/test-plan/ must remain to hold the surviving scaffolding"
+        );
+    }
+
+    /// Project scaffolding -- `.gitkeep` markers and `*.tmpl`
+    /// template files seeded by `sim-flow new model` -- survive a
+    /// reset even when they sit inside a step's work_artifact
+    /// directory. They aren't owned by any flow step; deleting
+    /// them on reset would force the user to git-restore template
+    /// scaffolding every time they reset a step.
+    #[test]
+    fn clear_step_collateral_forward_preserves_reset_scaffolding() {
+        use crate::__internal::steps::registry_for;
+        use crate::state::Flow;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path();
+        std::fs::create_dir_all(project.join("docs/analysis")).unwrap();
+        std::fs::create_dir_all(project.join("docs/critiques")).unwrap();
+        // DM4b-era report (downstream-owned -> deleted).
+        std::fs::write(project.join("docs/analysis/throughput.md"), "report\n").unwrap();
+        // Project scaffolding (no step claims it -> survives).
+        std::fs::write(project.join("docs/analysis/.gitkeep"), "").unwrap();
+        std::fs::write(
+            project.join("docs/analysis/decomposition.md.tmpl"),
+            "template\n",
+        )
+        .unwrap();
+        // Upstream-owned (DM2a) file.
+        std::fs::write(
+            project.join("docs/analysis/decomposition.md"),
+            "DM2a output\n",
+        )
+        .unwrap();
+
+        let registry = registry_for(Flow::DirectModeling);
+        let order: Vec<&'static str> = registry.order_for(Flow::DirectModeling);
+        let idx = order.iter().position(|s| *s == "DM3a").unwrap();
+        let (_deleted, failures) = clear_step_collateral_forward(project, idx, &order, &registry);
+        assert!(failures.is_empty(), "got failures: {failures:?}");
+
+        assert!(
+            !project.join("docs/analysis/throughput.md").exists(),
+            "downstream report should be cleaned"
+        );
+        assert!(
+            project.join("docs/analysis/.gitkeep").exists(),
+            ".gitkeep is scaffolding; reset must not touch it"
+        );
+        assert!(
+            project.join("docs/analysis/decomposition.md.tmpl").exists(),
+            "*.tmpl files are scaffolding; reset must not touch them"
+        );
+        assert!(
+            project.join("docs/analysis/decomposition.md").exists(),
+            "DM2a's decomposition.md is upstream-protected"
+        );
+    }
+
+    /// Reset to a step clears that step's `work_artifacts` (and
+    /// downstream steps' artifacts) when nothing upstream claims
+    /// them. For DM3a: `docs/test-plan/` is exclusively DM3a's, so
+    /// it gets wiped wholesale. `tests/` is shared with DM2d
+    /// (upstream) so the directory survives intact -- a known
+    /// limitation of coarse `work_artifacts` declarations; the
+    /// alternative was the bug that wiped DM2d's elaboration test.
+    #[test]
+    fn clear_step_collateral_forward_deletes_exclusive_artifacts_only() {
+        use crate::__internal::steps::registry_for;
+        use crate::state::Flow;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path();
+        std::fs::create_dir_all(project.join("docs/test-plan")).unwrap();
+        std::fs::create_dir_all(project.join("docs/critiques")).unwrap();
+        std::fs::create_dir_all(project.join("tests")).unwrap();
+        // Old-flow leftovers under docs/test-plan/ (DM3a's
+        // exclusive artifact -> deleted).
+        std::fs::write(project.join("docs/test-plan/test-plan.md"), "# old\n").unwrap();
+        std::fs::write(project.join("docs/test-plan/smoke.md"), "# old\n").unwrap();
+        std::fs::write(project.join("docs/test-plan/edge.md"), "# old\n").unwrap();
+        // tests/ is shared between DM2d and DM3b/DM3c -- the
+        // upstream-protection logic preserves the dir as a whole
+        // because DM2d (upstream of DM3a) claims it. Stale DM3b
+        // artifacts inside survive too, but that's the safer
+        // tradeoff vs. wiping DM2d's smoke tests.
+        std::fs::write(project.join("tests/testbench.rs"), "// old\n").unwrap();
+        std::fs::write(project.join("tests/elaboration.rs"), "// dm2d\n").unwrap();
+        // Pre-DM3a artifacts that must NOT be deleted.
+        std::fs::create_dir_all(project.join("docs/impl-plan")).unwrap();
+        std::fs::write(project.join("docs/impl-plan/plan.md"), "# keep\n").unwrap();
+        std::fs::write(project.join("docs/spec.md"), "# keep\n").unwrap();
+
+        let registry = registry_for(Flow::DirectModeling);
+        let order: Vec<&'static str> = registry.order_for(Flow::DirectModeling);
+        let idx = order.iter().position(|s| *s == "DM3a").unwrap();
+        let (_deleted, failures) = clear_step_collateral_forward(project, idx, &order, &registry);
+        assert!(failures.is_empty(), "got failures: {failures:?}");
+
+        // DM3a's exclusive artifact `docs/test-plan/` is gone.
+        assert!(
+            !project.join("docs/test-plan").exists(),
+            "docs/test-plan/ is DM3a-exclusive; reset to DM3a should remove it"
+        );
+        // tests/ survives because DM2d (upstream) also claims it.
+        // DM2d's elaboration test specifically must survive; the
+        // stale DM3b file inside is collateral that the
+        // re-running DM3b will overwrite.
+        assert!(
+            project.join("tests").exists(),
+            "tests/ is shared with DM2d; reset to DM3a must not delete the dir"
+        );
+        assert!(
+            project.join("tests/elaboration.rs").exists(),
+            "tests/elaboration.rs is DM2d's; reset to DM3a MUST NOT delete it"
+        );
+        // Upstream artifacts that don't share a dir survive.
+        assert!(
+            project.join("docs/impl-plan/plan.md").exists(),
+            "docs/impl-plan/plan.md is DM2c's; reset to DM3a must NOT touch it"
+        );
+        assert!(
+            project.join("docs/spec.md").exists(),
+            "docs/spec.md is DM0's; reset to DM3a must NOT touch it"
+        );
     }
 }

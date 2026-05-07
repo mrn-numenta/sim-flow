@@ -17,7 +17,7 @@ sweep table, a `docs/analysis/<topic>.md` report).
 
 Read these before writing the plan:
 
-- `docs/plan/plan-management.md` -- the plan-file conventions
+- `docs/impl-plan/plan-management.md` -- the plan-file conventions
   (`plan.md` index + per-milestone files, milestone / task numbering,
   `[ ]` checkbox format).
 - `docs/spec.md` -- the specification (workload assumptions,
@@ -28,7 +28,7 @@ Read these before writing the plan:
   per-module utilization + bottleneck reporting).
 - `docs/analysis/pipeline-mapping.md` -- pipeline shape
   (for stage-level stall / occupancy reporting).
-- `docs/plan/test-plan.md` -- the verification surface; the
+- `docs/test-plan/test-plan.md` -- the verification surface; the
   Stress category there names the workloads that already exercise
   the targets and can usually be promoted into perf measurements.
 - `src/`, `tests/` -- the model under test and the testbench
@@ -40,10 +40,10 @@ that's DM4b's concern when running experiments and writing reports.
 ## Procedure
 
 1. Read each input above.
-2. If `docs/plan/perf-plan.md` does not exist, create it from
-   `docs/plan/perf-plan.md.tmpl`. Create each
-   `docs/plan/perf-milestone-NN-<name>.md` from
-   `docs/plan/perf-milestone.md.tmpl`. Use the templates as the
+2. If `docs/perf-plan/perf-plan.md` does not exist, create it from
+   `docs/perf-plan/perf-plan.md.tmpl`. Create each
+   `docs/perf-plan/perf-milestone-NN-<name>.md` from
+   `docs/impl-plan/perf-milestone.md.tmpl`. Use the templates as the
    required structure, but adapt them to the design rather than
    filling them mechanically.
 3. Decide the milestone breakdown. Use this skeleton; each entry is
@@ -103,16 +103,16 @@ that's DM4b's concern when running experiments and writing reports.
 
 ## Output
 
-Per `docs/plan/plan-management.md`:
+Per `docs/impl-plan/plan-management.md`:
 
-- `docs/plan/perf-plan.md` -- the index. Brief overview, then a
+- `docs/perf-plan/perf-plan.md` -- the index. Brief overview, then a
   TOC pointing at each `perf-milestone-NN-<name>.md`.
-- `docs/plan/perf-milestone-NN-<name>.md` -- one file per
+- `docs/perf-plan/perf-milestone-NN-<name>.md` -- one file per
   milestone with the milestone's task list (`[ ]` bullets).
 
 The `perf-` prefix on milestone files keeps them distinct from
 DM2c's implementation milestones (`milestone-NN-*.md`) when both
-trees coexist under `docs/plan/`.
+trees coexist under `docs/impl-plan/`.
 
 ## Constraints
 

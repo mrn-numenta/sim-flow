@@ -18,6 +18,17 @@ evaluate them and write the critique file.
 Prefix unresolved issues with `UNRESOLVED:` and gate-blocking issues with
 `BLOCKER:`.
 
+**Finding-marker grammar.** The gate parses lines starting with
+`BLOCKER:` / `RESOLVED:` / `UNRESOLVED:` (case-insensitive,
+plural OK) optionally preceded by list markers (`-`, `*`, `+`,
+`>`), heading markers (`#`+), bold/underline (`**` / `__`), and
+one decoration glyph (e.g. `❌` `✅`). Headings DO match
+(`### BLOCKER: ...`); section titles describing a blocker
+without a colon-after-keyword (e.g. `### BLOCKER 1 - title`)
+do NOT match -- they're prose. Mid-sentence mentions do NOT
+match. ONLY the keyword-colon shape is a finding; pick the form
+deliberately.
+
 1. Does every target in `docs/targets.md` trace back to a specific line or
    section of `docs/spec.md`?
 2. Does `docs/targets.md` include a gate-budget-per-cycle target or
@@ -39,6 +50,13 @@ Prefix unresolved issues with `UNRESOLVED:` and gate-blocking issues with
    way that will bite later?
 9. Are Scoreboard checks meaningful (value, ordering, invariants) or
    trivial (non-crash)?
+10. Does `docs/testbench.md` name a concrete `lib:examples/<NN-name>/test/`
+    implementation baseline, with a rationale that actually matches the
+    spec's port shape / stage count / flow-control surface? An absent
+    baseline is a `BLOCKER:`; a named baseline whose topology
+    demonstrably mismatches the design (e.g.  `04-combinatorial-logic`
+    cited for a multi-stage pipeline) is also a `BLOCKER:` -- DM3b
+    inherits the choice without re-evaluating it.
 
 ## Output
 

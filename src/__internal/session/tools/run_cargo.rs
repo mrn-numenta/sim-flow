@@ -64,30 +64,63 @@ impl Tool for RunCargoTool {
                 )));
             }
         };
-        let display = format!(
-            "[run_cargo `{}`] exit {}\n\n--- stdout (tail) ---\n{}\n\n--- stderr (tail) ---\n{}",
-            outcome.command,
-            outcome.exit_code,
-            if outcome.stdout_tail.is_empty() {
-                "(empty)"
-            } else {
-                outcome.stdout_tail.as_str()
-            },
-            if outcome.stderr_tail.is_empty() {
-                "(empty)"
-            } else {
-                outcome.stderr_tail.as_str()
-            },
-        );
+        // For `cargo test` failures, replace the raw stdout/stderr
+        // tail dump with a coalesced panic-block summary -- the
+        // sim-foundation framework emits ~7 lines of per-test
+        // instrumentation noise around each failing test, which
+        // crowds out the actual panic location + assertion body in
+        // the 8KB stderr tail. The summarizer extracts each
+        // `thread '...' panicked at FILE:LINE:` block, drops the
+        // instrumentation, and groups identical assertions so the
+        // agent sees `5 tests failed at line 290 (...)` instead of
+        // five copies. When the parser finds nothing (e.g. compile
+        // error before any test ran), fall back to the raw dump.
+        let test_summary = if command == "test" && !outcome.ok() {
+            crate::session::runners::summarize_cargo_test_failures(
+                &outcome.stdout_tail,
+                &outcome.stderr_tail,
+            )
+        } else {
+            None
+        };
+
+        let display = match &test_summary {
+            Some(s) => format!(
+                "[run_cargo `{}`] exit {}\n\n{}",
+                outcome.command, outcome.exit_code, s.display,
+            ),
+            None => format!(
+                "[run_cargo `{}`] exit {}\n\n--- stdout (tail) ---\n{}\n\n--- stderr (tail) ---\n{}",
+                outcome.command,
+                outcome.exit_code,
+                if outcome.stdout_tail.is_empty() {
+                    "(empty)"
+                } else {
+                    outcome.stdout_tail.as_str()
+                },
+                if outcome.stderr_tail.is_empty() {
+                    "(empty)"
+                } else {
+                    outcome.stderr_tail.as_str()
+                },
+            ),
+        };
+
         if outcome.ok() {
             Ok(ToolResult::ok(display))
         } else {
             // Tool didn't fail in any framework sense, but the cargo
-            // run reported a non-zero exit. We surface that via the
-            // err variant so the chat UI annotates it as a failed
-            // tool invocation; the agent still gets the full output
-            // in `display` and can act on it.
-            Ok(ToolResult::err(display))
+            // run reported a non-zero exit. Surface via err() so the
+            // chat UI annotates it as a failed tool invocation; the
+            // agent still gets the full (or coalesced) output in
+            // `display` and can act on it. If the summarizer parsed
+            // a failure count, attach it so the orchestrator's
+            // auto-iter loop can detect progress.
+            let mut result = ToolResult::err(display);
+            if let Some(s) = test_summary {
+                result = result.with_test_failure_count(s.failure_count);
+            }
+            Ok(result)
         }
     }
 }

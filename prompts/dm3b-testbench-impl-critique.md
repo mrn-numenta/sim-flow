@@ -1,28 +1,48 @@
 # DM3b - Testbench Implementation (critique session)
 
-You are reviewing the DM3b testbench scaffolding. Treat it as work
-produced by a third party even if you produced it yourself earlier
-in this conversation -- the independent-review property depends on
-you bracketing any prior reasoning rather than leaning on it. The
-testbench is the substrate DM3c will fill with edge / stress /
-random tests; gaps here force DM3c to either work around them or
-kick the work back. Do not modify the testbench; evaluate it and
-write the critique file.
+You are reviewing the DM3b testbench scaffolding. Treat it as
+work produced by a third party even if you produced it yourself
+earlier in this conversation -- the independent-review property
+depends on you bracketing any prior reasoning rather than leaning
+on it. Do not modify the testbench; evaluate it and write the
+critique file.
+
+This critique runs more than once:
+
+- after each `tb-milestone-NN-*.md` is checked off, to validate
+  the just-landed slice before the next milestone starts
+- once after the FINAL tb milestone, as the lighter end-to-end
+  integration / regression check across the full testbench
+
+Determine which milestone was just completed by walking
+`docs/test-plan/tb-milestone-NN-*.md` files in numeric order and
+finding the highest-numbered one whose rows are all resolved
+(`- [x]` or `- [-]` with a defer-reason). Review that milestone in
+detail, and also sanity-check that the new work didn't regress
+earlier milestones.
 
 ## Inputs
 
-- `docs/plan/test-plan.md` -- the contract DM3b was implementing;
-  specifically its `## Testbench` and `## Smoke` sections.
-- `tests/` source tree (or the test module the work session used).
-- `src/` -- the model under test, for confirming Monitors observe
-  the right ports.
+- `docs/impl-plan/plan-management.md` -- plan-file conventions
+  including the 10-task cap.
+- `docs/testbench.md` -- DM1's verification strategy. Specifically
+  `## Implementation Baseline` names the
+  `lib:examples/<NN-name>/test/` directory DM3b is mirroring.
+- `docs/test-plan/test-plan.md` -- index. Testbench architecture +
+  the contract DM3b is implementing.
+- `docs/test-plan/tb-milestone-NN-<name>.md` -- per-milestone task
+  lists. Verify every row in the just-completed milestone is
+  `- [x]` or `- [-]` with a `defer reason:`.
+- `tests/` source tree (or the test module DM3b is building).
+- `src/` -- model under test, for confirming Monitors observe the
+  right ports.
 - Reference material on demand:
+  - The named baseline `lib:examples/<NN-name>/test/`. Read it to
+    compare structure when judging baseline fidelity.
   - `lib:docs/modeling-guide/04-testing-models.md` for canonical
-    UVM-lite structure and `SimEnvBuilder` patterns.
-  - The example directories cited by `docs/plan/test-plan.md`.
-  - `fw:api/toc.md`, then only the specific `fw:api/pages/...` files
-    needed to confirm public API usage. Use `fw:src/prelude.rs` only as
-    a secondary source if you need an exact source-level signature.
+    UVM-lite patterns.
+  - `fw:api/toc.md` -> the specific `fw:api/pages/...` pages for
+    exact API signatures.
 
 ## Evaluation
 
@@ -30,41 +50,92 @@ Prefix gate-blocking issues with `BLOCKER:` (DM3c cannot proceed
 until fixed). Prefix informational notes with `UNRESOLVED:`. The
 orchestrator fails the DM3b gate on `BLOCKER:` lines only.
 
-1. **Component coverage**. Is every component named in
-   `docs/plan/test-plan.md`'s `## Testbench` section implemented?
-   Quote the plan row and the implementing source location for
-   each.
-2. **UVM-lite topology**. Sequencer -> Driver -> DUT -> Monitor ->
-   Scoreboard intact? Do any components reach into internal model
+**Finding-marker grammar.** The gate parses lines starting with
+`BLOCKER:` / `RESOLVED:` / `UNRESOLVED:` (case-insensitive,
+plural OK) optionally preceded by list markers (`-`, `*`, `+`,
+`>`), heading markers (`#`+), bold/underline (`**` / `__`), and
+one decoration glyph (e.g. `❌` `✅`). Headings DO match
+(`### BLOCKER: ...`); section titles describing a blocker
+without a colon-after-keyword (e.g. `### BLOCKER 1 - title`)
+do NOT match -- they're prose. Mid-sentence mentions do NOT
+match. ONLY the keyword-colon shape is a finding; pick the form
+deliberately.
+
+1. **Milestone completeness**. Identify the just-completed
+   milestone (the highest-numbered `tb-milestone-NN-*.md` whose
+   rows are all resolved). Is every row in that file `- [x]` or
+   `- [-]` with a specific `- defer reason:` sub-bullet? Reject
+   silently-skipped rows. On the FINAL critique, all
+   tb-milestone files must be fully resolved.
+
+2. **Task fidelity**. For each `- [x]` row in the just-completed
+   milestone, does the named artifact actually exist in `tests/`
+   with the symbol the task said it would? Quote the row and
+   the implementing source location. Reject rows ticked off
+   without the artifact landing.
+
+3. **Baseline fidelity**. Quote the
+   `lib:examples/<NN-name>/test/` baseline named in
+   `docs/testbench.md`'s `## Implementation Baseline`. Does the
+   `tests/` file structure mirror that baseline (file layout,
+   module split, `SimEnvBuilder` call site)? Silent
+   substitution of a different baseline is a `BLOCKER:`. A
+   genuine reason to deviate is also a `BLOCKER:` -- surface it
+   so DM1 can be revisited rather than fixed forward.
+
+4. **UVM-lite topology**. Sequencer -> Driver -> DUT -> Monitor
+   -> Scoreboard intact in the artifacts that landed this
+   milestone? Do any components reach into internal model
    state they should observe via Monitors?
-3. **`SimEnvBuilder` wiring**. Is there a helper function (named
-   per the plan) that returns a fully assembled `SimEnv`? Does it
-   connect every external port?
-4. **Scoreboard quality**. Are Scoreboard checks meaningful
-   (value, ordering, invariants stated in the plan), not trivial
-   (non-crash, "did anything come out")?
-5. **Smoke test**. Is the basic data-flow smoke test from the
-   plan implemented and passing? Does it exercise the wiring
-   end-to-end (stimulus -> DUT -> monitor -> scoreboard) rather
-   than testing components in isolation?
-6. **Build state**. Does `cargo build` succeed? Does
-   `cargo test` succeed for the smoke test? (Confirm via the
-   `run_cargo` tool; don't infer.)
-7. **Public API discipline**. Does the testbench stay within the
-   public framework surface reachable from `fw:`? Reject reliance on
-   internal helper modules or non-curated framework internals when a
-   public API page does not justify it.
-8. **Payload / port fidelity**. Do Drivers and Monitors use payload
-   types and port names that match `src/`, `docs/spec.md`, and
-   `docs/analysis/data-movement.md`? Flag mismatches explicitly.
-9. **Scope discipline**. Does DM3b stay out of DM3c territory?
-   Reject edge / stress / random tests authored at this step --
-   only the basic data-flow smoke is allowed.
-10. **Plan fidelity**. If the implementation deviated from
-   `docs/plan/test-plan.md` (renamed components, added ones not
-   in the plan, skipped ones), flag every deviation. The plan
-   is the contract; deviations belong as a `BLOCKER:` so DM3a
-   can be revisited.
+
+5. **Payload / port fidelity**. Do new Drivers and Monitors use
+   payload types and port names that match `src/`,
+   `docs/spec.md`, and `docs/analysis/data-movement.md`? Flag
+   mismatches explicitly.
+
+6. **Build state**. Does `cargo build` succeed? On the smoke
+   milestone (typically the last tb-milestone), does
+   `cargo test` also succeed for the basic data-flow smoke
+   test? Confirm via the `run_cargo` tool; don't infer from
+   source.
+
+7. **Public API discipline**. Does the new code stay within the
+   public framework surface reachable from `fw:`? Reject reliance
+   on internal helper modules or non-curated framework internals
+   when a public API page does not justify it.
+
+8. **Scope discipline**. Does DM3b stay out of DM3c territory?
+   The boundary is "categories named in the test plan", not
+   "count of `#[test]` functions":
+   - **In scope for DM3b**: Sequencer / Driver / Monitor /
+     Scoreboard bodies (their internal assertion / comparison
+     logic is scaffolding, not tests); the `SimEnvBuilder`
+     helper; the basic data-flow smoke test from the final
+     tb-milestone; small scaffolding-verification tests that
+     prove the scoreboard / wiring fire correctly.
+   - **Out of scope for DM3b** (`BLOCKER:` if newly-authored
+     code does this): any `#[test]` that maps to a row in a
+     `test-milestone-NN-*.md` file (smoke beyond the basic
+     data-flow entry, edge, stress, random). Those belong to
+     DM3c.
+   - **Pre-existing tests from earlier steps are NOT DM3b's
+     responsibility**: DM2d may legitimately have left smoke
+     tests under `tests/`. Do not flag DM2d-era tests as DM3b
+     scope violations. Only `BLOCKER:` tests that DM3b itself
+     authored this step in scope-violating categories.
+
+9. **Plan fidelity**. If DM3b deviated from the milestone task
+   text (renamed components, added rows not in the plan, skipped
+   rows), flag every deviation. The `tb-milestone-NN-*.md` rows
+   are the contract. Genuine plan errors should produce a
+   `BLOCKER:` so DM3a can be revisited.
+
+10. **Milestone composability**. If this is a milestone
+    checkpoint critique rather than the final DM3b review, is
+    the just-completed milestone solid enough that the next
+    tb-milestone can safely build on it? If this is the final
+    review, do the milestone-local artifacts compose cleanly
+    into a working testbench end-to-end without regression?
 
 ## Output
 

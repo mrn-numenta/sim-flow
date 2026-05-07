@@ -16,8 +16,14 @@ specifications.
 
 ## Project Structure
 
-- `docs/plan/` - Implementation plan (DM2c) -- `plan.md` index plus
-  per-milestone `milestone-NN-<name>.md` files DM2d works through.
+- `docs/impl-plan/` - Implementation plan (DM2c) -- `plan.md` index
+  plus per-milestone `milestone-NN-<name>.md` files DM2d works through.
+- `docs/test-plan/` - Verification plan (DM3a) -- `test-plan.md` index
+  plus per-category `smoke.md` / `edge.md` / `stress.md` / `random.md`
+  / `coverage.md` files DM3b/DM3c implement.
+- `docs/perf-plan/` - Performance analysis plan (DM4a) -- `perf-plan.md`
+  index plus per-milestone `perf-milestone-NN-<name>.md` files DM4b
+  executes.
 - `src/model/` - Module definitions, topology, hierarchy (DM2a/DM2b
   analysis; DM2d implementation)
 - `src/sim.rs` - Simulation harness and runtime wiring (DM2d / DM3)

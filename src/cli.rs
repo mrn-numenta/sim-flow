@@ -201,7 +201,7 @@ pub(crate) enum Command {
         /// only `claude`). `per-step` (default) spawns a fresh agent
         /// per step. `single` (Pass 2) keeps one agent across the
         /// whole flow with lazy re-spawn. Ignored for non-interactive
-        /// backends (vscode / anthropic / openai / ollama / lmstudio).
+        /// backends (vscode / anthropic / openai / ollama / openai-compat).
         #[arg(long, value_enum, default_value_t = SessionMode::PerStep)]
         session_mode: SessionMode,
         /// Step-axis mode (orthogonal to `--session-mode`). `auto`
@@ -240,12 +240,12 @@ pub(crate) enum Command {
         /// LLM backend. With `--jsonl`: opaque label echoed back to
         /// the host. Without `--jsonl`: selects the built-in
         /// CliAgent (`claude`, `codex`, `gh-copilot`, `ollama`,
-        /// `lmstudio`).
+        /// `openai-compat`).
         #[arg(long, default_value = "vscode")]
         llm_backend: String,
-        /// Optional model identifier. Required for LM Studio and
-        /// useful for Ollama (defaults to `llama3.1`); ignored by
-        /// `claude` / `codex` unless their CLI accepts a
+        /// Optional model identifier. Required for OpenAI-compat
+        /// servers and useful for Ollama (defaults to `llama3.1`);
+        /// ignored by `claude` / `codex` unless their CLI accepts a
         /// `--model` flag.
         #[arg(long)]
         llm_model: Option<String>,
@@ -254,11 +254,12 @@ pub(crate) enum Command {
         /// `--llm-backend ollama`.
         #[arg(long)]
         ollama_base_url: Option<String>,
-        /// Override the LM Studio base URL (default
-        /// `http://localhost:1234/v1`). Only meaningful when
-        /// `--llm-backend lmstudio`.
+        /// Override the OpenAI-compat base URL (default
+        /// `http://localhost:1234/v1` — LM Studio's port). Only
+        /// meaningful when `--llm-backend openai-compat`. Set to
+        /// vLLM / llama.cpp / TGI's port as needed.
         #[arg(long)]
-        lmstudio_base_url: Option<String>,
+        openai_base_url: Option<String>,
         /// Candidate scope for per-candidate steps (DSF).
         #[arg(long)]
         candidate: Option<String>,

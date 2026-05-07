@@ -12,7 +12,7 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use super::CliAgent;
+use super::{CliAgent, LlmCallMetrics};
 use crate::session::protocol::{LlmMessage, LlmRole};
 use crate::{Error, Result};
 
@@ -70,7 +70,8 @@ impl CliAgent for ClaudeAgent {
         "claude"
     }
 
-    fn dispatch(&self, messages: &[LlmMessage]) -> Result<String> {
+    fn dispatch(&self, messages: &[LlmMessage]) -> Result<(String, LlmCallMetrics)> {
+        let started = std::time::Instant::now();
         let prompt = Self::render_prompt(messages);
         let mut cmd = Command::new("claude");
         cmd.arg("-p");
@@ -121,7 +122,13 @@ impl CliAgent for ClaudeAgent {
             )));
         }
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        Ok(stdout)
+        // CLI doesn't surface token usage; only wall time is meaningful.
+        let metrics = LlmCallMetrics {
+            tokens_in: None,
+            tokens_out: None,
+            wall_ms: started.elapsed().as_millis() as u64,
+        };
+        Ok((stdout, metrics))
     }
 }
 

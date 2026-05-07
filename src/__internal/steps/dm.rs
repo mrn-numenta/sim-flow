@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use crate::gate::GateCheck;
 use crate::state::Flow;
-use crate::steps::{StepDescriptor, StepRegistry};
+use crate::steps::{MilestoneWalkConfig, StepDescriptor, StepRegistry};
 
 pub fn register(reg: &mut StepRegistry) {
     reg.register(dm0());
@@ -56,6 +56,17 @@ fn shell(cmd: &str, args: &[&str], description: &str) -> GateCheck {
     }
 }
 
+/// Pair this with a `StepDescriptor::milestone_walk` so the step's
+/// gate cannot pass while any milestone file under `dir` still has
+/// `- [ ]` rows.
+fn milestones_all_resolved(dir: &str, file_prefix: &str, description: &str) -> GateCheck {
+    GateCheck::MilestonesAllResolved {
+        dir: PathBuf::from(dir),
+        file_prefix: file_prefix.to_string(),
+        description: description.to_string(),
+    }
+}
+
 fn dm0() -> StepDescriptor {
     StepDescriptor {
         id: "DM0",
@@ -82,6 +93,7 @@ fn dm0() -> StepDescriptor {
         work_write_paths: &["docs/"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
+        milestone_walk: None,
     }
 }
 
@@ -105,6 +117,11 @@ fn dm1() -> StepDescriptor {
                 r"(Sequencer|Driver|Monitor|Scoreboard)",
                 "docs/testbench.md names at least one UVM-lite component",
             ),
+            file_matches(
+                "docs/testbench.md",
+                r"lib:examples/\d{2}-[a-z0-9-]+/test/?",
+                "docs/testbench.md names a concrete lib:examples/<NN-name>/test/ baseline DM3b will mirror",
+            ),
             critique_clean("DM1"),
         ],
         work_artifacts: &["docs/targets.md", "docs/testbench.md"],
@@ -112,6 +129,7 @@ fn dm1() -> StepDescriptor {
         work_write_paths: &["docs/"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
+        milestone_walk: None,
     }
 }
 
@@ -146,6 +164,7 @@ fn dm2a() -> StepDescriptor {
         work_write_paths: &["docs/"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
+        milestone_walk: None,
     }
 }
 
@@ -177,11 +196,12 @@ fn dm2b() -> StepDescriptor {
         work_write_paths: &["docs/"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
+        milestone_walk: None,
     }
 }
 
 /// DM2c (Implementation Plan) — produces the milestone-driven plan
-/// at `docs/plan/`. No code is written here; that's DM2d's job.
+/// at `docs/impl-plan/`. No code is written here; that's DM2d's job.
 /// The gate verifies that `plan.md` exists, references at least one
 /// numbered milestone heading, and that there's at least one
 /// `milestone-NN-<name>.md` file alongside it.
@@ -193,20 +213,20 @@ fn dm2c() -> StepDescriptor {
         instruction_slug: "dm2c-model-impl-plan",
         per_candidate: false,
         gate_checks: vec![
-            file_exists("docs/plan/plan.md", "docs/plan/plan.md exists"),
+            file_exists("docs/impl-plan/plan.md", "docs/impl-plan/plan.md exists"),
             file_matches(
-                "docs/plan/plan.md",
+                "docs/impl-plan/plan.md",
                 r"(?i)milestone\s+\d+",
-                "docs/plan/plan.md references at least one numbered milestone",
+                "docs/impl-plan/plan.md references at least one numbered milestone",
             ),
             shell(
                 "sh",
-                &["-c", "ls docs/plan/milestone-*.md >/dev/null 2>&1"],
-                "docs/plan/ contains at least one milestone-NN-*.md file",
+                &["-c", "ls docs/impl-plan/milestone-*.md >/dev/null 2>&1"],
+                "docs/impl-plan/ contains at least one milestone-NN-*.md file",
             ),
             critique_clean("DM2c"),
         ],
-        work_artifacts: &["docs/plan/plan.md"],
+        work_artifacts: &["docs/impl-plan/plan.md"],
         predecessor_inputs: &[
             "docs/spec.md",
             "docs/analysis/decomposition.md",
@@ -216,6 +236,7 @@ fn dm2c() -> StepDescriptor {
         work_write_paths: &["docs/"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
+        milestone_walk: None,
     }
 }
 
@@ -256,6 +277,11 @@ fn dm2d() -> StepDescriptor {
                 &["-r", "--include=*.rs", "-q", "impl HasLogic", "src"],
                 "src/ implements HasLogic",
             ),
+            milestones_all_resolved(
+                "docs/impl-plan/",
+                "milestone-",
+                "every docs/impl-plan/milestone-NN-*.md row resolved",
+            ),
             critique_clean("DM2d"),
         ],
         work_artifacts: &["src/", "tests/", "Cargo.toml"],
@@ -264,22 +290,41 @@ fn dm2d() -> StepDescriptor {
             "docs/analysis/decomposition.md",
             "docs/analysis/data-movement.md",
             "docs/analysis/pipeline-mapping.md",
-            "docs/plan/plan.md",
+            "docs/impl-plan/plan.md",
         ],
-        work_write_paths: &["src/", "tests/", "Cargo.toml"],
+        // `docs/impl-plan/` included so the agent can tick `[ ]` -> `[x]`
+        // on completed plan tasks. The DM2d critique gates already
+        // catch out-of-scope plan rewrites (gate 11: "introduced
+        // major architectural structures or boundaries not reflected
+        // in DM2c's plan"), so the safety net for misuse exists.
+        work_write_paths: &["src/", "tests/", "Cargo.toml", "docs/impl-plan/"],
         work_phases: &["author", "build", "test"],
         critique_phases: &["chat"],
+        // DM2d walks `docs/impl-plan/milestone-NN-*.md` files one
+        // at a time. The orchestrator picks the current milestone
+        // (first file with `- [ ]` rows) and scopes both work +
+        // critique sessions to it; the auto-driver iterates
+        // work-then-critique until every milestone is resolved.
+        milestone_walk: Some(MilestoneWalkConfig {
+            dir: "docs/impl-plan/",
+            file_prefix: "milestone-",
+            index_file: "docs/impl-plan/plan.md",
+        }),
     }
 }
 
-/// DM3a (Test Plan) — produces the formal verification plan at
-/// `docs/plan/test-plan.md`. The plan covers testbench design
-/// (UVM-lite components + `SimEnvBuilder` wiring), four enumerated
-/// test categories (smoke / edge / stress / random) with `[ ]`
-/// checklists, a `cargo-tarpaulin` coverage strategy, and a
-/// traceability table back to spec / targets / decomposition. No
-/// test code is written here; that's DM3b (scaffolding) and DM3c
-/// (test cases).
+/// DM3a (Test Plan) — produces the formal verification plan as a
+/// directory at `docs/test-plan/`. Top-level `test-plan.md` is the
+/// index (testbench architecture + traceability table back to spec
+/// / targets / decomposition); two parallel milestone sequences
+/// (`tb-milestone-NN-*.md` for DM3b's testbench-impl slices and
+/// `test-milestone-NN-*.md` for DM3c's test-execution slices); and
+/// `coverage.md` for the `cargo-tarpaulin` strategy. No test code
+/// is written here; that's DM3b (scaffolding) and DM3c (test
+/// cases). The milestone structure mirrors `docs/impl-plan/` and
+/// `docs/perf-plan/` so DM3b/DM3c walk small reviewable chunks
+/// with a critique after each milestone (10-task cap per
+/// `plan-management.md`).
 fn dm3a() -> StepDescriptor {
     StepDescriptor {
         id: "DM3a",
@@ -288,62 +333,70 @@ fn dm3a() -> StepDescriptor {
         instruction_slug: "dm3a-test-plan",
         per_candidate: false,
         gate_checks: vec![
-            file_exists("docs/plan/test-plan.md", "docs/plan/test-plan.md exists"),
+            file_exists(
+                "docs/test-plan/test-plan.md",
+                "docs/test-plan/test-plan.md exists (index file)",
+            ),
+            file_exists(
+                "docs/test-plan/coverage.md",
+                "docs/test-plan/coverage.md exists",
+            ),
+            shell(
+                "sh",
+                &["-c", "ls docs/test-plan/tb-milestone-*.md >/dev/null 2>&1"],
+                "docs/test-plan/ contains at least one tb-milestone-NN-*.md file (DM3b's slices)",
+            ),
+            shell(
+                "sh",
+                &[
+                    "-c",
+                    "ls docs/test-plan/test-milestone-*.md >/dev/null 2>&1",
+                ],
+                "docs/test-plan/ contains at least one test-milestone-NN-*.md file (DM3c's slices)",
+            ),
             file_matches(
-                "docs/plan/test-plan.md",
+                "docs/test-plan/test-plan.md",
                 r"(?i)Sequencer|Driver|Monitor|Scoreboard",
-                "docs/plan/test-plan.md describes UVM-lite components",
+                "test-plan.md index describes UVM-lite testbench components",
             ),
             file_matches(
-                "docs/plan/test-plan.md",
-                r"(?im)^##\s+Smoke",
-                "docs/plan/test-plan.md has a Smoke section",
-            ),
-            file_matches(
-                "docs/plan/test-plan.md",
-                r"(?im)^##\s+Edge",
-                "docs/plan/test-plan.md has an Edge section",
-            ),
-            file_matches(
-                "docs/plan/test-plan.md",
-                r"(?im)^##\s+Stress",
-                "docs/plan/test-plan.md has a Stress section",
-            ),
-            file_matches(
-                "docs/plan/test-plan.md",
-                r"(?im)^##\s+Random",
-                "docs/plan/test-plan.md has a Random section",
-            ),
-            file_matches(
-                "docs/plan/test-plan.md",
-                r"(?m)^-\s+\[\s?[x ]?\s?\]\s+",
-                "docs/plan/test-plan.md has markdown checklist entries",
-            ),
-            file_matches(
-                "docs/plan/test-plan.md",
-                r"(?i)tarpaulin",
-                "docs/plan/test-plan.md describes coverage via cargo-tarpaulin",
-            ),
-            file_matches(
-                "docs/plan/test-plan.md",
+                "docs/test-plan/test-plan.md",
                 r"spec\.md|targets\.md",
-                "docs/plan/test-plan.md traces entries back to docs/spec.md or docs/targets.md",
+                "test-plan.md index traces entries back to docs/spec.md or docs/targets.md",
+            ),
+            // Checklist entries can land in any milestone file; the
+            // shell glob succeeds when at least one `- [ ]` /
+            // `- [x]` line exists across the milestone files.
+            shell(
+                "sh",
+                &[
+                    "-c",
+                    "grep -lE '^-[[:space:]]+\\[[ x]\\][[:space:]]' docs/test-plan/tb-milestone-*.md docs/test-plan/test-milestone-*.md >/dev/null 2>&1",
+                ],
+                "docs/test-plan/ milestone files contain markdown checklist entries",
+            ),
+            file_matches(
+                "docs/test-plan/coverage.md",
+                r"(?i)tarpaulin",
+                "docs/test-plan/coverage.md describes coverage via cargo-tarpaulin",
             ),
             critique_clean("DM3a"),
         ],
-        work_artifacts: &["docs/plan/test-plan.md"],
+        work_artifacts: &["docs/test-plan/"],
         predecessor_inputs: &[
             "docs/spec.md",
             "docs/targets.md",
+            "docs/testbench.md",
             "docs/analysis/decomposition.md",
             "docs/analysis/pipeline-mapping.md",
             "docs/analysis/data-movement.md",
-            "docs/plan/plan.md",
+            "docs/impl-plan/plan.md",
             "src/",
         ],
         work_write_paths: &["docs/"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
+        milestone_walk: None,
     }
 }
 
@@ -372,13 +425,30 @@ fn dm3b() -> StepDescriptor {
                 "tests/ references UVM-lite testbench components",
             ),
             shell("cargo", &["build", "--quiet"], "cargo build succeeds"),
+            milestones_all_resolved(
+                "docs/test-plan/",
+                "tb-milestone-",
+                "every docs/test-plan/tb-milestone-NN-*.md row resolved",
+            ),
             critique_clean("DM3b"),
         ],
         work_artifacts: &["tests/"],
-        predecessor_inputs: &["docs/plan/test-plan.md", "src/"],
-        work_write_paths: &["tests/", "src/"],
+        predecessor_inputs: &["docs/testbench.md", "docs/test-plan/", "src/"],
+        // `docs/test-plan/` included so the agent can flip
+        // checkboxes on `tb-milestone-NN-*.md` files as tasks
+        // complete. The DM3b critique catches out-of-scope plan
+        // rewrites (silent restructuring of milestone files).
+        work_write_paths: &["tests/", "src/", "docs/test-plan/"],
         work_phases: &["author", "build"],
         critique_phases: &["chat"],
+        // DM3b walks `docs/test-plan/tb-milestone-NN-*.md` files
+        // one at a time. See StepDescriptor::milestone_walk for
+        // the structural-enforcement rationale.
+        milestone_walk: Some(MilestoneWalkConfig {
+            dir: "docs/test-plan/",
+            file_prefix: "tb-milestone-",
+            index_file: "docs/test-plan/test-plan.md",
+        }),
     }
 }
 
@@ -401,8 +471,8 @@ fn dm3c() -> StepDescriptor {
                 "full cargo test suite passes",
             ),
             file_exists(
-                "docs/plan/test-plan.md",
-                "docs/plan/test-plan.md still present",
+                "docs/test-plan/test-plan.md",
+                "docs/test-plan/test-plan.md still present",
             ),
             // Coverage threshold is validated by the critique (the
             // AI inspects the cargo-tarpaulin report referenced from
@@ -411,22 +481,42 @@ fn dm3c() -> StepDescriptor {
             // double the test time; rely on the agent reporting the
             // measured percentage in the plan's `## Coverage`
             // section.
+            milestones_all_resolved(
+                "docs/test-plan/",
+                "test-milestone-",
+                "every docs/test-plan/test-milestone-NN-*.md row resolved",
+            ),
             critique_clean("DM3c"),
         ],
         work_artifacts: &["tests/"],
-        predecessor_inputs: &["docs/plan/test-plan.md", "tests/", "src/"],
-        work_write_paths: &["tests/", "src/"],
+        predecessor_inputs: &["docs/testbench.md", "docs/test-plan/", "tests/", "src/"],
+        // `docs/test-plan/` included so the agent can flip
+        // checkboxes on `test-milestone-NN-*.md` rows and append
+        // measured-coverage info to `test-plan.md`'s `## Coverage`
+        // section. The DM3c critique catches structural plan
+        // rewrites.
+        work_write_paths: &["tests/", "src/", "docs/test-plan/"],
         work_phases: &["author", "test"],
         critique_phases: &["chat"],
+        // DM3c walks `docs/test-plan/test-milestone-NN-*.md` files
+        // one at a time. See StepDescriptor::milestone_walk for
+        // the structural-enforcement rationale.
+        milestone_walk: Some(MilestoneWalkConfig {
+            dir: "docs/test-plan/",
+            file_prefix: "test-milestone-",
+            index_file: "docs/test-plan/test-plan.md",
+        }),
     }
 }
 
 /// DM4a (Performance Analysis Plan) — produces a milestone-driven
-/// plan at `docs/plan/perf-plan.md` + per-milestone files. The
-/// plan covers baseline measurement, parameter sweeps, bottleneck
-/// analysis, target verification, and reporting -- and tells DM4b
-/// to stop for user review at each milestone boundary. No
-/// simulations or report writing happen here.
+/// plan at `docs/perf-plan/`. Top-level `perf-plan.md` is the
+/// index + traceability table; per-milestone
+/// `perf-milestone-NN-*.md` siblings cover baseline measurement,
+/// parameter sweeps, bottleneck analysis, target verification, and
+/// reporting -- and tell DM4b to stop for user review at each
+/// milestone boundary. No simulations or report writing happen
+/// here.
 fn dm4a() -> StepDescriptor {
     StepDescriptor {
         id: "DM4a",
@@ -435,30 +525,37 @@ fn dm4a() -> StepDescriptor {
         instruction_slug: "dm4a-performance-plan",
         per_candidate: false,
         gate_checks: vec![
-            file_exists("docs/plan/perf-plan.md", "docs/plan/perf-plan.md exists"),
+            file_exists(
+                "docs/perf-plan/perf-plan.md",
+                "docs/perf-plan/perf-plan.md exists",
+            ),
             file_matches(
-                "docs/plan/perf-plan.md",
+                "docs/perf-plan/perf-plan.md",
                 r"(?i)milestone\s+\d+",
-                "docs/plan/perf-plan.md references at least one numbered milestone",
+                "docs/perf-plan/perf-plan.md references at least one numbered milestone",
             ),
             shell(
                 "sh",
-                &["-c", "ls docs/plan/perf-milestone-*.md >/dev/null 2>&1"],
-                "docs/plan/ contains at least one perf-milestone-NN-*.md file",
+                &[
+                    "-c",
+                    "ls docs/perf-plan/perf-milestone-*.md >/dev/null 2>&1",
+                ],
+                "docs/perf-plan/ contains at least one perf-milestone-NN-*.md file",
             ),
             critique_clean("DM4a"),
         ],
-        work_artifacts: &["docs/plan/perf-plan.md"],
+        work_artifacts: &["docs/perf-plan/perf-plan.md"],
         predecessor_inputs: &[
             "docs/spec.md",
             "docs/targets.md",
             "docs/analysis/decomposition.md",
             "docs/analysis/pipeline-mapping.md",
-            "docs/plan/test-plan.md",
+            "docs/test-plan/",
         ],
         work_write_paths: &["docs/"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
+        milestone_walk: None,
     }
 }
 
@@ -489,20 +586,33 @@ fn dm4b() -> StepDescriptor {
                 "analysis report covers throughput and latency metrics",
             ),
             file_exists(
-                "docs/plan/perf-plan.md",
-                "docs/plan/perf-plan.md still present",
+                "docs/perf-plan/perf-plan.md",
+                "docs/perf-plan/perf-plan.md still present",
+            ),
+            milestones_all_resolved(
+                "docs/perf-plan/",
+                "perf-milestone-",
+                "every docs/perf-plan/perf-milestone-NN-*.md row resolved",
             ),
             critique_clean("DM4b"),
         ],
         work_artifacts: &["docs/analysis/"],
         predecessor_inputs: &[
             "docs/targets.md",
-            "docs/plan/perf-plan.md",
+            "docs/perf-plan/perf-plan.md",
             ".sim-flow/experiments.db",
         ],
         work_write_paths: &["docs/"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
+        // DM4b walks `docs/perf-plan/perf-milestone-NN-*.md` files
+        // one at a time. See StepDescriptor::milestone_walk for
+        // the structural-enforcement rationale.
+        milestone_walk: Some(MilestoneWalkConfig {
+            dir: "docs/perf-plan/",
+            file_prefix: "perf-milestone-",
+            index_file: "docs/perf-plan/perf-plan.md",
+        }),
     }
 }
 

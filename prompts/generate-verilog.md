@@ -44,7 +44,7 @@ Read all of the following before writing code:
 - `docs/analysis/decomposition.md`
 - `docs/analysis/pipeline-mapping.md`
 - `docs/analysis/data-movement.md`
-- `docs/plan/test-plan.md`
+- `docs/test-plan/test-plan.md`
 - `src/model/`
 - `src/sim.rs` if present
 - `tests/`
@@ -87,7 +87,7 @@ Produce SystemVerilog that is:
   `docs/analysis/data-movement.md` -- module names, pipeline structure,
   payload widths, module/stage boundaries, data edges, and intended
   staging.
-- `docs/plan/test-plan.md` -- the concrete verification contract. Treat
+- `docs/test-plan/test-plan.md` -- the concrete verification contract. Treat
   each planned test row as something that should have an equivalent SV
   sequence/test or a clearly documented grouping into a coherent test
   family.
@@ -151,7 +151,7 @@ overwrite the whole file rather than making partial edits.
    - the module list
    - the chosen pattern per module
    - the planned RTL file mapping
-   - the planned UVM test mapping from `docs/plan/test-plan.md`
+   - the planned UVM test mapping from `docs/test-plan/test-plan.md`
    - any ambiguity you had to resolve from spec/tests/code
 4. Emit RTL, then emit the UVM testbench, then run static validation if
    any compile/lint tool is available.
@@ -311,7 +311,7 @@ Do not reduce the testbench to generic category smoke tests.
 
 ### Planned-test mapping
 
-`docs/plan/test-plan.md` is the primary contract. For each planned test
+`docs/test-plan/test-plan.md` is the primary contract. For each planned test
 row:
 
 - emit a corresponding UVM test/sequence, or

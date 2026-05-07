@@ -72,6 +72,7 @@ fn smoke_step() -> StepDescriptor {
         work_write_paths: &["artifact.md"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
+        milestone_walk: None,
     }
 }
 

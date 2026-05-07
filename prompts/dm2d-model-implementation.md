@@ -13,9 +13,9 @@ tests. Exhaustive verification is DM3, not here.
 
 Read these before starting:
 
-- `docs/plan/plan.md` -- the milestone index. Read this first; it
+- `docs/impl-plan/plan.md` -- the milestone index. Read this first; it
   tells you which milestone files to read in what order.
-- `docs/plan/milestone-*.md` -- per-milestone task lists. The plan
+- `docs/impl-plan/milestone-*.md` -- per-milestone task lists. The plan
   is your source of truth for what to build and in what order;
   follow it task by task.
 - `docs/spec.md`
@@ -27,15 +27,22 @@ Read these before starting:
 
 Reference material (read on demand; do NOT bulk-read upfront):
 
-- **sim-models** repo via the `lib:` prefix (modeling guide, worked
-  examples, library models, prior user projects).
-- **foundation framework** public API via the `fw:` prefix. Start with
-  `fw:api/toc.md`, then read only the specific
-  `fw:api/pages/.../*.md` files you need. Use `fw:src/prelude.rs` or
-  other `fw:src/...` files only as a secondary source when you need
-  exact signatures or source-level examples. Do not browse internal
-  helpers; treat anything outside the curated public API surface as
-  implementation detail.
+- **PRIMARY -- sim-models** via the `lib:` prefix: modeling guide,
+  worked examples, library models, prior user projects. These are
+  the curated, opinionated answers to "how do I express this in the
+  framework?". Always check here first.
+- **SECONDARY -- foundation framework public API** via the `fw:`
+  prefix. The framework is large; consult it on demand, NOT
+  upfront, and only when `lib:` doesn't answer your question. Start
+  with `fw:api/toc.md` to navigate, then read the one or two
+  `fw:api/pages/.../*.md` files you need. Use `fw:src/prelude.rs`
+  or other `fw:src/...` files only when you need an exact signature
+  or source-level example that's missing from `fw:api/`. Do not
+  browse internal helpers; treat anything outside the curated public
+  API surface as implementation detail. (Generated rustdoc from
+  `cargo doc --workspace --no-deps` is also available locally but
+  is verbose; prefer the curated `fw:api/pages/...` markdown unless
+  a signature is genuinely missing there.)
 
 Each top-level `lib:` directory has a `README.md` that indexes its
 contents -- start there before diving into individual files. Consult
@@ -70,8 +77,8 @@ scope and structure.
 
 ## Procedure
 
-1. Read `docs/plan/plan.md` to orient. Then process each milestone
-   in order from `docs/plan/milestone-*.md`.
+1. Read `docs/impl-plan/plan.md` to orient. Then process each milestone
+   in order from `docs/impl-plan/milestone-*.md`.
 2. Read `docs/targets.md` and `docs/testbench.md` before starting
    implementation.
    - Use `docs/targets.md` to preserve target-sensitive structural
@@ -104,7 +111,7 @@ scope and structure.
 
 ### Order, jumping, and deferring
 
-`docs/plan/plan-management.md` is the source of truth for how to
+`docs/impl-plan/plan-management.md` is the source of truth for how to
 walk a plan: task states (`- [ ]` pending, `- [x]` done, `- [-]`
 deferred with `defer reason:` sub-bullet), how to handle
 out-of-order work (`order swap:` sub-bullet documenting why),
@@ -149,6 +156,17 @@ strictly.
      iterating, not enough to substitute for DV.
    If you find yourself writing scoreboards, sequencers, or a
    directed-test suite, stop -- defer that work to DM3.
+9. **Tick off completed plan tasks**. As you finish each task in
+   `docs/impl-plan/milestone-*.md`, use `edit_file` to flip the leading
+   `- [ ]` to `- [x]`. ONLY change the checkbox; do NOT modify the
+   task text, reorder tasks, add new ones, or restructure
+   milestones — the plan is DM2c's contract and the critique flags
+   any drift. If a task turns out to be wrong or impossible, leave
+   the box unchecked and document the discrepancy in your final
+   summary instead. Closed-out checklists are how the critique
+   confirms milestone-by-milestone progress on incremental DM2d
+   reviews; missing them shows up as `UNRESOLVED:` items at minimum
+   and can hide regressions during multi-milestone retries.
 
 ## Constraints
 
@@ -165,6 +183,20 @@ strictly.
 - References do not override the plan. If examples or public framework
   APIs suggest a different structure than the plan, prefer the plan and
   document the tension rather than drifting silently.
+
+## Re-entry
+
+If DM2d runs across multiple work + critique sessions (a milestone
+gets re-prompted because the critique flagged something, or the
+session was killed mid-milestone), restart by walking
+`docs/impl-plan/milestone-NN-*.md` files in numeric order. The
+first one with at least one `- [ ]` row OR any task whose code
+hasn't actually landed in `src/` is your current milestone, and
+you start at the first such row in that file. Do NOT skip a
+milestone just because its rows are all `[x]` -- if `cargo build`
+or the elaboration smoke test fails on first run, the prior
+milestone's claim of completeness was wrong; back up and reopen
+the failing tasks before moving forward.
 
 ## Output
 

@@ -15,7 +15,7 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use super::CliAgent;
+use super::{CliAgent, LlmCallMetrics};
 use crate::session::protocol::{LlmMessage, LlmRole};
 use crate::{Error, Result};
 
@@ -56,7 +56,8 @@ impl CliAgent for GhCopilotAgent {
         "gh-copilot"
     }
 
-    fn dispatch(&self, messages: &[LlmMessage]) -> Result<String> {
+    fn dispatch(&self, messages: &[LlmMessage]) -> Result<(String, LlmCallMetrics)> {
+        let started = std::time::Instant::now();
         let prompt = Self::render_prompt(messages);
         let mut cmd = Command::new("gh");
         cmd.args(["copilot", "suggest", "-t", "shell", "--no-spinner"]);
@@ -89,6 +90,12 @@ impl CliAgent for GhCopilotAgent {
                 stderr.trim(),
             )));
         }
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        let text = String::from_utf8_lossy(&output.stdout).into_owned();
+        let metrics = LlmCallMetrics {
+            tokens_in: None,
+            tokens_out: None,
+            wall_ms: started.elapsed().as_millis() as u64,
+        };
+        Ok((text, metrics))
     }
 }
