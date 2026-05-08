@@ -36,14 +36,31 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use crate::session::host::Host;
 use crate::session::protocol::{Event, HostEvent};
 use crate::{Error, Result};
 
+/// Public metadata for one running orchestrator's watch socket.
+/// Written to a registry file at bind time and removed on drop, so
+/// any observer (the dashboard's "Attach to running session"
+/// picker, an external script) can enumerate live runs without
+/// needing to know the socket path up front.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchRegistration {
+    pub pid: u32,
+    pub socket_path: PathBuf,
+    pub project_dir: PathBuf,
+    pub started_at: String,
+    pub llm_backend: String,
+    pub llm_model: Option<String>,
+}
+
 pub struct EventTap {
     socket_path: PathBuf,
+    registry_path: Option<PathBuf>,
     history: Arc<Mutex<Vec<Vec<u8>>>>,
     senders: Arc<Mutex<Vec<UnixStream>>>,
     shutdown: Arc<AtomicBool>,
@@ -97,11 +114,151 @@ impl EventTap {
 
         Ok(Self {
             socket_path: path,
+            registry_path: None,
             history,
             senders,
             shutdown,
             _accept_thread: accept_thread,
         })
+    }
+
+    /// Bind a tap and register it in the well-known discovery
+    /// directory so the dashboard's "Attach to running session"
+    /// picker (and any external script) can enumerate live runs.
+    /// `info.pid` should be the orchestrator's pid; the registry
+    /// filename is `<pid>.json` so a single orchestrator is
+    /// idempotent across re-binds. The registry file is removed
+    /// when the tap is dropped.
+    pub fn bind_with_registration(path: PathBuf, info: WatchRegistration) -> Result<Self> {
+        let mut tap = Self::bind(path)?;
+        let registry_dir = registry_dir()?;
+        std::fs::create_dir_all(&registry_dir).map_err(|err| {
+            Error::State(format!(
+                "event-tap: cannot mkdir registry `{}`: {err}",
+                registry_dir.display()
+            ))
+        })?;
+        let registry_path = registry_dir.join(format!("{}.json", info.pid));
+        let body = serde_json::to_string_pretty(&info)
+            .map_err(|err| Error::State(format!("event-tap: registry serialize: {err}")))?;
+        std::fs::write(&registry_path, body).map_err(|err| {
+            Error::State(format!(
+                "event-tap: write registry `{}`: {err}",
+                registry_path.display()
+            ))
+        })?;
+        info!(
+            registry = %registry_path.display(),
+            "event-tap: registered for discovery"
+        );
+        tap.registry_path = Some(registry_path);
+        Ok(tap)
+    }
+}
+
+/// Resolve the discovery directory where running orchestrators
+/// register their `WatchRegistration` JSON files. Lookup order:
+///
+/// 1. `SIM_FLOW_WATCHER_DIR` env var (test override).
+/// 2. `XDG_RUNTIME_DIR/sim-flow/watchers/` when set (Linux).
+/// 3. Platform user-cache dir + `sim-flow/watchers/` via the
+///    `directories` crate (macOS / Windows).
+/// 4. Last-resort fallback: `<temp>/sim-flow-watchers/`.
+pub fn registry_dir() -> Result<PathBuf> {
+    if let Ok(custom) = std::env::var("SIM_FLOW_WATCHER_DIR") {
+        return Ok(PathBuf::from(custom));
+    }
+    if let Ok(runtime) = std::env::var("XDG_RUNTIME_DIR")
+        && !runtime.is_empty()
+    {
+        return Ok(PathBuf::from(runtime).join("sim-flow").join("watchers"));
+    }
+    if let Some(dirs) = directories::ProjectDirs::from("", "", "sim-flow") {
+        return Ok(dirs.cache_dir().join("watchers"));
+    }
+    Ok(std::env::temp_dir().join("sim-flow-watchers"))
+}
+
+/// Enumerate every registered watcher in `registry_dir()`. Stale
+/// entries (process no longer alive, socket file missing) are
+/// silently skipped and their registry files removed so the list
+/// reflects what's actually attachable. Returns the surviving
+/// entries in arbitrary order; callers sort.
+pub fn list_registrations() -> Result<Vec<WatchRegistration>> {
+    let dir = registry_dir()?;
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Vec::new());
+        }
+        Err(err) => {
+            return Err(Error::State(format!(
+                "event-tap: read registry `{}`: {err}",
+                dir.display()
+            )));
+        }
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.ends_with(".json") {
+            continue;
+        }
+        let body = match std::fs::read_to_string(&path) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let reg: WatchRegistration = match serde_json::from_str(&body) {
+            Ok(r) => r,
+            Err(_) => {
+                // Malformed file -- best-effort cleanup so it
+                // doesn't poison future scans.
+                let _ = std::fs::remove_file(&path);
+                continue;
+            }
+        };
+        if !is_alive(reg.pid) || !reg.socket_path.exists() {
+            let _ = std::fs::remove_file(&path);
+            continue;
+        }
+        out.push(reg);
+    }
+    Ok(out)
+}
+
+/// Cheap `kill -0`-style liveness check on a pid. Returns false on
+/// platforms / errors we can't probe; the caller treats false as
+/// "stale, drop the registration."
+fn is_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        // SAFETY: kill(2) with signal 0 is the standard pid-liveness
+        // probe; it doesn't deliver a signal and only checks
+        // permissions / existence. Returns 0 on alive, -1 with errno
+        // ESRCH for "no such process" or EPERM for "alive but we
+        // can't signal it" (which still means alive).
+        let r = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        if r == 0 {
+            return true;
+        }
+        let err = std::io::Error::last_os_error();
+        err.raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+impl EventTap {
+    fn cleanup_registry(&self) {
+        if let Some(path) = &self.registry_path {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     /// Serialize `event` and broadcast it to every connected
@@ -143,6 +300,7 @@ impl Drop for EventTap {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
         let _ = std::fs::remove_file(&self.socket_path);
+        self.cleanup_registry();
     }
 }
 

@@ -33,7 +33,9 @@ pub use agent::{
     AgentConfig, ClaudeAgent, CliAgent, CodexAgent, GhCopilotAgent, KNOWN_AGENTS, LlmCallMetrics,
     MockAgent, OllamaAgent, OpenAiCompatAgent, build_cli_agent,
 };
-pub use event_tap::{EventTap, TappedHost};
+pub use event_tap::{
+    EventTap, TappedHost, WatchRegistration, list_registrations as list_watch_registrations,
+};
 pub use host::{Host, JsonlHost, TerminalHost, TestHost};
 pub use orchestrator::{OrchestratorOptions, run_session};
 pub use protocol::{

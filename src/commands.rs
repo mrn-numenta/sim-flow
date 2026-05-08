@@ -10,7 +10,7 @@ use sim_flow::__internal::steps::registry_for;
 
 use crate::cli::{
     BaselineAction, Cli, Command, ConfigAction, CoverageAction, NewKind, PromptResetScope,
-    PromptScopeArg, PromptsAction, SessionMode,
+    PromptScopeArg, PromptsAction, SessionMode, WatchersAction,
 };
 
 pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
@@ -158,7 +158,66 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             *show_types,
             netlist.as_deref(),
         ),
+        Command::Watchers { action } => watchers_cmd(action),
     }
+}
+
+fn watchers_cmd(action: &WatchersAction) -> sim_flow::Result<()> {
+    match action {
+        WatchersAction::List { json } => {
+            let mut entries = sim_flow::__internal::session::list_watch_registrations()?;
+            entries.sort_by(|a, b| a.started_at.cmp(&b.started_at));
+            if *json {
+                let out: Vec<_> = entries
+                    .iter()
+                    .map(|r| {
+                        serde_json::json!({
+                            "pid": r.pid,
+                            "socket_path": r.socket_path.display().to_string(),
+                            "project_dir": r.project_dir.display().to_string(),
+                            "started_at": r.started_at,
+                            "llm_backend": r.llm_backend,
+                            "llm_model": r.llm_model,
+                        })
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&out)
+                        .map_err(|e| sim_flow::Error::State(format!("watchers list json: {e}")))?
+                );
+            } else if entries.is_empty() {
+                println!("(no live watchers)");
+            } else {
+                println!(
+                    "{:>6} {:24} {:32} SOCKET",
+                    "PID", "BACKEND/MODEL", "PROJECT"
+                );
+                for r in &entries {
+                    let backend = match &r.llm_model {
+                        Some(m) => format!("{}/{}", r.llm_backend, m),
+                        None => r.llm_backend.clone(),
+                    };
+                    println!(
+                        "{:>6} {:24} {:32} {}",
+                        r.pid,
+                        truncate_field(&backend, 24),
+                        truncate_field(&r.project_dir.display().to_string(), 32),
+                        r.socket_path.display(),
+                    );
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+fn truncate_field(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        return s.to_string();
+    }
+    let head: String = s.chars().take(n.saturating_sub(1)).collect();
+    format!("{head}…")
 }
 
 fn prompts_cmd(cli: &Cli, project_dir: &Path, action: &PromptsAction) -> sim_flow::Result<()> {
@@ -453,11 +512,27 @@ fn auto_cmd(
     // set, every event the orchestrator emits is mirrored to the
     // tap; observers attach via Unix socket and receive history +
     // live stream. Initialised here (before the host wrapper) so a
-    // bind error fails fast.
+    // bind error fails fast. The registration writes a JSON file in
+    // the discovery directory so the dashboard's "Attach to running
+    // session" picker can list this run without the user having to
+    // know the socket path up front.
     let watch_tap = match watch_socket {
-        Some(path) => Some(sim_flow::__internal::session::EventTap::bind(
-            path.to_path_buf(),
-        )?),
+        Some(path) => {
+            let registration = sim_flow::__internal::session::WatchRegistration {
+                pid: std::process::id(),
+                socket_path: path.to_path_buf(),
+                project_dir: project.to_path_buf(),
+                started_at: current_iso8601(),
+                llm_backend: llm_backend.to_string(),
+                llm_model: llm_model.map(String::from),
+            };
+            Some(
+                sim_flow::__internal::session::EventTap::bind_with_registration(
+                    path.to_path_buf(),
+                    registration,
+                )?,
+            )
+        }
         None => None,
     };
 

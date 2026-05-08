@@ -349,6 +349,27 @@ pub(crate) enum Command {
         #[arg(long)]
         netlist: Option<PathBuf>,
     },
+    /// Discover running orchestrators that have a `--watch-socket`
+    /// observer surface bound. Reads the registry directory each
+    /// `sim-flow auto --watch-socket ...` registers on bind and
+    /// removes on shutdown; stale entries (process gone, socket
+    /// missing) are silently dropped from the list. Used by the
+    /// dashboard's "Attach to running session" picker and any
+    /// external script that wants to tail an in-flight run.
+    Watchers {
+        #[command(subcommand)]
+        action: WatchersAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum WatchersAction {
+    /// List every live watcher registration.
+    List {
+        /// Emit machine-readable JSON for the dashboard.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
