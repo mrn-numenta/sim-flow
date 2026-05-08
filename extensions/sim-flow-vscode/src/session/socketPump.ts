@@ -32,6 +32,7 @@ import type {
   StepDescriptorOut,
   StepMode,
 } from "./protocol-types";
+import { type LlmServerEntry, resolveLlmSource } from "../webview/messages";
 
 type SocketPumpBusEvent =
   | { type: "settled"; result: PumpSettleResult }
@@ -776,26 +777,73 @@ export class SocketSessionPump implements LiveSessionTransport {
 
   private readLiveLlmConfig(): {
     source: LlmSource;
+    rawSource: string;
     model?: string;
     ollamaBaseUrl?: string;
     lmstudioBaseUrl?: string;
+    /**
+     * Resolved when `rawSource` is `server:<name>` and the entry
+     * exists in `llm.servers`. Wins over the legacy per-backend
+     * URL fields. `null` when the source claims `server:<name>`
+     * but no matching entry exists -- caller surfaces a clear
+     * error rather than silently falling back to a default.
+     */
+    serverBaseUrl: string | null | undefined;
     verbose: boolean;
   } {
     const config = vscode.workspace.getConfiguration("sim-flow");
-    const source = (config.get<LlmSource>("llm.source") ?? this.llm.source) as LlmSource;
+    const rawSource = (config.get<string>("llm.source") ?? this.llm.source) as string;
     const model = (config.get<string>("llm.model") ?? "").trim() || this.llm.model;
     const ollamaBaseUrl =
       (config.get<string>("llm.ollama.baseUrl") ?? "").trim() || this.llm.ollamaBaseUrl;
     const lmstudioBaseUrl =
       (config.get<string>("llm.lmstudio.baseUrl") ?? "").trim() || this.llm.lmstudioBaseUrl;
     const verbose = config.get<boolean>("llm.verbose") ?? true;
-    return { source, model, ollamaBaseUrl, lmstudioBaseUrl, verbose };
+    // Resolve `server:<name>` against `sim-flow.llm.servers` so the
+    // factory sees the entry's `kind` + composed base URL instead of
+    // the raw "server:..." string (which it doesn't understand).
+    const servers = (config.get<unknown>("llm.servers") as LlmServerEntry[] | undefined) ?? [];
+    const resolved = resolveLlmSource(rawSource, servers);
+    if (resolved === null) {
+      return {
+        source: rawSource as LlmSource,
+        rawSource,
+        model,
+        ollamaBaseUrl,
+        lmstudioBaseUrl,
+        serverBaseUrl: null,
+        verbose,
+      };
+    }
+    return {
+      source: resolved.source as LlmSource,
+      rawSource,
+      // Per-server `model` overrides the global setting when set.
+      model: resolved.model ?? model,
+      ollamaBaseUrl,
+      lmstudioBaseUrl,
+      serverBaseUrl: resolved.baseUrl,
+      verbose,
+    };
   }
 
   private async dispatchLlm(
     event: ProtocolEvent & { event: "request-llm-response" },
   ): Promise<void> {
     const live = this.readLiveLlmConfig();
+    if (live.serverBaseUrl === null) {
+      // `llm.source = "server:<name>"` but no matching entry in
+      // `llm.servers`. Tell the user what's wrong rather than
+      // letting the factory's default-arm "Unknown LLM source"
+      // error surface (which obscures the real cause).
+      this.sendHostEvent({
+        event: "llm-error",
+        request_id: event.request_id,
+        kind: "unsupported",
+        message: `LLM source \`${live.rawSource}\` references a custom server that isn't defined in \`sim-flow.llm.servers\`. Add the entry in the dashboard's Settings tab, or pick a built-in source.`,
+      });
+      return;
+    }
     if (live.source !== this.lastUsedSource) {
       this.currentRenderer?.markdown(
         `_LLM source switched: \`${this.lastUsedSource ?? "(initial)"}\` → \`${live.source}\`._\n\n`,
@@ -812,6 +860,11 @@ export class SocketSessionPump implements LiveSessionTransport {
         binary: this.llm.binary,
         ollamaBaseUrl: live.ollamaBaseUrl,
         lmstudioBaseUrl: live.lmstudioBaseUrl,
+        // `server:<name>`-resolved base URL wins over the legacy
+        // per-backend fields. For built-in sources `serverBaseUrl`
+        // is undefined and the factory falls back to its
+        // conventional defaults.
+        baseUrl: live.serverBaseUrl ?? undefined,
         session: undefined,
       });
     } catch (err) {

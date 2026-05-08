@@ -13,7 +13,12 @@ import type { ChatTranscriptEntry } from "./messages";
 import { toLlmMessages } from "./state";
 
 export interface ChatPanelTransportConfig {
+  /** Resolved backend kind. The host has already mapped any
+   *  `server:<name>` reference to the entry's `kind`. */
   source: LlmSourceTag;
+  /** Resolved base URL, when the source maps to a custom server.
+   *  Wins over the legacy per-backend URL fields. */
+  baseUrl?: string;
   model: string;
   verbose: boolean;
   ollamaBaseUrl: string;
@@ -48,6 +53,9 @@ export async function* streamPanelReply(
     secrets: config.secrets,
     ollamaBaseUrl: config.ollamaBaseUrl,
     lmstudioBaseUrl: config.lmstudioBaseUrl,
+    // Resolved by the host before we get here -- wins over the
+    // legacy per-backend URL fields when set.
+    baseUrl: config.baseUrl,
   });
   const messages = buildPanelMessages(
     context,

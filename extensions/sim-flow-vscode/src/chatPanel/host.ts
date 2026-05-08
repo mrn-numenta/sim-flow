@@ -13,8 +13,10 @@ import { readFlowState } from "../state/flowState";
 import {
   cliBackendArgFor,
   isTerminalLlmSource,
+  type LlmServerEntry,
   LLM_SOURCE_LABELS,
   type LlmSourceTag,
+  resolveLlmSource,
 } from "../webview/messages";
 
 import type {
@@ -249,6 +251,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
 
+    if (context.unresolvedServer) {
+      conversation = appendNote(
+        conversation,
+        "Unknown LLM source",
+        `\`sim-flow.llm.source\` is set to \`${context.rawSource}\`, which references a custom server that isn't defined in \`sim-flow.llm.servers\`. Add the entry in the dashboard's Settings tab, or pick a built-in source.`,
+        "error",
+      );
+      await this.persistConversation(context.projectDir, conversation);
+      await this.postState(context, conversation);
+      return;
+    }
+
     if (!supportsPanelTransport(context.source)) {
       conversation = appendNote(
         conversation,
@@ -301,6 +315,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       for await (const chunk of streamPanelReply(
         {
           source: context.source,
+          baseUrl: context.baseUrl,
           model: context.model,
           verbose: context.verbose,
           ollamaBaseUrl: context.ollamaBaseUrl,
@@ -430,6 +445,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       projectDir,
       currentStep,
       source: settings.source,
+      rawSource: settings.rawSource,
+      baseUrl: settings.baseUrl,
+      unresolvedServer: settings.unresolvedServer,
       sourceLabel: settings.sourceLabel,
       model: settings.model,
       verbose: settings.verbose,
@@ -1353,7 +1371,15 @@ interface PanelContext {
   projectLabel: string;
   projectDir: string | null;
   currentStep: string | null;
+  /** Resolved backend kind. `server:<name>` references already
+   *  mapped to the entry's `kind`. */
   source: LlmSourceTag;
+  /** Raw `sim-flow.llm.source` value (e.g. `server:vllm-local`). */
+  rawSource: string;
+  /** Resolved base URL when the source maps to a custom server. */
+  baseUrl: string | undefined;
+  /** True when `rawSource` claims `server:<name>` with no entry. */
+  unresolvedServer: boolean;
   sourceLabel: string;
   model: string;
   verbose: boolean;
@@ -1403,22 +1429,62 @@ function readStepModeSetting(config: vscode.WorkspaceConfiguration): "auto" | "m
 }
 
 function readPanelSettings(): {
+  /** Resolved source kind. For `server:<name>` references, the
+   *  matching entry's `kind`; otherwise the raw built-in value. */
   source: LlmSourceTag;
+  /** Raw `sim-flow.llm.source` value. Kept for display + the
+   *  `unresolved server` error path. */
+  rawSource: string;
+  /** When `rawSource` is `server:<name>` and the entry exists,
+   *  the composed `host:port/v1` URL the agent should hit.
+   *  Undefined for built-in sources. */
+  baseUrl: string | undefined;
+  /** True when `rawSource` claims `server:<name>` but no entry
+   *  matches. Callers should surface a clear error rather than
+   *  silently falling back to a default. */
+  unresolvedServer: boolean;
   sourceLabel: string;
   model: string;
   verbose: boolean;
   ollamaBaseUrl: string;
   lmstudioBaseUrl: string;
+  servers: LlmServerEntry[];
 } {
   const config = vscode.workspace.getConfiguration("sim-flow");
-  const source = (config.get<string>("llm.source") ?? "vscode") as LlmSourceTag;
+  const rawSource = (config.get<string>("llm.source") ?? "vscode") as string;
+  const servers =
+    (config.get<unknown>("llm.servers") as LlmServerEntry[] | undefined) ?? [];
+  const resolved = resolveLlmSource(rawSource, servers);
+  const fallback: LlmSourceTag = "vscode";
+  if (resolved === null) {
+    return {
+      source: fallback,
+      rawSource,
+      baseUrl: undefined,
+      unresolvedServer: true,
+      sourceLabel: rawSource,
+      model: (config.get<string>("llm.model") ?? "").trim(),
+      verbose: config.get<boolean>("llm.verbose") ?? true,
+      ollamaBaseUrl: (config.get<string>("llm.ollama.baseUrl") ?? "").trim(),
+      lmstudioBaseUrl: (config.get<string>("llm.lmstudio.baseUrl") ?? "").trim(),
+      servers,
+    };
+  }
+  const source = resolved.source as LlmSourceTag;
+  const modelOverride = resolved.model && resolved.model.length > 0 ? resolved.model : null;
   return {
     source,
-    sourceLabel: LLM_SOURCE_LABELS[source] ?? source,
-    model: (config.get<string>("llm.model") ?? "").trim(),
+    rawSource,
+    baseUrl: resolved.baseUrl,
+    unresolvedServer: false,
+    sourceLabel: rawSource.startsWith("server:")
+      ? rawSource
+      : (LLM_SOURCE_LABELS[source] ?? source),
+    model: modelOverride ?? (config.get<string>("llm.model") ?? "").trim(),
     verbose: config.get<boolean>("llm.verbose") ?? true,
     ollamaBaseUrl: (config.get<string>("llm.ollama.baseUrl") ?? "").trim(),
     lmstudioBaseUrl: (config.get<string>("llm.lmstudio.baseUrl") ?? "").trim(),
+    servers,
   };
 }
 

@@ -537,6 +537,18 @@ function renderLlmServersTable(): HTMLElement {
   const servers: LlmServerEntry[] = (ui.data?.llmServers ?? []).slice();
 
   const commit = (next: LlmServerEntry[]): void => {
+    // Optimistic update: write the new array straight into the
+    // local snapshot before the round-trip lands. This stops the
+    // table from snapping back when the host's
+    // `onDidChangeConfiguration` -> `postLlmConfig` -> webview
+    // `render()` chain re-reads `ui.data.llmServers` before the
+    // post-write `state-update` arrives. Once the host's
+    // `set-llm-servers` handler fires `refresh()` and the fresh
+    // state arrives, this same array gets written into `ui.data`
+    // again -- a no-op visually.
+    if (ui.data) {
+      ui.data.llmServers = next;
+    }
     send({ type: "set-llm-servers", servers: next });
   };
 

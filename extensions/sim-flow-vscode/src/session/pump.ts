@@ -49,6 +49,7 @@ import type {
 } from "./protocol-types";
 import { DebugLog } from "./debug-log";
 import { removePidRecord, writePidRecord } from "./processRegistry";
+import { type LlmServerEntry, resolveLlmSource } from "../webview/messages";
 
 /** Configuration the registry hands to a freshly-spawned pump. */
 export interface SessionPumpOptions {
@@ -531,20 +532,44 @@ export class SessionPump {
    */
   private readLiveLlmConfig(): {
     source: LlmSource;
+    rawSource: string;
     model?: string;
     ollamaBaseUrl?: string;
     lmstudioBaseUrl?: string;
+    /** See `socketPump.readLiveLlmConfig` for semantics. */
+    serverBaseUrl: string | null | undefined;
     verbose: boolean;
   } {
     const config = vscode.workspace.getConfiguration("sim-flow");
-    const source = (config.get<LlmSource>("llm.source") ?? this.llm.source) as LlmSource;
+    const rawSource = (config.get<string>("llm.source") ?? this.llm.source) as string;
     const model = (config.get<string>("llm.model") ?? "").trim() || this.llm.model;
     const ollamaBaseUrl =
       (config.get<string>("llm.ollama.baseUrl") ?? "").trim() || this.llm.ollamaBaseUrl;
     const lmstudioBaseUrl =
       (config.get<string>("llm.lmstudio.baseUrl") ?? "").trim() || this.llm.lmstudioBaseUrl;
     const verbose = config.get<boolean>("llm.verbose") ?? true;
-    return { source, model, ollamaBaseUrl, lmstudioBaseUrl, verbose };
+    const servers = (config.get<unknown>("llm.servers") as LlmServerEntry[] | undefined) ?? [];
+    const resolved = resolveLlmSource(rawSource, servers);
+    if (resolved === null) {
+      return {
+        source: rawSource as LlmSource,
+        rawSource,
+        model,
+        ollamaBaseUrl,
+        lmstudioBaseUrl,
+        serverBaseUrl: null,
+        verbose,
+      };
+    }
+    return {
+      source: resolved.source as LlmSource,
+      rawSource,
+      model: resolved.model ?? model,
+      ollamaBaseUrl,
+      lmstudioBaseUrl,
+      serverBaseUrl: resolved.baseUrl,
+      verbose,
+    };
   }
 
   private async dispatchLlm(
@@ -557,6 +582,15 @@ export class SessionPump {
     // dashboard; the captured config from constructor time would
     // pin them to whatever was active when the chat tab opened.
     const live = this.readLiveLlmConfig();
+    if (live.serverBaseUrl === null) {
+      this.sendHostEvent({
+        event: "llm-error",
+        request_id: event.request_id,
+        kind: "unsupported",
+        message: `LLM source \`${live.rawSource}\` references a custom server that isn't defined in \`sim-flow.llm.servers\`. Add the entry in the dashboard's Settings tab, or pick a built-in source.`,
+      });
+      return;
+    }
     if (live.source !== this.lastUsedSource) {
       this.currentRenderer?.markdown(
         `_LLM source switched: \`${this.lastUsedSource ?? "(initial)"}\` → \`${live.source}\`._\n\n`,
@@ -573,6 +607,7 @@ export class SessionPump {
         binary: this.llm.binary,
         ollamaBaseUrl: live.ollamaBaseUrl,
         lmstudioBaseUrl: live.lmstudioBaseUrl,
+        baseUrl: live.serverBaseUrl ?? undefined,
         // The CLI fallback backend has been retired (Phase 9 M5); a
         // stub session keeps the type happy for the few branches
         // that still touch it.

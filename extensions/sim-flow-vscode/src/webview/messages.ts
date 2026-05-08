@@ -299,6 +299,50 @@ export function llmServerBaseUrl(entry: LlmServerEntry): string {
 }
 
 /**
+ * Result of [`resolveLlmSource`]: the actual backend kind + the
+ * resolved base URL (when the source mapped to a custom server) +
+ * the entry's per-server model override (when set). Callers feed
+ * these into `createBackend` instead of the raw `server:<name>`
+ * string -- the LLM factory only knows the bare backend kinds.
+ */
+export interface ResolvedLlmSource {
+  source: LlmSourceTag;
+  baseUrl?: string;
+  model?: string;
+}
+
+/**
+ * Resolve a raw `sim-flow.llm.source` value against the user's
+ * `sim-flow.llm.servers` array. When `source` starts with
+ * `server:<name>`, look up the matching entry and return its
+ * `kind` + composed `host:port` URL. Otherwise pass the source
+ * through unchanged (built-in `LlmSourceTag` values don't need
+ * resolution).
+ *
+ * Returns `null` when the source claims `server:<name>` but no
+ * matching entry exists -- caller should surface a clear error
+ * rather than silently falling back to a default.
+ */
+export function resolveLlmSource(
+  source: string,
+  servers: LlmServerEntry[],
+): ResolvedLlmSource | null {
+  if (!source.startsWith("server:")) {
+    return { source: source as LlmSourceTag };
+  }
+  const name = source.slice("server:".length);
+  const entry = servers.find((s) => s.name === name);
+  if (!entry) {
+    return null;
+  }
+  return {
+    source: entry.kind as LlmSourceTag,
+    baseUrl: llmServerBaseUrl(entry),
+    model: entry.model,
+  };
+}
+
+/**
  * DM3c coverage acceptance criteria mirror of the Rust
  * `CoverageSettings` struct. Carried on `DashboardState.coverage`
  * and round-tripped through the `set-coverage` webview message.

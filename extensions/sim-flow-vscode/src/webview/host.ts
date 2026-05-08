@@ -415,6 +415,15 @@ export class DashboardHost {
         await vscode.workspace
           .getConfiguration("sim-flow")
           .update("llm.servers", msg.servers, vscode.ConfigurationTarget.Workspace);
+        // Push a fresh state-update so the table re-renders from
+        // the post-write servers array. Without this, the
+        // `onDidChangeConfiguration` handler fires `postLlmConfig`
+        // which triggers a webview re-render against `ui.data` --
+        // and `ui.data.llmServers` is still the pre-write value
+        // until the next `state-update`. The result is that any
+        // edit to a server row (port, host, name, model) snaps
+        // back to the prior value on blur.
+        await this.refresh();
         return;
       case "set-coverage":
         await this.writeCoverage(msg.coverage);
