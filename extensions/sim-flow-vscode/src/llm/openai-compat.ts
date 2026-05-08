@@ -79,6 +79,16 @@ export class OpenAiCompatibleBackend implements LlmBackend {
     // syntax — qwen3-coder slips to `tool=name` instead of
     // `tool:name`). Going native end-to-end keeps the model in its
     // own protocol.
+    // Strict OpenAI-compat servers (vllm with the default chat
+    // template, especially) reject requests with multiple system
+    // messages: "System message must be at the beginning." The
+    // orchestrator legitimately emits several (combined-system,
+    // tool-notice, spec TOC, framework TOC, session-inputs
+    // stable + volatile) so the prefix-cache split survives.
+    // Collapse them into one before serializing -- LM Studio /
+    // Ollama / OpenAI tolerate the merged form just fine, so this
+    // is uniform behavior, not a vllm-special-case.
+    const merged = mergeLeadingSystemMessages(messages);
     const body: {
       model: string;
       messages: OpenAiMessage[];
@@ -86,7 +96,7 @@ export class OpenAiCompatibleBackend implements LlmBackend {
       stream: boolean;
     } = {
       model,
-      messages: transformMessagesForOpenAi(messages),
+      messages: transformMessagesForOpenAi(merged),
       stream: true,
     };
     if (tools && tools.length > 0) {
@@ -400,6 +410,51 @@ function toOpenAiTool(tool: LlmTool): OpenAiTool {
  * conversation, so it stays in native-tool-calling mode instead of
  * mimicking the fenced-text format we synthesized for it.
  */
+/**
+ * Collapse a run of leading `role: "system"` messages into one,
+ * joining their bodies with a blank-line separator. Subsequent
+ * non-leading system messages (rare; defensive) are left in place
+ * so we don't mask higher-up bugs by silently rewriting them.
+ *
+ * Why we need this: the orchestrator emits up to five separate
+ * system messages at the head of every prompt (combined-system,
+ * tool-notice, spec TOC, framework-API TOC, session-inputs
+ * stable + volatile) so vLLM's prefix cache can reuse the long
+ * stable prefix across milestone advances and critique retries.
+ * That split works on most servers, but the default vllm chat
+ * template enforces "exactly one system message at the
+ * beginning" and rejects the request with `BadRequestError:
+ * System message must be at the beginning.`. Merging on the
+ * wire keeps the prefix-cache benefit intact (the merged head
+ * is still token-identical across dispatches that share their
+ * stable inputs) while satisfying the strict template.
+ */
+export function mergeLeadingSystemMessages(messages: LlmMessage[]): LlmMessage[] {
+  let leading = 0;
+  while (leading < messages.length && messages[leading].role === "system") {
+    leading += 1;
+  }
+  if (leading <= 1) {
+    return messages;
+  }
+  const head = messages.slice(0, leading);
+  // Multimodal attachments on a system message are unusual but
+  // possible (image-based system prompts). Concatenate them in
+  // order so nothing is lost; the underlying `openAiContent`
+  // helper handles the multimodal serialization.
+  const mergedAttachments = head.flatMap((m) => m.attachments ?? []);
+  const mergedContent = head.map((m) => m.content).join("\n\n");
+  const tail = messages.slice(leading);
+  return [
+    {
+      role: "system",
+      content: mergedContent,
+      ...(mergedAttachments.length > 0 ? { attachments: mergedAttachments } : {}),
+    },
+    ...tail,
+  ];
+}
+
 export function transformMessagesForOpenAi(messages: LlmMessage[]): OpenAiMessage[] {
   const out: OpenAiMessage[] = [];
   // Outstanding tool_call ids from the most recent assistant message.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { transformMessagesForOpenAi } from "./openai-compat";
+import { mergeLeadingSystemMessages, transformMessagesForOpenAi } from "./openai-compat";
 import type { LlmMessage } from "./types";
 
 function user(content: string, attachments?: LlmMessage["attachments"]): LlmMessage {
@@ -184,6 +184,67 @@ describe("transformMessagesForOpenAi", () => {
     expect(out[2]).toMatchObject({
       role: "user",
       content: expect.stringContaining("[read_file `b`]"),
+    });
+  });
+});
+
+describe("mergeLeadingSystemMessages", () => {
+  it("collapses multiple leading system messages into one with blank-line joins", () => {
+    const out = mergeLeadingSystemMessages([
+      system("first"),
+      system("second"),
+      system("third"),
+      user("hello"),
+    ]);
+    expect(out).toEqual([
+      { role: "system", content: "first\n\nsecond\n\nthird" },
+      { role: "user", content: "hello", attachments: undefined },
+    ]);
+  });
+
+  it("passes a single leading system message through unchanged", () => {
+    const input: LlmMessage[] = [system("only"), user("hi")];
+    const out = mergeLeadingSystemMessages(input);
+    expect(out).toBe(input); // no allocation when nothing to merge
+  });
+
+  it("passes a system-less conversation through unchanged", () => {
+    const input: LlmMessage[] = [user("hi"), assistant("hello")];
+    const out = mergeLeadingSystemMessages(input);
+    expect(out).toBe(input);
+  });
+
+  it("does not touch system messages that appear after the leading run", () => {
+    // The orchestrator never emits non-leading system messages today,
+    // but we leave them in place if someone slips one in -- silent
+    // rewrite would mask that bug.
+    const out = mergeLeadingSystemMessages([
+      system("a"),
+      system("b"),
+      user("u1"),
+      system("mid"),
+      user("u2"),
+    ]);
+    expect(out).toEqual([
+      { role: "system", content: "a\n\nb" },
+      { role: "user", content: "u1", attachments: undefined },
+      { role: "system", content: "mid" },
+      { role: "user", content: "u2", attachments: undefined },
+    ]);
+  });
+
+  it("concatenates attachments across merged system messages", () => {
+    const a = { mime: "image/png", data: "AAA", source: "foo.png" };
+    const b = { mime: "image/png", data: "BBB", source: "bar.png" };
+    const out = mergeLeadingSystemMessages([
+      { role: "system", content: "first", attachments: [a] },
+      { role: "system", content: "second", attachments: [b] },
+      user("hi"),
+    ]);
+    expect(out[0]).toEqual({
+      role: "system",
+      content: "first\n\nsecond",
+      attachments: [a, b],
     });
   });
 });
