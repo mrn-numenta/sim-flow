@@ -630,13 +630,26 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
     if (this.activePump && this.activePump.projectDir === args.projectDir) {
-      // A live pump for this project already exists. Don't take it
-      // over silently -- the user might be driving. Surface a
-      // notice and let them disconnect first.
-      void vscode.window.showWarningMessage(
-        `sim-flow: a session is already attached to ${args.projectDir}. Disconnect first, then attach as viewer.`,
-      );
-      return;
+      if (this.activePump.pump.isViewer) {
+        // Existing pump is also a viewer (e.g. user re-attaching
+        // to a watcher after the orchestrator restarted, or just
+        // refreshing). Tear it down and re-attach. No-op if it
+        // was disposed already.
+        try {
+          this.activePump.pump.dispose();
+        } catch {
+          // Ignore: the new attach proceeds regardless.
+        }
+        await this.autoSessions.clearIfActive(this.activePump);
+      } else {
+        // Existing pump is DRIVING. Don't silently steal -- the
+        // user might be in the middle of work. Surface a notice
+        // and let them Disconnect first.
+        void vscode.window.showWarningMessage(
+          `sim-flow: a driving session is already attached to ${args.projectDir}. Disconnect first, then attach as viewer.`,
+        );
+        return;
+      }
     }
     const sessionId = `viewer-${args.pid}-${Date.now()}`;
     // Tag the source as best-effort; LlmSourceTag is a closed
@@ -702,6 +715,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       `workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`,
     );
     await this.autoSessions.attach(record, pump, this.autoSessionDelegate());
+    // Surface attach success so the user knows the viewer is live.
+    // Without this, a successful attach is silent and is easy to
+    // confuse with the failure path (where we DO show a notice) --
+    // especially when the chat panel pill takes a moment to switch
+    // from OFFLINE to VIEWING while history replays.
+    void vscode.window.showInformationMessage(
+      `sim-flow: attached as viewer to ${path.basename(args.projectDir)} (pid ${args.pid}).`,
+    );
   }
 
   async launchStepSession(
