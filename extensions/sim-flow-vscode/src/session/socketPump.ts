@@ -690,14 +690,23 @@ export class SocketSessionPump implements LiveSessionTransport {
       event.event !== "session-end" &&
       event.event !== "step-mode-changed" &&
       event.event !== "sub-session-started" &&
-      event.event !== "sub-session-ended"
+      event.event !== "sub-session-ended" &&
+      event.event !== "gate-result"
     ) {
       // Defer most events until the next `settle()`; the renderer
       // is gone right now and we'd lose the markdown context. But
-      // session-end, step-mode-changed, and the sub-session
-      // bracket events are pure state — dashboard subscribers
-      // (toggle UI, per-step button gating) would otherwise miss
-      // transitions that land between settles.
+      // session-end, step-mode-changed, the sub-session bracket
+      // events, AND structured `gate-result` are pure state /
+      // control-channel events -- dashboard subscribers (toggle
+      // UI, per-step button gating, gate cache) would otherwise
+      // miss transitions that land between settles. `gate-result`
+      // specifically is the manual-mode Run Gate response: the
+      // orchestrator handles RunGate OUTSIDE a sub-session
+      // bracket, so when the user clicks Run Gate while the chat
+      // panel is parked at `awaiting-input`, the result arrives
+      // with `currentRenderer === null`. Without this bypass the
+      // event would queue forever, the gate cache would never
+      // update, and the Advance button would never enable.
       this.queuedEvents.push(event);
       return;
     }
