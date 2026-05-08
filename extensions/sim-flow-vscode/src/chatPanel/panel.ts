@@ -82,9 +82,36 @@ function render(): void {
   root.append(
     header(ui.state),
     transcript(ui.state.transcript),
+    ...(ui.state.isStreaming ? [streamingIndicator(ui.state)] : []),
     composer(ui.state),
   );
   app.appendChild(root);
+}
+
+/**
+ * Bottom-of-panel busy indicator. The header's STREAMING pill is
+ * easy to miss when the user has scrolled mid-transcript or is
+ * focused on the composer; this shows directly above the textarea
+ * so the "the LLM is still crunching" signal is impossible to
+ * overlook. Animated to make the live-vs-stuck distinction obvious.
+ */
+function streamingIndicator(state: ChatPanelState): HTMLElement {
+  const root = section("streaming-indicator");
+  const dots = section("streaming-indicator-dots");
+  for (let i = 0; i < 3; i++) {
+    dots.appendChild(el("span", { class: "streaming-indicator-dot" }));
+  }
+  const phase = state.currentPhase ? `(${state.currentPhase})` : "";
+  const label = state.currentTool
+    ? `Tool: ${state.currentTool}`
+    : state.currentArtifact
+      ? `Writing: ${state.currentArtifact}`
+      : `Streaming response from ${state.model || state.sourceLabel}`;
+  root.append(
+    dots,
+    el("div", { class: "streaming-indicator-text" }, phase ? `${label} ${phase}` : label),
+  );
+  return root;
 }
 
 function header(state: ChatPanelState): HTMLElement {
