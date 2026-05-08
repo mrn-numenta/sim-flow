@@ -171,6 +171,28 @@ export const BREVITY_DIRECTIVE = [
   "- Code, file paths, and tool calls over commentary.",
 ].join("\n");
 
+/**
+ * Append the brevity directive to the leading system message, or
+ * prepend it as a new system message when there isn't one. Mutates
+ * `messages` in place.
+ *
+ * Why not splice mid-conversation: strict OpenAI-compat servers
+ * (vllm being the loud case -- "System message must be at the
+ * beginning") reject any non-leading system message. LM Studio /
+ * Ollama / OpenAI tolerate it, so the original splice worked there
+ * but quietly broke vllm. Keeping the directive as part of the
+ * leading system block satisfies every supported backend without
+ * burning a separate role slot.
+ */
+export function mergeBrevityDirective(messages: BackendLlmMessage[]): void {
+  const head = messages[0];
+  if (head && head.role === "system") {
+    head.content = `${head.content}\n\n${BREVITY_DIRECTIVE}`;
+    return;
+  }
+  messages.unshift({ role: "system", content: BREVITY_DIRECTIVE });
+}
+
 /** Bind a `vscode.ChatResponseStream` as a `PumpRenderer`. */
 export function rendererFromChatStream(stream: vscode.ChatResponseStream): PumpRenderer {
   return {
@@ -631,18 +653,12 @@ export class SessionPump {
         source: a.source ?? undefined,
       })),
     }));
-    // When the user has unchecked "Verbose" in the dashboard, slip a
-    // brevity directive in just before the user message. The
-    // orchestrator's prompts always end with one user turn, so
-    // splicing at length-1 lands us after every system message but
-    // ahead of the actual ask. Skipped when verbose=true so models'
-    // natural tone shows through.
+    // When the user has unchecked "Verbose" in the dashboard, fold
+    // the brevity directive into the leading system message. See
+    // `mergeBrevityDirective` for the rationale (strict
+    // OpenAI-compat servers reject non-leading system messages).
     if (!live.verbose) {
-      const insertAt = Math.max(0, messages.length - 1);
-      messages.splice(insertAt, 0, {
-        role: "system",
-        content: BREVITY_DIRECTIVE,
-      });
+      mergeBrevityDirective(messages);
     }
     this.currentRenderer?.requestTokensEstimate?.(estimateMessagesTokens(messages));
     const tools = event.tools?.map((t) => ({

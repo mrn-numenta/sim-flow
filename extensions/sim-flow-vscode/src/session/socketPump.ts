@@ -16,8 +16,8 @@ import { DebugLog } from "./debug-log";
 import { removePidRecord, writePidRecord } from "./processRegistry";
 import { acquirePumpLock, type PumpLock } from "./pumpLock";
 import {
-  BREVITY_DIRECTIVE,
   type LiveSessionTransport,
+  mergeBrevityDirective,
   type PumpLlmConfig,
   type PumpRenderer,
   type PumpSettleResult,
@@ -886,11 +886,13 @@ export class SocketSessionPump implements LiveSessionTransport {
       })),
     }));
     if (!live.verbose) {
-      const insertAt = Math.max(0, messages.length - 1);
-      messages.splice(insertAt, 0, {
-        role: "system",
-        content: BREVITY_DIRECTIVE,
-      });
+      // Append the brevity directive to the leading system message
+      // when one is already in place; otherwise prepend it as a new
+      // system message. Splicing it mid-conversation (the prior
+      // implementation) trips strict OpenAI-compat servers like vllm
+      // which require system messages to be at the start, contiguous
+      // and unsplit ("System message must be at the beginning").
+      mergeBrevityDirective(messages);
     }
     this.currentRenderer?.requestTokensEstimate?.(estimateMessagesTokens(messages));
     const tools = event.tools?.map((t) => ({
