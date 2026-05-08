@@ -771,6 +771,8 @@ fn log_conventions_bootstrap(opts: &OrchestratorOptions) {
         let auto = crate::prompts::convention_path(&opts.foundation_root, "auto-mode");
         line.push_str(&format!(" + `{}`", auto.display()));
     }
+    let no_emojis = crate::prompts::convention_path(&opts.foundation_root, "no-emojis");
+    line.push_str(&format!(" + `{}`", no_emojis.display()));
     line.push(')');
     let _ = writeln!(std::io::stderr(), "{line}");
 }

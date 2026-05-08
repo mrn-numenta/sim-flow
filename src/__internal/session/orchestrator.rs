@@ -1614,10 +1614,13 @@ pub fn build_initial_messages(
             "Before responding, read the conventions file at:\n\n  {}\n\n\
              Treat its content as a system instruction that applies for\n\
              the rest of this session. The file is short (read it in full).\
-             \n\nAlso read the {} at:\n\n  {}\n\nFollow them on every turn.",
+             \n\nAlso read the {} at:\n\n  {}\n\nFollow them on every turn.\
+             \n\nAlso read the no-emojis convention at:\n\n  {}\n\n\
+             ASCII only -- no decorative glyphs in files, tool args, or chat replies.",
             prompts::convention_path(&opts.foundation_root, convention_name).display(),
             mode_notes_label,
             prompts::convention_path(&opts.foundation_root, mode_notes_name).display(),
+            prompts::convention_path(&opts.foundation_root, "no-emojis").display(),
         );
         if opts.no_preamble {
             directives.push_str(&format!(
@@ -1630,7 +1633,11 @@ pub fn build_initial_messages(
     } else {
         let convention = prompts::load_convention(&opts.foundation_root, convention_name)?;
         let mode_notes = prompts::load_convention(&opts.foundation_root, mode_notes_name)?;
-        let mut combined = format!("{}\n\n---\n\n{}\n\n---\n\n", convention, mode_notes,);
+        let no_emojis = prompts::load_convention(&opts.foundation_root, "no-emojis")?;
+        let mut combined = format!(
+            "{}\n\n---\n\n{}\n\n---\n\n{}\n\n---\n\n",
+            convention, mode_notes, no_emojis,
+        );
         if opts.no_preamble {
             let no_preamble = prompts::load_convention(&opts.foundation_root, "no-preamble")?;
             combined.push_str(&no_preamble);
@@ -1754,7 +1761,7 @@ fn effective_artifacts_empty(response_text: &str, kind: SessionKind) -> bool {
 // AUTO_MODE_SYSTEM, ARTIFACT_CONVENTION_SYSTEM, and NATIVE_FS_TOOLS_SYSTEM
 // used to live here as `concat!` strings. They were extracted to
 // `<foundation>/tools/sim-flow/prompts/_conventions/{auto-mode,
-// fenced-blocks,native-tools}.md` so:
+// manual-mode,fenced-blocks,native-tools,no-emojis,no-preamble}.md` so:
 //   - PTY agents that have a Read tool can fetch them on demand
 //     instead of having a multi-thousand-character paste shoved into
 //     stdin (avoiding paste-detection / ECHO / newline doubling).
