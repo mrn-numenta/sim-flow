@@ -64,6 +64,13 @@ struct Args {
     max_auto_iters: u32,
     max_critique_iters: u32,
     max_llm_requests: u32,
+    /// Optional Unix socket path passed to `sim-flow auto
+    /// --watch-socket ...` so the dashboard's "Attach to Running
+    /// Watcher" picker can list this run. When unset (and
+    /// `--no-watch-socket` is not passed), defaults to a
+    /// per-pid path under the system temp dir so every run is
+    /// observable out of the box.
+    watch_socket: Option<PathBuf>,
 }
 
 impl Args {
@@ -77,6 +84,8 @@ impl Args {
         let mut max_auto_iters = 3u32;
         let mut max_critique_iters = 3u32;
         let mut max_llm_requests = 50u32;
+        let mut watch_socket: Option<PathBuf> = None;
+        let mut watch_disabled = false;
         let mut iter = argv.into_iter().skip(1);
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -107,13 +116,22 @@ impl Args {
                         .parse()
                         .map_err(|err| format!("--max-llm-requests: {err}"))?
                 }
+                "--watch-socket" => watch_socket = iter.next().map(PathBuf::from),
+                "--no-watch-socket" => watch_disabled = true,
                 "--help" | "-h" => {
                     println!(
                         "usage: e2e_manual --project-dir <P> --foundation-root <F> \
                          --backend {{openai-compat|ollama|claude}} [--model <M>] \
                          [--spec <PATH>] [--sim-flow-bin <PATH>] \
                          [--max-auto-iters <N>] [--max-critique-iters <N>] \
-                         [--max-llm-requests <N>]"
+                         [--max-llm-requests <N>] \
+                         [--watch-socket <PATH>] [--no-watch-socket]\n\
+                         \n\
+                         By default a `--watch-socket` path is auto-generated under the \
+                         system temp dir so the VS Code dashboard's `sim-flow: Attach to \
+                         Running Watcher` picker can attach as a read-only viewer. Pass \
+                         `--no-watch-socket` to disable, or `--watch-socket <PATH>` to \
+                         choose your own path."
                     );
                     std::process::exit(0);
                 }
@@ -130,6 +148,18 @@ impl Args {
             foundation_root.ok_or_else(|| "--foundation-root is required".to_string())?;
         let sim_flow_bin =
             sim_flow_bin.unwrap_or_else(|| foundation_root.join("target/debug/sim-flow"));
+        // Default watch-socket: <tmp>/sim-flow-e2e-manual-<pid>.sock,
+        // unique per process, removable by the orchestrator on
+        // shutdown via the EventTap drop. `--no-watch-socket`
+        // suppresses; an explicit `--watch-socket` overrides.
+        let watch_socket = if watch_disabled {
+            None
+        } else {
+            Some(watch_socket.unwrap_or_else(|| {
+                std::env::temp_dir()
+                    .join(format!("sim-flow-e2e-manual-{}.sock", std::process::id()))
+            }))
+        };
         Ok(Self {
             project_dir,
             foundation_root,
@@ -140,6 +170,7 @@ impl Args {
             max_auto_iters,
             max_critique_iters,
             max_llm_requests,
+            watch_socket,
         })
     }
 }
@@ -218,6 +249,18 @@ fn run(args: &Args) -> std::result::Result<(), String> {
     }
     if let Some(spec) = &args.spec {
         cmd.arg("--spec").arg(spec);
+    }
+    // Pass through `--watch-socket` so the orchestrator binds a
+    // read-only event tap. The dashboard's "Attach to Running
+    // Watcher" picker discovers this run via the registry the tap
+    // writes; observers see history + live events without
+    // touching e2e_manual's command channel.
+    if let Some(watch) = &args.watch_socket {
+        cmd.arg("--watch-socket").arg(watch);
+        eprintln!(
+            "e2e_manual: watch socket = {} (attach via VS Code: `sim-flow: Attach to Running Watcher`)",
+            watch.display()
+        );
     }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())

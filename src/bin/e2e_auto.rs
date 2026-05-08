@@ -40,7 +40,9 @@ use sim_flow::session::agent::{
 };
 use sim_flow::session::host::TerminalHost;
 use sim_flow::session::protocol::{LlmMessage, StepMode};
-use sim_flow::session::{AutoOptions, ingest_spec_file, run_auto};
+use sim_flow::session::{
+    AutoOptions, EventTap, TappedHost, WatchRegistration, ingest_spec_file, run_auto,
+};
 
 fn main() {
     let args: Args = match Args::parse(std::env::args().collect()) {
@@ -79,6 +81,13 @@ struct Args {
     /// rather than after a 30-minute warm-up + first dispatch
     /// failure. Disable with `--no-healthcheck`.
     healthcheck: bool,
+    /// Optional Unix socket path for the read-only event tap.
+    /// When set (or auto-generated when neither
+    /// `--watch-socket` nor `--no-watch-socket` is passed), the
+    /// VS Code dashboard's "Attach to Running Watcher" picker
+    /// can list this run and observe events without touching
+    /// e2e_auto's in-process command path.
+    watch_socket: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy)]
@@ -102,6 +111,8 @@ impl Args {
         let mut max_identical_responses = 3u32;
         let mut no_preamble = true;
         let mut healthcheck = true;
+        let mut watch_socket: Option<PathBuf> = None;
+        let mut watch_disabled = false;
         let mut iter = argv.into_iter().skip(1);
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -143,6 +154,8 @@ impl Args {
                 "--preamble" => no_preamble = false,
                 "--no-healthcheck" => healthcheck = false,
                 "--healthcheck" => healthcheck = true,
+                "--watch-socket" => watch_socket = iter.next().map(PathBuf::from),
+                "--no-watch-socket" => watch_disabled = true,
                 "--help" | "-h" => {
                     println!(
                         "usage: e2e_auto --project-dir <P> --foundation-root <F> \
@@ -151,7 +164,14 @@ impl Args {
                          [--max-auto-iters <N>] [--max-critique-iters <N>] \
                          [--max-llm-requests <N>] [--max-identical-responses <N>] \
                          [--preamble | --no-preamble] \
-                         [--healthcheck | --no-healthcheck]"
+                         [--healthcheck | --no-healthcheck] \
+                         [--watch-socket <PATH>] [--no-watch-socket]\n\
+                         \n\
+                         By default a `--watch-socket` path is auto-generated under the \
+                         system temp dir so the VS Code dashboard's `sim-flow: Attach \
+                         to Running Watcher` picker can attach as a read-only viewer. \
+                         Pass `--no-watch-socket` to disable, or `--watch-socket <PATH>` \
+                         to choose your own path."
                     );
                     std::process::exit(0);
                 }
@@ -164,6 +184,13 @@ impl Args {
             Some("claude") | Some("claude-cli") => Backend::Claude,
             Some(other) => return Err(format!("unknown backend: {other}")),
             None => return Err("--backend is required".to_string()),
+        };
+        let watch_socket = if watch_disabled {
+            None
+        } else {
+            Some(watch_socket.unwrap_or_else(|| {
+                std::env::temp_dir().join(format!("sim-flow-e2e-auto-{}.sock", std::process::id()))
+            }))
         };
         Ok(Self {
             project_dir: project_dir.ok_or_else(|| "--project-dir is required".to_string())?,
@@ -179,6 +206,7 @@ impl Args {
             max_identical_responses,
             no_preamble,
             healthcheck,
+            watch_socket,
         })
     }
 }
@@ -322,7 +350,42 @@ fn run(args: &Args) -> std::result::Result<(), String> {
     let stdin = BufReader::new(Cursor::new(Vec::<u8>::new()));
     let stdout = std::io::stdout();
     let stderr = std::io::stderr();
-    let mut host = TerminalHost::new(BoxedAgent(agent), stdin, stdout, stderr);
+    let host = TerminalHost::new(BoxedAgent(agent), stdin, stdout, stderr);
+
+    // Optional read-only event broadcast. When `--watch-socket` is
+    // set (default) the dashboard's "Attach to Running Watcher"
+    // picker can list this run and observe events live; the tap
+    // unbinds + de-registers when the EventTap is dropped at the
+    // end of `run`.
+    let watch_tap = match &args.watch_socket {
+        Some(path) => {
+            let registration = WatchRegistration {
+                pid: std::process::id(),
+                socket_path: path.clone(),
+                project_dir: args.project_dir.clone(),
+                started_at: now_iso8601(),
+                llm_backend: backend_label.to_string(),
+                llm_model: args.model.clone(),
+            };
+            match EventTap::bind_with_registration(path.clone(), registration) {
+                Ok(tap) => {
+                    eprintln!(
+                        "e2e_auto: watch socket = {} (attach via VS Code: `sim-flow: Attach to Running Watcher`)",
+                        path.display()
+                    );
+                    Some(tap)
+                }
+                Err(err) => {
+                    eprintln!(
+                        "e2e_auto: WARN: failed to bind --watch-socket {}: {err}",
+                        path.display()
+                    );
+                    None
+                }
+            }
+        }
+        None => None,
+    };
 
     let opts = AutoOptions {
         project_dir: args.project_dir.clone(),
@@ -341,7 +404,14 @@ fn run(args: &Args) -> std::result::Result<(), String> {
 
     println!("e2e_auto: launching run_auto...\n");
     let started = Instant::now();
-    run_auto(opts, &mut host).map_err(|err| format!("run_auto error: {err}"))?;
+    let result = if let Some(tap) = watch_tap {
+        let mut tapped = TappedHost::new(host, tap);
+        run_auto(opts, &mut tapped)
+    } else {
+        let mut host = host;
+        run_auto(opts, &mut host)
+    };
+    result.map_err(|err| format!("run_auto error: {err}"))?;
     let elapsed = started.elapsed();
     println!(
         "\ne2e_auto: run_auto returned after {:.1}s",
@@ -410,5 +480,13 @@ impl CliAgent for BoxedAgent {
     }
     fn dispatch(&self, messages: &[LlmMessage]) -> sim_flow::Result<(String, LlmCallMetrics)> {
         self.0.dispatch(messages)
+    }
+}
+
+fn now_iso8601() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(d) => format!("{}", d.as_secs()),
+        Err(_) => "0".to_string(),
     }
 }
