@@ -1285,9 +1285,13 @@ pub fn clear_step_collateral_forward(
     use std::collections::HashSet;
 
     // Build the upstream-protected set: every work_artifact +
-    // critique file from steps[0..idx]. Trailing-slash directory
-    // markers are normalized off so we can do exact-equality
-    // matches against `Path::join(rel)`.
+    // critique file from steps[0..idx]. Both forms of the critique
+    // (canonical `<step>-critique.json` and the orchestrator-rendered
+    // `<step>-critique.md` view) are protected so an exact-equality
+    // delete of either form on a downstream pass doesn't sweep the
+    // upstream sibling that lives in the same directory.
+    // Trailing-slash directory markers are normalized off so we can
+    // do exact-equality matches against `Path::join(rel)`.
     let mut protected: HashSet<PathBuf> = HashSet::new();
     for upstream in &order[..idx] {
         let Some(step) = registry.get(upstream) else {
@@ -1296,6 +1300,7 @@ pub fn clear_step_collateral_forward(
         for art in step.work_artifacts {
             protected.insert(project_dir.join(art.trim_end_matches('/')));
         }
+        protected.insert(project_dir.join(format!("docs/critiques/{}-critique.json", step.id)));
         protected.insert(project_dir.join(format!("docs/critiques/{}-critique.md", step.id)));
     }
 
@@ -1314,10 +1319,26 @@ pub fn clear_step_collateral_forward(
                 &mut failures,
             );
         }
-        let critique_rel = format!("docs/critiques/{}-critique.md", step.id);
+        // Delete BOTH critique forms. Post-migration the agent emits
+        // the JSON via `write_file`; the orchestrator renders the
+        // `.md` sibling. A reset that only removes one of the two
+        // leaves a stale critique on disk that the gate / retry path
+        // (`Critique::load`) will pick up the next time the step
+        // runs, defeating the reset. See
+        // `tools/sim-flow/src/__internal/critique.rs::Critique::load`
+        // -- it resolves the JSON sibling first.
+        let json_rel = format!("docs/critiques/{}-critique.json", step.id);
         delete_with_upstream_protection(
             project_dir,
-            &critique_rel,
+            &json_rel,
+            &protected,
+            &mut deleted,
+            &mut failures,
+        );
+        let md_rel = format!("docs/critiques/{}-critique.md", step.id);
+        delete_with_upstream_protection(
+            project_dir,
+            &md_rel,
             &protected,
             &mut deleted,
             &mut failures,
@@ -2136,12 +2157,16 @@ not a finding
     }
 
     /// Both reset entry points (`Reset` HostEvent + CLI `sim-flow
-    /// reset`) must clear `docs/critiques/<step>-critique.md` for
-    /// the reset target step AND every downstream step. The bug
-    /// this guards against: a stale DM3a-critique.md left on disk
-    /// after a reset to DM3a makes the next critique session
+    /// reset`) must clear BOTH critique forms (canonical
+    /// `<step>-critique.json` and rendered `<step>-critique.md`)
+    /// for the reset target step AND every downstream step. The
+    /// bug this guards against: a stale DM3a critique left on
+    /// disk after a reset to DM3a makes the next critique session
     /// trigger focused-retry mode against the prior pass's
-    /// blockers, which were rendered moot by the reset.
+    /// blockers, which were rendered moot by the reset. Pre-fix,
+    /// only the `.md` was cleared, so `Critique::load` (which
+    /// resolves the JSON sibling first) kept seeing the stale
+    /// findings.
     #[test]
     fn clear_step_collateral_forward_deletes_critiques_for_target_and_downstream() {
         use crate::__internal::steps::registry_for;
@@ -2150,15 +2175,20 @@ not a finding
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path();
         std::fs::create_dir_all(project.join("docs/critiques")).unwrap();
-        // Stage critiques for several DM steps. Reset to DM3a
-        // should clear DM3a / DM3b / DM3c / DM4a / DM4b but leave
-        // DM0-DM2d alone.
+        // Stage critiques for several DM steps in BOTH forms.
+        // Reset to DM3a should clear DM3a / DM3b / DM3c / DM4a /
+        // DM4b (both forms) but leave DM0-DM2d alone.
         for step in [
             "DM0", "DM1", "DM2a", "DM2b", "DM2c", "DM2d", "DM3a", "DM3b", "DM3c", "DM4a", "DM4b",
         ] {
             std::fs::write(
                 project.join(format!("docs/critiques/{step}-critique.md")),
                 format!("# {step} critique\n\n- RESOLVED: stub\n"),
+            )
+            .unwrap();
+            std::fs::write(
+                project.join(format!("docs/critiques/{step}-critique.json")),
+                format!(r#"{{"step":"{step}","summary":"","findings":[],"notes":""}}"#),
             )
             .unwrap();
         }
@@ -2170,26 +2200,59 @@ not a finding
 
         assert!(failures.is_empty(), "got failures: {failures:?}");
 
-        // Deleted set must include every DM3a-onwards critique.
+        // Deleted set must include every DM3a-onwards critique in
+        // BOTH forms.
         for step in ["DM3a", "DM3b", "DM3c", "DM4a", "DM4b"] {
-            let p = project.join(format!("docs/critiques/{step}-critique.md"));
-            assert!(
-                !p.exists(),
-                "{step}-critique.md should be deleted by reset to DM3a"
-            );
-            assert!(
-                deleted.iter().any(|d| d == &p),
-                "{step}-critique.md should be in the deleted list"
-            );
+            for ext in ["md", "json"] {
+                let p = project.join(format!("docs/critiques/{step}-critique.{ext}"));
+                assert!(
+                    !p.exists(),
+                    "{step}-critique.{ext} should be deleted by reset to DM3a"
+                );
+                assert!(
+                    deleted.iter().any(|d| d == &p),
+                    "{step}-critique.{ext} should be in the deleted list"
+                );
+            }
         }
-        // Upstream critiques must survive untouched.
+        // Upstream critiques (both forms) must survive untouched.
         for step in ["DM0", "DM1", "DM2a", "DM2b", "DM2c", "DM2d"] {
-            let p = project.join(format!("docs/critiques/{step}-critique.md"));
-            assert!(
-                p.exists(),
-                "{step}-critique.md should NOT be deleted by reset to DM3a"
-            );
+            for ext in ["md", "json"] {
+                let p = project.join(format!("docs/critiques/{step}-critique.{ext}"));
+                assert!(
+                    p.exists(),
+                    "{step}-critique.{ext} should NOT be deleted by reset to DM3a"
+                );
+            }
         }
+    }
+
+    /// Reset must also work when only the canonical JSON form is on
+    /// disk (the orchestrator's render-on-write usually produces
+    /// both, but a transient state where only the JSON exists is
+    /// possible after a render failure or partial migration).
+    #[test]
+    fn clear_step_collateral_forward_deletes_json_only_critiques() {
+        use crate::__internal::steps::registry_for;
+        use crate::state::Flow;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path();
+        std::fs::create_dir_all(project.join("docs/critiques")).unwrap();
+        // JSON-only stage for the target step.
+        std::fs::write(
+            project.join("docs/critiques/DM3a-critique.json"),
+            r#"{"step":"DM3a","summary":"","findings":[],"notes":""}"#,
+        )
+        .unwrap();
+        let registry = registry_for(Flow::DirectModeling);
+        let order: Vec<&'static str> = registry.order_for(Flow::DirectModeling);
+        let idx = order.iter().position(|s| *s == "DM3a").unwrap();
+        let (deleted, failures) = clear_step_collateral_forward(project, idx, &order, &registry);
+        assert!(failures.is_empty(), "got failures: {failures:?}");
+        let p = project.join("docs/critiques/DM3a-critique.json");
+        assert!(!p.exists(), "DM3a-critique.json should be deleted");
+        assert!(deleted.iter().any(|d| d == &p));
     }
 
     /// Upstream-protection: when DM4b's coarse `["docs/analysis/"]`
