@@ -19,6 +19,16 @@ export interface ChatPanelState {
   totalOutputTokensEstimate: number;
   transcript: ChatTranscriptEntry[];
   isStreaming: boolean;
+  /**
+   * True when an orchestrator session is attached for this project
+   * and currently parked at `request-user-input` -- i.e. not
+   * streaming but not finished either, just waiting for the user's
+   * next click. The bottom-of-panel status row uses this to show
+   * "Waiting on user to select the next step" instead of hiding
+   * entirely (which would leave the user wondering whether the
+   * session was still alive).
+   */
+  awaitingUserInput: boolean;
   supportsPromptEntry: boolean;
   canStop: boolean;
 }

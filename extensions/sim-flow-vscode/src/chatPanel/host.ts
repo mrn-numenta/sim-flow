@@ -918,6 +918,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       totalOutputTokensEstimate: tokenTotals.output,
       transcript: filterPresentationEntries(conversation.transcript),
       isStreaming,
+      awaitingUserInput: awaitingPumpInput,
       supportsPromptEntry,
       canStop:
         !!this.inFlight ||
@@ -1137,11 +1138,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       session.assistantId = started.assistantId;
       session.pendingRequestTokensEstimate = null;
       conversation = started.state;
-      // First assistant chunk of a new turn -- the previous turn's
-      // tool / artifact note is no longer the live action. Without
-      // this clear, the bottom-of-panel busy indicator keeps
-      // showing "Tool: write_file" or "Writing: <path>" while the
-      // LLM is actually streaming the next response.
+    }
+    // Any assistant chunk arriving while a tool / artifact note is
+    // pinned means the LLM has resumed streaming after the tool ran
+    // -- the tool pill is no longer the live action. Without this
+    // clear, the bottom-of-panel indicator and header pill keep
+    // showing "Tool: read_file" while the LLM is actually streaming
+    // the next response. (Cleared regardless of whether the
+    // assistant placeholder is fresh -- mid-session tool calls
+    // don't tear down the placeholder, so the "first chunk only"
+    // clear from earlier wasn't enough.)
+    if (session.currentTool !== null || session.currentArtifact !== null) {
       session.currentTool = null;
       session.currentArtifact = null;
     }

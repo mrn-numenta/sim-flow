@@ -78,39 +78,71 @@ function render(): void {
     return;
   }
 
+  const indicator = bottomStatusIndicator(ui.state);
   const root = section("chat-shell");
   root.append(
     header(ui.state),
     transcript(ui.state.transcript),
-    ...(ui.state.isStreaming ? [streamingIndicator(ui.state)] : []),
+    ...(indicator ? [indicator] : []),
     composer(ui.state),
   );
   app.appendChild(root);
 }
 
 /**
- * Bottom-of-panel busy indicator. The header's STREAMING pill is
- * easy to miss when the user has scrolled mid-transcript or is
- * focused on the composer; this shows directly above the textarea
- * so the "the LLM is still crunching" signal is impossible to
- * overlook. Animated to make the live-vs-stuck distinction obvious.
+ * Bottom-of-panel status row. Visible whenever there's an active
+ * orchestrator session for this project, with three modes:
+ *
+ * - Streaming: animated dots + "Tool / Writing / Generating"
+ *   label so the user sees what the LLM is busy with.
+ * - Awaiting input: static dot + "Waiting on user to select the
+ *   next step." This is the case the user kept missing -- session
+ *   parked for the next dashboard click, header pill stale, no
+ *   streaming animation.
+ * - Otherwise (no live session): hidden.
+ *
+ * The header's STREAMING pill is easy to miss when the user has
+ * scrolled mid-transcript or is focused on the composer; the
+ * bottom row sits directly above the textarea so the active /
+ * idle distinction is impossible to overlook.
  */
-function streamingIndicator(state: ChatPanelState): HTMLElement {
-  const root = section("streaming-indicator");
+function bottomStatusIndicator(state: ChatPanelState): HTMLElement | null {
+  if (state.isStreaming) {
+    return renderIndicator("active", streamingLabel(state));
+  }
+  if (state.awaitingUserInput) {
+    return renderIndicator(
+      "parked",
+      "Waiting on user to select the next step.",
+    );
+  }
+  return null;
+}
+
+function streamingLabel(state: ChatPanelState): string {
+  const phase = state.currentPhase ? ` (${state.currentPhase})` : "";
+  if (state.currentTool) {
+    return `Tool: ${state.currentTool}${phase}`;
+  }
+  if (state.currentArtifact) {
+    return `Writing: ${state.currentArtifact}${phase}`;
+  }
+  return `Generating response from ${state.model || state.sourceLabel}${phase}`;
+}
+
+function renderIndicator(
+  mode: "active" | "parked",
+  text: string,
+): HTMLElement {
+  const root = section(`streaming-indicator streaming-indicator-${mode}`);
   const dots = section("streaming-indicator-dots");
-  for (let i = 0; i < 3; i++) {
+  // Three dots in active mode (animated via CSS); a single static
+  // dot in parked mode reads visually as "idle / waiting".
+  const dotCount = mode === "active" ? 3 : 1;
+  for (let i = 0; i < dotCount; i++) {
     dots.appendChild(el("span", { class: "streaming-indicator-dot" }));
   }
-  const phase = state.currentPhase ? `(${state.currentPhase})` : "";
-  const label = state.currentTool
-    ? `Tool: ${state.currentTool}`
-    : state.currentArtifact
-      ? `Writing: ${state.currentArtifact}`
-      : `Streaming response from ${state.model || state.sourceLabel}`;
-  root.append(
-    dots,
-    el("div", { class: "streaming-indicator-text" }, phase ? `${label} ${phase}` : label),
-  );
+  root.append(dots, el("div", { class: "streaming-indicator-text" }, text));
   return root;
 }
 
