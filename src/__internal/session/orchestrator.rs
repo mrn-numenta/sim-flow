@@ -569,23 +569,42 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             // the artifact-write convention requires, the extractor
             // sees nothing and the auto driver loops until the cap
             // fires -- even when the critique itself is fine
-            // ("UNRESOLVED items only, no BLOCKERs"). The critique
-            // file format is free-form markdown (only the
-            // `BLOCKER:` / `UNRESOLVED:` / `RESOLVED:` line prefixes
-            // matter to the gate), so the entire response works as
-            // valid content. We only apply this when the turn also
-            // produced no tool calls -- a turn that's purely
-            // `read_file` calls is the agent gathering input, not
-            // emitting the critique. Restricting to critique
-            // sessions keeps work-session "agent talked, didn't
-            // write" cases on the existing nudge-and-cap path
-            // (work sessions have multiple expected artifacts; we
-            // can't auto-deduce which one prose belongs to).
+            // ("UNRESOLVED items only, no BLOCKERs"). The legacy
+            // markdown form lets us recover by saving the prose body
+            // when it carries `BLOCKER:` / `UNRESOLVED:` /
+            // `RESOLVED:` line markers; the new JSON form makes that
+            // recovery less common because the agent typically calls
+            // `write_file` natively, but we keep the marker-based
+            // path as a safety net for projects mid-migration. We
+            // only apply this when the turn also produced no tool
+            // calls -- a turn that's purely `read_file` calls is the
+            // agent gathering input, not emitting the critique.
+            //
+            // Crucial pre-check: if the canonical critique file is
+            // already on disk for this step, the agent's job is
+            // done. The current turn is then just a prose summary
+            // of a tool-driven write that landed in a PRIOR turn
+            // (typical with native function-calling backends:
+            // turn N writes via `write_file`, turn N+1 says "the
+            // critique JSON is written at <path>"). Treating that
+            // follow-up as "no findings, ghost-pass risk" and
+            // re-prompting is wrong -- the file exists and the
+            // session should end normally.
             let pre_check_tool_calls = tools::extract_tool_calls(&assistant_text);
+            let critique_already_on_disk = opts.kind == SessionKind::Critique
+                && (opts
+                    .project_dir
+                    .join(format!("docs/critiques/{}-critique.json", step.id))
+                    .exists()
+                    || opts
+                        .project_dir
+                        .join(format!("docs/critiques/{}-critique.md", step.id))
+                        .exists());
             if artifacts.is_empty()
                 && opts.kind == SessionKind::Critique
                 && pre_check_tool_calls.is_empty()
                 && !assistant_text.trim().is_empty()
+                && !critique_already_on_disk
             {
                 // Auto-save the response as the critique IFF it
                 // contains at least one structured finding marker
@@ -624,33 +643,35 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         content: assistant_text.clone(),
                     });
                 } else {
-                    // No fenced block AND no findings: refuse to
-                    // commit. Push a corrective User turn so the
-                    // agent retries with proper structure rather
-                    // than the gate clearing on a no-op.
+                    // No fenced block AND no findings AND no critique
+                    // already on disk: refuse to commit. Push a
+                    // corrective User turn so the agent retries with
+                    // proper structure rather than the gate clearing
+                    // on a no-op.
+                    let json_path = format!("docs/critiques/{}-critique.json", step.id);
                     host.write(&Event::Diagnostic {
                         level: DiagnosticLevel::Error,
                         message: format!(
-                            "{}: critique response had no fenced artifact-write block AND \
-                             no `BLOCKER:` / `RESOLVED:` / `UNRESOLVED:` finding lines. \
-                             Refusing to auto-save -- a critique with no findings would \
-                             ghost-pass the gate. Re-prompting the agent.",
-                            step.id,
+                            "{}: critique response produced no critique file (no `write_file` \
+                             call, no fenced artifact-write block, no `BLOCKER:` / \
+                             `RESOLVED:` / `UNRESOLVED:` finding lines) and `{}` is not on \
+                             disk. Refusing to auto-save -- a critique with no findings \
+                             would ghost-pass the gate. Re-prompting the agent.",
+                            step.id, json_path,
                         ),
                     })?;
                     messages.push(LlmMessage {
                         role: LlmRole::User,
                         content: format!(
-                            "Your previous response did not contain a fenced \
-                             ```docs/critiques/{}-critique.md`` block AND it did not contain \
-                             any `BLOCKER:` / `RESOLVED:` / `UNRESOLVED:` finding lines. \
-                             A critique with no findings would silently pass the gate. \
-                             Re-emit the critique now: either as a fenced artifact-write \
-                             block at the path above, or as free-form markdown that \
-                             contains explicit finding-marker lines. At minimum every \
-                             evaluation question should produce one `RESOLVED:` or \
-                             `UNRESOLVED:` line, and any gap is a `BLOCKER:`.",
-                            step.id,
+                            "Your previous response did not produce a critique file. The \
+                             expected output is `{json_path}` (canonical JSON form -- \
+                             schema in the system instructions: `step`, `summary`, \
+                             `findings[]` with `kind` in `blocker`/`unresolved`/`resolved`, \
+                             optional `notes`). The orchestrator will render the markdown \
+                             sibling automatically; do not write the markdown yourself. \
+                             Emit the critique now -- preferably via the `write_file` \
+                             tool, or as a fenced artifact-write block whose info-string \
+                             is `{json_path}`."
                         ),
                         attachments: Vec::new(),
                     });
@@ -1774,7 +1795,12 @@ fn effective_artifacts_empty(response_text: &str, kind: SessionKind) -> bool {
 fn expected_output_paths(step: &StepDescriptor, kind: SessionKind) -> Vec<String> {
     match kind {
         SessionKind::Work => step.work_artifacts.iter().map(|s| (*s).into()).collect(),
-        SessionKind::Critique => vec![format!("docs/critiques/{}-critique.md", step.id)],
+        // Canonical critique form is JSON; the orchestrator renders
+        // the `.md` sibling on disk after the agent writes the JSON
+        // (see `write_artifact` and `write_file` tool). The agent
+        // should NOT write the markdown directly, so we don't
+        // surface its path here.
+        SessionKind::Critique => vec![format!("docs/critiques/{}-critique.json", step.id)],
     }
 }
 
