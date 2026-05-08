@@ -136,20 +136,62 @@ window.addEventListener("message", (ev) => {
       // different step in the rail, leave their selection alone --
       // they're inspecting that step on purpose.
       const prevCurrent = ui.data?.flow.current_step ?? null;
+      const prevInSub = ui.data?.inSubSession ?? false;
+      const prevSessionActive = ui.data?.sessionActive ?? false;
       const wasTracking = !ui.selectedStep || ui.selectedStep === prevCurrent;
       ui.data = msg.state;
       ui.lastError = null;
-      // Fresh state means whatever action prompted this refresh has
-      // landed. Clear all pending so any re-enabled button reflects
-      // current truth.
-      ui.pendingActions.clear();
+      // Reconcile the local Connect/Disconnect flag with the host's
+      // truth. Two desync sources:
+      //   (a) the orchestrator died on its own (transport-error,
+      //       runaway-guard, child-exit) -- `autoRunning` would
+      //       otherwise stay stuck `true` and Connect stay disabled
+      //       until the user reloaded the window.
+      //   (b) the webview reloaded while a pump is alive --
+      //       `autoRunning` resets to `false` and the per-step
+      //       buttons render `flow-locked` despite a live session.
+      ui.autoRunning = msg.state.sessionActive;
+      // Discriminating pendingAction clears. Previously we cleared
+      // every entry on every `state-update`, which clobbered the
+      // optimistic disable from a freshly-clicked button whenever an
+      // unrelated trigger (file-watcher tick, viewState refresh,
+      // llm-config arrival, ...) caused a state-update to land in
+      // the gap between click and the orchestrator's acknowledgement.
+      // The 5s `actionButton` failsafe still ensures nothing stays
+      // stuck forever; here we just clear when we have positive
+      // evidence the action resolved.
+      if (prevInSub && !msg.state.inSubSession) {
+        // A sub-session just released -- run-step / run-critique
+        // for any step have settled.
+        for (const id of Array.from(ui.pendingActions)) {
+          if (
+            id.startsWith("run-step-") ||
+            id.startsWith("run-critique-") ||
+            id.startsWith("reset-")
+          ) {
+            ui.pendingActions.delete(id);
+          }
+        }
+      }
+      if (prevCurrent !== null && prevCurrent !== msg.state.flow.current_step) {
+        // /advance bumped the current step -- the previous step's
+        // advance pending entry settled.
+        ui.pendingActions.delete(`advance-${prevCurrent}`);
+      }
+      if (prevSessionActive !== msg.state.sessionActive) {
+        // Connect / Disconnect resolved on the host side.
+        ui.pendingActions.delete("run-auto");
+        ui.pendingActions.delete("stop-auto");
+      }
+      // The selected step changed: drop any stale gate report from
+      // the previous step regardless of whether the user was
+      // tracking. A user inspecting an old step shouldn't see a
+      // gate report cached from before /advance bumped the flow.
+      if (prevCurrent !== null && prevCurrent !== msg.state.flow.current_step) {
+        ui.gateReport = null;
+      }
       if (wasTracking) {
         ui.selectedStep = msg.state.flow.current_step;
-        // The selected step changed: drop any stale gate report from
-        // the previous step so the new step's pane starts clean.
-        if (prevCurrent !== msg.state.flow.current_step) {
-          ui.gateReport = null;
-        }
       }
       // Seed the spec input from persisted state on first sync.
       // Subsequent edits flow back via `set-spec-path` so the user's
@@ -232,9 +274,12 @@ window.addEventListener("message", (ev) => {
       return;
     case "error":
       ui.lastError = { message: msg.message, detail: msg.detail };
-      // Any error clears all pending so users aren't left with
-      // permanently-disabled buttons.
-      ui.pendingActions.clear();
+      // Errors no longer clear EVERY pending entry -- doing so wipes
+      // unrelated in-flight actions (e.g. a Run Critique still
+      // running while a `regenerate-block-diagram` fails). The 5s
+      // failsafe in `actionButton` still releases anything that
+      // never gets a discrete settled signal, so users aren't left
+      // with permanently-disabled buttons.
       render();
       return;
   }
