@@ -126,9 +126,13 @@ export class OpenAiCompatibleBackend implements LlmBackend {
       if (token.isCancellationRequested || isAbortError(err)) {
         throw new LlmError("cancelled", `${this.options.name} request cancelled.`);
       }
+      // Include the URL we tried so the user can immediately see
+      // host / port / path when the connection itself fails. The
+      // bare "fetch failed" Node hands us is otherwise useless for
+      // diagnosing wrong-port / unreachable-host setups.
       throw new LlmError(
         "http",
-        `${this.options.name} request failed: ${(err as Error).message ?? String(err)}`,
+        `${this.options.name} request to ${url} failed: ${(err as Error).message ?? String(err)}`,
         undefined,
         err,
       );
@@ -138,7 +142,7 @@ export class OpenAiCompatibleBackend implements LlmBackend {
       const detail = await safeText(res);
       throw new LlmError(
         "http",
-        `${this.options.name} API returned ${res.status} ${res.statusText}`,
+        `${this.options.name} API at ${url} returned ${res.status} ${res.statusText}`,
         detail,
       );
     }

@@ -16,12 +16,20 @@ export interface LMStudioBackendOptions {
   baseUrl?: string;
   apiUrl?: string;
   fetchImpl?: typeof fetch;
+  /**
+   * Override the backend's display name, used in error
+   * diagnostics. The factory routes `vllm` and `openai-compat`
+   * through this class (same wire format as LM Studio);
+   * labeling them "lmstudio" in the error obscures the actual
+   * selector the user picked.
+   */
+  name?: string;
 }
 
 export class LMStudioBackend extends OpenAiCompatibleBackend {
   constructor(options: LMStudioBackendOptions = {}) {
     super({
-      name: "lmstudio",
+      name: options.name ?? "lmstudio",
       baseUrl: options.baseUrl ?? LMSTUDIO_DEFAULT_BASE_URL,
       defaultModel: "local-model",
       keyId: LMSTUDIO_KEY_ID,

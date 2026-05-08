@@ -43,10 +43,13 @@ export function createBackend(options: FactoryOptions): LlmBackend {
         secrets: options.secrets,
       });
     case "ollama":
+      // The generic `baseUrl` (set when resolving `server:<name>`)
+      // wins over the legacy `llm.ollama.baseUrl` setting so a
+      // user-defined ollama entry actually points where they say.
       return new OllamaBackend({
         model: options.model,
         secrets: options.secrets,
-        baseUrl: options.ollamaBaseUrl,
+        baseUrl: options.baseUrl ?? options.ollamaBaseUrl,
       });
     case "lmstudio":
       return new LMStudioBackend({
@@ -59,7 +62,10 @@ export function createBackend(options: FactoryOptions): LlmBackend {
       // the LM Studio backend (same wire format); only the
       // default URL differs. Custom servers route here too via
       // `kind: "vllm"` in the user's `sim-flow.llm.servers` array.
+      // Pass `name: "vllm"` so error diagnostics name the actual
+      // selector the user picked, not "lmstudio".
       return new LMStudioBackend({
+        name: "vllm",
         model: options.model,
         secrets: options.secrets,
         baseUrl: options.baseUrl ?? "http://localhost:8000/v1",
@@ -69,6 +75,7 @@ export function createBackend(options: FactoryOptions): LlmBackend {
       // `:1234/v1` so the conventional case still works without
       // the user typing a base URL.
       return new LMStudioBackend({
+        name: "openai-compat",
         model: options.model,
         secrets: options.secrets,
         baseUrl: options.baseUrl ?? options.lmstudioBaseUrl ?? "http://localhost:1234/v1",
