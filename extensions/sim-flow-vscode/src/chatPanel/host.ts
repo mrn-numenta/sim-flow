@@ -1019,6 +1019,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       isStreaming,
       awaitingUserInput: awaitingPumpInput,
       isViewer,
+      sessionStep:
+        this.activePump?.projectDir === context.projectDir
+          ? (this.activePump.pump.session?.step ?? null)
+          : null,
+      sessionKind:
+        this.activePump?.projectDir === context.projectDir
+          ? (this.activePump.pump.session?.kind ?? null)
+          : null,
       supportsPromptEntry,
       canStop:
         !!this.inFlight ||

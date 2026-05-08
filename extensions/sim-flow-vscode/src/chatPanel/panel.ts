@@ -129,14 +129,65 @@ function bottomStatusIndicator(state: ChatPanelState): HTMLElement | null {
 }
 
 function streamingLabel(state: ChatPanelState): string {
+  // Prefix with the step + kind the orchestrator is in, when
+  // known. The status row sits below a long transcript, so the
+  // semantic anchor ("DM0.work") makes the action ("Reading
+  // docs/spec.md.tmpl") immediately situated even when the user
+  // has scrolled away from the session banner. Falls back to no
+  // prefix when the pump hasn't opened a sub-session yet.
+  const stepPrefix =
+    state.sessionStep && state.sessionKind
+      ? `${state.sessionStep}.${state.sessionKind} · `
+      : "";
   const phase = state.currentPhase ? ` (${state.currentPhase})` : "";
   if (state.currentTool) {
-    return `Tool: ${state.currentTool}${phase}`;
+    return `${stepPrefix}${humanizeToolAction(state.currentTool)}${phase}`;
   }
   if (state.currentArtifact) {
-    return `Writing: ${state.currentArtifact}${phase}`;
+    return `${stepPrefix}Writing ${state.currentArtifact}${phase}`;
+  }
+  // Between tools: the LLM is generating. Make the semantic
+  // anchor still visible so the user knows what step is in
+  // flight even when nothing else is.
+  if (stepPrefix) {
+    return `${stepPrefix}Generating response${phase}`;
   }
   return `Generating response from ${state.model || state.sourceLabel}${phase}`;
+}
+
+/**
+ * Translate the pump's `_Tool \`name\` (args_summary) -> ok ..._`
+ * markdown into a human-readable action: `read_file (docs/spec.md.tmpl)`
+ * becomes `Reading docs/spec.md.tmpl`. Unknown tool names fall
+ * through as `Tool: <raw>` so the indicator never lies about
+ * what's running.
+ */
+function humanizeToolAction(toolSummary: string): string {
+  // toolSummary is the verbatim chunk from `classifyPumpMarkdown`'s
+  // `tool-activity` branch -- shape: `<name> (<args>)` (no
+  // duration / status tail; that's stripped upstream).
+  const m = /^([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:\(([^)]*)\))?/.exec(toolSummary);
+  if (!m) {
+    return `Tool: ${toolSummary}`;
+  }
+  const name = m[1];
+  const args = (m[2] ?? "").trim();
+  switch (name) {
+    case "read_file":
+      return args ? `Reading ${args}` : "Reading file";
+    case "write_file":
+      return args ? `Writing ${args}` : "Writing file";
+    case "edit_file":
+      return args ? `Editing ${args}` : "Editing file";
+    case "list_dir":
+      return args ? `Listing ${args}` : "Listing directory";
+    case "search":
+      return args ? `Searching ${args}` : "Searching";
+    case "run_cargo":
+      return args ? `Running cargo ${args}` : "Running cargo";
+    default:
+      return `Tool: ${toolSummary}`;
+  }
 }
 
 function renderIndicator(

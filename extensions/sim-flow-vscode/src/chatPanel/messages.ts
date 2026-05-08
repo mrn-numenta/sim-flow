@@ -37,6 +37,17 @@ export interface ChatPanelState {
    * user sees the orchestrator's progress.
    */
   isViewer: boolean;
+  /**
+   * Step + kind the orchestrator's most recent sub-session opened
+   * for (e.g. `{ step: "DM0", kind: "work" }`). Sourced from the
+   * pump's `session` getter (which reads `hello-ack`). Used by
+   * the bottom status indicator to prefix the streaming label with
+   * a semantic anchor (`DM0.work · Reading docs/spec.md.tmpl`)
+   * instead of just naming the tool. Null when no pump is active
+   * or the orchestrator hasn't opened a sub-session yet.
+   */
+  sessionStep: string | null;
+  sessionKind: "work" | "critique" | null;
   supportsPromptEntry: boolean;
   canStop: boolean;
 }
