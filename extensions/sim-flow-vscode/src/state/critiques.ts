@@ -77,7 +77,12 @@ function parseJsonCritique(text: string): { findings: Finding[]; hasBlocking: bo
     }
     const title = typeof f?.title === "string" ? f.title.trim() : "";
     findings.push({ kind, text: title, line: idx + 1 });
-    if (kind !== "resolved") {
+    // Only `blocker` counts as gate-blocking. `unresolved` is
+    // informational (an open question / nit the user should
+    // address eventually but that doesn't fail the gate); mirrors
+    // the Rust `Finding::is_blocking` rule in
+    // `tools/sim-flow/src/__internal/critique.rs`.
+    if (kind === "blocker") {
       hasBlocking = true;
     }
   });
@@ -193,7 +198,9 @@ function findingsFor(body: string): { findings: Finding[]; hasBlocking: boolean 
       continue;
     }
     findings.push(finding);
-    if (finding.kind !== "resolved") {
+    // Only `blocker` blocks the gate; `unresolved` is informational.
+    // See the matching note on `parseJsonCritique`.
+    if (finding.kind === "blocker") {
       hasBlocking = true;
     }
   }
