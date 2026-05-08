@@ -792,6 +792,7 @@ fn run_subsession<H: Host>(
     host.consume_session_end = consume_end;
     host.cap_exceeded = false;
     host.in_subsession = true;
+    host.in_subsession_parked = false;
     let kind_out = session_kind_to_protocol(kind);
     info!(step = step_id, kind = ?kind_out, auto, "sub-session starting");
     // Bracket the inner run_session with SubSessionStarted /
@@ -825,6 +826,7 @@ fn run_subsession<H: Host>(
     };
     let result = run_session(session_opts, host);
     host.in_subsession = false;
+    host.in_subsession_parked = false;
     // run_session returns Ok(()) for both clean completion and
     // user-initiated Cancel (the Cancel path emits its own internal
     // SessionEnd and returns Ok). Err is genuine protocol / I/O /
@@ -1605,9 +1607,19 @@ pub struct AutoHost<'a, H: Host> {
     /// this between sub-sessions and exits the orchestrator.
     pub shutdown_requested: bool,
     /// True while we're inside `run_subsession`. Manual-mode commands
-    /// (RunStep, etc.) that arrive in this window are rejected with a
-    /// Diagnostic; outside this window the parking loop reads them.
+    /// (RunStep, etc.) that arrive in this window are normally
+    /// rejected with a Diagnostic; outside this window the parking
+    /// loop reads them.
     pub in_subsession: bool,
+    /// True while the inner sub-session is parked at
+    /// `RequestUserInput`. The orchestrator isn't doing any work
+    /// during this span -- it's blocked at `host.read()` waiting for
+    /// the user's reply -- so a manual-mode command arriving here is
+    /// reasonable to interpret as "I'm done with this sub-session;
+    /// run the new command instead". Set on every `RequestUserInput`
+    /// write, cleared on the next active-work event from the
+    /// orchestrator and on every sub-session boundary.
+    pub in_subsession_parked: bool,
 }
 
 impl<'a, H: Host> AutoHost<'a, H> {
@@ -1620,6 +1632,7 @@ impl<'a, H: Host> AutoHost<'a, H> {
             step_mode,
             shutdown_requested: false,
             in_subsession: false,
+            in_subsession_parked: false,
         }
     }
 
@@ -1659,6 +1672,33 @@ impl<H: Host> Host for AutoHost<'_, H> {
         {
             self.cap_exceeded = true;
             self.pending_reads.push_back(HostEvent::Cancel);
+        }
+        // Track whether the inner sub-session is currently parked at
+        // `RequestUserInput`. This lets the manual-command branch in
+        // `read` distinguish "actively running, reject" from "parked
+        // and idle, accept the command by cancelling the parked
+        // session". The bracket open/close paths in `run_subsession`
+        // reset the flag explicitly; we only mutate it for events
+        // that occur DURING the sub-session.
+        if self.in_subsession {
+            match event {
+                Event::RequestUserInput { .. } => {
+                    self.in_subsession_parked = true;
+                }
+                // Bracket transitions and pure-state echoes don't
+                // affect the parking signal; the sub-session
+                // boundary handlers in `run_subsession` reset the
+                // flag at the right moments.
+                Event::SubSessionStarted { .. }
+                | Event::SubSessionEnded { .. }
+                | Event::StepModeChanged { .. }
+                | Event::SessionEnd { .. } => {}
+                // Anything else is the orchestrator actively
+                // producing output -- back to running.
+                _ => {
+                    self.in_subsession_parked = false;
+                }
+            }
         }
         if self.consume_session_end && matches!(event, Event::SessionEnd { .. }) {
             self.consume_session_end = false;
@@ -1709,6 +1749,26 @@ impl<H: Host> Host for AutoHost<'_, H> {
                         continue;
                     }
                     if self.in_subsession {
+                        if self.in_subsession_parked {
+                            // Parked sub-session: the orchestrator is
+                            // blocked at `host.read()` waiting for the
+                            // user's reply. The manual command is the
+                            // user saying "I'm done with this session;
+                            // run the new command instead". Queue the
+                            // command for the OUTER manual loop and
+                            // return Cancel to break the inner read
+                            // out of its park -- the inner emits
+                            // SessionEnd, `run_session` returns,
+                            // `run_subsession` emits SubSessionEnded,
+                            // and the outer loop's next read picks up
+                            // the queued manual command.
+                            info!(
+                                cmd = label,
+                                "manual command received while parked; cancelling and dispatching"
+                            );
+                            self.pending_reads.push_back(cmd);
+                            return Ok(Some(HostEvent::Cancel));
+                        }
                         warn!(
                             cmd = label,
                             "rejecting manual command while sub-session in flight"
@@ -1916,6 +1976,88 @@ not a finding
             )
         });
         assert!(saw_warn);
+    }
+
+    #[test]
+    fn manual_command_during_parked_subsession_cancels_and_dispatches() {
+        // The user clicks Run Step (or any manual command) while the
+        // inner sub-session is parked at RequestUserInput. AutoHost
+        // should:
+        //   1. Cancel the parked inner session so it can unwind.
+        //   2. Queue the manual command so the OUTER manual loop
+        //      dispatches it on its next read.
+        // This is the only way for dashboard buttons to work while a
+        // critique session is parked asking the user what to do.
+        let mut inner = TestHost::new();
+        inner.enqueue(HostEvent::RunStep {
+            step: "DM0".into(),
+            kind: SessionKindOut::Work,
+        });
+        let (mut host, _flag) = auto_host_with_mode(StepMode::Manual, &mut inner);
+        host.in_subsession = true;
+        // Simulate the orchestrator parking before the manual
+        // command arrives.
+        host.write(&Event::RequestUserInput {
+            prompt: None,
+            placeholder: None,
+        })
+        .unwrap();
+        assert!(host.in_subsession_parked);
+
+        // Manual command arrives -- AutoHost returns Cancel to break
+        // the inner read.
+        let first = host.read().unwrap();
+        assert!(matches!(first, Some(HostEvent::Cancel)));
+
+        // The inner sub-session ends, run_subsession resets
+        // in_subsession=false, and the next outer read picks up the
+        // queued RunStep.
+        host.in_subsession = false;
+        host.in_subsession_parked = false;
+        let second = host.read().unwrap();
+        match second {
+            Some(HostEvent::RunStep {
+                step,
+                kind: SessionKindOut::Work,
+            }) => assert_eq!(step, "DM0"),
+            other => panic!("expected queued RunStep, got {other:?}"),
+        }
+
+        // No "sub-session is currently running" diagnostic was
+        // written -- the parked path is the silent-accept path.
+        let saw_reject = inner.written.iter().any(|e| {
+            matches!(
+                e,
+                Event::Diagnostic { level: DiagnosticLevel::Warning, message }
+                    if message.contains("sub-session is currently running")
+            )
+        });
+        assert!(!saw_reject);
+    }
+
+    #[test]
+    fn parked_flag_clears_on_active_event_after_user_resumes() {
+        // After the user replies, the orchestrator's next active
+        // event (assistant-text, request-llm-response, ...) should
+        // clear the parked flag so a manual command arriving AFTER
+        // the resume but BEFORE the next park is rejected (no race
+        // window where the dashboard cancels a sub-session that's
+        // mid-stream).
+        let mut inner = TestHost::new();
+        let (mut host, _flag) = auto_host_with_mode(StepMode::Manual, &mut inner);
+        host.in_subsession = true;
+        host.write(&Event::RequestUserInput {
+            prompt: None,
+            placeholder: None,
+        })
+        .unwrap();
+        assert!(host.in_subsession_parked);
+        host.write(&Event::AssistantText {
+            text: "resuming".into(),
+            final_chunk: false,
+        })
+        .unwrap();
+        assert!(!host.in_subsession_parked);
     }
 
     #[test]
