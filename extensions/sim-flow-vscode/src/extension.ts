@@ -365,21 +365,35 @@ async function openDashboardForProject(
     return;
   }
 
-  let host = dashboardHosts.get(projectDir);
+  // Canonicalize the project path so the dashboard map's key is
+  // stable regardless of whether the caller passed the raw string
+  // (e.g. `/tmp/...` from the watcher registry) or the realpath
+  // (e.g. `/private/tmp/...` from VS Code's editor URI). Without
+  // this, attaching to a watcher creates a SECOND DashboardHost
+  // for the canonical path while a previous host still exists for
+  // the raw path -- one shows VIEWING / no Connect, the other
+  // still shows Connect, and the user can land on either. The
+  // `activeSession()` filter inside the host also compares
+  // string-equal against this same `projectDir`, so the session
+  // record (also canonicalized at attach time) lines up only when
+  // both ends agree.
+  const canonicalDir = canonicalizePath(projectDir);
+
+  let host = dashboardHosts.get(canonicalDir);
   if (!host) {
     const cli = new SimFlowCli({
       binary,
-      projectDir,
+      projectDir: canonicalDir,
       foundationRoot: getStringSetting("foundationRoot", ""),
     });
     host = new DashboardHost({
       extensionUri: context.extensionUri,
-      projectDir,
+      projectDir: canonicalDir,
       cli,
       workspaceState: context.workspaceState,
       autoSessions: autoSessionManager,
     });
-    dashboardHosts.set(projectDir, host);
+    dashboardHosts.set(canonicalDir, host);
   }
   await host.open();
 }
