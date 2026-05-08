@@ -59,8 +59,22 @@ const ACTIVE_AUTO_SESSION_KEY_PREFIX = "sim-flow.chatPanel.activeAutoSession.";
 
 let pendingAutoSessionRecordWrites: Promise<void> = Promise.resolve();
 
+/**
+ * Notified whenever `activeSession` is set, replaced, or cleared. The
+ * dashboard host uses this to attach its sub-session / step-mode bus
+ * listeners the moment a pump appears, instead of waiting for the
+ * next file-watcher tick or viewState change to call `refresh()` —
+ * otherwise the first `sub-session-started` / `-ended` events from a
+ * fresh pump can land before the listener is wired and the dashboard
+ * sits at `inSubSession=true` with everything except Reset disabled.
+ */
+export type ActiveSessionListener = (
+  session: ManagedAutoSessionState | undefined,
+) => void;
+
 export class AutoSessionManager implements vscode.Disposable {
   private activeSession: ManagedAutoSessionState | undefined;
+  private readonly activeSessionListeners = new Set<ActiveSessionListener>();
 
   constructor(private readonly workspaceState: vscode.Memento) {}
 
@@ -70,6 +84,38 @@ export class AutoSessionManager implements vscode.Disposable {
 
   isActive(session: ManagedAutoSessionState): boolean {
     return this.activeSession === session;
+  }
+
+  /**
+   * Subscribe to active-session lifecycle changes. The listener is
+   * invoked synchronously after every mutation (launch / attach /
+   * clear / dispose) with the new active session (or `undefined` when
+   * cleared). Returns a dispose function; the manager does not own
+   * the subscriber's lifetime, so callers must dispose on teardown.
+   *
+   * Hand-rolled instead of `vscode.EventEmitter` so this module's
+   * vitest suite can keep instantiating the manager without mocking
+   * `vscode` — the only runtime reference we'd add otherwise.
+   */
+  onActiveSessionChanged(listener: ActiveSessionListener): () => void {
+    this.activeSessionListeners.add(listener);
+    return () => {
+      this.activeSessionListeners.delete(listener);
+    };
+  }
+
+  private notifyActiveSessionChanged(): void {
+    for (const listener of this.activeSessionListeners) {
+      try {
+        listener(this.activeSession);
+      } catch (err) {
+        // Listener errors must not bubble through the mutation that
+        // triggered the notify — e.g. a launch() that succeeded
+        // shouldn't be reported as failed because the dashboard's
+        // refresh threw. Swallow + log so the lifecycle stays clean.
+        console.error("autoSessionManager: active-session listener threw", err);
+      }
+    }
   }
 
   async launch(
@@ -107,6 +153,7 @@ export class AutoSessionManager implements vscode.Disposable {
       launchSpecPath: options.launchSpecPath,
     };
     this.activeSession = session;
+    this.notifyActiveSessionChanged();
     await this.persistRecord(session);
     this.startDrive(session, delegate);
     return session;
@@ -148,6 +195,7 @@ export class AutoSessionManager implements vscode.Disposable {
       return;
     }
     this.activeSession = undefined;
+    this.notifyActiveSessionChanged();
     await this.clearRecord(session.projectDir);
   }
 
@@ -197,6 +245,7 @@ export class AutoSessionManager implements vscode.Disposable {
       launchSpecPath: record.launchSpecPath,
     };
     this.activeSession = session;
+    this.notifyActiveSessionChanged();
     await this.persistRecord(session);
     this.startDrive(session, delegate);
     return session;
@@ -205,13 +254,18 @@ export class AutoSessionManager implements vscode.Disposable {
   async forgetStoredRecord(projectDir: string): Promise<void> {
     if (this.activeSession?.projectDir === projectDir) {
       this.activeSession = undefined;
+      this.notifyActiveSessionChanged();
     }
     await this.clearRecord(projectDir);
   }
 
   dispose(): void {
     this.activeSession?.pump.dispose();
-    this.activeSession = undefined;
+    if (this.activeSession !== undefined) {
+      this.activeSession = undefined;
+      this.notifyActiveSessionChanged();
+    }
+    this.activeSessionListeners.clear();
   }
 
   private startDrive(

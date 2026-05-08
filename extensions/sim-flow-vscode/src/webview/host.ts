@@ -95,8 +95,30 @@ export class DashboardHost {
    */
   private subSessionListenerDispose: (() => void) | null = null;
   private subSessionListenerSession: ManagedAutoSessionState | null = null;
+  /**
+   * Subscription to `AutoSessionManager.onActiveSessionChanged`, set
+   * up at construction so the dashboard reacts to a pump appearing /
+   * rotating / disappearing without waiting for a file-watcher tick
+   * or viewState change to call `refresh()`. Without this hook, the
+   * sub-session and step-mode bus listeners are only attached lazily
+   * inside `refresh()`, so the first `sub-session-started` /
+   * `-ended` events from a fresh pump can fire before the listener
+   * is wired and the dashboard sits at `inSubSession=true` with
+   * everything except Reset disabled.
+   */
+  private activeSessionListenerDispose: (() => void) | null = null;
 
-  constructor(private readonly options: DashboardHostOptions) {}
+  constructor(private readonly options: DashboardHostOptions) {
+    this.activeSessionListenerDispose =
+      this.options.autoSessions?.onActiveSessionChanged(() => {
+        // refresh() rebuilds state, syncs the bus listeners against
+        // the current pump (or detaches when none), and posts a
+        // state-update so the per-step buttons re-evaluate. It's
+        // serialized via `refreshing` / `refreshQueued` so back-to-
+        // back lifecycle events coalesce.
+        void this.refresh();
+      }) ?? null;
+  }
 
   /** Show the dashboard, creating it if necessary. */
   async open(column: vscode.ViewColumn = vscode.ViewColumn.Active): Promise<void> {
@@ -152,6 +174,10 @@ export class DashboardHost {
     this.watcher = undefined;
     this.disposeStepModeListener();
     this.disposeSubSessionListener();
+    if (this.activeSessionListenerDispose) {
+      this.activeSessionListenerDispose();
+      this.activeSessionListenerDispose = null;
+    }
     for (const d of this.disposables) {
       d.dispose();
     }
