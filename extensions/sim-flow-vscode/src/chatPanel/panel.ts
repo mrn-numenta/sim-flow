@@ -452,6 +452,14 @@ function pill(text: string, variant: string): HTMLElement {
 }
 
 function statusPill(state: ChatPanelState): HTMLElement {
+  // Viewer attach takes precedence: even with no messages yet the
+  // user has explicitly opted into observing a run. Without this
+  // branch the pill rendered OFFLINE during the gap between attach
+  // and the first event from the orchestrator, masking the live
+  // (read-only) connection.
+  if (state.isViewer) {
+    return pill("VIEWING", "live");
+  }
   if (state.isStreaming) {
     return pill("STREAMING", "streaming");
   }

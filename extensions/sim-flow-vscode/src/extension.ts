@@ -247,22 +247,52 @@ async function attachWatcherCommand(): Promise<void> {
   // attaches a viewer SocketSessionPump (read-only) and the
   // dashboard's onActiveSessionChanged hook refreshes per-step
   // button gating + chat-panel composer state.
+  //
+  // Canonicalize the project path BEFORE handing it off. Reason:
+  // VS Code's `vscode.window.activeTextEditor.document.uri.fsPath`
+  // resolves macOS `/tmp -> /private/tmp` symlinks (and similar on
+  // other platforms), so the chat-panel's per-message project
+  // resolver returns the realpath. The watcher registry, however,
+  // stores whatever string the orchestrator was launched with --
+  // typically `/tmp/...` raw. If we don't canonicalize here, the
+  // chat panel's `activePump.projectDir === context.projectDir`
+  // check fails and the panel shows OFFLINE with the live viewer
+  // pump invisible to it.
   if (!chatPanelProvider) {
     void vscode.window.showErrorMessage(
       "sim-flow: chat panel not initialised; viewer attach unavailable.",
     );
     return;
   }
+  const canonProjectDir = canonicalizePath(picked.entry.project_dir);
   await chatPanelProvider.attachWatcherSession({
     socketPath: picked.entry.socket_path,
-    projectDir: picked.entry.project_dir,
+    projectDir: canonProjectDir,
     pid: picked.entry.pid,
     llmBackend: picked.entry.llm_backend,
     llmModel: picked.entry.llm_model,
   });
   // Also reveal the dashboard for that project so the user sees
-  // step / critique / gate state alongside the chat panel.
-  await openDashboardForProject(globalContext(), picked.entry.project_dir);
+  // step / critique / gate state alongside the chat panel. Use the
+  // canonical path here too so the new DashboardHost's
+  // `options.projectDir` matches the activePump's record.
+  await openDashboardForProject(globalContext(), canonProjectDir);
+}
+
+/**
+ * Resolve symlinks (`fs.realpath`) so the path matches whatever
+ * `vscode.window.activeTextEditor.document.uri.fsPath` produces for
+ * a file under it. Falls back to the input on error (e.g. the
+ * directory was just removed) -- viewer attach will still proceed
+ * but the chat panel may render OFFLINE because of the path
+ * mismatch.
+ */
+function canonicalizePath(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
 }
 
 interface WatcherEntry {
