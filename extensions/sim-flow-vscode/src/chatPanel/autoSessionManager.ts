@@ -176,6 +176,36 @@ export class AutoSessionManager implements vscode.Disposable {
     this.startDrive(session, delegate);
   }
 
+  /**
+   * Re-attach a drive cycle WITHOUT sending a user message.
+   *
+   * Needed when the orchestrator started a new sub-session under us
+   * while the chat panel was parked at "awaiting user input" -- e.g.
+   * the dashboard's Run Step click went through `AutoHost`'s
+   * cancel-and-dispatch path, which closed the parked critique
+   * bracket and opened a fresh work-session bracket without any
+   * input from the chat panel. The previous `driveSession()`
+   * already returned with `awaiting-input`, so `currentRenderer` is
+   * `null` and the pump silently queues the new sub-session's
+   * `request-llm-response`. Calling `startDrive` here re-attaches
+   * the renderer and flushes the queue so the orchestrator unblocks.
+   */
+  async resumeDriveOnly(
+    session: ManagedAutoSessionState,
+    delegate: AutoSessionDriveDelegate,
+  ): Promise<void> {
+    if (session.drivePromise) {
+      // Already driving; nothing to do.
+      return;
+    }
+    if (!this.isActive(session)) {
+      return;
+    }
+    session.awaitingInput = false;
+    await this.persistRecord(session);
+    this.startDrive(session, delegate);
+  }
+
   async waitForDrive(session: ManagedAutoSessionState): Promise<void> {
     if (session.drivePromise) {
       await session.drivePromise;

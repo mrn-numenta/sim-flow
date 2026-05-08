@@ -84,6 +84,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     return this.autoSessions.getActiveSession();
   }
 
+  /**
+   * Subscription to the active pump's `onSubSessionChanged`. The chat
+   * panel needs to react to a NEW sub-session opening under it: that
+   * happens when the dashboard's Run Step / Run Critique / Run Gate /
+   * Advance click goes through `AutoHost`'s cancel-and-dispatch path
+   * (ends the parked critique, opens a fresh work bracket) WITHOUT
+   * the user typing anything in the chat panel. The previous drive
+   * cycle resolved with `awaiting-input`, so `currentRenderer` is
+   * `null` and the pump silently queues the new sub-session's
+   * `request-llm-response`. We re-attach the drive here the moment
+   * the bracket flips back to busy.
+   */
+  private subSessionListenerDispose: (() => void) | null = null;
+
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly workspaceState: vscode.Memento,
@@ -109,6 +123,44 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         void this.refresh();
       }),
     );
+    // Re-subscribe to the active pump's bracket transitions whenever
+    // the active session rotates (Connect / Disconnect / step
+    // session swap). The disposer is stored so the previous pump's
+    // listener doesn't outlive its session.
+    this.autoSessions.onActiveSessionChanged((session) => {
+      this.attachSubSessionListener(session);
+    });
+  }
+
+  private attachSubSessionListener(
+    session: ManagedAutoSessionState | undefined,
+  ): void {
+    if (this.subSessionListenerDispose) {
+      this.subSessionListenerDispose();
+      this.subSessionListenerDispose = null;
+    }
+    if (!session || typeof session.pump.onSubSessionChanged !== "function") {
+      return;
+    }
+    this.subSessionListenerDispose = session.pump.onSubSessionChanged(
+      (inSubSession) => {
+        // We only care about transitions INTO busy. The pump's
+        // effective `inSubSession` flips to true on
+        // `sub-session-started` (and on resume from a parked state
+        // via the next active-work event). If the chat panel was
+        // sitting in `awaiting-input` -- meaning the previous drive
+        // resolved and `currentRenderer` is null -- a new sub-session
+        // would otherwise queue events and stall the orchestrator.
+        if (!inSubSession) {
+          return;
+        }
+        const current = this.activePump;
+        if (!current || !current.awaitingInput) {
+          return;
+        }
+        void this.autoSessions.resumeDriveOnly(current, this.autoSessionDelegate());
+      },
+    );
   }
 
   dispose(): void {
@@ -128,6 +180,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.inFlight = undefined;
     }
     this.view = undefined;
+    if (this.subSessionListenerDispose) {
+      this.subSessionListenerDispose();
+      this.subSessionListenerDispose = null;
+    }
     for (const d of this.disposables) {
       d.dispose();
     }
