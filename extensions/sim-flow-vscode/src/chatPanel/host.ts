@@ -155,7 +155,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           return;
         }
         const current = this.activePump;
-        if (!current || !current.awaitingInput) {
+        if (!current) {
+          return;
+        }
+        // Fresh sub-session: any tool / artifact context from the
+        // prior session is stale. Clear before posting state so
+        // the indicator doesn't carry "Tool: read_file" from the
+        // last critique into the new work session.
+        current.currentTool = null;
+        current.currentArtifact = null;
+        if (!current.awaitingInput) {
+          // Drive is already running (e.g. the session never
+          // parked); the cleared fields will surface on the next
+          // postState. Nothing else to do.
           return;
         }
         void this.autoSessions.resumeDriveOnly(current, this.autoSessionDelegate());
@@ -1012,6 +1024,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       await this.autoSessions.markAwaitingInput(session);
       session.stopRequested = false;
       session.pendingPromptEntryId = null;
+      // Parked: the orchestrator is idle waiting for input. The
+      // last tool / artifact note from the just-completed turn is
+      // no longer current; clear so the dashboard doesn't pin
+      // "Tool: write_file" while the user is deciding what to do
+      // next. (Phase still reflects where we parked, which is
+      // useful context.)
+      session.currentTool = null;
+      session.currentArtifact = null;
       await this.persistConversation(session.projectDir, conversation);
       await this.postState(await this.readPanelContextForProject(session.projectDir), conversation);
       return;
@@ -1069,21 +1089,30 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
     if (classified.kind === "phase-sequence") {
       session.currentPhase = classified.currentPhase;
+      // Phase boundaries reset the per-turn tool / artifact context.
+      session.currentTool = null;
+      session.currentArtifact = null;
       void this.postStateForProject(session.projectDir, conversation);
       return;
     }
     if (classified.kind === "phase-changed") {
       session.currentPhase = classified.currentPhase;
+      session.currentTool = null;
+      session.currentArtifact = null;
       void this.postStateForProject(session.projectDir, conversation);
       return;
     }
     if (classified.kind === "tool-activity") {
       session.currentTool = classified.summary;
+      // A tool just completed; any stale artifact-write note from
+      // an earlier turn is no longer the live action.
+      session.currentArtifact = null;
       void this.postStateForProject(session.projectDir, conversation);
       return;
     }
     if (classified.kind === "artifact-activity") {
       session.currentArtifact = classified.summary;
+      session.currentTool = null;
       void this.postStateForProject(session.projectDir, conversation);
       return;
     }
@@ -1108,6 +1137,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       session.assistantId = started.assistantId;
       session.pendingRequestTokensEstimate = null;
       conversation = started.state;
+      // First assistant chunk of a new turn -- the previous turn's
+      // tool / artifact note is no longer the live action. Without
+      // this clear, the bottom-of-panel busy indicator keeps
+      // showing "Tool: write_file" or "Writing: <path>" while the
+      // LLM is actually streaming the next response.
+      session.currentTool = null;
+      session.currentArtifact = null;
     }
     conversation = appendAssistantChunk(
       conversation,

@@ -1182,14 +1182,22 @@ describe("mocked dashboard/chat harness", () => {
       { uri: { fsPath: secondDir }, name: "other-project", index: 1 },
     ];
 
+    // Script intentionally ends with the tool-activity line so
+    // `currentTool` is the latched header value at the moment we
+    // switch projects. `currentTool` and `currentArtifact` are
+    // mutually exclusive under the new "next event clears the
+    // other" semantics, so we can't have both set simultaneously
+    // (and an assistant chunk would clear both as well, defeating
+    // the leakage test). The artifact-write line earlier in the
+    // script exercises that the artifact path doesn't permanently
+    // pin the header either.
     mock.state.pumpScripts.set(exampleDir, [
       {
         onSettle: (renderer) => {
           renderer.markdown("_Phases:_ `discover` -> `implement`\n");
           renderer.markdown("**Phase:** `discover`\n");
-          renderer.markdown("_Tool `read_file` (docs/spec.md) -> ok (12 ms)._\n");
           renderer.markdown("_Wrote `docs/plan.md` (128 bytes)._\n");
-          renderer.markdown("Example session still running.\n");
+          renderer.markdown("_Tool `read_file` (docs/spec.md) -> ok (12 ms)._\n");
         },
         waitForCancel: true,
         result: {
@@ -1224,8 +1232,11 @@ describe("mocked dashboard/chat harness", () => {
 
     let state = latestState(chatView);
     expect(state?.currentPhase).toBe("discover");
+    // Tool-activity is the LAST header-mutating line in the
+    // script, so currentTool latches and currentArtifact was
+    // cleared by it (next-event-clears-the-other rule).
     expect(state?.currentTool).toContain("read_file");
-    expect(state?.currentArtifact).toContain("docs/plan.md");
+    expect(state?.currentArtifact).toBeNull();
 
     mock.state.currentProjectDir = secondDir;
     await mock.fireActiveEditorChange();
