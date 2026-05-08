@@ -9,7 +9,15 @@ use clap::Parser;
 use cli::Cli;
 
 fn main() {
+    // Tracing goes to STDERR. Stdout is reserved for the JSONL
+    // session protocol when `sim-flow auto` is driven by an IDE
+    // host (the dashboard, e2e_manual, etc.); a tracing line
+    // bleeding into stdout would fail to parse as a protocol
+    // event and confuse every host. The default
+    // `tracing_subscriber::fmt()` writer is stdout, hence the
+    // explicit `.with_writer(std::io::stderr)`.
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),

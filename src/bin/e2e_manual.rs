@@ -416,12 +416,31 @@ fn handle_event(
 ) -> std::result::Result<ManualPhase, String> {
     match event {
         Event::HelloAck { session, .. } => {
-            // Manual mode: kick the flow off by running the work
-            // session for the orchestrator's `current_step` (which
-            // it carries in `session.step`).
+            // Two HelloAck events arrive in a typical manual run:
+            //   1. The initial handshake post-Hello (auto.rs's
+            //      `perform_initial_handshake`). This is our
+            //      "session is up, please drive" signal -- send
+            //      RunStep here.
+            //   2. Each sub-session also emits a synthetic
+            //      HelloAck carrying its own step descriptor (so
+            //      the dashboard's banner can update); these are
+            //      banner-only and MUST NOT trigger another
+            //      RunStep, or the orchestrator rejects it as "a
+            //      sub-session is currently running" and the
+            //      driver hangs.
+            // We discriminate by the phase we're in: only the
+            // first HelloAck is dispatched against
+            // `AwaitHelloAck`.
+            if !matches!(phase, ManualPhase::AwaitHelloAck) {
+                println!(
+                    "e2e_manual: HelloAck (step={}, kind={:?}) -- sub-session banner, ignoring",
+                    session.step, session.kind
+                );
+                return Ok(phase);
+            }
             let step = session.step.clone();
             println!(
-                "e2e_manual: HelloAck (step={}, kind={:?}) — sending RunStep work",
+                "e2e_manual: HelloAck (step={}, kind={:?}) -- sending RunStep work",
                 step, session.kind
             );
             send_host_event(
@@ -544,8 +563,22 @@ fn handle_event(
             // The orchestrator blocks waiting for chunks/end on the
             // same request_id, so doing this inline (rather than on
             // a thread) is safe and keeps the driver simple.
+            let dispatch_start = Instant::now();
+            println!(
+                "e2e_manual:   LLM dispatch ({}, {} messages) ...",
+                request_id,
+                messages.len()
+            );
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
             match agent.dispatch(&messages) {
                 Ok((text, metrics)) => {
+                    println!(
+                        "e2e_manual:   LLM dispatch ({}) -> {} bytes in {:.1}s",
+                        request_id,
+                        text.len(),
+                        dispatch_start.elapsed().as_secs_f64()
+                    );
                     tracing::info!(
                         target: "sim_flow::metrics",
                         event = "llm_call",
@@ -572,6 +605,12 @@ fn handle_event(
                     )?;
                 }
                 Err(err) => {
+                    println!(
+                        "e2e_manual:   LLM dispatch ({}) FAILED after {:.1}s: {}",
+                        request_id,
+                        dispatch_start.elapsed().as_secs_f64(),
+                        err,
+                    );
                     send_host_event(
                         stdin,
                         &HostEvent::LlmError {
