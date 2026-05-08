@@ -55,6 +55,19 @@ export interface SocketSessionPumpOptions {
     cwd: string;
     env?: NodeJS.ProcessEnv;
   };
+  /**
+   * Read-only viewer mode for `--watch-socket` taps. When `true`:
+   * - Skip pump-lock acquisition (we're not driving this run).
+   * - Skip pid-record bookkeeping (no child spawned).
+   * - Treat manual-mode commands (`runStep`, `runCritique`, …) and
+   *   the LLM dispatch surface as no-ops; the EventTap discards
+   *   observer input on the orchestrator side, but silencing them
+   *   client-side keeps the dashboard / chat panel honest.
+   * - Emit a single dummy `Hello`-shaped line at attach so the
+   *   EventTap's `read_line` returns and registers us as an
+   *   observer.
+   */
+  viewer?: boolean;
 }
 
 export class SocketSessionPump implements LiveSessionTransport {
@@ -298,6 +311,12 @@ export class SocketSessionPump implements LiveSessionTransport {
   }
 
   sendUserMessage(text: string): void {
+    if (this.options.viewer) {
+      // Viewer pumps don't drive; the EventTap discards observer
+      // input on the server side. Skip the write so we don't pollute
+      // debug logs with pointless attempts.
+      return;
+    }
     void this.connectionReady
       .then(() => {
         this.sendHostEvent({ event: "user-message", text });
@@ -312,6 +331,9 @@ export class SocketSessionPump implements LiveSessionTransport {
   }
 
   cancel(): void {
+    if (this.options.viewer) {
+      return;
+    }
     void this.connectionReady
       .then(() => {
         this.sendHostEvent({ event: "cancel" });
@@ -319,6 +341,16 @@ export class SocketSessionPump implements LiveSessionTransport {
       .catch(() => {
         // ignore; caller will observe the terminal state
       });
+  }
+
+  /**
+   * True when this pump is attached to a `--watch-socket` tap as a
+   * read-only observer. The dashboard / chat panel use this to
+   * disable command surfaces (composer, per-step buttons, Stop)
+   * since the user can't drive a run that something else owns.
+   */
+  get isViewer(): boolean {
+    return !!this.options.viewer;
   }
 
   /**
@@ -409,30 +441,37 @@ export class SocketSessionPump implements LiveSessionTransport {
    * surfaces to the user via the existing diagnostic renderer.
    */
   setStepMode(mode: StepMode): void {
+    if (this.options.viewer) return;
     this.sendHostEventAfterReady({ event: "set-step-mode", mode });
   }
 
   runStep(step: string, kind: SessionKindOut): void {
+    if (this.options.viewer) return;
     this.sendHostEventAfterReady({ event: "run-step", step, kind });
   }
 
   runCritique(step: string): void {
+    if (this.options.viewer) return;
     this.sendHostEventAfterReady({ event: "run-critique", step });
   }
 
   runGate(step: string): void {
+    if (this.options.viewer) return;
     this.sendHostEventAfterReady({ event: "run-gate", step });
   }
 
   advance(step: string): void {
+    if (this.options.viewer) return;
     this.sendHostEventAfterReady({ event: "advance", step });
   }
 
   reset(step: string): void {
+    if (this.options.viewer) return;
     this.sendHostEventAfterReady({ event: "reset", step });
   }
 
   shutdown(): void {
+    if (this.options.viewer) return;
     this.sendHostEventAfterReady({ event: "shutdown" });
   }
 
@@ -764,6 +803,12 @@ export class SocketSessionPump implements LiveSessionTransport {
         } as SocketPumpBusEvent);
         break;
       case "request-llm-response":
+        // Viewer pumps don't drive: the orchestrator's primary host
+        // handles its own LLM dispatch. We just observe the events
+        // it emits afterwards. Skip without complaint.
+        if (this.options.viewer) {
+          break;
+        }
         this.dispatchLlm(event).catch((err) => {
           this.renderDiagnostic(
             "error",

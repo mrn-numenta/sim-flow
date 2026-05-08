@@ -107,6 +107,15 @@ function render(): void {
  * idle distinction is impossible to overlook.
  */
 function bottomStatusIndicator(state: ChatPanelState): HTMLElement | null {
+  if (state.isViewer) {
+    if (state.isStreaming) {
+      return renderIndicator("active", `VIEWING — ${streamingLabel(state)}`);
+    }
+    return renderIndicator(
+      "parked",
+      "VIEWING — read-only attach to another host's run. Detach to reclaim the chat.",
+    );
+  }
   if (state.isStreaming) {
     return renderIndicator("active", streamingLabel(state));
   }
@@ -246,23 +255,27 @@ function composer(state: ChatPanelState): HTMLElement {
     el(
       "div",
       { class: "composer-subtitle" },
-      state.supportsPromptEntry
-        ? `Target: ${state.sessionLabel}`
-        : interruptedSession
-          ? "Relaunch the flow or clear the transcript to start a fresh direct chat."
-          : "Switch to an API backend to enable direct chat here.",
+      state.isViewer
+        ? "Viewing a run driven by another host (read-only)."
+        : state.supportsPromptEntry
+          ? `Target: ${state.sessionLabel}`
+          : interruptedSession
+            ? "Relaunch the flow or clear the transcript to start a fresh direct chat."
+            : "Switch to an API backend to enable direct chat here.",
     ),
   );
 
   const area = document.createElement("textarea");
   area.className = "composer-input";
-  area.placeholder = state.supportsPromptEntry
-    ? "Ask a question about the current project, request a code change, or continue the conversation here."
-    : interruptedSession
-      ? "This restored flow session is no longer live."
-      : "This backend runs in a terminal, not in the panel chat.";
+  area.placeholder = state.isViewer
+    ? "Read-only viewer — input disabled. Detach to reclaim the chat."
+    : state.supportsPromptEntry
+      ? "Ask a question about the current project, request a code change, or continue the conversation here."
+      : interruptedSession
+        ? "This restored flow session is no longer live."
+        : "This backend runs in a terminal, not in the panel chat.";
   area.value = ui.draft;
-  area.disabled = !state.supportsPromptEntry || state.isStreaming;
+  area.disabled = state.isViewer || !state.supportsPromptEntry || state.isStreaming;
   area.addEventListener("input", () => {
     ui.draft = area.value;
     persist();
@@ -278,25 +291,38 @@ function composer(state: ChatPanelState): HTMLElement {
 
   const footer = section("composer-footer");
   const actions = section("composer-actions");
+  // Refresh stays useful in viewer mode (force a re-fetch of the
+  // observed state). Stop / Send / Clear Chat affect the host's
+  // run, which a viewer doesn't own -- hide them rather than
+  // showing them disabled, since "disabled" implies "could be
+  // enabled later" and a viewer can't drive without detaching.
   actions.append(
     actionButton("Refresh", true, () => {
       send({ type: "refresh" });
     }),
-    actionButton("Clear Chat", !state.isStreaming, () => {
-      send({ type: "clear-transcript" });
-    }),
-    actionButton("Stop", state.canStop, () => {
-      send({ type: "stop-conversation" });
-    }),
-    actionButton("Send", canSend(state), () => {
-      submitPrompt();
-    }),
   );
+  if (!state.isViewer) {
+    actions.append(
+      actionButton("Clear Chat", !state.isStreaming, () => {
+        send({ type: "clear-transcript" });
+      }),
+      actionButton("Stop", state.canStop, () => {
+        send({ type: "stop-conversation" });
+      }),
+      actionButton("Send", canSend(state), () => {
+        submitPrompt();
+      }),
+    );
+  }
   footer.append(
     el(
       "div",
       { class: "composer-hint" },
-      state.supportsPromptEntry ? "Ctrl+Enter to send" : "Panel chat supports API backends only",
+      state.isViewer
+        ? "Viewer mode — input disabled"
+        : state.supportsPromptEntry
+          ? "Ctrl+Enter to send"
+          : "Panel chat supports API backends only",
     ),
     actions,
   );

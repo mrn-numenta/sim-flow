@@ -1106,7 +1106,11 @@ function renderAutoFlowRow(): HTMLElement {
   // Connect launches the orchestrator (or no-ops when one is already
   // attached); the step-mode toggle picks the initial mode and can
   // also flip live mid-session via SetStepMode; Disconnect tells the
-  // orchestrator to shut down cleanly.
+  // orchestrator to shut down cleanly. In viewer mode (read-only
+  // attach to a `--watch-socket` tap) Connect is replaced by a
+  // "VIEWING" badge and Disconnect detaches the observer without
+  // sending Shutdown to the orchestrator.
+  const isViewer = ui.data?.isViewer ?? false;
   const connectBtn = actionButton(
     "\u{1F50C}", // 🔌
     "run-auto",
@@ -1124,12 +1128,17 @@ function renderAutoFlowRow(): HTMLElement {
   connectBtn.classList.add("auto-run-btn", "auto-icon-btn");
   applyButtonState(
     connectBtn,
-    !ui.autoRunning,
-    ui.autoRunning ? "Connect is disabled while a session is already attached." : connectBtn.title,
+    !ui.autoRunning && !isViewer,
+    isViewer
+      ? "Viewing a run driven by another host -- Connect is disabled. Detach first."
+      : ui.autoRunning
+        ? "Connect is disabled while a session is already attached."
+        : connectBtn.title,
   );
 
+  const disconnectLabel = isViewer ? "Detach" : "\u{23FB}";
   const disconnectBtn = actionButton(
-    "\u{23FB}", // ⏻
+    disconnectLabel,
     "stop-auto",
     () => {
       ui.autoRunning = false;
@@ -1138,9 +1147,10 @@ function renderAutoFlowRow(): HTMLElement {
     },
     "secondary",
   );
-  disconnectBtn.title =
-    "Disconnect from the sim-flow session. The orchestrator shuts down cleanly; " +
-    "after Disconnect the step rail re-locks until you Connect again.";
+  disconnectBtn.title = isViewer
+    ? "Detach from the run you're observing. The orchestrator keeps running; only this dashboard's connection closes."
+    : "Disconnect from the sim-flow session. The orchestrator shuts down cleanly; " +
+      "after Disconnect the step rail re-locks until you Connect again.";
   disconnectBtn.classList.add("auto-stop-btn", "auto-icon-btn");
   applyButtonState(
     disconnectBtn,
@@ -1150,7 +1160,19 @@ function renderAutoFlowRow(): HTMLElement {
       : "Disconnect is disabled because there is no active session.",
   );
 
-  const buttonRowChildren: HTMLElement[] = [connectBtn, renderStepModeToggle(), disconnectBtn];
+  const buttonRowChildren: HTMLElement[] = [];
+  if (isViewer) {
+    const badge = el("span", { class: "viewer-badge" }, "VIEWING");
+    badge.setAttribute(
+      "title",
+      "Read-only viewer attached to another host's --watch-socket. The composer / per-step buttons are disabled while the other host drives.",
+    );
+    buttonRowChildren.push(badge);
+  } else {
+    buttonRowChildren.push(connectBtn);
+  }
+  buttonRowChildren.push(renderStepModeToggle());
+  buttonRowChildren.push(disconnectBtn);
 
   const specLabel = el(
     "label",
@@ -1336,16 +1358,21 @@ function renderSelectedStepDetail(data: DashboardState): HTMLElement {
   // Reset is the recovery action — it stays enabled so the user
   // can recover from a stuck or mis-queued sub-session.
   const inSubSession = data.inSubSession ?? false;
+  const isViewer = data.isViewer ?? false;
   const subSessionReason =
     "A sub-session is in flight; wait for it to complete before issuing the next command.";
+  const viewerReason =
+    "This dashboard is viewing a run driven by another host. Detach to drive your own session.";
   const stepGate = (enabled: boolean, reason: string): { enabled: boolean; reason: string } =>
-    !flowUnlocked
-      ? { enabled: false, reason: FLOW_LOCKED_REASON }
-      : !manualMode
-        ? { enabled: false, reason: autoModeReason }
-        : inSubSession
-          ? { enabled: false, reason: subSessionReason }
-          : { enabled, reason };
+    isViewer
+      ? { enabled: false, reason: viewerReason }
+      : !flowUnlocked
+        ? { enabled: false, reason: FLOW_LOCKED_REASON }
+        : !manualMode
+          ? { enabled: false, reason: autoModeReason }
+          : inSubSession
+            ? { enabled: false, reason: subSessionReason }
+            : { enabled, reason };
   const runStepBtn = actionButton("Run Step", `run-step-${stepId}`, () =>
     send({ type: "run-step", step: stepId }),
   );

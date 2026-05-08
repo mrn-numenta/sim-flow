@@ -54,6 +54,7 @@ export interface AggregateInput {
    * while the orchestrator is busy. Defaults to `false`.
    */
   inSubSession?: boolean;
+  isViewer?: boolean;
   generatedAt?: string;
   cliVersion?: string;
   maxRuns?: number;
@@ -86,6 +87,7 @@ export function aggregateDashboardState(input: AggregateInput): DashboardState {
     stepMode: input.stepMode ?? "manual",
     sessionActive: input.sessionActive ?? false,
     inSubSession: input.inSubSession ?? false,
+    isViewer: input.isViewer ?? false,
     generatedAt: input.generatedAt ?? new Date().toISOString(),
     cliVersion: input.cliVersion,
   };

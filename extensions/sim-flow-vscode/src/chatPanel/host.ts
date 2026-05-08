@@ -610,6 +610,100 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     );
   }
 
+  /**
+   * Attach as a read-only observer to a `--watch-socket` tap. The
+   * orchestrator's primary host (e2e_manual / another dashboard /
+   * an external script) keeps driving; we just receive the JSONL
+   * event stream, render it the same way the live pump does, and
+   * disable the user's command surfaces (composer, per-step
+   * buttons, Stop). Reveals the chat panel and refreshes the
+   * dashboard via the existing onActiveSessionChanged hook.
+   */
+  async attachWatcherSession(args: {
+    socketPath: string;
+    projectDir: string;
+    pid: number;
+    llmBackend: string;
+    llmModel: string | null;
+  }): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
+    if (this.activePump && this.activePump.projectDir === args.projectDir) {
+      // A live pump for this project already exists. Don't take it
+      // over silently -- the user might be driving. Surface a
+      // notice and let them disconnect first.
+      void vscode.window.showWarningMessage(
+        `sim-flow: a session is already attached to ${args.projectDir}. Disconnect first, then attach as viewer.`,
+      );
+      return;
+    }
+    const sessionId = `viewer-${args.pid}-${Date.now()}`;
+    // Tag the source as best-effort; LlmSourceTag is a closed
+    // enum and watchers come from arbitrary backends, so map to
+    // a rough match (the viewer never dispatches LLM calls --
+    // dispatchLlm is skipped in viewer mode -- so the tag is
+    // purely cosmetic for the chat-panel header).
+    const sourceTag = mapBackendToSourceTag(args.llmBackend);
+    const record: StoredAutoSessionRecord = {
+      sessionId,
+      socketPath: args.socketPath,
+      projectDir: args.projectDir,
+      awaitingInput: false,
+      sourceTag,
+      model: args.llmModel ?? "",
+      sessionMode: "auto",
+      stepRef: null,
+      launchSpecPath: undefined,
+      updatedAtMs: Date.now(),
+    };
+    const ctx = await resolveContext({
+      projectDir: args.projectDir,
+      showErrors: false,
+    });
+    if (!ctx) {
+      void vscode.window.showErrorMessage(
+        "sim-flow: cannot resolve sim-flow binary; viewer attach aborted.",
+      );
+      return;
+    }
+    // Viewer pumps never dispatch LLM calls (see
+    // `SocketSessionPump.dispatchLlm` skip in viewer mode), so the
+    // LLM-config fields are placeholders. Keep the same shape the
+    // pump expects so we don't widen the interface for one
+    // call site.
+    const llmConfig: PumpLlmConfig = {
+      source: sourceTag as unknown as PumpLlmConfig["source"],
+      model: args.llmModel ?? undefined,
+      secrets: this.secrets,
+      projectDir: args.projectDir,
+      binary: ctx.cli.binary,
+      debugTokens: "",
+    };
+    const pump = new SocketSessionPump(
+      {
+        sessionId,
+        socketPath: args.socketPath,
+        viewer: true,
+      },
+      llmConfig,
+    );
+    try {
+      await pump.ready();
+    } catch (err) {
+      void vscode.window.showErrorMessage(
+        `sim-flow: failed to attach viewer to ${args.socketPath}: ${(err as Error).message ?? String(err)}`,
+      );
+      pump.dispose();
+      return;
+    }
+    this.rememberConversation(args.projectDir, clearConversationState());
+    await vscode.commands.executeCommand(
+      `workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`,
+    );
+    await this.autoSessions.attach(record, pump, this.autoSessionDelegate());
+  }
+
   async launchStepSession(
     step: string,
     kind: "work" | "critique",
@@ -881,11 +975,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       (!!this.activePump &&
         this.activePump.projectDir === context.projectDir &&
         !this.activePump.awaitingInput);
+    const isViewer =
+      !!this.activePump &&
+      this.activePump.projectDir === context.projectDir &&
+      !!this.activePump.pump.isViewer;
     const supportsPromptEntry =
-      (!!this.activePump &&
+      !isViewer &&
+      ((!!this.activePump &&
         this.activePump.projectDir === context.projectDir &&
         this.activePump.awaitingInput) ||
-      (!isTerminalLlmSource(context.source) && !hasInterruptedAutoSession);
+        (!isTerminalLlmSource(context.source) && !hasInterruptedAutoSession));
     return {
       mode: "live",
       projectLabel: context.projectLabel,
@@ -919,6 +1018,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       transcript: filterPresentationEntries(conversation.transcript),
       isStreaming,
       awaitingUserInput: awaitingPumpInput,
+      isViewer,
       supportsPromptEntry,
       canStop:
         !!this.inFlight ||
@@ -1861,4 +1961,27 @@ function randomNonce(): string {
     out += alphabet[Math.floor(Math.random() * alphabet.length)];
   }
   return out;
+}
+
+/**
+ * Map an arbitrary `llm_backend` string from a watcher
+ * registration onto the closed `LlmSourceTag` enum used by the
+ * chat-panel header. Viewers never dispatch LLM calls, so this is
+ * cosmetic only -- unrecognized backends fall back to "openai".
+ */
+function mapBackendToSourceTag(backend: string): LlmSourceTag {
+  switch (backend) {
+    case "vscode":
+    case "anthropic":
+    case "openai":
+    case "ollama":
+    case "lmstudio":
+    case "vllm":
+    case "claude-cli":
+    case "codex-cli":
+    case "gh-copilot-cli":
+      return backend;
+    default:
+      return "openai";
+  }
 }

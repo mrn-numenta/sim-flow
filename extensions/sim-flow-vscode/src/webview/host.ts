@@ -1037,6 +1037,7 @@ export class DashboardHost {
     // is attached we report `false` so the dashboard's "no
     // orchestrator" path applies its own gating.
     const inSubSession = session?.pump.inSubSession ?? false;
+    const isViewer = session?.pump.isViewer ?? false;
     return aggregateDashboardState({
       projectDir: this.options.projectDir,
       flow,
@@ -1057,6 +1058,7 @@ export class DashboardHost {
       stepMode,
       sessionActive,
       inSubSession,
+      isViewer,
       maxRuns: MAX_DASHBOARD_RUNS,
     });
   }

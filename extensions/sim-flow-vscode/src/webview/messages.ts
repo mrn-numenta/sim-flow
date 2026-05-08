@@ -124,6 +124,15 @@ export interface DashboardState {
    * recover from a stuck sub-session.
    */
   inSubSession: boolean;
+  /**
+   * True when the active session is a read-only viewer attached to
+   * a `--watch-socket` tap. Per-step Run/Critique/Gate/Advance and
+   * Connect/Disconnect surfaces are disabled in this mode -- the
+   * user can't drive a run that something else owns. The dashboard
+   * still renders state-update / critique / gate-result events
+   * normally so the user sees progress.
+   */
+  isViewer: boolean;
   /** Timestamp of this snapshot (ISO-8601 UTC). */
   generatedAt: string;
   /** Sim-flow CLI version, if resolvable. */

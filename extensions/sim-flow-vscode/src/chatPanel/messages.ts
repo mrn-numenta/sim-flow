@@ -29,6 +29,14 @@ export interface ChatPanelState {
    * session was still alive).
    */
   awaitingUserInput: boolean;
+  /**
+   * True when the active session is a read-only viewer attached to
+   * a `--watch-socket` tap. The composer is disabled, the Stop
+   * button is hidden, and the streaming indicator says "VIEWING"
+   * instead of "STREAMING". Events still render normally so the
+   * user sees the orchestrator's progress.
+   */
+  isViewer: boolean;
   supportsPromptEntry: boolean;
   canStop: boolean;
 }

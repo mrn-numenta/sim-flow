@@ -155,6 +155,14 @@ export interface LiveSessionTransport {
   readonly inSubSession?: boolean;
   onSubSessionChanged?(listener: (inSubSession: boolean) => void): () => void;
   /**
+   * True when this pump is attached as a read-only observer to a
+   * `--watch-socket` tap. Dashboard / chat panel use this to
+   * disable command surfaces (Run Step / Run Critique / Send /
+   * Stop) since the user can't drive a run that something else
+   * owns. Absent on stdio / mock transports.
+   */
+  readonly isViewer?: boolean;
+  /**
    * Structured gate-result observation surface. The orchestrator
    * emits `Event::GateResult` over JSONL when a manual Run Gate
    * click runs; the pump exposes it here so the dashboard host can

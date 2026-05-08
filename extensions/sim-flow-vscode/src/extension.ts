@@ -31,9 +31,21 @@ const dashboardHosts = new Map<string, DashboardHost>();
 const terminals = new Map<string, SimFlowTerminal>();
 let chatPanelProvider: ChatPanelProvider | undefined;
 let autoSessionManager: AutoSessionManager | undefined;
+let extensionContext: vscode.ExtensionContext | undefined;
+
+/** Best-effort access to the extension context. Throws on access
+ * before `activate` ran (which shouldn't happen for any user-
+ * triggered command since activation is `onStartupFinished`). */
+function globalContext(): vscode.ExtensionContext {
+  if (!extensionContext) {
+    throw new Error("sim-flow: extension context not initialised");
+  }
+  return extensionContext;
+}
 
 export function activate(context: vscode.ExtensionContext): void {
   console.log("sim-flow: extension activated");
+  extensionContext = context;
   setBundledRoot(context.extensionUri.fsPath);
   // Reap orphaned `sim-flow` processes left behind by a prior
   // extension run (host crash, OS reboot, killed extension host
@@ -231,22 +243,26 @@ async function attachWatcherCommand(): Promise<void> {
     return;
   }
 
-  // `nc -U <socket>` streams the JSONL events into the terminal.
-  // We send a no-op Hello line so the EventTap's accept thread
-  // stops blocking on its `read_line` and registers us as an
-  // observer; the tap discards observer input afterwards.
-  const term = vscode.window.createTerminal({
-    name: `sim-flow watcher: pid ${picked.entry.pid}`,
-    cwd: picked.entry.project_dir,
+  // Hand the chosen watcher off to the chat-panel provider so it
+  // attaches a viewer SocketSessionPump (read-only) and the
+  // dashboard's onActiveSessionChanged hook refreshes per-step
+  // button gating + chat-panel composer state.
+  if (!chatPanelProvider) {
+    void vscode.window.showErrorMessage(
+      "sim-flow: chat panel not initialised; viewer attach unavailable.",
+    );
+    return;
+  }
+  await chatPanelProvider.attachWatcherSession({
+    socketPath: picked.entry.socket_path,
+    projectDir: picked.entry.project_dir,
+    pid: picked.entry.pid,
+    llmBackend: picked.entry.llm_backend,
+    llmModel: picked.entry.llm_model,
   });
-  term.show(true);
-  // `printf '{"event":"hello"}\n' | nc -U <sock>`-style attach
-  // would close the connection on EOF. Use a here-doc keep-alive
-  // instead so the connection stays open.
-  term.sendText(
-    `printf '{"event":"hello"}\\n' | nc -U ${shellQuote(picked.entry.socket_path)} | cat`,
-    true,
-  );
+  // Also reveal the dashboard for that project so the user sees
+  // step / critique / gate state alongside the chat panel.
+  await openDashboardForProject(globalContext(), picked.entry.project_dir);
 }
 
 interface WatcherEntry {
