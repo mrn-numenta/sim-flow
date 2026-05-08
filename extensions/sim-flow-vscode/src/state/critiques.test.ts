@@ -1,6 +1,17 @@
-import { describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { tmpdir } from "node:os";
 
-import { parseFindings } from "./critiques";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import {
+  CRITIQUES_DIR,
+  critiquePath,
+  critiquesDir,
+  listCritiqueFiles,
+  parseFindings,
+  readCritique,
+} from "./critiques";
 
 describe("parseFindings", () => {
   it("returns an empty finding list for prose-only markdown", () => {
@@ -80,5 +91,94 @@ describe("parseFindings", () => {
     expect(findings[0].text).toBe("missing coverage for illegal opcodes.");
     expect(findings[2].text).toBe("testbench file missing entirely.");
     expect(hasBlocking).toBe(true);
+  });
+});
+
+describe("path helpers", () => {
+  it("CRITIQUES_DIR is the relative docs/critiques path", () => {
+    expect(CRITIQUES_DIR).toBe(path.join("docs", "critiques"));
+  });
+
+  it("critiquesDir composes the project-rooted absolute path", () => {
+    expect(critiquesDir("/abs/p")).toBe(path.join("/abs/p", "docs", "critiques"));
+  });
+
+  it("critiquePath uses the `<step>-critique.md` filename convention", () => {
+    expect(critiquePath("/abs/p", "DM2c")).toBe(
+      path.join("/abs/p", "docs", "critiques", "DM2c-critique.md"),
+    );
+  });
+});
+
+describe("listCritiqueFiles / readCritique", () => {
+  let projectDir: string;
+
+  beforeEach(() => {
+    projectDir = fs.mkdtempSync(path.join(tmpdir(), "sim-flow-critiques-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  it("listCritiqueFiles returns an empty array when the directory is missing", async () => {
+    const got = await listCritiqueFiles(projectDir);
+    expect(got).toEqual([]);
+  });
+
+  it("listCritiqueFiles returns parsed entries for every `<step>-critique.md` file", async () => {
+    const dir = critiquesDir(projectDir);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "DM0-critique.md"), "- BLOCKER: nope\n", "utf8");
+    fs.writeFileSync(
+      path.join(dir, "DM1-critique.md"),
+      "- RESOLVED: addressed earlier\n",
+      "utf8",
+    );
+    // Non-critique files should be ignored.
+    fs.writeFileSync(path.join(dir, "README.md"), "ignored", "utf8");
+    const list = await listCritiqueFiles(projectDir);
+    expect(list).toHaveLength(2);
+    expect(list[0].step).toBe("DM0");
+    expect(list[0].hasBlocking).toBe(true);
+    expect(list[0].path).toBe(path.join(dir, "DM0-critique.md"));
+    expect(list[1].step).toBe("DM1");
+    expect(list[1].hasBlocking).toBe(false);
+  });
+
+  it("listCritiqueFiles propagates non-ENOENT errors", async () => {
+    // Replace the critiques directory with a regular file so
+    // readdir returns ENOTDIR (not ENOENT). The helper should
+    // re-throw rather than silently returning an empty list.
+    fs.mkdirSync(path.join(projectDir, "docs"), { recursive: true });
+    fs.writeFileSync(critiquesDir(projectDir), "not a dir", "utf8");
+    await expect(listCritiqueFiles(projectDir)).rejects.toThrow();
+  });
+
+  it("readCritique returns null when the file is missing", async () => {
+    expect(await readCritique(projectDir, "DM2c")).toBeNull();
+  });
+
+  it("readCritique parses an existing file", async () => {
+    const p = critiquePath(projectDir, "DM3a");
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(
+      p,
+      ["# DM3a critique", "", "- BLOCKER: missing scoreboard", ""].join("\n"),
+      "utf8",
+    );
+    const got = await readCritique(projectDir, "DM3a");
+    expect(got).not.toBeNull();
+    expect(got!.step).toBe("DM3a");
+    expect(got!.hasBlocking).toBe(true);
+    expect(got!.findings.map((f) => f.kind)).toEqual(["blocker"]);
+  });
+
+  it("readCritique propagates non-ENOENT errors", async () => {
+    // Replace the file path with a directory so readFile fails
+    // with EISDIR rather than ENOENT.
+    const p = critiquePath(projectDir, "DM3b");
+    fs.mkdirSync(p, { recursive: true });
+    await expect(readCritique(projectDir, "DM3b")).rejects.toThrow();
   });
 });
