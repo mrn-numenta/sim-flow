@@ -52,6 +52,12 @@ export function createStateWatcher(projectDir: string): SimFlowStateWatcher {
   };
 
   register(".sim-flow/state.toml", "state-toml");
+  // Match both forms of critique artifact: `.json` is the canonical
+  // structured form the orchestrator and gate read; `.md` is the
+  // rendered view. Watching only `.md` meant a JSON-only update
+  // (e.g. agent emits JSON via `write_file` and the markdown render
+  // failed or hasn't landed yet) didn't refresh the dashboard.
+  register("docs/critiques/*.json", "critiques");
   register("docs/critiques/*.md", "critiques");
   register(".sim-flow/experiments.db", "experiments-db");
   // Plan files drive the progress panel under the step buttons. Edits

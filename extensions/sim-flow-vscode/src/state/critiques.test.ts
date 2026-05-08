@@ -174,6 +174,91 @@ describe("listCritiqueFiles / readCritique", () => {
     expect(got!.findings.map((f) => f.kind)).toEqual(["blocker"]);
   });
 
+  it("readCritique prefers JSON findings when both forms exist", async () => {
+    // Canonical post-migration shape: orchestrator writes both files;
+    // dashboard's `findings` / `hasBlocking` should come from the
+    // structured JSON (gate's source of truth), not the markdown
+    // text. Mismatch protects against stale markdown renders.
+    const dir = critiquesDir(projectDir);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "DM0-critique.json"),
+      JSON.stringify({
+        step: "DM0",
+        summary: "structured",
+        findings: [{ kind: "blocker", title: "scoreboard missing", body: "" }],
+        notes: "",
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(dir, "DM0-critique.md"),
+      "# DM0 critique\n\nNo markers in this body.\n",
+      "utf8",
+    );
+    const got = await readCritique(projectDir, "DM0");
+    expect(got).not.toBeNull();
+    expect(got!.findings).toHaveLength(1);
+    expect(got!.findings[0].kind).toBe("blocker");
+    expect(got!.hasBlocking).toBe(true);
+    // The displayable `body` still points at the rendered markdown
+    // so existing renderers / open-in-editor wiring stays happy.
+    expect(got!.body).toContain("DM0 critique");
+  });
+
+  it("readCritique falls back to markdown when only the .md exists", async () => {
+    const dir = critiquesDir(projectDir);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "DM2c-critique.md"),
+      "- BLOCKER: still legacy\n",
+      "utf8",
+    );
+    const got = await readCritique(projectDir, "DM2c");
+    expect(got).not.toBeNull();
+    expect(got!.hasBlocking).toBe(true);
+    expect(got!.findings[0].kind).toBe("blocker");
+  });
+
+  it("readCritique returns JSON findings when only the .json exists", async () => {
+    // Race: agent emitted the JSON via `write_file` but the orchestrator's
+    // markdown render hasn't landed yet (or failed). Dashboard should
+    // still see the structured findings.
+    const dir = critiquesDir(projectDir);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "DM3b-critique.json"),
+      JSON.stringify({
+        step: "DM3b",
+        findings: [{ kind: "unresolved", title: "minor nit" }],
+      }),
+      "utf8",
+    );
+    const got = await readCritique(projectDir, "DM3b");
+    expect(got).not.toBeNull();
+    expect(got!.findings).toHaveLength(1);
+    expect(got!.findings[0].kind).toBe("unresolved");
+    expect(got!.hasBlocking).toBe(true);
+  });
+
+  it("listCritiqueFiles dedupes step ids when both .json and .md exist", async () => {
+    const dir = critiquesDir(projectDir);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "DM0-critique.json"),
+      JSON.stringify({
+        step: "DM0",
+        findings: [{ kind: "blocker", title: "t" }],
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(dir, "DM0-critique.md"), "# rendered\n", "utf8");
+    const list = await listCritiqueFiles(projectDir);
+    expect(list).toHaveLength(1);
+    expect(list[0].step).toBe("DM0");
+    expect(list[0].hasBlocking).toBe(true);
+  });
+
   it("readCritique propagates non-ENOENT errors", async () => {
     // Replace the file path with a directory so readFile fails
     // with EISDIR rather than ENOENT.

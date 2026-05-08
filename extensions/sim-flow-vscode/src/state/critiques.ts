@@ -1,9 +1,16 @@
-// List and parse `docs/critiques/*.md`. The parser follows the
-// same rule as the Rust `Critique::parse` (see
-// `tools/sim-flow/src/critique.rs`): a line whose first non-whitespace
-// token (after stripping common markdown list markers `- ` or `* `) is
-// `UNRESOLVED:`, `BLOCKER:`, or `RESOLVED:` becomes a finding; all
-// other lines are prose. Blocking status = any Blocker.
+// List and parse `docs/critiques/<step>-critique.{json,md}`. The
+// canonical form is JSON (see `tools/sim-flow/src/critique.rs`); the
+// orchestrator renders a markdown sibling for human reading. We
+// prefer the JSON when present and fall back to parsing the markdown
+// (legacy projects, or transient races where the JSON landed but the
+// `.md` render hasn't yet) so the dashboard's blocker counts and
+// `hasBlocking` flag track the same source-of-truth as the gate.
+//
+// Markdown parser rule mirrors the Rust `Critique::parse`: a line
+// whose first non-whitespace token (after stripping common markdown
+// list markers `- ` / `* ` / numbered `12. `) is `UNRESOLVED:`,
+// `BLOCKER:`, or `RESOLVED:` becomes a finding; all other lines are
+// prose.
 //
 // Critiques deliberately live OUTSIDE `.sim-flow/` (which is the
 // orchestrator's private state tree) so the agent can write to them
@@ -25,16 +32,66 @@ export function critiquesDir(projectDir: string): string {
   return path.join(projectDir, CRITIQUES_DIR);
 }
 
-/** Resolve the absolute path of a specific step's critique file. */
+/**
+ * Resolve the absolute path of a specific step's critique markdown
+ * view. The orchestrator's render-on-write path produces this file
+ * from the canonical JSON; existing call sites (open-in-editor,
+ * "open critique" buttons) want the human-readable version.
+ */
 export function critiquePath(projectDir: string, stepId: string): string {
   return path.join(critiquesDir(projectDir), `${stepId}-critique.md`);
+}
+
+/** Resolve the absolute path of a specific step's critique JSON. */
+export function critiqueJsonPath(projectDir: string, stepId: string): string {
+  return path.join(critiquesDir(projectDir), `${stepId}-critique.json`);
+}
+
+interface CritiqueJsonShape {
+  step?: string;
+  summary?: string;
+  findings?: Array<{ kind?: string; title?: string; body?: string }>;
+  notes?: string;
+}
+
+function parseJsonCritique(text: string): { findings: Finding[]; hasBlocking: boolean } | null {
+  let parsed: CritiqueJsonShape;
+  try {
+    parsed = JSON.parse(text) as CritiqueJsonShape;
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.findings)) {
+    return null;
+  }
+  const findings: Finding[] = [];
+  let hasBlocking = false;
+  parsed.findings.forEach((f, idx) => {
+    const kindRaw = typeof f?.kind === "string" ? f.kind.toLowerCase() : "";
+    let kind: FindingKind | null = null;
+    if (kindRaw === "blocker") kind = "blocker";
+    else if (kindRaw === "unresolved") kind = "unresolved";
+    else if (kindRaw === "resolved") kind = "resolved";
+    if (kind === null) {
+      return;
+    }
+    const title = typeof f?.title === "string" ? f.title.trim() : "";
+    findings.push({ kind, text: title, line: idx + 1 });
+    if (kind !== "resolved") {
+      hasBlocking = true;
+    }
+  });
+  return { findings, hasBlocking };
 }
 
 /**
  * List every critique file present under a project.
  *
  * Returns an empty array if the directory does not exist (normal for
- * projects that have not completed any steps yet).
+ * projects that have not completed any steps yet). When both `.json`
+ * and `.md` exist for the same step, the JSON's structured findings
+ * win and the markdown body is preserved for any consumer that wants
+ * the human-readable text.
  */
 export async function listCritiqueFiles(projectDir: string): Promise<CritiqueFile[]> {
   const dir = critiquesDir(projectDir);
@@ -47,43 +104,75 @@ export async function listCritiqueFiles(projectDir: string): Promise<CritiqueFil
     }
     throw err;
   }
-  const files = entries.filter((name) => name.endsWith("-critique.md")).sort();
+  const stepIds = new Set<string>();
+  for (const name of entries) {
+    if (name.endsWith("-critique.json")) {
+      stepIds.add(name.replace(/-critique\.json$/, ""));
+    } else if (name.endsWith("-critique.md")) {
+      stepIds.add(name.replace(/-critique\.md$/, ""));
+    }
+  }
+  const sorted = [...stepIds].sort();
   const results: CritiqueFile[] = [];
-  for (const name of files) {
-    const full = path.join(dir, name);
-    const step = name.replace(/-critique\.md$/, "");
-    const body = await fs.readFile(full, "utf8");
-    results.push({
-      path: full,
-      step,
-      body,
-      ...findingsFor(body),
-    });
+  for (const step of sorted) {
+    const file = await readCritique(projectDir, step);
+    if (file) {
+      results.push(file);
+    }
   }
   return results;
 }
 
-/** Read and parse a specific step's critique file. Returns `null` if missing. */
+/**
+ * Read a specific step's critique. Prefers the JSON form for
+ * findings (canonical structured source) and falls back to parsing
+ * the markdown body when only `.md` exists. Returns `null` when
+ * neither form is on disk.
+ */
 export async function readCritique(
   projectDir: string,
   stepId: string,
 ): Promise<CritiqueFile | null> {
-  const full = critiquePath(projectDir, stepId);
-  let body: string;
+  const jsonFull = critiqueJsonPath(projectDir, stepId);
+  const mdFull = critiquePath(projectDir, stepId);
+  const jsonText = await readIfExists(jsonFull);
+  const mdText = await readIfExists(mdFull);
+  if (jsonText !== null) {
+    const parsed = parseJsonCritique(jsonText);
+    if (parsed !== null) {
+      return {
+        // Surface the markdown path when present so existing
+        // open-in-editor wiring still routes to the human-readable
+        // view; otherwise point at the JSON.
+        path: mdText !== null ? mdFull : jsonFull,
+        step: stepId,
+        body: mdText ?? jsonText,
+        findings: parsed.findings,
+        hasBlocking: parsed.hasBlocking,
+      };
+    }
+    // Malformed JSON: fall through to markdown if we have it.
+  }
+  if (mdText !== null) {
+    return {
+      path: mdFull,
+      step: stepId,
+      body: mdText,
+      ...findingsFor(mdText),
+    };
+  }
+  return null;
+}
+
+async function readIfExists(p: string): Promise<string | null> {
   try {
-    body = await fs.readFile(full, "utf8");
+    return await fs.readFile(p, "utf8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       return null;
     }
     throw err;
   }
-  return {
-    path: full,
-    step: stepId,
-    body,
-    ...findingsFor(body),
-  };
 }
 
 /** Parse the finding markers in a critique body. Exposed for testing. */
