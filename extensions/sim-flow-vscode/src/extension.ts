@@ -90,6 +90,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("sim-flow.dumpAvailableLmModels", () =>
       dumpAvailableLmModels(),
     ),
+    vscode.commands.registerCommand("sim-flow.attachWatcher", () => attachWatcherCommand()),
     vscode.commands.registerCommand("sim-flow.testLmModel", () => testLmModel(context)),
     vscode.commands.registerCommand("sim-flow.switchProject", () => switchProjectCommand(context)),
     vscode.commands.registerCommand(
@@ -127,6 +128,134 @@ async function openChatPanel(): Promise<void> {
       'sim-flow: unable to reveal the chat panel automatically. Try "View: Open View" and select "sim-flow Chat".',
     );
   }
+}
+
+/**
+ * `sim-flow: Attach to Running Watcher` command. Discovers
+ * orchestrators that have a `--watch-socket` observer surface
+ * bound (via `sim-flow watchers list --json`), shows a quick-pick
+ * with project / pid / model context, and on selection opens a
+ * VS Code terminal that streams the JSONL events from the chosen
+ * socket using `nc -U`. The terminal is read-only-ish: anything
+ * the user types is silently dropped on the orchestrator side
+ * (the EventTap ignores observer input).
+ *
+ * Lightweight by design -- no new pump, no new webview. The
+ * dashboard's full "watch alongside the test" UI can build on
+ * the same `watchers list` discovery later.
+ */
+async function attachWatcherCommand(): Promise<void> {
+  const cliBinary = (() => {
+    try {
+      const setting = vscode.workspace
+        .getConfiguration("sim-flow")
+        .get<string>("binaryPath");
+      return resolveBinary({
+        settingOverride: setting,
+        bundledCandidates,
+      });
+    } catch (err) {
+      void vscode.window.showErrorMessage(
+        `sim-flow: cannot resolve sim-flow binary: ${
+          (err as Error).message ?? String(err)
+        }`,
+      );
+      return undefined;
+    }
+  })();
+  if (!cliBinary) {
+    return;
+  }
+
+  const { execFile } = await import("node:child_process");
+  const stdout = await new Promise<string>((resolve, reject) => {
+    execFile(
+      cliBinary,
+      ["watchers", "list", "--json"],
+      { encoding: "utf8" },
+      (err, out) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve(out);
+      },
+    );
+  }).catch((err) => {
+    void vscode.window.showErrorMessage(
+      `sim-flow: \`watchers list\` failed: ${err.message ?? String(err)}`,
+    );
+    return undefined;
+  });
+  if (stdout === undefined) {
+    return;
+  }
+
+  let entries: WatcherEntry[];
+  try {
+    entries = JSON.parse(stdout) as WatcherEntry[];
+  } catch (err) {
+    void vscode.window.showErrorMessage(
+      `sim-flow: malformed JSON from \`watchers list\`: ${
+        (err as Error).message ?? String(err)
+      }`,
+    );
+    return;
+  }
+
+  if (entries.length === 0) {
+    void vscode.window.showInformationMessage(
+      "sim-flow: no live watchers. Start an orchestrator with `sim-flow auto --watch-socket <path>` (or pass `--watch-socket` through `e2e_manual` / your launcher of choice) to make it discoverable here.",
+    );
+    return;
+  }
+
+  const items: (vscode.QuickPickItem & { entry: WatcherEntry })[] = entries.map(
+    (e) => ({
+      label: `pid ${e.pid} · ${path.basename(e.project_dir)}`,
+      description: e.llm_model
+        ? `${e.llm_backend}/${e.llm_model}`
+        : e.llm_backend,
+      detail: `${e.project_dir} · ${e.socket_path}`,
+      entry: e,
+    }),
+  );
+
+  const picked = await vscode.window.showQuickPick(items, {
+    title: "Attach to running sim-flow watcher",
+    placeHolder: "Pick the orchestrator to observe (read-only)",
+    matchOnDescription: true,
+    matchOnDetail: true,
+  });
+  if (!picked) {
+    return;
+  }
+
+  // `nc -U <socket>` streams the JSONL events into the terminal.
+  // We send a no-op Hello line so the EventTap's accept thread
+  // stops blocking on its `read_line` and registers us as an
+  // observer; the tap discards observer input afterwards.
+  const term = vscode.window.createTerminal({
+    name: `sim-flow watcher: pid ${picked.entry.pid}`,
+    cwd: picked.entry.project_dir,
+  });
+  term.show(true);
+  // `printf '{"event":"hello"}\n' | nc -U <sock>`-style attach
+  // would close the connection on EOF. Use a here-doc keep-alive
+  // instead so the connection stays open.
+  term.sendText(
+    `printf '{"event":"hello"}\\n' | nc -U ${shellQuote(picked.entry.socket_path)} | cat`,
+    true,
+  );
+}
+
+interface WatcherEntry {
+  pid: number;
+  socket_path: string;
+  project_dir: string;
+  started_at: string;
+  llm_backend: string;
+  llm_model: string | null;
 }
 
 function disposeAllResources(): void {

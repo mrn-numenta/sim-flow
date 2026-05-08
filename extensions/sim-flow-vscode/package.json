@@ -105,6 +105,10 @@
         "title": "sim-flow: Open Flow Dashboard"
       },
       {
+        "command": "sim-flow.attachWatcher",
+        "title": "sim-flow: Attach to Running Watcher"
+      },
+      {
         "command": "sim-flow.runStep",
         "title": "sim-flow: Run Step"
       },
