@@ -115,6 +115,17 @@ export class SocketSessionPump implements LiveSessionTransport {
    * the click.
    */
   private inSubSessionFlag = false;
+  /**
+   * True after `request-user-input` and before the next active-work
+   * event from the orchestrator. While parked, the orchestrator
+   * isn't running anything — `run_session` is blocked waiting for a
+   * user message — so the sub-session bracket stays open but the
+   * dashboard should treat the session as idle (buttons clickable).
+   * Without this distinction, a critique that ends with a parked
+   * "ask user what to do" turn never sees `sub-session-ended` and
+   * the per-step buttons stay disabled until the user resumes.
+   */
+  private awaitingUserInputFlag = false;
 
   constructor(
     private readonly options: SocketSessionPumpOptions,
@@ -319,13 +330,17 @@ export class SocketSessionPump implements LiveSessionTransport {
   }
 
   /**
-   * Whether the orchestrator is currently inside a sub-session.
-   * `true` between `sub-session-started` and `sub-session-ended`;
-   * `false` while parked. The dashboard uses this to gate the
-   * per-step buttons.
+   * Whether the orchestrator is currently busy inside a sub-session.
+   * `true` between `sub-session-started` and `sub-session-ended` —
+   * but only while the session is actually processing. While parked
+   * on `request-user-input` the bracket is still open server-side
+   * (the orchestrator hasn't returned from `run_session`), but no
+   * work is happening, so the dashboard treats it as not-busy and
+   * re-enables the per-step buttons. The flag flips back to true on
+   * the first work event after the user resumes.
    */
   get inSubSession(): boolean {
-    return this.inSubSessionFlag;
+    return this.inSubSessionFlag && !this.awaitingUserInputFlag;
   }
 
   /**
@@ -646,6 +661,25 @@ export class SocketSessionPump implements LiveSessionTransport {
   }
 
   private handleEvent(event: ProtocolEvent): void {
+    const wasBusy = this.inSubSession;
+    // Update the parking flag BEFORE dispatching the per-event
+    // case. The bracket flag (`inSubSessionFlag`) is the orchestrator's
+    // server-side truth; the parking flag (`awaitingUserInputFlag`)
+    // is our derivation: `request-user-input` parks, any other
+    // active event resumes. Bracket transitions and pure-state
+    // events (step-mode echo, hello-ack) don't change the parking
+    // signal; they're handled inline in their cases below.
+    if (event.event === "request-user-input") {
+      this.awaitingUserInputFlag = true;
+    } else if (
+      event.event !== "step-mode-changed" &&
+      event.event !== "hello-ack" &&
+      event.event !== "sub-session-started" &&
+      event.event !== "sub-session-ended" &&
+      event.event !== "session-end"
+    ) {
+      this.awaitingUserInputFlag = false;
+    }
     switch (event.event) {
       case "hello-ack":
         this.sessionTag = event.session;
@@ -730,27 +764,35 @@ export class SocketSessionPump implements LiveSessionTransport {
         } as SocketPumpBusEvent);
         break;
       case "sub-session-started":
-        // Bracket open. Dashboard listeners disable per-step
-        // buttons until the matching `sub-session-ended` arrives.
+        // Bracket open. A fresh sub-session is by definition not
+        // parked, so clear the parking flag too (covers the case
+        // where the previous sub-session ended while parked and a
+        // new one starts before any active-work event).
         this.inSubSessionFlag = true;
-        this.bus.emit("msg", {
-          type: "in-sub-session",
-          inSubSession: true,
-        } as SocketPumpBusEvent);
+        this.awaitingUserInputFlag = false;
         break;
       case "sub-session-ended":
         // Bracket close. Dashboard listeners re-enable per-step
         // buttons (subject to disk-state preconditions).
         this.inSubSessionFlag = false;
-        this.bus.emit("msg", {
-          type: "in-sub-session",
-          inSubSession: false,
-        } as SocketPumpBusEvent);
+        this.awaitingUserInputFlag = false;
         break;
       default: {
         const exhaustive: never = event;
         void exhaustive;
       }
+    }
+    // Single emission point for the effective busy signal. Events
+    // that don't change the bracket / parking pair are no-ops here
+    // (`wasBusy === isBusy`); everything that does — bracket open
+    // and close, parking on `request-user-input`, resuming on the
+    // next active-work event — fires exactly once per transition.
+    const isBusy = this.inSubSession;
+    if (isBusy !== wasBusy) {
+      this.bus.emit("msg", {
+        type: "in-sub-session",
+        inSubSession: isBusy,
+      } as SocketPumpBusEvent);
     }
   }
 
