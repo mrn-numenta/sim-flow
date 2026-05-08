@@ -15,7 +15,16 @@ plan and tests; DM4 will measure against the targets.
 
 ## Procedure
 
-1. Read `docs/spec.md`.
+1. Read the spec. It lands in one of two layouts (the gate accepts
+   either):
+   - Single file: `read_file("docs/spec.md")`.
+   - Paginated: section files under `docs/spec/` (e.g.
+     `docs/spec/01-overview.md`, ...). The system stack's TOC
+     block lists every section; `list_dir("docs/spec/")` if you
+     need to enumerate. Read each section in numeric order.
+   For paginated specs, treat the union of section files as "the
+   spec" for everything below; quote `<section-file>:<line>` when
+   citing requirements.
 2. Read the spec for explicit requirements, implied requirements,
    `## Open Questions`, and any `## Auto-decisions`.
    - Preserve explicit requirements faithfully.

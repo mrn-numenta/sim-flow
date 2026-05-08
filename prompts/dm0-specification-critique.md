@@ -1,21 +1,34 @@
 # DM0 - Specification (critique session)
 
-You are reviewing the DM0 work artifact (`docs/spec.md`). Treat it
-as work produced by a third party even if you produced it yourself
-earlier in this conversation -- the independent-review property
-depends on you bracketing any prior reasoning rather than leaning
-on it. Do not modify `docs/spec.md`; evaluate it and write the
-critique file.
+You are reviewing the DM0 work artifact. Treat it as work produced
+by a third party even if you produced it yourself earlier in this
+conversation -- the independent-review property depends on you
+bracketing any prior reasoning rather than leaning on it. Do not
+modify the spec; evaluate it and write the critique file.
 
 ## Inputs
 
-- `docs/spec.md` at the project root. Judge it on its own merits;
-  any transcript or prior reasoning you happen to have access to is
-  not authoritative -- the spec is.
+The spec lands in one of two layouts; the gate accepts either, and
+your review applies to whichever is on disk:
+
+- **Single-file:** `docs/spec.md` at the project root. Read it
+  directly.
+- **Paginated:** numbered section files under `docs/spec/`
+  (e.g. `docs/spec/01-overview.md`,
+  `docs/spec/02-interfaces.md`, ...). The system stack's TOC
+  block lists every section file with its size; use `read_file`
+  per section, or `list_dir docs/spec/` if the TOC isn't already
+  in scope. Treat the union of section files as "the spec" for
+  the questions below; quote the section file path + line number
+  when citing offending content.
+
+Judge the spec on its own merits; any transcript or prior reasoning
+you happen to have access to is not authoritative -- what's on
+disk is.
 
 ## Evaluation
 
-Judge `docs/spec.md` by this standard:
+Judge the spec (whichever layout) by this standard:
 
 - The spec does NOT need to spell out every minute detail.
 - It DOES need to preserve explicit requirements and be clear enough that
@@ -33,8 +46,10 @@ for non-blocking notes, `"resolved"` for informational
 acknowledgements (ignored by the gate). See "Output" below for
 the schema.
 
-1. Does `docs/spec.md` declare a clock frequency? (regex `\d+\s*(MHz|GHz)`)
-2. Does it declare a technology node? (regex `\d+\s*nm`)
+1. Does the spec declare a clock frequency? (regex `\d+\s*(MHz|GHz)`
+   in `docs/spec.md` OR any `docs/spec/*.md` section)
+2. Does it declare a technology node? (regex `\d+\s*nm` in either
+   layout's content files)
 3. Does it either declare an explicit gate budget per cycle or provide
    enough information for DM1 to derive a reasonable gate-budget-per-cycle
    estimate, usually via frequency plus technology target?

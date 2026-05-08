@@ -59,6 +59,21 @@ fn shell(cmd: &str, args: &[&str], description: &str) -> GateCheck {
     }
 }
 
+fn any_exists(paths: &[&str], description: &str) -> GateCheck {
+    GateCheck::AnyExists {
+        paths: paths.iter().map(PathBuf::from).collect(),
+        description: description.to_string(),
+    }
+}
+
+fn any_matches(paths: &[&str], pattern: &str, description: &str) -> GateCheck {
+    GateCheck::AnyMatches {
+        paths: paths.iter().map(PathBuf::from).collect(),
+        pattern: pattern.to_string(),
+        description: description.to_string(),
+    }
+}
+
 /// Pair this with a `StepDescriptor::milestone_walk` so the step's
 /// gate cannot pass while any milestone file under `dir` is still
 /// pending. Defaults to execution-step semantics (`- [ ]` rows must
@@ -95,6 +110,15 @@ fn milestones_all_detailed(
 }
 
 fn dm0() -> StepDescriptor {
+    // The spec can land in either of two layouts and the gate
+    // accepts both:
+    //   - Single file: `docs/spec.md` (small designs).
+    //   - Paginated:  `docs/spec/<NN>-<slug>.md` section files
+    //     (large designs that exceed an LLM's single-response
+    //     budget; mirrors the input-spec staging convention).
+    // The `any_exists` / `any_matches` helpers expand the directory
+    // entry to all `*.md` files inside (excluding scaffolding and
+    // index files like `README.md` / `_toc.md`).
     StepDescriptor {
         id: "DM0",
         flow: Flow::DirectModeling,
@@ -102,20 +126,25 @@ fn dm0() -> StepDescriptor {
         instruction_slug: "dm0-specification",
         per_candidate: false,
         gate_checks: vec![
-            file_exists("docs/spec.md", "docs/spec.md exists and is non-empty"),
-            file_matches(
-                "docs/spec.md",
-                r"\d+\s*(MHz|GHz)",
-                "docs/spec.md declares a clock frequency",
+            any_exists(
+                &["docs/spec.md", "docs/spec/"],
+                "docs/spec.md or docs/spec/ exists and is non-empty",
             ),
-            file_matches(
-                "docs/spec.md",
+            any_matches(
+                &["docs/spec.md", "docs/spec/"],
+                r"\d+\s*(MHz|GHz)",
+                "spec declares a clock frequency",
+            ),
+            any_matches(
+                &["docs/spec.md", "docs/spec/"],
                 r"\d+\s*nm",
-                "docs/spec.md declares a technology node",
+                "spec declares a technology node",
             ),
             critique_clean("DM0"),
         ],
-        work_artifacts: &["docs/spec.md"],
+        // Both layouts listed so a Reset to DM0 (or any downstream
+        // reset that cascades through DM0) clears either form.
+        work_artifacts: &["docs/spec.md", "docs/spec/"],
         predecessor_inputs: &[],
         work_write_paths: &["docs/"],
         work_phases: &["chat"],
@@ -152,7 +181,7 @@ fn dm1() -> StepDescriptor {
             critique_clean("DM1"),
         ],
         work_artifacts: &["docs/targets.md", "docs/testbench.md"],
-        predecessor_inputs: &["docs/spec.md"],
+        predecessor_inputs: &["docs/spec.md", "docs/spec/"],
         work_write_paths: &["docs/"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
@@ -187,7 +216,7 @@ fn dm2a() -> StepDescriptor {
             "docs/analysis/decomposition.md",
             "docs/analysis/data-movement.md",
         ],
-        predecessor_inputs: &["docs/spec.md", "docs/targets.md"],
+        predecessor_inputs: &["docs/spec.md", "docs/spec/", "docs/targets.md"],
         work_write_paths: &["docs/"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
@@ -217,6 +246,7 @@ fn dm2b() -> StepDescriptor {
         work_artifacts: &["docs/analysis/pipeline-mapping.md"],
         predecessor_inputs: &[
             "docs/spec.md",
+            "docs/spec/",
             "docs/analysis/decomposition.md",
             "docs/analysis/data-movement.md",
         ],
@@ -260,6 +290,7 @@ fn dm2c() -> StepDescriptor {
         work_artifacts: &["docs/impl-plan/"],
         predecessor_inputs: &[
             "docs/spec.md",
+            "docs/spec/",
             "docs/analysis/decomposition.md",
             "docs/analysis/data-movement.md",
             "docs/analysis/pipeline-mapping.md",
@@ -297,6 +328,7 @@ fn dm2cd() -> StepDescriptor {
         work_artifacts: &["docs/impl-plan/"],
         predecessor_inputs: &[
             "docs/spec.md",
+            "docs/spec/",
             "docs/analysis/decomposition.md",
             "docs/analysis/data-movement.md",
             "docs/analysis/pipeline-mapping.md",
@@ -391,6 +423,7 @@ fn dm2d() -> StepDescriptor {
         work_artifacts: &["src/", "tests/", "Cargo.toml"],
         predecessor_inputs: &[
             "docs/spec.md",
+            "docs/spec/",
             "docs/analysis/decomposition.md",
             "docs/analysis/data-movement.md",
             "docs/analysis/pipeline-mapping.md",

@@ -25,9 +25,31 @@ the name; do not conflate them:
     orchestrator may have inlined into the system stack
   Treat the source spec as authoritative input. **Do not modify it**
   (`.sim-flow/` is the orchestrator's tree).
-- **Sim-flow spec** -- the structured artifact you produce, at
-  `docs/spec.md`. This is your output and the input to every later DM
-  step.
+- **Sim-flow spec** -- the structured artifact you produce. Two
+  acceptable layouts; downstream steps and the gate accept either:
+  - **Single-file:** `docs/spec.md` at the project root. Use this
+    when the spec is small enough to fit comfortably in one
+    response (rough rule: under ~500 lines of markdown).
+  - **Paginated:** a directory `docs/spec/` containing numbered
+    section files (`docs/spec/01-overview.md`,
+    `docs/spec/02-interfaces.md`, ...). Use this for large designs
+    where a single response would exceed your output budget. The
+    file numbers establish the canonical reading order; the
+    section slug is for human readability. Each file holds one
+    self-contained section.
+    - The orchestrator inlines the section directory listing into
+      every downstream step, so DM1 / DM2a / DM2b / etc. can
+      `read_file` individual sections on demand without you
+      having to maintain a hand-written TOC.
+    - You MAY also write a brief `docs/spec.md` at the project
+      root that points readers at the section directory; it is
+      not required by the gate. If you write it, keep it short
+      (intent + link to `docs/spec/`); the bulk content goes in
+      the numbered files.
+  Either layout is the input to every later DM step. **Pick one
+  layout per project and stick with it** -- mixing a populated
+  `docs/spec.md` with a populated `docs/spec/` is confusing for
+  downstream readers.
 
 ## Procedure
 
@@ -115,9 +137,31 @@ the name; do not conflate them:
 
 ## Output
 
-- `docs/spec.md` at the project root, updated or newly created.
+EITHER:
+
+- `docs/spec.md` at the project root, updated or newly created
+  (single-file layout for small specs).
+
+OR:
+
+- `docs/spec/<NN>-<slug>.md` files for each section, numbered to
+  establish reading order (e.g.
+  `docs/spec/01-overview.md`,
+  `docs/spec/02-interfaces.md`,
+  `docs/spec/03-functional-behavior.md`,
+  `docs/spec/04-timing-throughput.md`,
+  `docs/spec/05-reset-and-corner-cases.md`,
+  `docs/spec/06-examples.md`,
+  `docs/spec/07-open-questions.md`).
+  The numbered prefix is REQUIRED for canonical ordering; the
+  slug after the number is free-form (lower-case, hyphenated).
+  Cover the same content as the single-file layout -- the
+  template's section structure maps onto one or more numbered
+  files per section group.
 
 When the artifacts above are complete, stop. Do not write
-`docs/critiques/DM0-critique.md`; the critique is a distinct task.
-Do not `/exit` on your own -- the user and the orchestrator control
-session boundaries.
+`docs/critiques/DM0-critique.json` (the critique is a distinct
+task) and do not write a hand-rolled `docs/spec.md` index when
+using the paginated layout (the orchestrator surfaces the
+section listing automatically). Do not `/exit` on your own --
+the user and the orchestrator control session boundaries.

@@ -222,7 +222,13 @@ fn describe_emits_step_descriptor_for_dm0_work() {
     assert_eq!(v["kind"], "work");
     assert_eq!(v["flow"], "direct-modeling");
     assert_eq!(v["per_candidate"], false);
-    assert_eq!(v["work_artifacts"], serde_json::json!(["docs/spec.md"]));
+    // DM0 lists both spec layouts (single-file `docs/spec.md` and
+    // paginated `docs/spec/`); the gate accepts either, and Reset
+    // sweeps both forms.
+    assert_eq!(
+        v["work_artifacts"],
+        serde_json::json!(["docs/spec.md", "docs/spec/"])
+    );
     assert_eq!(v["predecessor_inputs"], serde_json::json!([]));
     let gate_checks = v["gate_checks"].as_array().expect("gate_checks array");
     assert!(
@@ -246,7 +252,14 @@ fn describe_dm1_critique_lists_predecessor_spec_and_own_work_artifacts() {
     let v: Value = serde_json::from_str(&String::from_utf8(out.stdout).unwrap()).unwrap();
     assert_eq!(v["step"], "DM1");
     assert_eq!(v["kind"], "critique");
-    assert_eq!(v["predecessor_inputs"], serde_json::json!(["docs/spec.md"]));
+    // Both spec layouts are surfaced as predecessor inputs so
+    // downstream steps see whichever the project uses; the
+    // orchestrator's TOC builder gracefully reports the missing
+    // form as `(missing)`.
+    assert_eq!(
+        v["predecessor_inputs"],
+        serde_json::json!(["docs/spec.md", "docs/spec/"])
+    );
     assert_eq!(
         v["work_artifacts"],
         serde_json::json!(["docs/targets.md", "docs/testbench.md"])

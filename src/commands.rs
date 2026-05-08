@@ -1137,6 +1137,38 @@ fn gate_check_to_out(check: &sim_flow::__internal::gate::GateCheck) -> GateCheck
             cmd: None,
             args: None,
         },
+        AnyExists { paths, description } => GateCheckOut {
+            kind: "any-exists",
+            description,
+            path: Some(
+                paths
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+            ),
+            pattern: None,
+            cmd: None,
+            args: None,
+        },
+        AnyMatches {
+            paths,
+            pattern,
+            description,
+        } => GateCheckOut {
+            kind: "any-matches",
+            description,
+            path: Some(
+                paths
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+            ),
+            pattern: Some(pattern.clone()),
+            cmd: None,
+            args: None,
+        },
     }
 }
 

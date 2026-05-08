@@ -38,6 +38,29 @@ pub enum GateCheck {
     /// tracking captured a simulation run before the analysis gate
     /// passes.
     ExperimentsRecorded { description: String },
+    /// At least one of the listed paths must exist and be non-empty.
+    /// Each path may be a file (matched directly) or a directory
+    /// (treated as "any non-empty `*.md` inside, excluding
+    /// `.gitkeep` / `README.md`"). Used to accept either of two
+    /// canonical artifact layouts -- e.g. the generated spec can
+    /// land as a single `docs/spec.md` (small designs) or as a
+    /// directory of section files under `docs/spec/` (large
+    /// designs paginated like the input spec).
+    AnyExists {
+        paths: Vec<PathBuf>,
+        description: String,
+    },
+    /// Like `FileMatches`, but the pattern needs to match in at
+    /// least ONE of the listed paths. Each path may be a file or
+    /// a directory of `*.md` (same expansion rule as `AnyExists`).
+    /// Used so DM0's frequency / tech-node regexes still pass when
+    /// the spec is paginated and the matching string lives in a
+    /// section file rather than the top-level `docs/spec.md`.
+    AnyMatches {
+        paths: Vec<PathBuf>,
+        pattern: String,
+        description: String,
+    },
     /// Every milestone file under `dir` matching one of
     /// `<file_prefix>NN-*.md` (for any `<file_prefix>` in
     /// `file_prefixes`) must be resolved.
@@ -136,6 +159,69 @@ fn evaluate_one(project_dir: &Path, check: &GateCheck) -> Result<Option<GateFail
                 }));
             }
             Ok(None)
+        }
+        GateCheck::AnyExists { paths, description } => {
+            let candidates = expand_candidate_files(project_dir, paths);
+            for full in &candidates {
+                if let Ok(meta) = std::fs::metadata(full)
+                    && meta.is_file()
+                    && meta.len() > 0
+                {
+                    return Ok(None);
+                }
+            }
+            Ok(Some(GateFailure {
+                description: description.clone(),
+                reason: format!(
+                    "no non-empty file found in any of: {}",
+                    paths
+                        .iter()
+                        .map(|p| project_dir.join(p).display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }))
+        }
+        GateCheck::AnyMatches {
+            paths,
+            pattern,
+            description,
+        } => {
+            let regex = Regex::new(pattern).map_err(|e| {
+                Error::Gate(format!("invalid regex in gate check {pattern:?}: {e}"))
+            })?;
+            let candidates = expand_candidate_files(project_dir, paths);
+            if candidates.is_empty() {
+                return Ok(Some(GateFailure {
+                    description: description.clone(),
+                    reason: format!(
+                        "no candidate files exist for any of: {}",
+                        paths
+                            .iter()
+                            .map(|p| project_dir.join(p).display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                }));
+            }
+            for full in &candidates {
+                if let Ok(text) = std::fs::read_to_string(full)
+                    && regex.is_match(&text)
+                {
+                    return Ok(None);
+                }
+            }
+            Ok(Some(GateFailure {
+                description: description.clone(),
+                reason: format!(
+                    "pattern {pattern:?} not found in any of: {}",
+                    candidates
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }))
         }
         GateCheck::Shell {
             cmd,
@@ -322,6 +408,57 @@ fn marker(finding: &crate::critique::Finding) -> &'static str {
         crate::critique::Finding::Unresolved(_) => "UNRESOLVED",
         crate::critique::Finding::Blocker(_) => "BLOCKER",
     }
+}
+
+/// Expand a list of candidate paths (used by `AnyExists` /
+/// `AnyMatches`) into the concrete files to inspect. File entries
+/// are kept as-is; directory entries are walked one level deep and
+/// every `*.md` inside is included EXCEPT scaffolding markers
+/// (`.gitkeep`) and the auto-generated index files
+/// (`README.md`, `_toc.md`) -- those don't carry the actual
+/// content the gate cares about. Missing paths are silently
+/// dropped; the caller surfaces a "no candidate files" failure
+/// when the resulting list is empty.
+fn expand_candidate_files(project_dir: &Path, paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for rel in paths {
+        let abs = project_dir.join(rel);
+        let Ok(meta) = std::fs::metadata(&abs) else {
+            continue;
+        };
+        if meta.is_file() {
+            out.push(abs);
+            continue;
+        }
+        if !meta.is_dir() {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&abs) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !name.ends_with(".md") {
+                continue;
+            }
+            // Skip scaffolding + auto-generated index files. The
+            // index summarizes section content; the actual
+            // numbers / patterns the gate looks for live in the
+            // section files themselves.
+            if matches!(name, ".gitkeep" | "README.md" | "_toc.md" | "index.md") {
+                continue;
+            }
+            if let Ok(file_meta) = path.metadata()
+                && file_meta.is_file()
+            {
+                out.push(path);
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -595,5 +732,151 @@ mod tests {
         let reason = &report.failures[0].reason;
         assert!(reason.contains("test-milestone-01"), "reason: {reason}");
         assert!(!reason.contains("tb-milestone-01"));
+    }
+
+    #[test]
+    fn any_exists_passes_for_single_file_layout() {
+        // Legacy / small-spec layout: docs/spec.md is the spec.
+        // The directory candidate is missing; the gate still
+        // passes because the file candidate exists with content.
+        let tmp = tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("docs")).unwrap();
+        std::fs::write(tmp.path().join("docs/spec.md"), "hi").unwrap();
+        let report = evaluate(
+            tmp.path(),
+            &[GateCheck::AnyExists {
+                paths: vec![PathBuf::from("docs/spec.md"), PathBuf::from("docs/spec/")],
+                description: "spec exists".into(),
+            }],
+        )
+        .unwrap();
+        assert!(report.is_clean(), "failures: {:?}", report.failures);
+    }
+
+    #[test]
+    fn any_exists_passes_for_paginated_layout() {
+        // New paginated layout: docs/spec.md absent, sections live
+        // under docs/spec/. Gate passes via the directory branch.
+        let tmp = tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("docs/spec")).unwrap();
+        std::fs::write(tmp.path().join("docs/spec/01-overview.md"), "x").unwrap();
+        let report = evaluate(
+            tmp.path(),
+            &[GateCheck::AnyExists {
+                paths: vec![PathBuf::from("docs/spec.md"), PathBuf::from("docs/spec/")],
+                description: "spec exists".into(),
+            }],
+        )
+        .unwrap();
+        assert!(report.is_clean(), "failures: {:?}", report.failures);
+    }
+
+    #[test]
+    fn any_exists_fails_when_neither_form_present() {
+        let tmp = tempdir().unwrap();
+        let report = evaluate(
+            tmp.path(),
+            &[GateCheck::AnyExists {
+                paths: vec![PathBuf::from("docs/spec.md"), PathBuf::from("docs/spec/")],
+                description: "spec exists".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(report.failures.len(), 1);
+    }
+
+    #[test]
+    fn any_exists_skips_empty_files() {
+        // Empty file fails the "non-empty" requirement; gate falls
+        // through to the directory candidate, which is also empty
+        // -- so the overall gate fails.
+        let tmp = tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("docs")).unwrap();
+        std::fs::write(tmp.path().join("docs/spec.md"), "").unwrap();
+        let report = evaluate(
+            tmp.path(),
+            &[GateCheck::AnyExists {
+                paths: vec![PathBuf::from("docs/spec.md"), PathBuf::from("docs/spec/")],
+                description: "spec non-empty".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(report.failures.len(), 1);
+    }
+
+    #[test]
+    fn any_matches_finds_pattern_in_paginated_section() {
+        // Clock frequency lives in section 04, not in any
+        // top-level docs/spec.md. The gate must scan section
+        // files to satisfy the regex.
+        let tmp = tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("docs/spec")).unwrap();
+        std::fs::write(
+            tmp.path().join("docs/spec/01-overview.md"),
+            "# Overview\nA pipeline.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("docs/spec/04-timing.md"),
+            "# Timing\nClock frequency: 1 GHz.\n",
+        )
+        .unwrap();
+        let report = evaluate(
+            tmp.path(),
+            &[GateCheck::AnyMatches {
+                paths: vec![PathBuf::from("docs/spec.md"), PathBuf::from("docs/spec/")],
+                pattern: r"\d+\s*(MHz|GHz)".into(),
+                description: "spec has frequency".into(),
+            }],
+        )
+        .unwrap();
+        assert!(report.is_clean(), "failures: {:?}", report.failures);
+    }
+
+    #[test]
+    fn any_matches_skips_index_files_when_scanning_directory() {
+        // The auto-generated `README.md` index typically just
+        // links to section files and shouldn't be a substitute
+        // for the section content; the gate's expansion rule
+        // excludes it. Pattern lives only in README.md here, so
+        // the gate must fail.
+        let tmp = tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("docs/spec")).unwrap();
+        std::fs::write(
+            tmp.path().join("docs/spec/README.md"),
+            "# Spec\nClock: 1 GHz\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("docs/spec/01-overview.md"),
+            "# Overview\nNo numbers here.\n",
+        )
+        .unwrap();
+        let report = evaluate(
+            tmp.path(),
+            &[GateCheck::AnyMatches {
+                paths: vec![PathBuf::from("docs/spec/")],
+                pattern: r"\d+\s*GHz".into(),
+                description: "spec has frequency".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(report.failures.len(), 1);
+    }
+
+    #[test]
+    fn any_matches_fails_with_helpful_message_when_no_candidates() {
+        let tmp = tempdir().unwrap();
+        let report = evaluate(
+            tmp.path(),
+            &[GateCheck::AnyMatches {
+                paths: vec![PathBuf::from("docs/spec.md"), PathBuf::from("docs/spec/")],
+                pattern: r"\d+\s*GHz".into(),
+                description: "spec has frequency".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(report.failures.len(), 1);
+        assert!(report.failures[0].reason.contains("no candidate files"));
     }
 }

@@ -78,7 +78,7 @@ fn handshake_emits_hello_ack_and_phase_changed() {
             assert_eq!(session.step, "DM0");
             assert_eq!(
                 step_descriptor.work_artifacts,
-                vec!["docs/spec.md".to_string()]
+                vec!["docs/spec.md".to_string(), "docs/spec/".to_string()]
             );
         }
         other => panic!("expected HelloAck first, got {other:?}"),
