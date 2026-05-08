@@ -209,7 +209,12 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["name", "kind", "host", "port"],
+            "required": [
+              "name",
+              "kind",
+              "host",
+              "port"
+            ],
             "properties": {
               "name": {
                 "type": "string",
@@ -217,7 +222,12 @@
               },
               "kind": {
                 "type": "string",
-                "enum": ["ollama", "lmstudio", "vllm", "openai-compat"],
+                "enum": [
+                  "ollama",
+                  "lmstudio",
+                  "vllm",
+                  "openai-compat"
+                ],
                 "description": "Backend protocol. `ollama` / `lmstudio` / `vllm` are convenience aliases for OpenAI-compat servers running those products' default paths; `openai-compat` is the generic fallback."
               },
               "host": {
@@ -356,6 +366,7 @@
     "format:check": "prettier --check \"src/**/*.ts\" \"*.json\" \"*.md\"",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage --exclude='**/experiments.test.ts'",
     "test:mock-flow": "vitest run src/mockFlowHarness.test.ts",
     "test:mock-flow:watch": "vitest src/mockFlowHarness.test.ts",
     "package": "node scripts/package-dev.mjs",
@@ -372,6 +383,7 @@
     "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.95.0",
+    "@vitest/coverage-v8": "^2.1.9",
     "@vscode/vsce": "^3.1.0",
     "esbuild": "^0.24.0",
     "eslint": "^9.8.0",
