@@ -154,6 +154,21 @@ export interface LiveSessionTransport {
    */
   readonly inSubSession?: boolean;
   onSubSessionChanged?(listener: (inSubSession: boolean) => void): () => void;
+  /**
+   * Structured gate-result observation surface. The orchestrator
+   * emits `Event::GateResult` over JSONL when a manual Run Gate
+   * click runs; the pump exposes it here so the dashboard host can
+   * post a `gate-result` HostMessage that updates the per-step gate
+   * cache and clears the matching pending-action entry. JSONL-only
+   * transport optional; absent on stdio / mock.
+   */
+  onGateResult?(
+    listener: (result: {
+      step: string;
+      clean: boolean;
+      failures: { description: string; reason: string }[];
+    }) => void,
+  ): () => void;
 }
 
 /**

@@ -37,7 +37,13 @@ import { type LlmServerEntry, resolveLlmSource } from "../webview/messages";
 type SocketPumpBusEvent =
   | { type: "settled"; result: PumpSettleResult }
   | { type: "step-mode"; mode: StepMode }
-  | { type: "in-sub-session"; inSubSession: boolean };
+  | { type: "in-sub-session"; inSubSession: boolean }
+  | {
+      type: "gate-result";
+      step: string;
+      clean: boolean;
+      failures: { description: string; reason: string }[];
+    };
 
 export interface SocketSessionPumpOptions {
   sessionId: string;
@@ -126,6 +132,16 @@ export class SocketSessionPump implements LiveSessionTransport {
    * the per-step buttons stay disabled until the user resumes.
    */
   private awaitingUserInputFlag = false;
+  /**
+   * Cancellation source for the in-flight LLM stream. Each
+   * `dispatchLlm` call replaces this; `dispose()` cancels whatever
+   * is current. Without this, a Disconnect (or a crashed
+   * orchestrator) leaves the HTTP/SSE stream to the model server
+   * running to completion -- the user pays for tokens that go
+   * nowhere because every chunk's `sendHostEvent` no-ops on a
+   * destroyed socket and `currentRenderer` was already cleared.
+   */
+  private llmCancelSource: vscode.CancellationTokenSource | null = null;
 
   constructor(
     private readonly options: SocketSessionPumpOptions,
@@ -359,6 +375,34 @@ export class SocketSessionPump implements LiveSessionTransport {
   }
 
   /**
+   * Subscribe to structured gate-result events. The orchestrator
+   * emits `Event::GateResult` over JSONL when a manual-mode Run Gate
+   * click runs, but the dashboard previously had no way to observe
+   * the result (the bracket-only listener doesn't carry the
+   * payload). The dashboard host posts a `gate-result` HostMessage
+   * when this fires so the per-step gate cache updates.
+   */
+  onGateResult(
+    listener: (result: {
+      step: string;
+      clean: boolean;
+      failures: { description: string; reason: string }[];
+    }) => void,
+  ): () => void {
+    const wrapped = (msg: SocketPumpBusEvent) => {
+      if (msg.type === "gate-result") {
+        listener({
+          step: msg.step,
+          clean: msg.clean,
+          failures: msg.failures,
+        });
+      }
+    };
+    this.bus.on("msg", wrapped);
+    return () => this.bus.off("msg", wrapped);
+  }
+
+  /**
    * Manual-mode host commands. Each one fires-and-forgets — the
    * orchestrator emits `Diagnostic` if the command is rejected (auto
    * mode owns step execution, sub-session in flight, etc.) and that
@@ -502,6 +546,19 @@ export class SocketSessionPump implements LiveSessionTransport {
       return;
     }
     this.disposed = true;
+    // Cancel any in-flight LLM stream before tearing the socket
+    // down. The backend client honours the cancellation token by
+    // aborting the underlying HTTP/SSE request, so the user stops
+    // paying for tokens that nobody is reading.
+    if (this.llmCancelSource) {
+      try {
+        this.llmCancelSource.cancel();
+      } catch {
+        // never throw out of dispose
+      }
+      this.llmCancelSource.dispose();
+      this.llmCancelSource = null;
+    }
     if (this.socket && !this.socket.destroyed) {
       this.socket.destroy();
     }
@@ -730,6 +787,21 @@ export class SocketSessionPump implements LiveSessionTransport {
             `\n**Gate \`${event.step}\`: ${event.failures.length} failure(s).**\n\n${lines}\n`,
           );
         }
+        // Bus event so the dashboard's `gate-result` HostMessage path
+        // gets the structured result. Without this, manual-mode JSONL
+        // gate clicks only land in the chat panel as markdown -- the
+        // per-step "Run Gate" pending action stays "..." until the 5s
+        // failsafe, the gate cache never updates, and downstream
+        // buttons (Advance) don't react.
+        this.bus.emit("msg", {
+          type: "gate-result",
+          step: event.step,
+          clean: event.clean,
+          failures: event.failures.map((f) => ({
+            description: f.description,
+            reason: f.reason,
+          })),
+        } as SocketPumpBusEvent);
         break;
       case "state-advanced":
         this.currentRenderer?.markdown(
@@ -952,9 +1024,15 @@ export class SocketSessionPump implements LiveSessionTransport {
         reasoningOpen = false;
       }
     };
+    // Cancel any prior in-flight stream before kicking off a new
+    // one. The orchestrator never overlaps two LLM dispatches, but
+    // defensive cancel keeps the bookkeeping simple.
+    this.llmCancelSource?.cancel();
+    this.llmCancelSource?.dispose();
+    this.llmCancelSource = new vscode.CancellationTokenSource();
+    const cancelSource = this.llmCancelSource;
     try {
-      const token = new vscode.CancellationTokenSource().token;
-      for await (const chunk of backend.stream(messages, token, tools)) {
+      for await (const chunk of backend.stream(messages, cancelSource.token, tools)) {
         if (chunk.text.length === 0) {
           continue;
         }
@@ -1000,6 +1078,15 @@ export class SocketSessionPump implements LiveSessionTransport {
         kind: err instanceof LlmError ? err.kind : "stream",
         message: composed,
       });
+    } finally {
+      // Dispose only when this dispatch still owns the source;
+      // a back-to-back dispatch may have already replaced it.
+      if (this.llmCancelSource === cancelSource) {
+        cancelSource.dispose();
+        this.llmCancelSource = null;
+      } else {
+        cancelSource.dispose();
+      }
     }
   }
 

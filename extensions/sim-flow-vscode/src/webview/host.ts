@@ -96,6 +96,17 @@ export class DashboardHost {
   private subSessionListenerDispose: (() => void) | null = null;
   private subSessionListenerSession: ManagedAutoSessionState | null = null;
   /**
+   * Bookkeeping for the active pump's structured `gate-result`
+   * listener. Same lifecycle as the sub-session listener: re-attached
+   * on every `refresh()` after pump rotation. Without this, the JSONL
+   * Run Gate path's `Event::GateResult` was rendered as chat-panel
+   * markdown but never bridged to the dashboard's `gate-result`
+   * HostMessage path -- the per-step gate cache stayed stale and the
+   * "Run Gate ..." pending entry hung until the 5s failsafe fired.
+   */
+  private gateResultListenerDispose: (() => void) | null = null;
+  private gateResultListenerSession: ManagedAutoSessionState | null = null;
+  /**
    * Subscription to `AutoSessionManager.onActiveSessionChanged`, set
    * up at construction so the dashboard reacts to a pump appearing /
    * rotating / disappearing without waiting for a file-watcher tick
@@ -174,6 +185,7 @@ export class DashboardHost {
     this.watcher = undefined;
     this.disposeStepModeListener();
     this.disposeSubSessionListener();
+    this.disposeGateResultListener();
     if (this.activeSessionListenerDispose) {
       this.activeSessionListenerDispose();
       this.activeSessionListenerDispose = null;
@@ -213,6 +225,44 @@ export class DashboardHost {
     this.subSessionListenerDispose = session.pump.onSubSessionChanged(() => {
       // Bracket transition: refresh so the per-step buttons re-evaluate.
       void this.refresh();
+    });
+  }
+
+  private disposeGateResultListener(): void {
+    if (this.gateResultListenerDispose) {
+      this.gateResultListenerDispose();
+      this.gateResultListenerDispose = null;
+    }
+    this.gateResultListenerSession = null;
+  }
+
+  /**
+   * Resubscribe to the live pump's structured `gate-result` events.
+   * Mirrors the sub-session listener lifecycle. The listener posts a
+   * `gate-result` HostMessage to the webview so the per-step gate
+   * cache and pending-action entry settle on the structured result,
+   * not just on the chat-panel markdown render.
+   */
+  private syncGateResultListener(): void {
+    const session = this.activeSession();
+    if (this.gateResultListenerSession === session) {
+      return;
+    }
+    this.disposeGateResultListener();
+    if (!session || typeof session.pump.onGateResult !== "function") {
+      return;
+    }
+    this.gateResultListenerSession = session;
+    this.gateResultListenerDispose = session.pump.onGateResult((result) => {
+      void this.post({
+        type: "gate-result",
+        step: result.step,
+        result: {
+          step: result.step,
+          clean: result.clean,
+          failures: result.failures,
+        },
+      });
     });
   }
 
@@ -579,6 +629,7 @@ export class DashboardHost {
       // truth between refreshes.
       this.syncStepModeListener();
       this.syncSubSessionListener();
+      this.syncGateResultListener();
       await this.post({ type: "state-update", state });
       await this.postLlmConfig();
       await this.postBlockDiagram();
