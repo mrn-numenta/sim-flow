@@ -120,6 +120,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             dm0_interactive,
             spec,
             transport_socket,
+            watch_socket,
             session_mode,
             step_mode,
             max_llm_requests,
@@ -136,6 +137,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             *dm0_interactive,
             spec.as_deref(),
             transport_socket.as_deref(),
+            watch_socket.as_deref(),
             *session_mode,
             (*step_mode).into(),
             *max_llm_requests,
@@ -381,6 +383,7 @@ fn auto_cmd(
     dm0_interactive: bool,
     spec: Option<&Path>,
     transport_socket: Option<&Path>,
+    watch_socket: Option<&Path>,
     session_mode: SessionMode,
     step_mode: sim_flow::__internal::session::protocol::StepMode,
     max_llm_requests: u32,
@@ -446,13 +449,38 @@ fn auto_cmd(
         step_mode,
         no_preamble,
     };
+    // Optional read-only event broadcast. When `--watch-socket` is
+    // set, every event the orchestrator emits is mirrored to the
+    // tap; observers attach via Unix socket and receive history +
+    // live stream. Initialised here (before the host wrapper) so a
+    // bind error fails fast.
+    let watch_tap = match watch_socket {
+        Some(path) => Some(sim_flow::__internal::session::EventTap::bind(
+            path.to_path_buf(),
+        )?),
+        None => None,
+    };
+
     if let Some(socket_path) = transport_socket {
-        run_with_socket_session_end(socket_path, |host| {
-            sim_flow::__internal::session::run_auto(opts, host)
+        run_with_socket_session_end(socket_path, |host| match watch_tap {
+            Some(tap) => {
+                let mut tapped = sim_flow::__internal::session::TappedHost::new(host, tap);
+                sim_flow::__internal::session::run_auto(opts, &mut tapped)
+            }
+            None => sim_flow::__internal::session::run_auto(opts, host),
         })
     } else {
-        let mut host = sim_flow::__internal::session::JsonlHost::stdio();
-        sim_flow::__internal::session::run_auto(opts, &mut host)
+        let host = sim_flow::__internal::session::JsonlHost::stdio();
+        match watch_tap {
+            Some(tap) => {
+                let mut tapped = sim_flow::__internal::session::TappedHost::new(host, tap);
+                sim_flow::__internal::session::run_auto(opts, &mut tapped)
+            }
+            None => {
+                let mut host = host;
+                sim_flow::__internal::session::run_auto(opts, &mut host)
+            }
+        }
     }
 }
 

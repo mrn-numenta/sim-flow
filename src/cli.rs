@@ -212,6 +212,16 @@ pub(crate) enum Command {
         /// extension reloads and later reattach.
         #[arg(long)]
         transport_socket: Option<PathBuf>,
+        /// Bind a read-only event-broadcast Unix socket at the given
+        /// path. Every event the orchestrator emits is mirrored to
+        /// every connected observer (history is replayed on attach).
+        /// Observers cannot send commands; the primary host (stdio
+        /// or `--transport-socket`) still owns the command channel.
+        /// Use this to watch a run that's being driven by something
+        /// else -- the dashboard, `e2e_manual`, an external script,
+        /// or `nc -U`. Multiple observers can attach concurrently.
+        #[arg(long)]
+        watch_socket: Option<PathBuf>,
         /// Lifecycle for interactive CLI-agent backends (currently
         /// only `claude`). `per-step` (default) spawns a fresh agent
         /// per step. `single` (Pass 2) keeps one agent across the

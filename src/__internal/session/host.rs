@@ -24,6 +24,19 @@ pub trait Host {
     fn read(&mut self) -> Result<Option<HostEvent>>;
 }
 
+/// Forward `Host` through a mutable reference so wrappers like
+/// `TappedHost<&mut H>` (used for the read-only event tap, where the
+/// inner host is owned by an outer closure context) can satisfy the
+/// trait without taking ownership.
+impl<H: Host + ?Sized> Host for &mut H {
+    fn write(&mut self, event: &Event) -> Result<()> {
+        (**self).write(event)
+    }
+    fn read(&mut self) -> Result<Option<HostEvent>> {
+        (**self).read()
+    }
+}
+
 // ---------------------------------------------------------------------
 // JsonlHost - the production transport for IDE / external hosts.
 // ---------------------------------------------------------------------

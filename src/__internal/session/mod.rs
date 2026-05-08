@@ -13,6 +13,7 @@ pub mod auto;
 pub mod auto_interactive;
 pub mod control_socket;
 pub mod debug_log;
+pub mod event_tap;
 pub mod host;
 pub mod orchestrator;
 pub mod pdfium_loader;
@@ -32,6 +33,7 @@ pub use agent::{
     AgentConfig, ClaudeAgent, CliAgent, CodexAgent, GhCopilotAgent, KNOWN_AGENTS, LlmCallMetrics,
     MockAgent, OllamaAgent, OpenAiCompatAgent, build_cli_agent,
 };
+pub use event_tap::{EventTap, TappedHost};
 pub use host::{Host, JsonlHost, TerminalHost, TestHost};
 pub use orchestrator::{OrchestratorOptions, run_session};
 pub use protocol::{
