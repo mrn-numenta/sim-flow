@@ -642,21 +642,51 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         relative_path: path,
                         content: assistant_text.clone(),
                     });
+                } else if let Some(salvaged) = salvage_critique_json(&assistant_text, step.id) {
+                    // Salvage: the agent emitted a structurally
+                    // valid critique JSON but with a wrong fence
+                    // (e.g. ```json instead of
+                    // ```docs/critiques/DM0-critique.json) or as
+                    // bare prose surrounding a JSON literal. Save
+                    // it directly rather than asking the agent to
+                    // retry -- a retry burns LLM tokens to
+                    // reproduce content we already have.
+                    let path = format!("docs/critiques/{}-critique.json", step.id);
+                    host.write(&Event::Diagnostic {
+                        level: DiagnosticLevel::Warning,
+                        message: format!(
+                            "{}: salvaged critique JSON from a non-fenced response and \
+                             saved to `{path}`. Tighten the critique system prompt if \
+                             this is recurrent (the agent should emit the JSON inside a \
+                             fenced block whose info-string is the path).",
+                            step.id,
+                        ),
+                    })?;
+                    artifacts.push(ExtractedArtifact {
+                        relative_path: path,
+                        content: salvaged,
+                    });
                 } else {
                     // No fenced block AND no findings AND no critique
-                    // already on disk: refuse to commit. Push a
-                    // corrective User turn so the agent retries with
-                    // proper structure rather than the gate clearing
-                    // on a no-op.
+                    // already on disk AND no salvageable JSON:
+                    // refuse to commit. Push a corrective User turn
+                    // so the agent retries with proper structure
+                    // rather than the gate clearing on a no-op.
+                    //
+                    // Diagnostic level is Warning, not Error: this
+                    // is a recovery / retry path, not a
+                    // session-fatal error. The chat panel
+                    // classifier reads `**Error**:` as "Session
+                    // error" (error tone, scary banner) which
+                    // overstates a routine re-prompt.
                     let json_path = format!("docs/critiques/{}-critique.json", step.id);
                     host.write(&Event::Diagnostic {
-                        level: DiagnosticLevel::Error,
+                        level: DiagnosticLevel::Warning,
                         message: format!(
                             "{}: critique response produced no critique file (no `write_file` \
                              call, no fenced artifact-write block, no `BLOCKER:` / \
                              `RESOLVED:` / `UNRESOLVED:` finding lines) and `{}` is not on \
-                             disk. Refusing to auto-save -- a critique with no findings \
-                             would ghost-pass the gate. Re-prompting the agent.",
+                             disk. Re-prompting the agent for a properly fenced critique.",
                             step.id, json_path,
                         ),
                     })?;
@@ -1764,6 +1794,81 @@ fn evaluate_structural_gate(project_dir: &Path, step: &StepDescriptor) -> Result
 /// artifact-write block extracted OR the session is a critique with
 /// substantive body content and no tool calls. Used at the
 /// auto-iteration cap check so a turn that wrote the critique file
+/// Attempt to salvage a critique JSON object embedded in
+/// `assistant_text` when the agent's output has structurally valid
+/// content but the wrong fence shape (e.g. ` ```json ` instead of
+/// ` ```docs/critiques/<step>-critique.json `, or just bare prose
+/// wrapping a JSON literal).
+///
+/// Strategy: scan for every `{` and try to balance braces (string-
+/// aware) until we find a slice that parses as `CritiqueJson` with
+/// the matching `step` id. Returns the salvaged JSON body (the
+/// bytes we'll write to disk verbatim) or `None` if nothing
+/// recognizable was found.
+///
+/// This is a recovery path; the canonical contract is still that
+/// the agent emits a fenced block whose info-string is the path.
+fn salvage_critique_json(text: &str, step_id: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    for start in 0..bytes.len() {
+        if bytes[start] != b'{' {
+            continue;
+        }
+        let Some(end) = scan_balanced_json(bytes, start) else {
+            continue;
+        };
+        let candidate = &text[start..end];
+        let Ok(parsed) = serde_json::from_str::<crate::critique::CritiqueJson>(candidate) else {
+            continue;
+        };
+        if parsed.step != step_id {
+            // A JSON literal with the right shape but a different
+            // step id is not OUR critique; skip rather than risk
+            // mis-attributing.
+            continue;
+        }
+        return Some(candidate.to_string());
+    }
+    None
+}
+
+/// String-aware brace-balanced scan from a `{` at `start`. Returns
+/// the byte offset just past the matching `}`, or `None` if the
+/// braces are unbalanced or a string literal runs to EOF. Tracks
+/// `\\`-escaped quotes inside strings.
+fn scan_balanced_json(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut escape = false;
+    let mut i = start;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_string {
+            if escape {
+                escape = false;
+            } else if b == b'\\' {
+                escape = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+        } else {
+            match b {
+                b'"' => in_string = true,
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 /// via the fallback doesn't get counted as "no artifact" and re-
 /// trigger the cap.
 fn effective_artifacts_empty(response_text: &str, kind: SessionKind) -> bool {
@@ -3219,5 +3324,64 @@ The fix is to add a Report Output section.\n\
         assert!(blocks[0].contains("The run command names a directory"));
         assert!(blocks[0].contains("The fix is to add"));
         assert!(!blocks[0].contains("RESOLVED"));
+    }
+
+    #[test]
+    fn salvage_critique_json_extracts_from_json_fence() {
+        // Common failure mode: agent uses ```json instead of
+        // ```docs/critiques/<step>-critique.json. The fallback
+        // sees no fenced PATH block, no fenced TOOL block, and no
+        // BLOCKER markers. Salvage should recover the JSON.
+        let text = r#"Here is the critique:
+
+```json
+{"step":"DM1","summary":"one finding","findings":[{"kind":"blocker","title":"x","body":""}],"notes":""}
+```
+
+Hope that helps."#;
+        let salvaged = super::salvage_critique_json(text, "DM1").expect("salvaged");
+        let parsed: crate::critique::CritiqueJson = serde_json::from_str(&salvaged).unwrap();
+        assert_eq!(parsed.step, "DM1");
+        assert_eq!(parsed.findings.len(), 1);
+    }
+
+    #[test]
+    fn salvage_critique_json_extracts_from_bare_prose() {
+        // Agent forgot to fence at all but emitted valid JSON
+        // inline. Brace-balanced scan should still find it.
+        let text = r#"Critique: {"step":"DM0","summary":"","findings":[],"notes":""}. Done."#;
+        let salvaged = super::salvage_critique_json(text, "DM0").expect("salvaged");
+        let parsed: crate::critique::CritiqueJson = serde_json::from_str(&salvaged).unwrap();
+        assert_eq!(parsed.step, "DM0");
+    }
+
+    #[test]
+    fn salvage_critique_json_rejects_wrong_step_id() {
+        // The matching step id check prevents mis-attributing a
+        // critique JSON the agent quoted from a prior step (e.g.
+        // pasted DM0's critique into a DM1 turn).
+        let text = r#"```json
+{"step":"DM0","summary":"","findings":[]}
+```"#;
+        assert!(super::salvage_critique_json(text, "DM1").is_none());
+    }
+
+    #[test]
+    fn salvage_critique_json_returns_none_for_non_critique_json() {
+        // Any old JSON object shouldn't trip the salvage; it must
+        // parse as the strict critique schema.
+        let text = r#"```json
+{"foo": "bar", "baz": 42}
+```"#;
+        assert!(super::salvage_critique_json(text, "DM0").is_none());
+    }
+
+    #[test]
+    fn scan_balanced_json_handles_strings_with_braces() {
+        // A `}` inside a string literal must not close the
+        // outer object early.
+        let text = r#"{"x": "a } b", "y": 1}"#;
+        let end = super::scan_balanced_json(text.as_bytes(), 0).expect("balanced");
+        assert_eq!(end, text.len());
     }
 }
