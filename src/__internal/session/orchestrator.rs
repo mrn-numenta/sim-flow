@@ -236,6 +236,8 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
     let framework_root = detect_framework_root(&opts.foundation_root);
     let framework_docs_root = detect_framework_docs_root(&opts.foundation_root);
     let write_paths: Vec<String> = crate::steps::allowed_write_paths(&step, opts.kind);
+    let work_retry_has_prior_blockers = opts.kind == SessionKind::Work
+        && !retry_blocker_blocks(&opts.project_dir, step.id).is_empty();
 
     // The current milestone's project-relative path, when this is a
     // milestone-walk step. WriteFileTool reads the body fresh each
@@ -245,7 +247,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
     let current_milestone_path: Option<std::path::PathBuf> = step.milestone_walk.and_then(|walk| {
         let pick_touched = match opts.kind {
             SessionKind::Critique => true,
-            SessionKind::Work => !retry_blocker_blocks(&opts.project_dir, step.id).is_empty(),
+            SessionKind::Work => work_retry_has_prior_blockers,
         };
         match crate::__internal::steps::find_current_milestone(
             &opts.project_dir,
@@ -298,14 +300,18 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
     // (the cross-session critique loop has its own cap in the
     // CLI-side `auto` driver).
     let mut auto_iterations: u32 = 0;
-    // Did THIS session produce any successful artifact / tool call
-    // yet? Used by the per-milestone wind-down exit so we don't
+    // Did THIS session persist any project outputs yet (artifact
+    // block write, `write_file`, or `edit_file`)? This is
+    // intentionally narrower than "any successful tool call":
+    // read-only tools like `read_file` must NOT qualify a
+    // critique-blocker retry for the no-artifact wind-down path.
+    // Used by the per-milestone wind-down exit too so we don't
     // misfire when the agent's first turn is just reading inputs:
     // without this flag, a milestone-walk step where milestone-N-1
     // is already on disk (from a prior killed run) would see
     // `find_current_milestone(retry=true) != find_current_milestone(retry=false)`
     // on turn 1 and end the session prematurely.
-    let mut session_produced_artifact: bool = false;
+    let mut session_persisted_writes: bool = false;
 
     // Backstop guards against runaway loops that don't trip the more
     // specific `max_auto_iters` / `max_critique_iters` caps:
@@ -796,7 +802,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 consecutive_tool_error_turns = 0;
             }
             if artifact_write_successes > 0 {
-                session_produced_artifact = true;
+                session_persisted_writes = true;
             }
             if !artifact_write_failures.is_empty() {
                 // Any-failed turn with no successes -> bump streak;
@@ -854,6 +860,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 let mut this_turn_test_count: Option<usize> = None;
                 let mut tool_successes: u32 = 0;
                 let mut tool_failures: u32 = 0;
+                let mut this_turn_persisted_write: bool = false;
                 for call in &tool_calls {
                     let started = std::time::Instant::now();
                     // Read the current milestone's body fresh for
@@ -873,6 +880,9 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     let status = if outcome.ok { "ok" } else { "error" };
                     if outcome.ok {
                         tool_successes += 1;
+                        if tool_call_persists_output(&call.name) {
+                            this_turn_persisted_write = true;
+                        }
                     } else {
                         tool_failures += 1;
                     }
@@ -902,8 +912,8 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 } else if tool_successes > 0 {
                     consecutive_tool_error_turns = 0;
                 }
-                if tool_successes > 0 {
-                    session_produced_artifact = true;
+                if this_turn_persisted_write {
+                    session_persisted_writes = true;
                 }
                 messages.push(LlmMessage {
                     role: LlmRole::User,
@@ -1122,8 +1132,12 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             // file-existence on the critique markdown, which is
             // already evaluated by the time we reach here.)
             if opts.kind == SessionKind::Work {
+                let can_wind_down_clean = can_auto_wind_down_clean_work_session(
+                    work_retry_has_prior_blockers,
+                    session_persisted_writes,
+                );
                 let report = evaluate_structural_gate(&opts.project_dir, &step)?;
-                if report.is_clean() {
+                if can_wind_down_clean && report.is_clean() {
                     host.write(&Event::SessionEnd {
                         reason: SessionEndReason::Completed,
                         message: Some(format!(
@@ -1148,7 +1162,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 // agent finished its scoped slice; end the
                 // session.
                 if let Some(walk) = step.milestone_walk
-                    && session_produced_artifact
+                    && session_persisted_writes
                 {
                     let current = crate::__internal::steps::find_current_milestone(
                         &opts.project_dir,
@@ -2406,6 +2420,17 @@ fn retry_blocker_blocks(project_dir: &Path, step_id: &str) -> Vec<String> {
     extract_blocker_blocks(&body)
 }
 
+fn tool_call_persists_output(tool_name: &str) -> bool {
+    matches!(tool_name, "write_file" | "edit_file")
+}
+
+fn can_auto_wind_down_clean_work_session(
+    work_retry_has_prior_blockers: bool,
+    session_persisted_writes: bool,
+) -> bool {
+    !work_retry_has_prior_blockers || session_persisted_writes
+}
+
 /// Pull each `BLOCKER:` block out of a critique markdown file as a
 /// MULTI-LINE string covering the line that opens with `BLOCKER:`
 /// (after stripping list-markers / bold) plus every following line
@@ -3212,6 +3237,22 @@ random text BLOCKER: not a heading\n\
         // shortcut.
         let body = "- RESOLVED: clock domain.\n- UNRESOLVED: stage 2 timing.\n";
         assert!(parse_blocker_lines(body).is_empty());
+    }
+
+    #[test]
+    fn tool_call_persists_output_only_for_write_tools() {
+        assert!(tool_call_persists_output("write_file"));
+        assert!(tool_call_persists_output("edit_file"));
+        assert!(!tool_call_persists_output("read_file"));
+        assert!(!tool_call_persists_output("search"));
+        assert!(!tool_call_persists_output("run_cargo"));
+    }
+
+    #[test]
+    fn critique_retry_work_requires_a_persisted_write_before_clean_wind_down() {
+        assert!(!can_auto_wind_down_clean_work_session(true, false));
+        assert!(can_auto_wind_down_clean_work_session(true, true));
+        assert!(can_auto_wind_down_clean_work_session(false, false));
     }
 
     #[test]
