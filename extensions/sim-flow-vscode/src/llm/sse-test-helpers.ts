@@ -18,6 +18,15 @@ export function sseResponse(events: SseEvent[]): Response {
   });
 }
 
+/** Build an SSE response without the trailing `data: [DONE]` marker. */
+export function sseResponseWithoutDone(events: SseEvent[]): Response {
+  const body = events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
 /** Convenience: build a single content delta event. */
 export function contentDelta(content: string): SseEvent {
   return { choices: [{ index: 0, delta: { content } }] };

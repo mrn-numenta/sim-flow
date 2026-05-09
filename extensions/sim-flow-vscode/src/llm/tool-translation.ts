@@ -81,6 +81,11 @@ export function extractToolFences(text: string): {
           continue;
         }
       }
+      if (info === "json") {
+        bodyLines = [];
+        currentName = "__json_tool__";
+        continue;
+      }
     }
     keep.push(line);
   }
@@ -89,7 +94,38 @@ export function extractToolFences(text: string): {
   if (bodyLines !== null) {
     keep.push("```tool:" + currentName, ...bodyLines);
   }
-  return { content: keep.join("\n").trim(), toolCalls: out };
+  const normalized: ParsedToolCall[] = [];
+  for (const call of out) {
+    if (call.name !== "__json_tool__") {
+      normalized.push(call);
+      continue;
+    }
+    const parsed = parseJsonToolFence(call.args);
+    if (parsed) {
+      normalized.push(parsed);
+      continue;
+    }
+    keep.push("```json", call.args, "```");
+  }
+  return { content: keep.join("\n").trim(), toolCalls: normalized };
+}
+
+function parseJsonToolFence(args: string): ParsedToolCall | null {
+  try {
+    const value = JSON.parse(args) as { name?: unknown; arguments?: unknown };
+    if (typeof value?.name !== "string" || value.name.trim().length === 0) {
+      return null;
+    }
+    let normalizedArgs = "";
+    if (typeof value.arguments === "string") {
+      normalizedArgs = value.arguments;
+    } else if (value.arguments !== undefined && value.arguments !== null) {
+      normalizedArgs = JSON.stringify(value.arguments);
+    }
+    return { name: value.name.trim(), args: normalizedArgs };
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -353,6 +353,11 @@ pub fn extract_tool_calls(response_text: &str) -> Vec<ParsedToolCall> {
     let mut i = 0;
     while i < blocks.len() {
         let b = &blocks[i];
+        if let Some(call) = parse_json_tool_block(b) {
+            out.push(call);
+            i += 1;
+            continue;
+        }
         let Some(name) = b.info.strip_prefix("tool:") else {
             i += 1;
             continue;
@@ -387,6 +392,31 @@ pub fn extract_tool_calls(response_text: &str) -> Vec<ParsedToolCall> {
         i += 1;
     }
     out
+}
+
+fn parse_json_tool_block(block: &FencedBlock) -> Option<ParsedToolCall> {
+    if block.info.trim() != "json" {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(block.body.trim()).ok()?;
+    let obj = value.as_object()?;
+    let name = obj.get("name")?.as_str()?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let args = obj
+        .get("arguments")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let body = match args {
+        serde_json::Value::String(s) => s,
+        serde_json::Value::Null => String::new(),
+        other => other.to_string(),
+    };
+    Some(ParsedToolCall {
+        name: name.to_string(),
+        body,
+    })
 }
 
 struct FencedBlock {
@@ -461,6 +491,16 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].name, "list_dir");
         assert_eq!(calls[1].name, "read_file");
+    }
+
+    #[test]
+    fn parses_json_fenced_tool_calls() {
+        let body =
+            "```json\n{\"name\":\"read_file\",\"arguments\":{\"path\":\"docs/spec.md\"}}\n```\n";
+        let calls = extract_tool_calls(body);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].body, "{\"path\":\"docs/spec.md\"}");
     }
 
     #[test]

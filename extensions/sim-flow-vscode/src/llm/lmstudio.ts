@@ -18,6 +18,7 @@ export interface LMStudioBackendOptions {
   baseUrl?: string;
   apiUrl?: string;
   fetchImpl?: typeof fetch;
+  streamIdleTimeoutMs?: number;
   /**
    * Override the backend's display name, used in error
    * diagnostics. The factory routes `vllm` and `openai-compat`
@@ -43,6 +44,7 @@ export class LMStudioBackend extends OpenAiCompatibleBackend {
       secrets: options.secrets,
       apiUrl: options.apiUrl,
       fetchImpl: options.fetchImpl,
+      streamIdleTimeoutMs: options.streamIdleTimeoutMs,
     });
   }
 }

@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { LMSTUDIO_DEFAULT_BASE_URL, LMStudioBackend } from "./lmstudio";
-import { contentDelta, finishReason, sseResponse, sseSingleResponse } from "./sse-test-helpers";
+import {
+  contentDelta,
+  finishReason,
+  sseResponse,
+  sseResponseWithoutDone,
+  sseSingleResponse,
+} from "./sse-test-helpers";
 import { LlmError } from "./types";
 
 function noCancel() {
@@ -224,6 +230,57 @@ describe("LMStudioBackend", () => {
     }
     expect(chunks).toEqual(["Hel", "lo, ", "world", "!"]);
     expect(chunks.join("")).toBe("Hello, world!");
+  });
+
+  it("stops on finish_reason even when the server never sends [DONE]", async () => {
+    const fakeFetch = (async () =>
+      sseResponseWithoutDone([
+        contentDelta("done"),
+        finishReason("stop"),
+      ])) as unknown as typeof fetch;
+
+    const backend = new LMStudioBackend({ fetchImpl: fakeFetch });
+    const chunks: string[] = [];
+    for await (const c of backend.stream([{ role: "user", content: "hi" }], noCancel())) {
+      chunks.push(c.text);
+    }
+    expect(chunks).toEqual(["done"]);
+  });
+
+  it("fails fast when the stream never produces any response bytes", async () => {
+    const fakeFetch = (async (_url: string, init: RequestInit) => {
+      const signal = init.signal as AbortSignal;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          signal.addEventListener(
+            "abort",
+            () => {
+              controller.error(Object.assign(new Error("aborted"), { name: "AbortError" }));
+            },
+            { once: true },
+          );
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as unknown as typeof fetch;
+
+    const backend = new LMStudioBackend({
+      fetchImpl: fakeFetch,
+      streamIdleTimeoutMs: 20,
+    });
+    try {
+      for await (const _ of backend.stream([{ role: "user", content: "hi" }], noCancel())) {
+        // drain
+      }
+      throw new Error("expected timeout");
+    } catch (err) {
+      expect(err).toBeInstanceOf(LlmError);
+      expect((err as LlmError).kind).toBe("http");
+      expect((err as LlmError).message).toContain("timed out");
+    }
   });
 
   it("includes LlmError.detail body text when available", async () => {

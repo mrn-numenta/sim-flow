@@ -36,6 +36,23 @@ describe("extractToolFences", () => {
     expect(r.content).toBe("First check:\n\nThen read:");
   });
 
+  it("extracts json-fenced tool calls used by fallback backends", () => {
+    const text =
+      'before\n```json\n{"name":"read_file","arguments":{"path":"docs/spec.md"}}\n```\nafter';
+    const r = extractToolFences(text);
+    expect(r.toolCalls).toEqual([
+      { name: "read_file", args: '{"path":"docs/spec.md"}' },
+    ]);
+    expect(r.content).toBe("before\nafter");
+  });
+
+  it("leaves non-tool json fences in residual content", () => {
+    const text = '```json\n{"foo":"bar"}\n```';
+    const r = extractToolFences(text);
+    expect(r.toolCalls).toEqual([]);
+    expect(r.content).toBe(text);
+  });
+
   it("preserves multi-line fence bodies verbatim", () => {
     const text =
       "```tool:edit_file\n{\n  \"path\": \"x\",\n  \"old_string\": \"a\",\n  \"new_string\": \"b\"\n}\n```\n";

@@ -69,11 +69,14 @@ export interface OpenAiCompatibleBackendOptions {
   /** Absolute override URL. Takes precedence over baseUrl + path. */
   apiUrl?: string;
   fetchImpl?: typeof fetch;
+  /** Abort stalled SSE streams after this many milliseconds of silence. */
+  streamIdleTimeoutMs?: number;
 }
 
 export class OpenAiCompatibleBackend implements LlmBackend {
   readonly name: string;
   readonly adaptation: LlmAdaptationProfile;
+  private static readonly DEFAULT_STREAM_IDLE_TIMEOUT_MS = 30_000;
 
   constructor(protected readonly options: OpenAiCompatibleBackendOptions) {
     this.name = options.name;
@@ -179,6 +182,23 @@ export class OpenAiCompatibleBackend implements LlmBackend {
     const cancelSubscription = token.onCancellationRequested?.(() => {
       controller.abort();
     });
+    let streamTimedOut = false;
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearIdleTimer = () => {
+      if (idleTimer !== undefined) {
+        clearTimeout(idleTimer);
+        idleTimer = undefined;
+      }
+    };
+    const resetIdleTimer = () => {
+      clearIdleTimer();
+      const timeoutMs =
+        this.options.streamIdleTimeoutMs ?? OpenAiCompatibleBackend.DEFAULT_STREAM_IDLE_TIMEOUT_MS;
+      idleTimer = setTimeout(() => {
+        streamTimedOut = true;
+        controller.abort();
+      }, timeoutMs);
+    };
     let res: Response;
     try {
       res = await doFetch(url, {
@@ -230,7 +250,9 @@ export class OpenAiCompatibleBackend implements LlmBackend {
     const decoder = new TextDecoder("utf-8");
 
     try {
+      resetIdleTimer();
       for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+        resetIdleTimer();
         if (token.isCancellationRequested) {
           controller.abort();
           throw new LlmError("cancelled", `${this.options.name} stream cancelled.`);
@@ -273,6 +295,18 @@ export class OpenAiCompatibleBackend implements LlmBackend {
           if (delta?.tool_calls) {
             absorbToolCallDeltas(accumulator, delta.tool_calls);
           }
+          if (delta?.finishReason && delta.finishReason !== "length") {
+            for (const block of synthesizeAccumulatedTools(accumulator)) {
+              yield { text: block };
+            }
+            return;
+          }
+          if (delta?.finishReason === "length") {
+            throw new LlmError(
+              "parse",
+              `${this.options.name} response was truncated (finish_reason=length).`,
+            );
+          }
         }
       }
       // Body ended without an explicit `[DONE]`. Emit any
@@ -284,6 +318,14 @@ export class OpenAiCompatibleBackend implements LlmBackend {
       if (err instanceof LlmError) {
         throw err;
       }
+      if (streamTimedOut) {
+        const timeoutMs =
+          this.options.streamIdleTimeoutMs ?? OpenAiCompatibleBackend.DEFAULT_STREAM_IDLE_TIMEOUT_MS;
+        throw new LlmError(
+          "http",
+          `${this.options.name} stream timed out after ${timeoutMs} ms without any response activity.`,
+        );
+      }
       if (token.isCancellationRequested || isAbortError(err)) {
         throw new LlmError("cancelled", `${this.options.name} stream cancelled.`);
       }
@@ -294,6 +336,7 @@ export class OpenAiCompatibleBackend implements LlmBackend {
         err,
       );
     } finally {
+      clearIdleTimer();
       cancelSubscription?.dispose();
     }
   }
@@ -665,6 +708,7 @@ interface SseDelta {
   content?: string;
   reasoning?: string;
   tool_calls?: SseToolCallFragment[];
+  finishReason?: string;
 }
 
 interface SseToolCallFragment {
@@ -680,25 +724,27 @@ function readDelta(parsed: unknown): SseDelta | undefined {
   if (!Array.isArray(choices) || choices.length === 0) {
     return undefined;
   }
-  const first = choices[0] as { delta?: unknown };
+  const first = choices[0] as { delta?: unknown; finish_reason?: unknown };
   const delta = first?.delta;
-  if (!delta || typeof delta !== "object") {
-    return undefined;
-  }
   const out: SseDelta = {};
-  const d = delta as Record<string, unknown>;
-  if (typeof d.content === "string") {
-    out.content = d.content;
+  if (typeof first.finish_reason === "string" && first.finish_reason.length > 0) {
+    out.finishReason = first.finish_reason;
   }
-  if (typeof d.reasoning_content === "string") {
-    out.reasoning = d.reasoning_content;
-  } else if (typeof d.reasoning === "string") {
-    out.reasoning = d.reasoning;
+  if (delta && typeof delta === "object") {
+    const d = delta as Record<string, unknown>;
+    if (typeof d.content === "string") {
+      out.content = d.content;
+    }
+    if (typeof d.reasoning_content === "string") {
+      out.reasoning = d.reasoning_content;
+    } else if (typeof d.reasoning === "string") {
+      out.reasoning = d.reasoning;
+    }
+    if (Array.isArray(d.tool_calls)) {
+      out.tool_calls = d.tool_calls as SseToolCallFragment[];
+    }
   }
-  if (Array.isArray(d.tool_calls)) {
-    out.tool_calls = d.tool_calls as SseToolCallFragment[];
-  }
-  return out;
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function absorbToolCallDeltas(
