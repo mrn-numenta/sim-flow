@@ -6,14 +6,21 @@ export { OpenAiCompatibleBackend, extractOpenAiText } from "./openai-compat";
 export { OPENAI_KEY_ID, OpenAiBackend } from "./openai";
 export {
   type CancellationLike,
+  type LlmAdaptationProfile,
   type LlmAttachment,
   type LlmBackend,
   type LlmBackendOptions,
+  type LlmChunkKind,
   LlmError,
   type LlmErrorKind,
   type LlmMessage,
   type LlmSource,
   type LlmStreamChunk,
+  normalizeLlmChunk,
+  type NormalizedLlmChunk,
+  type ModelFamilyProfile,
+  type ResponseNormalizer,
+  type RuntimeCapabilityProfile,
   type SecretStorage,
 } from "./types";
 export { VSCodeLmBackend } from "./vscode";

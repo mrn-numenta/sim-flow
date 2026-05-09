@@ -5,6 +5,7 @@ import {
   type LlmSource,
   type SecretStorage,
   type CancellationLike,
+  normalizeLlmChunk,
 } from "../llm";
 import { BREVITY_DIRECTIVE } from "../session/pump";
 import { isTerminalLlmSource, type LlmSourceTag } from "../webview/messages";
@@ -62,7 +63,8 @@ export async function* streamPanelReply(
     context.transcript,
     config.verbose,
   );
-  for await (const chunk of backend.stream(messages, token)) {
+  for await (const rawChunk of backend.stream(messages, token)) {
+    const chunk = normalizeLlmChunk(rawChunk);
     if (chunk.kind === "reasoning" || chunk.text.length === 0) {
       continue;
     }

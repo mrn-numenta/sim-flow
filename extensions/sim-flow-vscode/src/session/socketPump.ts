@@ -10,6 +10,7 @@ import {
   createBackend,
   LlmError,
   type LlmSource,
+  normalizeLlmChunk,
 } from "../llm";
 import { estimateMessagesTokens } from "../llm/tokenEstimate";
 import { DebugLog } from "./debug-log";
@@ -1086,7 +1087,8 @@ export class SocketSessionPump implements LiveSessionTransport {
     this.llmCancelSource = new vscode.CancellationTokenSource();
     const cancelSource = this.llmCancelSource;
     try {
-      for await (const chunk of backend.stream(messages, cancelSource.token, tools)) {
+      for await (const rawChunk of backend.stream(messages, cancelSource.token, tools)) {
+        const chunk = normalizeLlmChunk(rawChunk);
         if (chunk.text.length === 0) {
           continue;
         }

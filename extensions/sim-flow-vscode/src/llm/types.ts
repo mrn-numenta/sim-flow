@@ -66,6 +66,29 @@ export interface SecretStorage {
   get(key: string): PromiseLike<string | undefined>;
 }
 
+/**
+ * Normalized chunk kinds the session-driving layer understands.
+ *
+ * The normalized vocabulary intentionally includes `tool_call` even
+ * though current backends still synthesize fenced `tool:<name>` text
+ * instead of emitting first-class tool-call chunks. Keeping the
+ * future-facing kind in the shared type set now gives both the TS and
+ * Rust paths one stable target as the structured normalizer work
+ * lands in later milestones.
+ */
+export type LlmChunkKind = "content" | "reasoning" | "tool_call";
+
+/**
+ * Normalized response chunk after defaulting / adaptation cleanup.
+ * `text` remains the shared payload for all current kinds so existing
+ * session drivers do not need a structural migration before runtime
+ * and model-family profiles land.
+ */
+export interface NormalizedLlmChunk {
+  text: string;
+  kind: LlmChunkKind;
+}
+
 export interface LlmStreamChunk {
   /** Incremental text to append to the response. */
   text: string;
@@ -78,7 +101,72 @@ export interface LlmStreamChunk {
    * pollute artifact / tool-call extraction). Defaults to `content`
    * when omitted, so existing call sites stay unchanged.
    */
-  kind?: "content" | "reasoning";
+  kind?: LlmChunkKind;
+}
+
+/**
+ * Normalize a streamed chunk into the explicit session-facing shape.
+ * This keeps the legacy "kind omitted means content" behavior local
+ * to the LLM layer rather than spreading that default across every
+ * consumer.
+ */
+export function normalizeLlmChunk(chunk: LlmStreamChunk): NormalizedLlmChunk {
+  return {
+    text: chunk.text,
+    kind: chunk.kind ?? "content",
+  };
+}
+
+/**
+ * Runtime capability profile: behavior imposed by the serving stack
+ * or integration surface rather than by the model family itself.
+ * Kept intentionally small for the first landing; concrete profiles
+ * can extend this as Phase 10 proceeds.
+ */
+export interface RuntimeCapabilityProfile {
+  id: string;
+  /**
+   * True when the runtime requires or prefers multiple leading
+   * system messages to be collapsed before serialization.
+   */
+  collapseLeadingSystemMessages?: boolean;
+  /** True when the runtime can expose reasoning separately from text. */
+  supportsStructuredReasoning?: boolean;
+  /** True when the runtime can expose native structured tool calls. */
+  supportsStructuredToolCalls?: boolean;
+  /** True when the runtime supports a shared cross-host credential chain. */
+  supportsSharedCredentialChain?: boolean;
+}
+
+/**
+ * Model-family profile: prompt / sampling / output semantics that
+ * stay stable across multiple runtimes serving the same family.
+ */
+export interface ModelFamilyProfile {
+  id: string;
+  /** Hint that the family may emit raw-text thought markers. */
+  thoughtMarkerStyle?: "none" | "qwen-think-tag" | "kimi-think-tag" | "custom";
+  /** Family-level preference for whether multimodal inputs place media first. */
+  prefersMediaBeforeText?: boolean;
+  /** True when the family has first-class reasoning controls. */
+  supportsThinkingControls?: boolean;
+}
+
+/**
+ * Response normalizer: converts provider/runtime/model-family output
+ * into the compact internal chunk stream the session-driving layer
+ * consumes.
+ */
+export interface ResponseNormalizer {
+  id: string;
+  normalizeChunk(chunk: LlmStreamChunk): NormalizedLlmChunk;
+}
+
+/** Optional adaptation metadata a backend may expose for diagnostics. */
+export interface LlmAdaptationProfile {
+  runtime: RuntimeCapabilityProfile;
+  modelFamily: ModelFamilyProfile;
+  responseNormalizer: ResponseNormalizer;
 }
 
 /**
@@ -107,6 +195,12 @@ export interface CancellationLike {
 export interface LlmBackend {
   /** Human-readable backend name (for status lines in the chat). */
   readonly name: string;
+  /**
+   * Optional adaptation metadata for diagnostics and future profile-
+   * driven request shaping. Backends may omit this until they are
+   * migrated onto explicit Phase 10 profiles.
+   */
+  readonly adaptation?: LlmAdaptationProfile;
   /**
    * Stream a response for the supplied messages. Chunks are yielded
    * as soon as they arrive. The consumer is responsible for stopping

@@ -35,6 +35,7 @@ import {
   createBackend,
   LlmError,
   type LlmSource,
+  normalizeLlmChunk,
 } from "../llm";
 import { estimateMessagesTokens } from "../llm/tokenEstimate";
 import type {
@@ -706,7 +707,8 @@ export class SessionPump {
       }
     };
     try {
-      for await (const chunk of backend.stream(messages, token, tools)) {
+      for await (const rawChunk of backend.stream(messages, token, tools)) {
+        const chunk = normalizeLlmChunk(rawChunk);
         if (chunk.text.length === 0) {
           continue;
         }
