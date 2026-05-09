@@ -170,11 +170,29 @@ export interface RuntimeCapabilityProfile {
 export interface ModelFamilyProfile {
   id: string;
   /** Hint that the family may emit raw-text thought markers. */
-  thoughtMarkerStyle?: "none" | "qwen-think-tag" | "kimi-think-tag" | "custom";
+  thoughtMarkerStyle?:
+    | "none"
+    | "qwen-think-tag"
+    | "kimi-think-tag"
+    | "gemma-think-tag"
+    | "anthropic-thinking-blocks"
+    | "custom";
   /** Family-level preference for whether multimodal inputs place media first. */
   prefersMediaBeforeText?: boolean;
   /** True when the family has first-class reasoning controls. */
   supportsThinkingControls?: boolean;
+  /** How the family exposes thinking controls when they exist. */
+  thinkingControlMode?: "none" | "prompt-tag" | "runtime-flag";
+  /** Prompt token/tag used by prompt-controlled families like Gemma 4. */
+  thinkingControlToken?: string;
+  /** Guidance for whether prior reasoning should stay in history. */
+  reasoningHistoryPolicy?: "preserve-all" | "drop-prior-reasoning" | "runtime-controlled";
+  /** Family-level generation defaults. */
+  defaultSampling?: {
+    temperature?: number;
+    topP?: number;
+    topK?: number;
+  };
 }
 
 /**

@@ -8,9 +8,15 @@ import { envVarFor, resolveApiKey, secretIdFor } from "./keyResolver";
 import {
   ANTHROPIC_MESSAGES_RUNTIME,
   DEFAULT_RESPONSE_NORMALIZER,
-  GENERIC_MODEL_FAMILY,
   prepareAnthropicMessages,
 } from "./runtimeProfiles";
+import {
+  applyModelFamilyPromptPolicy,
+  applyReasoningHistoryPolicy,
+  GENERIC_CHAT_MODEL_FAMILY,
+  orderAttachmentsByFamily,
+  resolveModelFamily,
+} from "./modelFamilies";
 import {
   type LlmAdaptationProfile,
   type CancellationLike,
@@ -32,6 +38,7 @@ export const ANTHROPIC_KEY_ID = secretIdFor("anthropic");
 
 export interface AnthropicBackendOptions {
   model?: string;
+  modelFamilyId?: string;
   secrets?: SecretStorage;
   apiUrl?: string;
   /** Max tokens for the response. Anthropic requires this field. */
@@ -42,13 +49,16 @@ export interface AnthropicBackendOptions {
 
 export class AnthropicBackend implements LlmBackend {
   readonly name = "anthropic";
-  readonly adaptation: LlmAdaptationProfile = {
-    runtime: ANTHROPIC_MESSAGES_RUNTIME,
-    modelFamily: GENERIC_MODEL_FAMILY,
-    responseNormalizer: DEFAULT_RESPONSE_NORMALIZER,
-  };
 
   constructor(private readonly options: AnthropicBackendOptions = {}) {}
+
+  get adaptation(): LlmAdaptationProfile {
+    return {
+      runtime: ANTHROPIC_MESSAGES_RUNTIME,
+      modelFamily: resolveModelFamily(this.options.modelFamilyId, this.options.model),
+      responseNormalizer: DEFAULT_RESPONSE_NORMALIZER,
+    };
+  }
 
   async *stream(
     messages: LlmMessage[],
@@ -65,14 +75,22 @@ export class AnthropicBackend implements LlmBackend {
     const url = this.options.apiUrl ?? "https://api.anthropic.com/v1/messages";
     const model = this.options.model ?? "claude-sonnet-4-6";
 
+    const modelFamily = this.adaptation.modelFamily;
     const prepared = this.adaptation.runtime.prepareInput
       ? this.adaptation.runtime.prepareInput(messages)
       : { messages };
+    const familyInput = applyModelFamilyPromptPolicy(
+      {
+        ...prepared,
+        messages: applyReasoningHistoryPolicy(prepared.messages, modelFamily),
+      },
+      modelFamily,
+    );
     const body = {
       model,
       max_tokens: this.options.maxTokens ?? 4096,
-      system: prepared.system,
-      messages: convertMessages(prepared.messages),
+      system: familyInput.system,
+      messages: convertMessages(familyInput.messages, modelFamily),
     };
 
     const doFetch = this.options.fetchImpl ?? globalThis.fetch;
@@ -146,12 +164,13 @@ export class AnthropicBackend implements LlmBackend {
 /** Strip system messages and map remaining roles to Anthropic shapes. */
 function convertMessages(
   messages: LlmMessage[],
+  modelFamily = GENERIC_CHAT_MODEL_FAMILY,
 ): Array<{ role: "user" | "assistant"; content: AnthropicContent }> {
   return messages
     .filter((m) => m.role !== "system")
     .map((m) => ({
       role: m.role as "user" | "assistant",
-      content: anthropicContent(m),
+      content: anthropicContent(m, modelFamily),
     }));
 }
 
@@ -171,18 +190,26 @@ type AnthropicContent =
  * form (which Anthropic happily accepts); attachments produce a
  * mixed text+image block array.
  */
-function anthropicContent(m: LlmMessage): AnthropicContent {
+function anthropicContent(
+  m: LlmMessage,
+  modelFamily = GENERIC_CHAT_MODEL_FAMILY,
+): AnthropicContent {
   if (!m.attachments || m.attachments.length === 0) {
     return m.content;
   }
   const parts: Exclude<AnthropicContent, string> = [];
-  if (m.content.length > 0) {
-    parts.push({ type: "text", text: m.content });
-  }
-  for (const att of m.attachments) {
+  for (const part of orderAttachmentsByFamily(modelFamily, m.content, m.attachments)) {
+    if (part.kind === "text") {
+      parts.push({ type: "text", text: part.text });
+      continue;
+    }
     parts.push({
       type: "image",
-      source: { type: "base64", media_type: att.mime, data: att.data },
+      source: {
+        type: "base64",
+        media_type: part.attachment.mime,
+        data: part.attachment.data,
+      },
     });
   }
   return parts;

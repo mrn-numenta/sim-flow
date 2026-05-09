@@ -13,6 +13,8 @@ import { VSCodeLmBackend } from "./vscode";
 export interface FactoryOptions {
   source: LlmSource;
   model?: string;
+  /** Optional explicit model-family override; otherwise inferred from `model`. */
+  modelFamilyId?: string;
   secrets?: SecretStorage;
   /** Reserved for future per-session backends (e.g. local model paths). */
   projectDir?: string;
@@ -31,15 +33,20 @@ export interface FactoryOptions {
 export function createBackend(options: FactoryOptions): LlmBackend {
   switch (options.source) {
     case "vscode":
-      return new VSCodeLmBackend({ model: options.model });
+      return new VSCodeLmBackend({
+        model: options.model,
+        modelFamilyId: options.modelFamilyId,
+      });
     case "anthropic":
       return new AnthropicBackend({
         model: options.model,
+        modelFamilyId: options.modelFamilyId,
         secrets: options.secrets,
       });
     case "openai":
       return new OpenAiBackend({
         model: options.model,
+        modelFamilyId: options.modelFamilyId,
         secrets: options.secrets,
       });
     case "ollama":
@@ -48,12 +55,14 @@ export function createBackend(options: FactoryOptions): LlmBackend {
       // user-defined ollama entry actually points where they say.
       return new OllamaBackend({
         model: options.model,
+        modelFamilyId: options.modelFamilyId,
         secrets: options.secrets,
         baseUrl: options.baseUrl ?? options.ollamaBaseUrl,
       });
     case "lmstudio":
       return new LMStudioBackend({
         model: options.model,
+        modelFamilyId: options.modelFamilyId,
         secrets: options.secrets,
         baseUrl: options.baseUrl ?? options.lmstudioBaseUrl,
       });
@@ -67,6 +76,7 @@ export function createBackend(options: FactoryOptions): LlmBackend {
       return new LMStudioBackend({
         name: "vllm",
         model: options.model,
+        modelFamilyId: options.modelFamilyId,
         secrets: options.secrets,
         baseUrl: options.baseUrl ?? "http://localhost:8000/v1",
       });
@@ -77,6 +87,7 @@ export function createBackend(options: FactoryOptions): LlmBackend {
       return new LMStudioBackend({
         name: "openai-compat",
         model: options.model,
+        modelFamilyId: options.modelFamilyId,
         secrets: options.secrets,
         baseUrl: options.baseUrl ?? options.lmstudioBaseUrl ?? "http://localhost:1234/v1",
       });

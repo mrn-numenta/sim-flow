@@ -40,6 +40,23 @@ describe("createBackend", () => {
     expect(backend.adaptation?.runtime.id).toBe("openai_compat_generic");
   });
 
+  it("infers the model family from the configured model id", () => {
+    const backend = createBackend({
+      source: "lmstudio",
+      model: "Qwen/Qwen3.6-35B-A3B",
+    });
+    expect(backend.adaptation?.modelFamily.id).toBe("qwen3_6");
+  });
+
+  it("honors an explicit model-family override", () => {
+    const backend = createBackend({
+      source: "lmstudio",
+      model: "moonshotai/Kimi-VL-A3B-Thinking-2506",
+      modelFamilyId: "gemma4",
+    });
+    expect(backend.adaptation?.modelFamily.id).toBe("gemma4");
+  });
+
   it("returns OllamaBackend for source=ollama (no secrets required)", () => {
     const backend = createBackend({ source: "ollama" });
     expect(backend).toBeInstanceOf(OllamaBackend);

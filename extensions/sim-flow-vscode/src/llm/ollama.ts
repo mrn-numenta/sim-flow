@@ -11,6 +11,7 @@ export const OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434/v1";
 
 export interface OllamaBackendOptions {
   model?: string;
+  modelFamilyId?: string;
   secrets?: SecretStorage;
   baseUrl?: string;
   apiUrl?: string;
@@ -27,6 +28,7 @@ export class OllamaBackend extends OpenAiCompatibleBackend {
       keyId: OLLAMA_KEY_ID,
       requireKey: false,
       model: options.model,
+      modelFamilyId: options.modelFamilyId,
       secrets: options.secrets,
       apiUrl: options.apiUrl,
       fetchImpl: options.fetchImpl,

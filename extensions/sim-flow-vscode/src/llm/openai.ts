@@ -9,6 +9,7 @@ export const OPENAI_KEY_ID = "sim-flow.openai.apiKey";
 
 export interface OpenAiBackendOptions {
   model?: string;
+  modelFamilyId?: string;
   secrets?: SecretStorage;
   apiUrl?: string;
   baseUrl?: string;
@@ -25,6 +26,7 @@ export class OpenAiBackend extends OpenAiCompatibleBackend {
       keyId: OPENAI_KEY_ID,
       requireKey: true,
       model: options.model,
+      modelFamilyId: options.modelFamilyId,
       secrets: options.secrets,
       apiUrl: options.apiUrl,
       fetchImpl: options.fetchImpl,

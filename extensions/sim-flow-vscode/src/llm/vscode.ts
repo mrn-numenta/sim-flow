@@ -5,6 +5,11 @@
 import * as vscode from "vscode";
 
 import {
+  GENERIC_CHAT_MODEL_FAMILY,
+  orderAttachmentsByFamily,
+  resolveModelFamily,
+} from "./modelFamilies";
+import {
   type CancellationLike,
   type LlmBackend,
   LlmError,
@@ -16,6 +21,8 @@ import {
 export interface VSCodeBackendOptions {
   /** Optional model family/id filter, e.g. "gpt-4o" or "claude-sonnet-4.5". */
   model?: string;
+  /** Optional explicit model-family override; otherwise inferred from `model`. */
+  modelFamilyId?: string;
 }
 
 export class VSCodeLmBackend implements LlmBackend {
@@ -41,7 +48,8 @@ export class VSCodeLmBackend implements LlmBackend {
       );
     }
 
-    const vmsgs = toVscodeMessages(messages);
+    const modelFamily = resolveModelFamily(this.options.modelFamilyId, this.options.model);
+    const vmsgs = toVscodeMessages(messages, modelFamily);
     // `justification` gives VS Code the user-facing reason for the
     // consent prompt some providers gate behind. Without it, certain
     // chat-model providers silently return empty without throwing.
@@ -253,10 +261,13 @@ export function parseModelHint(value: string | undefined): {
   };
 }
 
-function toVscodeMessages(messages: LlmMessage[]): vscode.LanguageModelChatMessage[] {
+function toVscodeMessages(
+  messages: LlmMessage[],
+  modelFamily = GENERIC_CHAT_MODEL_FAMILY,
+): vscode.LanguageModelChatMessage[] {
   return messages.map((m) => {
     const text = m.role === "system" ? `[system] ${m.content}` : m.content;
-    const parts = buildContentParts(text, m);
+    const parts = buildContentParts(text, m, modelFamily);
     switch (m.role) {
       case "system":
       case "user":
@@ -278,24 +289,29 @@ type LmPart = vscode.LanguageModelTextPart | vscode.LanguageModelDataPart;
  * data part per attachment; vscode.lm forwards the data parts to
  * any underlying multimodal model that accepts them.
  */
-function buildContentParts(text: string, m: LlmMessage): string | LmPart[] {
+function buildContentParts(
+  text: string,
+  m: LlmMessage,
+  modelFamily = GENERIC_CHAT_MODEL_FAMILY,
+): string | LmPart[] {
   if (!m.attachments || m.attachments.length === 0) {
     return text;
   }
   const parts: LmPart[] = [];
-  if (text.length > 0) {
-    parts.push(new vscode.LanguageModelTextPart(text));
-  }
-  for (const att of m.attachments) {
+  for (const part of orderAttachmentsByFamily(modelFamily, text, m.attachments)) {
+    if (part.kind === "text") {
+      parts.push(new vscode.LanguageModelTextPart(part.text));
+      continue;
+    }
     try {
-      const bytes = Buffer.from(att.data, "base64");
-      parts.push(vscode.LanguageModelDataPart.image(bytes, att.mime));
+      const bytes = Buffer.from(part.attachment.data, "base64");
+      parts.push(vscode.LanguageModelDataPart.image(bytes, part.attachment.mime));
     } catch (err) {
       // Skip a malformed attachment but keep the rest of the message
       // intact -- losing the image is preferable to dropping the
       // whole turn.
       console.warn(
-        `sim-flow: skipping malformed attachment (${att.source ?? "<unknown>"}): ${
+        `sim-flow: skipping malformed attachment (${part.attachment.source ?? "<unknown>"}): ${
           (err as Error).message ?? String(err)
         }`,
       );

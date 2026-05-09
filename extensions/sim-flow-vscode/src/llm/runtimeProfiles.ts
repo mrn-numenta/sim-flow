@@ -1,7 +1,6 @@
 import {
   normalizeLlmChunk,
   type LlmMessage,
-  type ModelFamilyProfile,
   type ResponseNormalizer,
   type RuntimeCapabilityProfile,
   type RuntimePreparedInput,
@@ -66,17 +65,6 @@ export function prepareAnthropicMessages(messages: LlmMessage[]): RuntimePrepare
 export const DEFAULT_RESPONSE_NORMALIZER: ResponseNormalizer = {
   id: "default",
   normalizeChunk: normalizeLlmChunk,
-};
-
-/**
- * Generic placeholder family for backends that have runtime profiles
- * but do not yet opt into model-family specialization. Phase 10 M3
- * replaces this with concrete Gemma/Qwen/Kimi/Claude families.
- */
-export const GENERIC_MODEL_FAMILY: ModelFamilyProfile = {
-  id: "generic_chat",
-  thoughtMarkerStyle: "none",
-  supportsThinkingControls: false,
 };
 
 export const OPENAI_COMPAT_GENERIC_RUNTIME: RuntimeCapabilityProfile = {

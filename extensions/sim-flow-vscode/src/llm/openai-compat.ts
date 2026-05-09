@@ -17,10 +17,16 @@ import {
 } from "./tool-translation";
 import {
   DEFAULT_RESPONSE_NORMALIZER,
-  GENERIC_MODEL_FAMILY,
   mergeLeadingSystemMessages,
   OPENAI_COMPAT_GENERIC_RUNTIME,
 } from "./runtimeProfiles";
+import {
+  applyModelFamilyPromptPolicy,
+  applyReasoningHistoryPolicy,
+  GENERIC_CHAT_MODEL_FAMILY,
+  orderAttachmentsByFamily,
+  resolveModelFamily,
+} from "./modelFamilies";
 import {
   type LlmAdaptationProfile,
   type CancellationLike,
@@ -58,6 +64,8 @@ export interface OpenAiCompatibleBackendOptions {
 
   /** Caller-supplied overrides. */
   model?: string;
+  /** Explicit model-family override; otherwise inferred from `model`. */
+  modelFamilyId?: string;
   secrets?: SecretStorage;
   /** Absolute override URL. Takes precedence over baseUrl + path. */
   apiUrl?: string;
@@ -66,14 +74,17 @@ export interface OpenAiCompatibleBackendOptions {
 
 export class OpenAiCompatibleBackend implements LlmBackend {
   readonly name: string;
-  readonly adaptation: LlmAdaptationProfile = {
-    runtime: OPENAI_COMPAT_GENERIC_RUNTIME,
-    modelFamily: GENERIC_MODEL_FAMILY,
-    responseNormalizer: DEFAULT_RESPONSE_NORMALIZER,
-  };
 
   constructor(protected readonly options: OpenAiCompatibleBackendOptions) {
     this.name = options.name;
+  }
+
+  get adaptation(): LlmAdaptationProfile {
+    return {
+      runtime: OPENAI_COMPAT_GENERIC_RUNTIME,
+      modelFamily: resolveModelFamily(this.options.modelFamilyId, this.options.model),
+      responseNormalizer: DEFAULT_RESPONSE_NORMALIZER,
+    };
   }
 
   async *stream(
@@ -115,9 +126,17 @@ export class OpenAiCompatibleBackend implements LlmBackend {
     // Collapse them into one before serializing -- LM Studio /
     // Ollama / OpenAI tolerate the merged form just fine, so this
     // is uniform behavior, not a vllm-special-case.
+    const modelFamily = this.adaptation.modelFamily;
     const prepared = this.adaptation.runtime.prepareInput
       ? this.adaptation.runtime.prepareInput(messages)
       : { messages };
+    const familyInput = applyModelFamilyPromptPolicy(
+      {
+        ...prepared,
+        messages: applyReasoningHistoryPolicy(prepared.messages, modelFamily),
+      },
+      modelFamily,
+    );
     const body: {
       model: string;
       messages: OpenAiMessage[];
@@ -125,7 +144,7 @@ export class OpenAiCompatibleBackend implements LlmBackend {
       stream: boolean;
     } = {
       model,
-      messages: transformMessagesForOpenAi(prepared.messages),
+      messages: transformMessagesForOpenAi(familyInput.messages, modelFamily),
       stream: true,
     };
     if (tools && tools.length > 0) {
@@ -481,7 +500,10 @@ function toOpenAiTool(tool: LlmTool): OpenAiTool {
  * is still token-identical across dispatches that share their
  * stable inputs) while satisfying the strict template.
  */
-export function transformMessagesForOpenAi(messages: LlmMessage[]): OpenAiMessage[] {
+export function transformMessagesForOpenAi(
+  messages: LlmMessage[],
+  modelFamily = GENERIC_CHAT_MODEL_FAMILY,
+): OpenAiMessage[] {
   const out: OpenAiMessage[] = [];
   // Outstanding tool_call ids from the most recent assistant message.
   // The next user message is a candidate for translation into
@@ -499,7 +521,7 @@ export function transformMessagesForOpenAi(messages: LlmMessage[]): OpenAiMessag
       // pass-through. (Today the orchestrator never attaches images
       // to assistant messages; the guard is defensive.)
       if (m.attachments && m.attachments.length > 0) {
-        out.push({ role: "assistant", content: openAiContent(m) });
+        out.push({ role: "assistant", content: openAiContent(m, modelFamily) });
         pendingToolCallIds = [];
         continue;
       }
@@ -542,7 +564,7 @@ export function transformMessagesForOpenAi(messages: LlmMessage[]): OpenAiMessag
         // Plain user message — clear pending ids so we don't
         // mis-pair later, and pass through.
         pendingToolCallIds = [];
-        out.push({ role: "user", content: openAiContent(m) });
+        out.push({ role: "user", content: openAiContent(m, modelFamily) });
         continue;
       }
       // Pair each section with the corresponding pending id.
@@ -578,11 +600,11 @@ export function transformMessagesForOpenAi(messages: LlmMessage[]): OpenAiMessag
     // results before the next user turn would be a protocol error.
     pendingToolCallIds = [];
     if (m.role === "system" || m.role === "user") {
-      out.push({ role: m.role, content: openAiContent(m) });
+      out.push({ role: m.role, content: openAiContent(m, modelFamily) });
     } else {
       // Unknown role — shouldn't happen; pass through with role
       // coerced to user so the message at least reaches the model.
-      out.push({ role: "user", content: openAiContent(m) });
+      out.push({ role: "user", content: openAiContent(m, modelFamily) });
     }
   }
   return out;
@@ -608,18 +630,22 @@ type OpenAiContent =
  * what GPT-4o vision and Llava expect when using the openai-compat
  * surface.
  */
-function openAiContent(m: LlmMessage): OpenAiContent {
+function openAiContent(
+  m: LlmMessage,
+  modelFamily = GENERIC_CHAT_MODEL_FAMILY,
+): OpenAiContent {
   if (!m.attachments || m.attachments.length === 0) {
     return m.content;
   }
   const parts: Exclude<OpenAiContent, string> = [];
-  if (m.content.length > 0) {
-    parts.push({ type: "text", text: m.content });
-  }
-  for (const att of m.attachments) {
+  for (const part of orderAttachmentsByFamily(modelFamily, m.content, m.attachments)) {
+    if (part.kind === "text") {
+      parts.push({ type: "text", text: part.text });
+      continue;
+    }
     parts.push({
       type: "image_url",
-      image_url: { url: `data:${att.mime};base64,${att.data}` },
+      image_url: { url: `data:${part.attachment.mime};base64,${part.attachment.data}` },
     });
   }
   return parts;

@@ -12,6 +12,7 @@ export const LMSTUDIO_DEFAULT_BASE_URL = "http://localhost:1234/v1";
 
 export interface LMStudioBackendOptions {
   model?: string;
+  modelFamilyId?: string;
   secrets?: SecretStorage;
   baseUrl?: string;
   apiUrl?: string;
@@ -36,6 +37,7 @@ export class LMStudioBackend extends OpenAiCompatibleBackend {
       keyId: LMSTUDIO_KEY_ID,
       requireKey: false,
       model: options.model,
+      modelFamilyId: options.modelFamilyId,
       secrets: options.secrets,
       apiUrl: options.apiUrl,
       fetchImpl: options.fetchImpl,
