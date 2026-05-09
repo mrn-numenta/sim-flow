@@ -78,13 +78,35 @@ fn any_matches(paths: &[&str], pattern: &str, description: &str) -> GateCheck {
 /// gate cannot pass while any milestone file under `dir` is still
 /// pending. Defaults to execution-step semantics (`- [ ]` rows must
 /// resolve); use `milestones_all_detailed` for planning-detail
-/// steps where the placeholder-marker mode applies.
+/// steps where the placeholder-marker mode applies. `- [-]`
+/// (deferred) rows are TREATED AS RESOLVED here; use
+/// `milestones_all_implemented` (forbid_deferred=true) for steps
+/// where deferring drops downstream-required work.
 fn milestones_all_resolved(dir: &str, file_prefix: &str, description: &str) -> GateCheck {
     GateCheck::MilestonesAllResolved {
         dir: PathBuf::from(dir),
         file_prefixes: vec![file_prefix.to_string()],
         placeholder_marker: None,
         description: description.to_string(),
+        forbid_deferred: false,
+    }
+}
+
+/// Strict execution-mode variant: like `milestones_all_resolved`
+/// but `- [-]` rows ALSO count as pending. Used by DM2d / DM3c /
+/// DM4b -- the model-impl, test-impl, perf-impl gates -- where a
+/// silent "defer this task" by the agent would leak into the
+/// downstream step's predecessor inputs and the work would never
+/// get done. DM3b (testbench skeletons) keeps the lenient default
+/// since some integration shims can legitimately be deferred to
+/// DM3c.
+fn milestones_all_implemented(dir: &str, file_prefix: &str, description: &str) -> GateCheck {
+    GateCheck::MilestonesAllResolved {
+        dir: PathBuf::from(dir),
+        file_prefixes: vec![file_prefix.to_string()],
+        placeholder_marker: None,
+        description: description.to_string(),
+        forbid_deferred: true,
     }
 }
 
@@ -106,6 +128,7 @@ fn milestones_all_detailed(
         file_prefixes: file_prefixes.iter().map(|s| (*s).to_string()).collect(),
         placeholder_marker: Some(placeholder_marker.to_string()),
         description: description.to_string(),
+        forbid_deferred: false,
     }
 }
 
@@ -260,7 +283,7 @@ fn dm2b() -> StepDescriptor {
 /// DM2c (Implementation Plan, OUTLINE) — produces the plan index
 /// at `docs/impl-plan/plan.md` plus a milestone-NN-*.md STUB per
 /// milestone. Each stub carries its scope, predecessor / dependency
-/// notes, and a `<!-- detail-pending -->` placeholder that DM2cd
+/// notes, and a `<!-- detail-pending` placeholder that DM2cd
 /// later replaces with the full task list. Splitting outline from
 /// detail bounds each session's context: a large design (e.g.
 /// RISC-V core with 25+ milestones) can name its milestones in one
@@ -304,7 +327,7 @@ fn dm2c() -> StepDescriptor {
 
 /// DM2cd (Implementation Plan, DETAIL) — walks each
 /// `docs/impl-plan/milestone-NN-*.md` stub and replaces the
-/// `<!-- detail-pending -->` placeholder with the full task list per
+/// `<!-- detail-pending` placeholder with the full task list per
 /// `docs/impl-plan/plan-management.md`'s task format. One milestone
 /// per work + critique session, so the per-milestone task list gets
 /// a focused review and a critique can flag e.g. "milestone 03
@@ -320,7 +343,7 @@ fn dm2cd() -> StepDescriptor {
             milestones_all_detailed(
                 "docs/impl-plan/",
                 &["milestone-"],
-                "<!-- detail-pending -->",
+                "<!-- detail-pending",
                 "every docs/impl-plan/milestone-NN-*.md stub has been detailed",
             ),
             critique_clean("DM2cd"),
@@ -342,7 +365,8 @@ fn dm2cd() -> StepDescriptor {
             dir: "docs/impl-plan/",
             file_prefixes: &["milestone-"],
             index_file: "docs/impl-plan/plan.md",
-            placeholder_marker: Some("<!-- detail-pending -->"),
+            placeholder_marker: Some("<!-- detail-pending"),
+            forbid_deferred: false,
         }),
     }
 }
@@ -370,8 +394,8 @@ fn dm2d() -> StepDescriptor {
             ),
             shell(
                 "cargo",
-                &["fmt", "--all", "--", "--check"],
-                "cargo fmt --check passes (no unformatted code)",
+                &["fmt", "--all"],
+                "cargo fmt --all succeeds (auto-formats)",
             ),
             shell(
                 "cargo",
@@ -413,10 +437,18 @@ fn dm2d() -> StepDescriptor {
                 ],
                 "src/model/top.rs defines `pub struct Top` with `impl Module for Top` (block-diagram contract)",
             ),
-            milestones_all_resolved(
+            // DM2d's gate forbids `- [-]` deferrals. Defers ARE
+            // legitimate during the step (one milestone task can
+            // wait on a sibling milestone landing first), but by
+            // the time the gate evaluates, every deferred row must
+            // have been re-opened and resolved as `- [x]`.
+            // Otherwise a deferred-and-forgotten implementation
+            // task could leak into DM3 / DM4 where there's no
+            // longer a chance to fix it without resetting.
+            milestones_all_implemented(
                 "docs/impl-plan/",
                 "milestone-",
-                "every docs/impl-plan/milestone-NN-*.md row resolved",
+                "every docs/impl-plan/milestone-NN-*.md row implemented (no deferrals at gate exit)",
             ),
             critique_clean("DM2d"),
         ],
@@ -447,6 +479,10 @@ fn dm2d() -> StepDescriptor {
             file_prefixes: &["milestone-"],
             index_file: "docs/impl-plan/plan.md",
             placeholder_marker: None,
+            // DM2d's gate forbids `- [-]`; the walker must agree
+            // so milestones with deferred-only rows keep being
+            // targeted by Work + Critique until they're `[x]`.
+            forbid_deferred: true,
         }),
     }
 }
@@ -529,7 +565,7 @@ fn dm3a() -> StepDescriptor {
 
 /// DM3ad (Test Plan, DETAIL) — walks each tb-milestone-NN-*.md and
 /// test-milestone-NN-*.md stub left by DM3a and replaces the
-/// `<!-- detail-pending -->` placeholder with the full task list.
+/// `<!-- detail-pending` placeholder with the full task list.
 /// Both file types live in `docs/test-plan/`; the milestone-walk
 /// machinery walks lexicographically across both prefixes so a
 /// large project's tb-* tasks land before the test-* tasks that
@@ -545,7 +581,7 @@ fn dm3ad() -> StepDescriptor {
             milestones_all_detailed(
                 "docs/test-plan/",
                 &["tb-milestone-", "test-milestone-"],
-                "<!-- detail-pending -->",
+                "<!-- detail-pending",
                 "every tb-milestone-NN-*.md and test-milestone-NN-*.md stub has been detailed",
             ),
             shell(
@@ -577,7 +613,8 @@ fn dm3ad() -> StepDescriptor {
             dir: "docs/test-plan/",
             file_prefixes: &["tb-milestone-", "test-milestone-"],
             index_file: "docs/test-plan/test-plan.md",
-            placeholder_marker: Some("<!-- detail-pending -->"),
+            placeholder_marker: Some("<!-- detail-pending"),
+            forbid_deferred: false,
         }),
     }
 }
@@ -608,8 +645,8 @@ fn dm3b() -> StepDescriptor {
             ),
             shell(
                 "cargo",
-                &["fmt", "--all", "--", "--check"],
-                "cargo fmt --check passes (no unformatted code)",
+                &["fmt", "--all"],
+                "cargo fmt --all succeeds (auto-formats)",
             ),
             shell(
                 "cargo",
@@ -641,6 +678,7 @@ fn dm3b() -> StepDescriptor {
             file_prefixes: &["tb-milestone-"],
             index_file: "docs/test-plan/test-plan.md",
             placeholder_marker: None,
+            forbid_deferred: false,
         }),
     }
 }
@@ -660,8 +698,8 @@ fn dm3c() -> StepDescriptor {
         gate_checks: vec![
             shell(
                 "cargo",
-                &["fmt", "--all", "--", "--check"],
-                "cargo fmt --check passes (no unformatted code)",
+                &["fmt", "--all"],
+                "cargo fmt --all succeeds (auto-formats)",
             ),
             shell(
                 "cargo",
@@ -684,10 +722,15 @@ fn dm3c() -> StepDescriptor {
             // double the test time; rely on the agent reporting the
             // measured percentage in the plan's `## Coverage`
             // section.
-            milestones_all_resolved(
+            // DM3c's gate forbids `- [-]` deferrals. Same
+            // semantics as DM2d: defers are valid intra-step but
+            // must be resolved before this gate passes; otherwise
+            // a deferred test escapes into DM4 with no way to
+            // rerun without resetting.
+            milestones_all_implemented(
                 "docs/test-plan/",
                 "test-milestone-",
-                "every docs/test-plan/test-milestone-NN-*.md row resolved",
+                "every docs/test-plan/test-milestone-NN-*.md row implemented (no deferrals at gate exit)",
             ),
             critique_clean("DM3c"),
         ],
@@ -709,6 +752,8 @@ fn dm3c() -> StepDescriptor {
             file_prefixes: &["test-milestone-"],
             index_file: "docs/test-plan/test-plan.md",
             placeholder_marker: None,
+            // DM3c's gate forbids `- [-]`; the walker must agree.
+            forbid_deferred: true,
         }),
     }
 }
@@ -762,7 +807,7 @@ fn dm4a() -> StepDescriptor {
 
 /// DM4ad (Performance Analysis Plan, DETAIL) — walks each
 /// `docs/perf-plan/perf-milestone-NN-*.md` stub and replaces its
-/// `<!-- detail-pending -->` placeholder with the full task list per
+/// `<!-- detail-pending` placeholder with the full task list per
 /// `docs/impl-plan/plan-management.md`. Tasks reference workload
 /// configs, target rows, and run-id schemes that DM4b later
 /// executes.
@@ -777,7 +822,7 @@ fn dm4ad() -> StepDescriptor {
             milestones_all_detailed(
                 "docs/perf-plan/",
                 &["perf-milestone-"],
-                "<!-- detail-pending -->",
+                "<!-- detail-pending",
                 "every docs/perf-plan/perf-milestone-NN-*.md stub has been detailed",
             ),
             critique_clean("DM4ad"),
@@ -798,7 +843,8 @@ fn dm4ad() -> StepDescriptor {
             dir: "docs/perf-plan/",
             file_prefixes: &["perf-milestone-"],
             index_file: "docs/perf-plan/perf-plan.md",
-            placeholder_marker: Some("<!-- detail-pending -->"),
+            placeholder_marker: Some("<!-- detail-pending"),
+            forbid_deferred: false,
         }),
     }
 }
@@ -841,18 +887,23 @@ fn dm4b() -> StepDescriptor {
             // separate build check here.
             shell(
                 "cargo",
-                &["fmt", "--all", "--", "--check"],
-                "cargo fmt --check passes (no unformatted code)",
+                &["fmt", "--all"],
+                "cargo fmt --all succeeds (auto-formats)",
             ),
             shell(
                 "cargo",
                 &["clippy", "--all-targets", "--quiet", "--", "-D", "warnings"],
                 "cargo clippy --all-targets clean (warnings denied)",
             ),
-            milestones_all_resolved(
+            // DM4b's gate forbids `- [-]` deferrals on its own
+            // perf-plan. The impl-plan and test-plan dirs are
+            // already enforced clean by DM2d's and DM3c's gates,
+            // so the agent can't have introduced new deferrals
+            // into them here.
+            milestones_all_implemented(
                 "docs/perf-plan/",
                 "perf-milestone-",
-                "every docs/perf-plan/perf-milestone-NN-*.md row resolved",
+                "every docs/perf-plan/perf-milestone-NN-*.md row implemented (no deferrals at gate exit)",
             ),
             critique_clean("DM4b"),
         ],
@@ -873,6 +924,8 @@ fn dm4b() -> StepDescriptor {
             file_prefixes: &["perf-milestone-"],
             index_file: "docs/perf-plan/perf-plan.md",
             placeholder_marker: None,
+            // DM4b's gate forbids `- [-]`; the walker must agree.
+            forbid_deferred: true,
         }),
     }
 }

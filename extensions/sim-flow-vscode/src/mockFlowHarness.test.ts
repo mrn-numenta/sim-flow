@@ -1108,6 +1108,67 @@ describe("mocked dashboard/chat harness", () => {
     expect(transcriptBodies(state!)).toContain("active project changed");
   });
 
+  it("keeps the active auto session attached when the chat panel is merely revealed", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const secondDir = createProjectFromFixture(tmpRoot, "other-project");
+    const specPath = path.join(exampleDir, "docs", "spec.md");
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+      { uri: { fsPath: secondDir }, name: "other-project", index: 1 },
+    ];
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("Example session still running.\n");
+        },
+        waitForCancel: true,
+        cancelResult: {
+          status: "ended",
+          endReason: "cancelled",
+        },
+        result: {
+          status: "ended",
+          endReason: "completed",
+        },
+      },
+    ]);
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    mock.state.chatProvider = provider as never;
+    const chatView = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(chatView as never, {} as never, {} as never);
+
+    const dashboardHost = new DashboardHost({
+      extensionUri: { fsPath: "/extension" } as never,
+      projectDir: exampleDir,
+      cli: {} as never,
+      workspaceState: workspaceState as never,
+    });
+    await dashboardHost.open();
+
+    await mock.state.lastDashboardPanel!.webview.emit({
+      type: "run-auto",
+      specPath,
+    });
+    await flushAsyncWork();
+
+    mock.state.currentProjectDir = secondDir;
+    chatView.fireVisibility();
+    await flushAsyncWork();
+
+    const state = latestState(chatView);
+    expect(state?.projectLabel).toBe("example");
+    expect(state?.canStop).toBe(true);
+    expect(transcriptBodies(state!)).toContain("Example session still running.");
+    expect(transcriptBodies(state!)).not.toContain("active project changed");
+  });
+
   it("switches the chat panel to project B when dashboard Play is pressed there while project A is visible", async () => {
     const exampleDir = createProjectFromFixture(tmpRoot, "example");
     const secondDir = createProjectFromFixture(tmpRoot, "other-project");

@@ -68,8 +68,14 @@ pub enum GateCheck {
     /// Two resolution modes, matching `MilestoneWalkConfig`:
     /// - When `placeholder_marker` is `None` (execution-step gate
     ///   for DM2d / DM3b / DM3c / DM4b): every `- [ ]` row must be
-    ///   resolved (`- [x]` or `- [-]`). Prevents the step from
-    ///   advancing while any milestone still has pending rows.
+    ///   resolved. By default `- [x]` (done) AND `- [-]` (deferred)
+    ///   both pass; set `forbid_deferred = true` on steps where
+    ///   skipping a row would silently drop work that downstream
+    ///   steps depend on (DM2d / DM3c / DM4b -- the model-impl,
+    ///   test-impl, perf-impl gates) so `- [-]` ALSO counts as
+    ///   pending. The check still permits `- [-]` on DM3b
+    ///   (testbench skeletons can legitimately defer integration
+    ///   shims) where `forbid_deferred = false`.
     /// - When `placeholder_marker` is `Some(s)` (planning-detail
     ///   gate for DM2cd / DM3ad / DM4ad): no milestone body may
     ///   contain `s`. The detail step replaces the outline's stubs
@@ -82,6 +88,12 @@ pub enum GateCheck {
         file_prefixes: Vec<String>,
         placeholder_marker: Option<String>,
         description: String,
+        /// When `true`, `- [-]` rows count as pending in the
+        /// no-placeholder execution-mode branch. Used by DM2d /
+        /// DM3c / DM4b to enforce that deferred items are actually
+        /// implemented, not optimistically skipped. Has no effect
+        /// in placeholder-marker mode.
+        forbid_deferred: bool,
     },
 }
 
@@ -281,6 +293,7 @@ fn evaluate_one(project_dir: &Path, check: &GateCheck) -> Result<Option<GateFail
             file_prefixes,
             placeholder_marker,
             description,
+            forbid_deferred,
         } => {
             let full_dir = project_dir.join(dir);
             let entries = match std::fs::read_dir(&full_dir) {
@@ -355,9 +368,23 @@ fn evaluate_one(project_dir: &Path, check: &GateCheck) -> Result<Option<GateFail
                             .lines()
                             .filter(|line| line.trim_start().starts_with("- [ ]"))
                             .count();
-                        if pending_count > 0 {
-                            pending
-                                .push(format!("  - `{name}`: {pending_count} unresolved row(s)"));
+                        let deferred_count = if *forbid_deferred {
+                            body.lines()
+                                .filter(|line| line.trim_start().starts_with("- [-]"))
+                                .count()
+                        } else {
+                            0
+                        };
+                        let unresolved = pending_count + deferred_count;
+                        if unresolved > 0 {
+                            let detail = if *forbid_deferred && deferred_count > 0 {
+                                format!(
+                                    "{unresolved} unresolved row(s) ({pending_count} pending, {deferred_count} deferred -- this step forbids deferrals)"
+                                )
+                            } else {
+                                format!("{unresolved} unresolved row(s)")
+                            };
+                            pending.push(format!("  - `{name}`: {detail}"));
                         }
                     }
                 }
@@ -554,6 +581,7 @@ mod tests {
                 file_prefixes: vec!["tb-milestone-".into()],
                 placeholder_marker: None,
                 description: "every tb-milestone resolved".into(),
+                forbid_deferred: false,
             }],
         )
         .unwrap();
@@ -578,6 +606,7 @@ mod tests {
                 file_prefixes: vec!["tb-milestone-".into()],
                 placeholder_marker: None,
                 description: "every tb-milestone resolved".into(),
+                forbid_deferred: false,
             }],
         )
         .unwrap();
@@ -601,6 +630,7 @@ mod tests {
                 file_prefixes: vec!["tb-milestone-".into()],
                 placeholder_marker: None,
                 description: "every tb-milestone resolved".into(),
+                forbid_deferred: false,
             }],
         )
         .unwrap();
@@ -626,6 +656,7 @@ mod tests {
                 file_prefixes: vec!["tb-milestone-".into()],
                 placeholder_marker: None,
                 description: "tb only".into(),
+                forbid_deferred: false,
             }],
         )
         .unwrap();
@@ -659,8 +690,9 @@ mod tests {
             &[GateCheck::MilestonesAllResolved {
                 dir: PathBuf::from("docs/impl-plan/"),
                 file_prefixes: vec!["milestone-".into()],
-                placeholder_marker: Some("<!-- detail-pending -->".into()),
+                placeholder_marker: Some("<!-- detail-pending".into()),
                 description: "every stub detailed".into(),
+                forbid_deferred: false,
             }],
         )
         .unwrap();
@@ -682,15 +714,16 @@ mod tests {
         );
         write(
             &dir.join("milestone-02-skeletons.md"),
-            "# Milestone 02\n\n## Tasks\n<!-- detail-pending -->\n",
+            "# Milestone 02\n\n## Tasks\n<!-- detail-pending\n",
         );
         let report = evaluate(
             tmp.path(),
             &[GateCheck::MilestonesAllResolved {
                 dir: PathBuf::from("docs/impl-plan/"),
                 file_prefixes: vec!["milestone-".into()],
-                placeholder_marker: Some("<!-- detail-pending -->".into()),
+                placeholder_marker: Some("<!-- detail-pending".into()),
                 description: "every stub detailed".into(),
+                forbid_deferred: false,
             }],
         )
         .unwrap();
@@ -714,15 +747,16 @@ mod tests {
         );
         write(
             &dir.join("test-milestone-01-smoke.md"),
-            "# test-Milestone 01\n## Tasks\n<!-- detail-pending -->\n",
+            "# test-Milestone 01\n## Tasks\n<!-- detail-pending\n",
         );
         let report = evaluate(
             tmp.path(),
             &[GateCheck::MilestonesAllResolved {
                 dir: PathBuf::from("docs/test-plan/"),
                 file_prefixes: vec!["tb-milestone-".into(), "test-milestone-".into()],
-                placeholder_marker: Some("<!-- detail-pending -->".into()),
+                placeholder_marker: Some("<!-- detail-pending".into()),
                 description: "all detailed".into(),
+                forbid_deferred: false,
             }],
         )
         .unwrap();

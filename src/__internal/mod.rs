@@ -15,6 +15,7 @@ pub mod session;
 pub mod state;
 pub mod steps;
 pub mod template;
+pub mod test_validation;
 pub mod tracking;
 
 pub use error::{Error, Result};

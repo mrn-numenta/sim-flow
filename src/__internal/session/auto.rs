@@ -896,12 +896,20 @@ fn try_advance_classified<H: Host>(
     let only_milestones_pending = step.milestone_walk.is_some()
         && !report.failures.is_empty()
         && report.failures.iter().all(|f| {
-            // The MilestonesAllResolved gate check uses a
-            // distinctive description prefix; its failure reason
-            // also starts with "milestone files still have
-            // unresolved rows". Match either to be robust.
+            // The MilestonesAllResolved gate check uses two
+            // distinct failure reason strings depending on mode:
+            //   - Execution-mode (DM2d / DM3b / DM3c / DM4b): the
+            //     reason starts with "milestone files still have
+            //     unresolved rows" (some `- [ ]` rows remain).
+            //   - Detail-mode (DM2cd / DM3ad / DM4ad): the reason
+            //     starts with "milestone stubs not yet detailed"
+            //     (the placeholder marker is still in the body).
+            // Both are valid "loop back to next milestone's Work
+            // session" signals. The third match handles the
+            // empty-directory edge case.
             f.reason
                 .contains("milestone files still have unresolved rows")
+                || f.reason.contains("milestone stubs not yet detailed")
                 || f.reason.contains("no `") && f.reason.contains("NN-*.md` files found")
         });
     if only_milestones_pending {
@@ -1158,12 +1166,132 @@ fn run_manual_advance<H: Host>(
         })?;
         return Ok(());
     }
-    // try_advance handles gate evaluation, git commit, mark passed,
-    // bump current_step, and emits Diagnostic / StateAdvanced. On a
-    // dirty gate it writes a Diagnostic and returns false; we stay
-    // parked.
-    let _ = try_advance(&opts.project_dir, step_id, auto_host)?;
-    Ok(())
+    // For non-milestone-walk steps the simple `try_advance` is
+    // sufficient: gate clean -> StateAdvanced; dirty -> Diagnostic
+    // + stay parked. For milestone-walk steps (DM2cd, DM3ad, DM3b,
+    // DM3c, DM4ad, DM4b) we mirror auto mode's two retry paths:
+    //
+    //   - **Critique blockers on the current milestone**: the
+    //     agent's Work session left issues the Critique flagged
+    //     (e.g. duplicate task symbols). Re-run Work + Critique
+    //     for the SAME milestone (the orchestrator's per-session
+    //     `prior_critique_blockers` feedback gives the agent the
+    //     prior BLOCKERs verbatim). Bounded by `max_critique_iters`.
+    //   - **More milestones pending**: the current milestone is
+    //     clean and the gate's only failures are
+    //     `MilestonesAllResolved` -- run Work + Critique for the
+    //     NEXT pending milestone. Resets the critique-iter budget.
+    //
+    // Without this, manual hosts (e2e_manual, dashboard) stall the
+    // moment the first per-milestone critique flags any blocker:
+    // Advance fails, the host sits in `AwaitAdvance`, and the
+    // milestone walk never progresses.
+    const MILESTONE_WALK_CAP: u32 = 50;
+    let mut walk_iter: u32 = 0;
+    let mut critique_iters: u32 = 0;
+    loop {
+        // Critique-blocker retry path: read the on-disk critique
+        // BEFORE attempting advance. If blockers are present we
+        // know advance would return Stuck for that reason; loop
+        // back to Work directly so the agent gets the prior
+        // BLOCKERs in the next prompt without the user seeing a
+        // misleading "cannot advance" Error.
+        let blockers = read_blockers(&opts.project_dir, step_id);
+        if !blockers.is_empty() {
+            critique_iters += 1;
+            if critique_iters > opts.max_critique_iters {
+                auto_host.write(&Event::Diagnostic {
+                    level: DiagnosticLevel::Error,
+                    message: format!(
+                        "Advance: {step_id} critique still has {} blocker(s) after {} retries; \
+                         giving up. Inspect `docs/critiques/{step_id}-critique.json` and re-issue \
+                         RunStep / RunCritique manually after fixing.",
+                        blockers.len(),
+                        opts.max_critique_iters,
+                    ),
+                })?;
+                return Ok(());
+            }
+            auto_host.write(&Event::Diagnostic {
+                level: DiagnosticLevel::Info,
+                message: format!(
+                    "Advance: {step_id} critique has {} blocker(s); re-running Work + Critique \
+                     (retry {}/{}).",
+                    blockers.len(),
+                    critique_iters,
+                    opts.max_critique_iters,
+                ),
+            })?;
+            run_subsession(
+                opts,
+                step_id,
+                crate::client::SessionKind::Work,
+                /*auto=*/ true,
+                auto_host,
+                /*consume_end=*/ true,
+                /*synth_hello=*/ true,
+            )?;
+            run_subsession(
+                opts,
+                step_id,
+                crate::client::SessionKind::Critique,
+                /*auto=*/ true,
+                auto_host,
+                /*consume_end=*/ true,
+                /*synth_hello=*/ true,
+            )?;
+            continue;
+        }
+
+        let outcome = try_advance_classified(&opts.project_dir, step_id, auto_host)?;
+        match outcome {
+            AdvanceOutcome::Advanced | AdvanceOutcome::Stuck => {
+                // try_advance_classified already emitted the
+                // StateAdvanced / Diagnostic events on these paths.
+                return Ok(());
+            }
+            AdvanceOutcome::MoreMilestonesPending => {
+                walk_iter += 1;
+                if walk_iter > MILESTONE_WALK_CAP {
+                    auto_host.write(&Event::Diagnostic {
+                        level: DiagnosticLevel::Error,
+                        message: format!(
+                            "Advance: {step_id} milestone walk exceeded {MILESTONE_WALK_CAP} iterations \
+                             without clearing the gate; aborting. Inspect the milestone files manually."
+                        ),
+                    })?;
+                    return Ok(());
+                }
+                // New milestone targeted: reset critique-iter budget.
+                critique_iters = 0;
+                auto_host.write(&Event::Diagnostic {
+                    level: DiagnosticLevel::Info,
+                    message: format!(
+                        "Advance: {step_id} has more pending milestones; running next Work + Critique pair."
+                    ),
+                })?;
+                run_subsession(
+                    opts,
+                    step_id,
+                    crate::client::SessionKind::Work,
+                    /*auto=*/ true,
+                    auto_host,
+                    /*consume_end=*/ true,
+                    /*synth_hello=*/ true,
+                )?;
+                run_subsession(
+                    opts,
+                    step_id,
+                    crate::client::SessionKind::Critique,
+                    /*auto=*/ true,
+                    auto_host,
+                    /*consume_end=*/ true,
+                    /*synth_hello=*/ true,
+                )?;
+                // Loop and re-attempt advance.
+            }
+        }
+    }
 }
 
 fn run_manual_reset<H: Host>(

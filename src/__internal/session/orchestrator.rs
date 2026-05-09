@@ -225,6 +225,28 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
     let framework_docs_root = detect_framework_docs_root(&opts.foundation_root);
     let write_paths: Vec<String> = crate::steps::allowed_write_paths(&step, opts.kind);
 
+    // The current milestone's project-relative path, when this is a
+    // milestone-walk step. WriteFileTool reads the body fresh each
+    // call to autocorrect paths -- if the agent writes `src/foo.rs`
+    // but the milestone references `src/model/foo.rs`, the tool
+    // moves the file and surfaces the redirect in the result.
+    let current_milestone_path: Option<std::path::PathBuf> = step.milestone_walk.and_then(|walk| {
+        let pick_touched = match opts.kind {
+            SessionKind::Critique => true,
+            SessionKind::Work => !retry_blocker_blocks(&opts.project_dir, step.id).is_empty(),
+        };
+        match crate::__internal::steps::find_current_milestone(
+            &opts.project_dir,
+            &walk,
+            pick_touched,
+        ) {
+            crate::__internal::steps::CurrentMilestone::File(rel) => {
+                Some(opts.project_dir.join(rel))
+            }
+            _ => None,
+        }
+    });
+
     // 4b. Build the message stack + LLM-side tool descriptors via the
     //     shared helper so the interactive PTY driver can produce the
     //     exact same prompt without going through this loop.
@@ -819,13 +841,19 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 let mut tool_failures: u32 = 0;
                 for call in &tool_calls {
                     let started = std::time::Instant::now();
+                    // Read the current milestone's body fresh for
+                    // each call -- the agent may have just edited it.
+                    let milestone_body = current_milestone_path
+                        .as_deref()
+                        .and_then(|p| std::fs::read_to_string(p).ok());
                     let ctx = tools::ToolContext::new(
                         &opts.project_dir,
                         library_root.as_deref(),
                         framework_root.as_deref(),
                         framework_docs_root.as_deref(),
                     )
-                    .with_write_paths(&write_paths);
+                    .with_write_paths(&write_paths)
+                    .with_milestone_body(milestone_body.as_deref());
                     let outcome = invoke_tool(&dispatcher, &ctx, call);
                     let status = if outcome.ok { "ok" } else { "error" };
                     if outcome.ok {
@@ -993,6 +1021,22 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 // session itself ends naturally on a no-artifact
                 // turn (the wind-down branch below).
                 if opts.auto && opts.kind == SessionKind::Work {
+                    // Auto-tick milestone task rows whose code has
+                    // landed on disk before evaluating the gate.
+                    // Agents (qwen3.6 in particular) write the
+                    // artifact then forget to flip `- [ ]` to
+                    // `- [x]`, the gate stays dirty for what looks
+                    // to the agent like already-finished work, and
+                    // the auto loop burns its `max_auto_iters`
+                    // budget arguing about it. The helper only
+                    // flips a row when its first backtick-quoted
+                    // token (`<path>::<Symbol>`) maps to a file
+                    // that exists AND the symbol grep-matches; it
+                    // is intentionally conservative.
+                    let _flipped = crate::__internal::steps::tick_resolved_milestone_tasks(
+                        &opts.project_dir,
+                        &step,
+                    );
                     let report = evaluate_structural_gate(&opts.project_dir, &step)?;
                     if report.is_clean() {
                         host.write(&Event::SessionEnd {
@@ -1347,6 +1391,22 @@ fn is_framework_docs_root(candidate: &Path) -> bool {
 /// first such ancestor (highest in the tree); `None` if nothing in the
 /// chain matches.
 fn detect_library_root(project_dir: &Path) -> Option<std::path::PathBuf> {
+    // `SIM_FLOW_LIBRARY_ROOT` is the explicit override. The e2e binaries
+    // and any caller running the orchestrator against a project that
+    // doesn't live under sim-models (tempdir smoke projects, CI, etc.)
+    // set this so the agent can still resolve `lib:examples/...` and
+    // `lib:docs/modeling-guide/...` references the prompts depend on.
+    if let Ok(s) = std::env::var("SIM_FLOW_LIBRARY_ROOT") {
+        let trimmed = s.trim();
+        if !trimmed.is_empty() {
+            let p = std::path::PathBuf::from(trimmed);
+            let docs = p.join("docs").join("modeling-guide");
+            let examples = p.join("examples");
+            if docs.is_dir() && examples.is_dir() {
+                return Some(p);
+            }
+        }
+    }
     let mut cursor = project_dir.to_path_buf();
     // Cap at 16 levels to avoid pathological infinite loops if the
     // canonical path resolution does anything weird.
@@ -2174,6 +2234,16 @@ fn build_session_inputs(
                  milestone -- meaning you've replaced the stub with a full task \
                  list per the format specified by your prompt"
             )
+        } else if walk.forbid_deferred {
+            "When EVERY row in the current milestone is `- [x]` done. \
+             This step does NOT permit `- [-]` deferrals: they cannot \
+             persist past this gate. If a row in this milestone is \
+             currently `- [-]`, you must re-open it (set it back to \
+             `- [ ]`), implement it, then mark it `- [x]`. Defers are \
+             allowed during the work session for intra-step ordering, \
+             but every one must land as `- [x]` before you signal the \
+             milestone complete"
+                .to_string()
         } else {
             "When all `- [ ]` rows in the current milestone are resolved \
              (`- [x]` done OR `- [-]` deferred with a `defer reason:` sub-bullet)"

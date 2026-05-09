@@ -79,6 +79,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   private refreshQueued = false;
   private reconcilePromise: Promise<void> | undefined;
   private postChain: Promise<void> = Promise.resolve();
+  /**
+   * Opening / revealing the panel also calls `refresh()`, but that is
+   * not itself a project switch. We only want the expensive and
+   * destructive "stop the old session because the active project
+   * changed" path to run after an actual editor/workspace context
+   * change signalled by VS Code.
+   */
+  private projectSwitchPending = false;
 
   private get activePump(): ManagedAutoSessionState | undefined {
     return this.autoSessions.getActiveSession();
@@ -117,9 +125,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         }
       }),
       vscode.window.onDidChangeActiveTextEditor(() => {
+        this.projectSwitchPending = true;
         void this.refresh();
       }),
       vscode.workspace.onDidChangeWorkspaceFolders(() => {
+        this.projectSwitchPending = true;
         void this.refresh();
       }),
     );
@@ -129,6 +139,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     // listener doesn't outlive its session.
     this.autoSessions.onActiveSessionChanged((session) => {
       this.attachSubSessionListener(session);
+      // A newly attached/replaced session changes the panel's anchor
+      // immediately; refresh so OFFLINE flips to VIEWING/STREAMING
+      // without waiting for the next pump event. We intentionally do
+      // NOT auto-refresh on clear: the settle/stop paths already post
+      // an explicit final state for the session's project, and a
+      // follow-up refresh here can snap the panel back to whichever
+      // project the editor currently points at.
+      if (session) {
+        void this.refresh();
+      }
     });
   }
 
@@ -711,10 +731,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
     this.rememberConversation(args.projectDir, clearConversationState());
+    // Attach BEFORE revealing so the visibility-triggered refresh
+    // sees `activeSession` populated and renders VIEWING immediately
+    // -- otherwise the reveal's async `refresh()` can race ahead of
+    // attach and leave the pill stuck on OFFLINE when the user's
+    // active editor is in a different sim-flow project than the
+    // watcher's. The constructor's `onActiveSessionChanged` listener
+    // also calls `refresh()` to belt-and-suspenders this.
+    await this.autoSessions.attach(record, pump, this.autoSessionDelegate());
     await vscode.commands.executeCommand(
       `workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`,
     );
-    await this.autoSessions.attach(record, pump, this.autoSessionDelegate());
     // Surface attach success so the user knows the viewer is live.
     // Without this, a successful attach is silent and is easy to
     // confuse with the failure path (where we DO show a notice) --
@@ -1404,11 +1431,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   private async reconcileModeSwitchesInner(): Promise<void> {
+    const shouldReconcileProjectSwitch = this.projectSwitchPending;
+    this.projectSwitchPending = false;
     const requestedProjectDir = await resolveProjectDirForPanel();
     const settings = readPanelSettings();
 
     if (
       this.inFlight &&
+      shouldReconcileProjectSwitch &&
       requestedProjectDir !== this.inFlight.projectDir
     ) {
       await this.stopDirectResponse(
@@ -1439,6 +1469,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
     if (
       this.activePump &&
+      shouldReconcileProjectSwitch &&
       requestedProjectDir !== this.activePump.projectDir
     ) {
       await this.stopActivePumpSession(

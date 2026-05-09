@@ -8,6 +8,7 @@ to produce, easy to gate-check, and concretely verifiable.
 
 - **Process node**: 7 nm
 - **Target clock frequency**: 1 GHz (1.0 ns cycle)
+- **Gates per cycle**: 25
 
 ## Architecture
 

@@ -112,6 +112,15 @@ pub struct MilestoneWalkConfig {
     /// semantics: pending iff the file has at least one `- [ ]`
     /// row, resolved iff every row is `- [x]` / `- [-]`.
     pub placeholder_marker: Option<&'static str>,
+    /// When `true`, `- [-]` (deferred) rows count as pending for
+    /// `find_current_milestone` -- the walker keeps targeting the
+    /// milestone until every deferred row is converted to `- [x]`.
+    /// Pairs with the matching `forbid_deferred` flag on the gate
+    /// check so milestone-walk dispatch and gate evaluation agree.
+    /// Used by DM2d / DM3c / DM4b. Has no effect under
+    /// `placeholder_marker` mode (planning-detail steps don't have
+    /// `[-]` rows).
+    pub forbid_deferred: bool,
 }
 
 /// Allowed write-path prefixes for the given (step, kind). Work
@@ -261,12 +270,18 @@ pub fn find_current_milestone(
 }
 
 /// "Pending" means the agent still has work to do on this milestone.
-/// In execution mode that's a `- [ ]` row; in planning-detail mode
-/// that's the placeholder marker still present in the body.
+/// In execution mode that's a `- [ ]` row -- and additionally `- [-]`
+/// (deferred) when `walk.forbid_deferred` is true, so the walker
+/// targets a milestone with deferrals until they're implemented as
+/// `- [x]`. In planning-detail mode that's the placeholder marker
+/// still present in the body.
 fn milestone_is_pending(walk: &MilestoneWalkConfig, path: &std::path::Path) -> bool {
     match walk.placeholder_marker {
         Some(marker) => milestone_body_contains(path, marker),
-        None => milestone_has_pending_row(path),
+        None => {
+            milestone_has_pending_row(path)
+                || (walk.forbid_deferred && milestone_has_deferred_row(path))
+        }
     }
 }
 
@@ -300,6 +315,21 @@ fn milestone_has_pending_row(path: &std::path::Path) -> bool {
     };
     body.lines()
         .any(|line| line.trim_start().starts_with("- [ ]"))
+}
+
+/// True iff the file at `path` contains at least one line whose
+/// first non-whitespace tokens are `- [-]`. Used (with
+/// `forbid_deferred`) to keep the walker targeting milestones that
+/// still have deferred rows, so DM2d / DM3c / DM4b force the agent
+/// to actually implement them rather than letting `- [-]` masquerade
+/// as resolved.
+fn milestone_has_deferred_row(path: &std::path::Path) -> bool {
+    let body = match std::fs::read_to_string(path) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    body.lines()
+        .any(|line| line.trim_start().starts_with("- [-]"))
 }
 
 /// True iff the file at `path` contains at least one line whose
@@ -555,6 +585,7 @@ mod write_path_tests {
             file_prefixes: &["tb-milestone-"],
             index_file: "docs/test-plan/test-plan.md",
             placeholder_marker: None,
+            forbid_deferred: false,
         }
     }
 
@@ -676,6 +707,7 @@ mod write_path_tests {
             file_prefixes: &["test-milestone-"],
             index_file: "docs/test-plan/test-plan.md",
             placeholder_marker: None,
+            forbid_deferred: false,
         };
         let result = find_current_milestone(tmp.path(), &walk, false);
         assert_eq!(
@@ -809,7 +841,8 @@ mod write_path_tests {
             dir: "docs/impl-plan/",
             file_prefixes: &["milestone-"],
             index_file: "docs/impl-plan/plan.md",
-            placeholder_marker: Some("<!-- detail-pending -->"),
+            placeholder_marker: Some("<!-- detail-pending"),
+            forbid_deferred: false,
         }
     }
 
@@ -828,7 +861,7 @@ mod write_path_tests {
         write_milestone(
             &dir,
             "milestone-02-skeletons.md",
-            "# Milestone 02\n## Tasks\n<!-- detail-pending -->\n",
+            "# Milestone 02\n## Tasks\n<!-- detail-pending\n",
         );
         let walk = placeholder_walk();
         let result = find_current_milestone(tmp.path(), &walk, false);
@@ -857,7 +890,7 @@ mod write_path_tests {
         write_milestone(
             &dir,
             "milestone-03-stages.md",
-            "# Milestone 03\n## Tasks\n<!-- detail-pending -->\n",
+            "# Milestone 03\n## Tasks\n<!-- detail-pending\n",
         );
         let walk = placeholder_walk();
         // Retry mode: critique fired on the milestone JUST detailed.
@@ -909,18 +942,19 @@ mod write_path_tests {
         write_milestone(
             &dir,
             "tb-milestone-02-drivers.md",
-            "# tb-02\n## Tasks\n<!-- detail-pending -->\n",
+            "# tb-02\n## Tasks\n<!-- detail-pending\n",
         );
         write_milestone(
             &dir,
             "test-milestone-01-smoke.md",
-            "# test-01\n## Tasks\n<!-- detail-pending -->\n",
+            "# test-01\n## Tasks\n<!-- detail-pending\n",
         );
         let walk = MilestoneWalkConfig {
             dir: "docs/test-plan/",
             file_prefixes: &["tb-milestone-", "test-milestone-"],
             index_file: "docs/test-plan/test-plan.md",
-            placeholder_marker: Some("<!-- detail-pending -->"),
+            placeholder_marker: Some("<!-- detail-pending"),
+            forbid_deferred: false,
         };
         let result = find_current_milestone(tmp.path(), &walk, false);
         assert_eq!(

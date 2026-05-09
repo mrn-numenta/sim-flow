@@ -11,6 +11,69 @@ use crate::steps::is_path_allowed_for_writes;
 
 pub struct WriteFileTool;
 
+/// If `requested` doesn't appear in the milestone body but a SIBLING
+/// path with the same filename does (under a different parent dir
+/// rooted at the same top-level component), return the milestone's
+/// canonical path. Returns `None` when no body, no match, or the
+/// path is already canonical.
+///
+/// Example: agent writes `src/stage_add_one.rs`; milestone body
+/// contains `` `src/model/stage_add_one.rs::AddOne` `` (in a task
+/// row) -> redirect to `src/model/stage_add_one.rs`.
+///
+/// Conservative on purpose: only redirects when the requested path's
+/// FILENAME matches a milestone-mentioned path AND the requested
+/// path is NOT itself mentioned. Same-filename matches across
+/// unrelated top-level dirs (e.g. `tests/foo.rs` vs `src/foo.rs`)
+/// are left alone -- the requested path stays where the agent put
+/// it.
+fn autocorrect_path(requested: &str, milestone_body: Option<&str>) -> Option<String> {
+    let body = milestone_body?;
+    if body.contains(requested) {
+        // Already canonical (or at least milestone-mentioned).
+        return None;
+    }
+    let filename = std::path::Path::new(requested).file_name()?.to_str()?;
+    let req_top = requested.split('/').next()?;
+    // Scan body for tokens that look like project-relative paths
+    // ending in our filename. The milestone format encloses paths
+    // in backticks (`src/model/stage_add_one.rs::AddOne`); we strip
+    // the optional `::Symbol[::Sub]` tail and pick the first
+    // match whose top-level component matches the requested path.
+    for token in body
+        .split(|c: char| c.is_whitespace() || matches!(c, '`' | '"' | '\'' | ',' | ';' | '(' | ')'))
+    {
+        let cleaned = token.split("::").next().unwrap_or(token);
+        if cleaned.is_empty() || cleaned == requested {
+            continue;
+        }
+        let cleaned_filename = match std::path::Path::new(cleaned)
+            .file_name()
+            .and_then(|n| n.to_str())
+        {
+            Some(n) => n,
+            None => continue,
+        };
+        if cleaned_filename != filename {
+            continue;
+        }
+        let cleaned_top = match cleaned.split('/').next() {
+            Some(t) => t,
+            None => continue,
+        };
+        if cleaned_top != req_top {
+            continue;
+        }
+        // Sanity: the canonical token must be a valid relative path
+        // (no `..`, no leading `/`).
+        if cleaned.starts_with('/') || cleaned.split('/').any(|c| c == ".." || c.is_empty()) {
+            continue;
+        }
+        return Some(cleaned.to_string());
+    }
+    None
+}
+
 impl Tool for WriteFileTool {
     fn name(&self) -> &'static str {
         "write_file"
@@ -46,7 +109,7 @@ impl Tool for WriteFileTool {
              `{\"path\": \"<relative-path>\", \"content\": \"<full file body>\"}`. \
              You provided `path` but no `content`; include the full file body \
              as a string literal.";
-        let path = match args.get("path").and_then(|v| v.as_str()) {
+        let mut path = match args.get("path").and_then(|v| v.as_str()) {
             Some(s) => s.to_string(),
             None => return Ok(ToolResult::err(MISSING_PATH_HELP)),
         };
@@ -54,6 +117,19 @@ impl Tool for WriteFileTool {
             return Ok(ToolResult::err(
                 "write_file: the library root is read-only; `lib:` paths cannot be written",
             ));
+        }
+        // Path autocorrect: if the agent's path is not referenced by
+        // the active milestone task list but a SIBLING path with the
+        // same filename IS, redirect to the milestone-canonical path.
+        // Catches the common DM2d miss where the agent puts stage
+        // code at `src/<file>.rs` even though the plan placed it at
+        // `src/model/<file>.rs`.
+        let mut redirect_note: Option<String> = None;
+        if let Some(canonical) = autocorrect_path(&path, ctx.current_milestone_body) {
+            redirect_note = Some(format!(
+                "[write_file] auto-redirected `{path}` -> `{canonical}` to match the active milestone's task list. Update your subsequent reads / writes to use the canonical path."
+            ));
+            path = canonical;
         }
         if !is_path_allowed_for_writes(ctx.write_paths, &path) {
             return Ok(ToolResult::err(format!(
@@ -95,10 +171,12 @@ impl Tool for WriteFileTool {
                         "write_file: critique JSON written to `{path}` but markdown render failed: {err}"
                     )));
                 }
-                Ok(ToolResult::ok(format!(
-                    "[write_file `{path}`] {} bytes",
-                    content.len()
-                )))
+                let mut msg = format!("[write_file `{path}`] {} bytes", content.len());
+                if let Some(note) = redirect_note {
+                    msg.push_str("\n\n");
+                    msg.push_str(&note);
+                }
+                Ok(ToolResult::ok(msg))
             }
             Err(err) => Ok(ToolResult::err(format!(
                 "write_file: cannot write `{path}`: {err}"

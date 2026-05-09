@@ -1228,9 +1228,12 @@ fn gate_check_to_out(check: &sim_flow::__internal::gate::GateCheck) -> GateCheck
             file_prefixes,
             placeholder_marker,
             description,
+            forbid_deferred,
         } => GateCheckOut {
             kind: if placeholder_marker.is_some() {
                 "milestones-all-detailed"
+            } else if *forbid_deferred {
+                "milestones-all-implemented"
             } else {
                 "milestones-all-resolved"
             },

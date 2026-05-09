@@ -37,8 +37,10 @@ use serde_json::Value;
 use sim_flow::session::agent::{ClaudeAgent, CliAgent, OllamaAgent, OpenAiCompatAgent};
 use sim_flow::session::ingest_spec_file;
 use sim_flow::session::protocol::{
-    Event, HostEvent, HostInfo, LlmMessage, PROTOCOL_VERSION, SessionKindOut, StepMode,
+    DiagnosticLevel, Event, HostEvent, HostInfo, LlmMessage, PROTOCOL_VERSION, SessionKindOut,
+    StepMode,
 };
+use sim_flow::test_validation::validate_step_advanced;
 
 fn main() {
     let args: Args = match Args::parse(std::env::args().collect()) {
@@ -212,6 +214,37 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         "e2e_manual: model           = {}",
         args.model.as_deref().unwrap_or("(default)")
     );
+    // Default `SIM_FLOW_LIBRARY_ROOT` to the sibling `sim-models/` of
+    // the foundation-root when the caller hasn't already set it. The
+    // smoke project lives in a tempdir, so the orchestrator's
+    // ancestor-walk auto-detection finds nothing and every
+    // `lib:examples/...` / `lib:docs/modeling-guide/...` read errors
+    // -- which kneecaps every DM step that's supposed to learn from
+    // sim-models. Honor an explicit env override; otherwise probe the
+    // sibling and only set if it has the expected layout.
+    if std::env::var_os("SIM_FLOW_LIBRARY_ROOT").is_none() {
+        if let Some(parent) = args.foundation_root.parent() {
+            let candidate = parent.join("sim-models");
+            if candidate.join("docs").join("modeling-guide").is_dir()
+                && candidate.join("examples").is_dir()
+            {
+                println!(
+                    "e2e_manual: library_root    = {} (auto)",
+                    candidate.display()
+                );
+                // SAFETY: we set the env var before spawning the child;
+                // no other thread is reading it yet.
+                unsafe {
+                    std::env::set_var("SIM_FLOW_LIBRARY_ROOT", &candidate);
+                }
+            }
+        }
+    } else {
+        println!(
+            "e2e_manual: library_root    = {} (env)",
+            std::env::var("SIM_FLOW_LIBRARY_ROOT").unwrap_or_default()
+        );
+    }
     println!();
 
     // Pre-ingest the spec so the orchestrator's first session has the
@@ -298,7 +331,7 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         _ => unreachable!("validated in Args::parse"),
     };
 
-    let outcome = drive(stdin, &event_rx, agent.as_ref());
+    let outcome = drive(stdin, &event_rx, agent.as_ref(), &args.project_dir);
 
     // Tear down: signal Shutdown if the loop didn't already, then
     // wait for child and reader.
@@ -315,7 +348,40 @@ fn run(args: &Args) -> std::result::Result<(), String> {
 
     summarize_state(&args.project_dir)?;
 
-    outcome
+    let verdict = outcome?;
+    // Convert collected error diagnostics + validation failures into
+    // a non-zero exit. The drive() loop logs them as they arrive, so
+    // the caller already saw the detail; this final summary makes
+    // the failure mode explicit and ensures CI / scripted runs treat
+    // a "completed but with errors" run as the failure it actually is.
+    let mut bail: Vec<String> = Vec::new();
+    if !verdict.errors_seen.is_empty() {
+        bail.push(format!(
+            "{} orchestrator Error diagnostic(s) (e.g. {})",
+            verdict.errors_seen.len(),
+            verdict
+                .errors_seen
+                .first()
+                .map(|s| s.as_str())
+                .unwrap_or("")
+        ));
+    }
+    if !verdict.validation_failures.is_empty() {
+        bail.push(format!(
+            "{} post-advance validation failure(s) (e.g. {})",
+            verdict.validation_failures.len(),
+            verdict
+                .validation_failures
+                .first()
+                .map(|s| s.as_str())
+                .unwrap_or("")
+        ));
+    }
+    if !bail.is_empty() {
+        return Err(format!("TEST FAILED: {}", bail.join("; ")));
+    }
+    println!("e2e_manual: TEST PASSED (no errors, all post-advance validations clean)");
+    Ok(())
 }
 
 /// Outcome wrapper carried over the channel: either a parsed Event
@@ -370,11 +436,24 @@ fn reader_loop(stdout: ChildStdout, tx: Sender<EventFromOrch>) {
     }
 }
 
+/// Test verdict accumulated by `drive`. Lets `run` decide the
+/// process exit code AFTER teardown -- a run can complete cleanly
+/// from the orchestrator's POV (Shutdown sent, child exited 0)
+/// while still having raised Error diagnostics or failed
+/// post-advance invariants. Without this the test silently passed
+/// on a corrupted state.
+#[derive(Debug, Default)]
+pub struct TestVerdict {
+    pub errors_seen: Vec<String>,
+    pub validation_failures: Vec<String>,
+}
+
 fn drive(
     mut stdin: ChildStdin,
     rx: &Receiver<EventFromOrch>,
     agent: &dyn CliAgent,
-) -> std::result::Result<(), String> {
+    project_dir: &std::path::Path,
+) -> std::result::Result<TestVerdict, String> {
     // 1. Send Hello to kick off the handshake.
     send_host_event(
         &mut stdin,
@@ -398,6 +477,7 @@ fn drive(
     // honest); `phase` tracks where we are in the (work, critique,
     // advance) triplet for the current step.
     let mut phase = ManualPhase::AwaitHelloAck;
+    let mut verdict = TestVerdict::default();
     loop {
         let evt = match rx.recv() {
             Ok(e) => e,
@@ -406,16 +486,16 @@ fn drive(
         match evt {
             EventFromOrch::Eof => {
                 println!("e2e_manual: sim-flow stdout closed (session ended)");
-                return Ok(());
+                return Ok(verdict);
             }
             EventFromOrch::Err(err) => {
                 eprintln!("e2e_manual: stdout parse error: {err}");
                 continue;
             }
             EventFromOrch::Event(event) => {
-                phase = handle_event(phase, *event, &mut stdin, agent)?;
+                phase = handle_event(phase, *event, &mut stdin, agent, project_dir, &mut verdict)?;
                 if matches!(phase, ManualPhase::Done) {
-                    return Ok(());
+                    return Ok(verdict);
                 }
             }
         }
@@ -456,6 +536,8 @@ fn handle_event(
     event: Event,
     stdin: &mut ChildStdin,
     agent: &dyn CliAgent,
+    project_dir: &std::path::Path,
+    verdict: &mut TestVerdict,
 ) -> std::result::Result<ManualPhase, String> {
     match event {
         Event::HelloAck { session, .. } => {
@@ -508,7 +590,23 @@ fn handle_event(
             outcome,
         } => {
             println!("e2e_manual: SubSessionEnded {step}.{kind:?} -> {outcome}");
-            Ok(ManualPhase::AfterSubSession { step, kind })
+            // While in `AwaitAdvance` the orchestrator may
+            // auto-launch its own Work + Critique sub-sessions
+            // (run_manual_advance's MoreMilestonesPending and
+            // critique-blocker retry loops both call
+            // run_subsession internally). Their SubSessionEnded
+            // events are NOT signals for the host to drive --
+            // they're internal bookkeeping, and dispatching another
+            // RunStep here would land while the orchestrator is
+            // still inside its loop and get rejected with
+            // "ignored RunStep: a sub-session is currently
+            // running". Stay in AwaitAdvance and wait for the
+            // ultimate StateAdvanced (or an Error diagnostic).
+            if matches!(phase, ManualPhase::AwaitAdvance { .. }) {
+                Ok(phase)
+            } else {
+                Ok(ManualPhase::AfterSubSession { step, kind })
+            }
         }
         Event::PhaseChanged { phase: phase_str } => {
             println!("e2e_manual:   phase -> {phase_str}");
@@ -560,27 +658,40 @@ fn handle_event(
             }
             Ok(phase)
         }
-        Event::StateAdvanced { from, to } => match to {
-            Some(next) => {
-                println!("e2e_manual: StateAdvanced {from} -> {next}; running next step");
-                send_host_event(
-                    stdin,
-                    &HostEvent::RunStep {
-                        step: next.clone(),
+        Event::StateAdvanced { from, to } => {
+            // Independent post-advance validation: re-runs the gate
+            // and additionally checks artifact existence / size +
+            // milestone-walk task counts. Catches gate BUGS that
+            // would otherwise let the test silently chase a
+            // corrupted state (the marker-substring mismatch class
+            // of bug we hit on DM2cd). Failures don't stop the run
+            // -- we collect them and fail the test at exit -- so
+            // the user sees what else breaks downstream.
+            let report = validate_step_advanced(project_dir, &from);
+            report.print(&format!("post-advance:{from}"));
+            verdict.validation_failures.extend(report.failures);
+            match to {
+                Some(next) => {
+                    println!("e2e_manual: StateAdvanced {from} -> {next}; running next step");
+                    send_host_event(
+                        stdin,
+                        &HostEvent::RunStep {
+                            step: next.clone(),
+                            kind: SessionKindOut::Work,
+                        },
+                    )?;
+                    Ok(ManualPhase::InStep {
+                        step: next,
                         kind: SessionKindOut::Work,
-                    },
-                )?;
-                Ok(ManualPhase::InStep {
-                    step: next,
-                    kind: SessionKindOut::Work,
-                })
+                    })
+                }
+                None => {
+                    println!("e2e_manual: StateAdvanced {from} -> (end of flow); shutting down");
+                    send_host_event(stdin, &HostEvent::Shutdown)?;
+                    Ok(ManualPhase::Done)
+                }
             }
-            None => {
-                println!("e2e_manual: StateAdvanced {from} -> (end of flow); shutting down");
-                send_host_event(stdin, &HostEvent::Shutdown)?;
-                Ok(ManualPhase::Done)
-            }
-        },
+        }
         Event::RequestUserInput { .. } => {
             // In manual mode the orchestrator parks for user input
             // when a sub-session needs human guidance (e.g. an
@@ -672,6 +783,17 @@ fn handle_event(
         }
         Event::Diagnostic { level, message } => {
             println!("e2e_manual:   [{level:?}] {message}");
+            // Record orchestrator-emitted Error diagnostics so the
+            // process exits non-zero. Warning / Info are noise. The
+            // run_manual_advance loop in the orchestrator now
+            // handles transient gate dirties (critique blockers,
+            // milestones-pending) internally with retry; if an
+            // Error escapes to the host, it's a real terminal
+            // failure -- max-retries exhausted, runaway loop, or
+            // protocol-level bug -- and the test should fail.
+            if matches!(level, DiagnosticLevel::Error) {
+                verdict.errors_seen.push(message.clone());
+            }
             Ok(phase)
         }
         Event::SessionEnd { reason, message } => {

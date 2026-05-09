@@ -213,8 +213,8 @@ modification-friendly across iterations.
   block diagram on the DM2d -> DM3a advance via
   `crate::dump_topology(&args)` defined in `src/lib.rs`.
   The contract DM2d MUST keep intact:
-  - `pub struct Top` (or whatever name the template ships)
-    stays in `src/model/top.rs` with `Default + Module +
+  - `pub struct Top` (literal name `Top`) stays in
+    `src/model/top.rs` and has `Default + Module +
     HasInstances + HasLogic` impls.
   - `dump_topology` in `src/lib.rs` stays callable with
     `&TopologyDumpArgs`. Don't rename, delete, or change its
@@ -222,6 +222,45 @@ modification-friendly across iterations.
   - `src/main.rs`'s top-of-`fn main` dispatch (which calls
     `dump_topology` when any `--dump-*` flag is passed) stays
     in place.
+
+  **DO NOT** redirect `Top` through a re-export
+  (`pub use crate::pipeline::Foo as Top;`) -- the gate's
+  structural grep checks `src/model/top.rs` for the literal
+  text `pub struct Top` AND `impl Module for Top`. A type
+  alias or re-export does not contain those tokens; the gate
+  fails even though the code compiles. If you want a
+  descriptive struct name internally, define it as the inner
+  field of `Top`, not as `Top` itself.
+
+  Canonical shape the gate expects (replace stub bodies, keep
+  the names + traits + module location):
+
+  ```rust
+  // src/model/top.rs
+  use foundation_framework::prelude::*;
+
+  #[derive(Clone, Debug, Default, HasInstances, HasLogic, SignalTraceState)]
+  pub struct Top {
+      // ... your stage instances + ports here ...
+  }
+
+  impl Module for Top {
+      fn evaluate(&mut self, ctx: &mut EvaluateContext) { /* ... */ }
+      fn settle(&mut self, ctx: &mut SettleContext)     { /* ... */ }
+      fn update(&mut self, ctx: &mut UpdateContext)     { /* ... */ }
+  }
+  ```
+
+  The pipeline structure / stages live as child modules
+  (`src/model/<stage>.rs`) referenced from `Top`'s fields, not
+  from a sibling `src/pipeline.rs`. Anything DM2d writes that
+  the milestone task list names under `src/model/` MUST land
+  under `src/model/`; writes to `src/<file>.rs` for code that
+  the plan placed under `src/model/` are auto-redirected by
+  the orchestrator (you'll see a notice in the tool result)
+  -- but the right move is to write the canonical path the
+  first time.
+
   Replace the stub `Top` body with the real model -- add
   fields, child modules, port wiring, evaluate/settle/update
   bodies -- but keep the type name + `Default::default()`

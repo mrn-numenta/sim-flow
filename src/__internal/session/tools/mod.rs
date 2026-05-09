@@ -63,6 +63,14 @@ pub struct ToolContext<'a> {
     /// orchestrator's artifact-write extractor enforces the same set
     /// before persisting fenced ` ```path ` blocks.
     pub write_paths: &'a [String],
+    /// When the current sub-session is scoped to a milestone, the
+    /// orchestrator passes the milestone file's body here so
+    /// `WriteFileTool` can autocorrect paths: if the agent writes
+    /// `src/foo.rs` but the milestone references `src/model/foo.rs`,
+    /// the tool redirects the write and tells the agent. `None`
+    /// outside milestone-walk steps. Empty string is fine (no
+    /// hints; no redirect).
+    pub current_milestone_body: Option<&'a str>,
 }
 
 impl<'a> ToolContext<'a> {
@@ -78,11 +86,17 @@ impl<'a> ToolContext<'a> {
             framework_root,
             framework_docs_root,
             write_paths: &[],
+            current_milestone_body: None,
         }
     }
 
     pub fn with_write_paths(mut self, write_paths: &'a [String]) -> Self {
         self.write_paths = write_paths;
+        self
+    }
+
+    pub fn with_milestone_body(mut self, body: Option<&'a str>) -> Self {
+        self.current_milestone_body = body;
         self
     }
 }
@@ -308,31 +322,117 @@ pub struct ParsedToolCall {
 /// orchestrator runs this alongside artifact extraction; the two
 /// kinds of fences are mutually exclusive (an info-string is either
 /// a relative file path with a dot, or a `tool:<name>` directive).
+///
+/// Lenient `tool:write_file` recovery: some agents emit the
+/// function-call shape with a path-only body and put the content in
+/// a SEPARATE adjacent language fence (```rust, ```text, etc.):
+///
+/// ```text
+/// ```tool:write_file
+/// src/model/mod.rs
+/// ```
+///
+/// ```rust
+/// pub mod foo;
+/// ```
+/// ```
+///
+/// The strict reading rejects the first fence (no content) and
+/// silently drops the second (info-string isn't a path), so the
+/// agent's write goes nowhere. We detect the pattern and merge:
+/// when a `tool:write_file` body is a single non-empty line that
+/// resembles a project-relative path AND the next fenced block has
+/// an unrecognized (non-`tool:`, non-path) info-string, treat the
+/// next block's body as the file content and emit a single
+/// JSON-shaped tool call.
 pub fn extract_tool_calls(response_text: &str) -> Vec<ParsedToolCall> {
+    // Tokenize the response into fenced blocks first, then walk
+    // them so we can look at adjacent pairs.
+    let blocks = collect_fenced_blocks(response_text);
     let mut out: Vec<ParsedToolCall> = Vec::new();
+    let mut i = 0;
+    while i < blocks.len() {
+        let b = &blocks[i];
+        let Some(name) = b.info.strip_prefix("tool:") else {
+            i += 1;
+            continue;
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            i += 1;
+            continue;
+        }
+        // Lenient write_file path-only-body merge.
+        if name == "write_file" && body_is_just_path(&b.body) && i + 1 < blocks.len() {
+            let next = &blocks[i + 1];
+            let next_info = next.info.trim();
+            let next_is_tool = next_info.starts_with("tool:");
+            let next_is_path = !next_info.is_empty() && next_info.contains('.');
+            if !next_is_tool && !next_is_path {
+                let path = b.body.trim().to_string();
+                let content = next.body.clone();
+                let json = serde_json::json!({ "path": path, "content": content });
+                out.push(ParsedToolCall {
+                    name: name.to_string(),
+                    body: json.to_string(),
+                });
+                i += 2;
+                continue;
+            }
+        }
+        out.push(ParsedToolCall {
+            name: name.to_string(),
+            body: b.body.clone(),
+        });
+        i += 1;
+    }
+    out
+}
+
+struct FencedBlock {
+    info: String,
+    body: String,
+}
+
+/// Walk every ```...``` fence in `text`, returning each in order
+/// with its info-string and body.
+fn collect_fenced_blocks(text: &str) -> Vec<FencedBlock> {
+    let mut out: Vec<FencedBlock> = Vec::new();
     let mut in_block: Option<(String, Vec<String>)> = None;
-    for line in response_text.split('\n') {
+    for line in text.split('\n') {
         if let Some((_, body)) = in_block.as_mut() {
             if line.trim_start().starts_with("```") && line.trim().len() == 3 {
-                let (name, lines) = in_block.take().expect("guarded by Some");
-                out.push(ParsedToolCall {
-                    name,
+                let (info, lines) = in_block.take().expect("guarded by Some");
+                out.push(FencedBlock {
+                    info,
                     body: lines.join("\n"),
                 });
                 continue;
             }
             body.push(line.to_string());
         } else if let Some(rest) = line.strip_prefix("```") {
-            let info = rest.trim();
-            if let Some(name) = info.strip_prefix("tool:") {
-                let name = name.trim();
-                if !name.is_empty() {
-                    in_block = Some((name.to_string(), Vec::new()));
-                }
+            let info = rest.trim().to_string();
+            if !info.is_empty() {
+                in_block = Some((info, Vec::new()));
             }
         }
     }
     out
+}
+
+/// True when `body` is a single non-empty line that looks like a
+/// project-relative file path (contains a `.`, no whitespace,
+/// doesn't start with `{`). Used by the lenient write_file merge.
+fn body_is_just_path(body: &str) -> bool {
+    let lines: Vec<&str> = body.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.len() != 1 {
+        return false;
+    }
+    let line = lines[0].trim();
+    !line.is_empty()
+        && !line.starts_with('{')
+        && line.contains('.')
+        && !line.chars().any(char::is_whitespace)
 }
 
 #[cfg(test)]

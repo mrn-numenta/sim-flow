@@ -289,6 +289,33 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         args.max_identical_responses,
         args.no_preamble,
     );
+    // Mirror e2e_manual: smoke projects in tempdirs would otherwise see
+    // `library_root = None` (the orchestrator's ancestor walk finds
+    // nothing above /tmp/), and every `lib:examples/...` read errors.
+    // Default `SIM_FLOW_LIBRARY_ROOT` to the sibling `sim-models/` of
+    // the foundation-root when the caller hasn't already set it.
+    if std::env::var_os("SIM_FLOW_LIBRARY_ROOT").is_none() {
+        if let Some(parent) = args.foundation_root.parent() {
+            let candidate = parent.join("sim-models");
+            if candidate.join("docs").join("modeling-guide").is_dir()
+                && candidate.join("examples").is_dir()
+            {
+                println!(
+                    "e2e_auto: library_root      = {} (auto)",
+                    candidate.display()
+                );
+                // SAFETY: set before we spawn anything that reads it.
+                unsafe {
+                    std::env::set_var("SIM_FLOW_LIBRARY_ROOT", &candidate);
+                }
+            }
+        }
+    } else {
+        println!(
+            "e2e_auto: library_root      = {} (env)",
+            std::env::var("SIM_FLOW_LIBRARY_ROOT").unwrap_or_default()
+        );
+    }
     println!();
 
     // Spec ingestion: chunk the source spec into `.sim-flow/spec-pages/`
@@ -419,6 +446,47 @@ fn run(args: &Args) -> std::result::Result<(), String> {
     );
 
     summarize_state(&args.project_dir)?;
+
+    // Independent post-run validation: re-runs every passed step's
+    // gate AND checks artifact-existence + milestone-walk task
+    // counts. Catches the gate-bug class of failure (where the
+    // orchestrator advanced on un-finished collateral and the
+    // existing summarize_state byte-only presence check waved it
+    // through).
+    let report = sim_flow::test_validation::validate_full_state(&args.project_dir);
+    report.print("e2e_auto: full-state");
+    if !report.is_clean() {
+        return Err(format!(
+            "TEST FAILED: {} post-run validation failure(s); see [VALIDATE-FAIL] lines above",
+            report.failures.len()
+        ));
+    }
+
+    // run_auto is supposed to drive the entire flow to its terminal
+    // step. If state.toml's `current_step` isn't the registered
+    // last-step (or the flow didn't fully advance), the run was
+    // incomplete -- fail loudly so a partially-finished run doesn't
+    // get rubber-stamped. The terminal step is whichever step the
+    // registry's `order_for` lists last.
+    {
+        let dot = args.project_dir.join(".sim-flow");
+        let state = sim_flow::__internal::state::State::load(&dot)
+            .map_err(|err| format!("load state.toml: {err}"))?;
+        let registry = sim_flow::__internal::steps::registry_for(state.flow);
+        let order = registry.order_for(state.flow);
+        if let Some(last) = order.last() {
+            let last_passed = state.gates.get(*last).map(|g| g.passed).unwrap_or(false);
+            if !last_passed {
+                return Err(format!(
+                    "TEST FAILED: terminal step `{last}` did not pass; current_step=`{}`. \
+                     run_auto returned without driving the flow to completion.",
+                    state.current_step
+                ));
+            }
+        }
+    }
+
+    println!("e2e_auto: TEST PASSED (full state validated, flow advanced to terminal step)");
     Ok(())
 }
 
