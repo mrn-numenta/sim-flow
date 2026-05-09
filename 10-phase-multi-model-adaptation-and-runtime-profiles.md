@@ -135,17 +135,17 @@ more provider-conditionals to backend classes.
 Build the response normalizer into a first-class layer and use it to stop
 flattening structured output too early.
 
-- [ ] Normalize OpenAI-compatible reasoning and tool-call output into the shared
+- [x] Normalize OpenAI-compatible reasoning and tool-call output into the shared
   internal chunk/event shape.
-- [ ] Normalize Anthropic / Claude typed blocks into the same shape, preserving
+- [x] Normalize Anthropic / Claude typed blocks into the same shape, preserving
   `thinking`, `tool_use`, and `tool_result` semantics rather than collapsing to
   concatenated text.
-- [ ] Add raw-text normalizers for families whose thinking is exposed as text
+- [x] Add raw-text normalizers for families whose thinking is exposed as text
   markers rather than typed blocks:
   - Qwen `<think>...</think>`
   - Kimi custom think delimiters
   - any Gemma family marker handling needed by the selected runtime
-- [ ] Add negative tests that prove reasoning cannot leak into artifact writing
+- [x] Add negative tests that prove reasoning cannot leak into artifact writing
   or tool-call parsing once the normalizer boundary is in place.
 
 After M4: all supported TS-backed runtimes emit one normalized internal stream.
@@ -230,5 +230,7 @@ surface, then mirrors the design into Rust once the seam has proven itself.
 - [x] Milestone 3 completed in the TypeScript backend path with explicit
   model-family profiles, inference/override support, prompt-policy helpers, and
   multimodal ordering policy.
-- [ ] Shared response normalizer boundary not started.
+- [x] Milestone 4 completed in the TypeScript backend path with shared response
+  normalizers, raw-text thinking-tag parsing, and Anthropic structured block
+  preservation.
 - [ ] Rust parity work not started.
