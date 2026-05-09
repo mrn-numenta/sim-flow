@@ -150,7 +150,7 @@ fn run(args: &Args) -> std::result::Result<(), String> {
     // stdin is closed (the auto driver shouldn't need user input;
     // any RequestUserInput is treated as "fall back to the user" in
     // interactive mode and we'll see it as a stuck terminal).
-    let agent = ClaudeAgent::new(args.model.clone());
+    let agent = ClaudeAgent::new(args.model.clone(), None);
     let stdin = BufReader::new(Cursor::new(Vec::<u8>::new()));
     let stdout = std::io::stdout();
     let stderr = std::io::stderr();

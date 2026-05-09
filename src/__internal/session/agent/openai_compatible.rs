@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::{normalize_response_text, prepare_messages_for_openai_compat, resolve_model_family};
 use crate::session::agent::LlmCallMetrics;
 use crate::session::protocol::{LlmMessage, LlmRole};
 use crate::{Error, Result};
@@ -18,6 +19,7 @@ use crate::{Error, Result};
 pub struct OpenAiCompatibleRequest<'a> {
     pub base_url: &'a str,
     pub model: &'a str,
+    pub model_family_id: Option<&'a str>,
     pub messages: &'a [LlmMessage],
     pub api_key: Option<&'a str>,
     /// Stop early once we've collected this many bytes of response.
@@ -63,11 +65,17 @@ impl<'a> OpenAiCompatibleRequest<'a> {
         Self {
             base_url,
             model,
+            model_family_id: None,
             messages,
             api_key: None,
             max_response_bytes,
             max_tokens,
         }
+    }
+
+    pub fn with_model_family_id(mut self, model_family_id: Option<&'a str>) -> Self {
+        self.model_family_id = model_family_id;
+        self
     }
 }
 
@@ -135,23 +143,14 @@ struct ResponseMessage {
 /// `<base_url>/chat/completions`.
 pub fn dispatch_chat(req: OpenAiCompatibleRequest<'_>) -> Result<(String, LlmCallMetrics)> {
     let started = std::time::Instant::now();
-    // Merge consecutive leading system messages into one. The
-    // orchestrator's `build_initial_messages` stacks 4-5 system
-    // messages at the front (convention + instructions, tool catalog,
-    // session inputs, spec TOC, framework TOC) which OpenAI / LM
-    // Studio happily accept verbatim. vLLM enforces qwen / llama
-    // chat templates that require EXACTLY ONE system message at the
-    // start ("System message must be at the beginning."), so we
-    // collapse the stack here. Concatenation order matches the
-    // orchestrator's emit order; a `\n\n---\n\n` separator preserves
-    // the visual block boundaries the model would otherwise lose.
-    let merged_messages = merge_leading_system_messages(req.messages);
+    let model_family = resolve_model_family(req.model_family_id, Some(req.model));
+    let prepared_messages = prepare_messages_for_openai_compat(req.messages, model_family);
     let body = ChatRequestBody {
         model: req.model,
-        messages: merged_messages
+        messages: prepared_messages
             .iter()
             .map(|m| RequestMessage {
-                role: m.role,
+                role: role_str(m.role),
                 content: m.content.as_ref(),
             })
             .collect(),
@@ -213,7 +212,7 @@ pub fn dispatch_chat(req: OpenAiCompatibleRequest<'_>) -> Result<(String, LlmCal
         tokens_out: parsed.usage.as_ref().and_then(|u| u.completion_tokens),
         wall_ms: started.elapsed().as_millis() as u64,
     };
-    let text = decode_choice(parsed.choices.into_iter().next())?;
+    let text = decode_choice(parsed.choices.into_iter().next(), model_family)?;
     Ok((text, metrics))
 }
 
@@ -236,7 +235,10 @@ pub fn dispatch_chat(req: OpenAiCompatibleRequest<'_>) -> Result<(String, LlmCal
 /// fall back to `reasoning` (vLLM / qwen sometimes emit only
 /// `reasoning` when the chat template treats a turn as
 /// reasoning-only).
-fn decode_choice(choice: Option<Choice>) -> Result<String> {
+fn decode_choice(
+    choice: Option<Choice>,
+    model_family: &super::adaptation::ModelFamilyProfile,
+) -> Result<String> {
     let Some(c) = choice else {
         return Ok(String::new());
     };
@@ -257,9 +259,9 @@ fn decode_choice(choice: Option<Choice>) -> Result<String> {
         )));
     }
     if !content.is_empty() {
-        Ok(content)
+        Ok(normalize_response_text(model_family, &content))
     } else if !reasoning.is_empty() {
-        Ok(reasoning)
+        Ok(normalize_response_text(model_family, &reasoning))
     } else {
         Ok(String::new())
     }
@@ -271,54 +273,6 @@ fn role_str(role: LlmRole) -> &'static str {
         LlmRole::User => "user",
         LlmRole::Assistant => "assistant",
     }
-}
-
-/// Owned message wrapper used by `merge_leading_system_messages` so
-/// the merged-system entry (a freshly-allocated `String`) can sit
-/// alongside borrowed references to original message contents.
-struct MergedMessage<'a> {
-    role: &'static str,
-    content: std::borrow::Cow<'a, str>,
-}
-
-/// Collapse consecutive leading system messages into one. Required
-/// for backends whose chat template rejects multi-system stacks
-/// (vLLM / qwen, certain llama templates). Trailing system messages
-/// inside the conversation are left alone — the orchestrator doesn't
-/// emit those today; if a future feature does, the backend will
-/// reject the request and we'll see the body in the LlmError
-/// diagnostic so we can add a per-backend adapter then.
-fn merge_leading_system_messages(messages: &[LlmMessage]) -> Vec<MergedMessage<'_>> {
-    let leading_system_count = messages
-        .iter()
-        .take_while(|m| matches!(m.role, LlmRole::System))
-        .count();
-    let mut out: Vec<MergedMessage<'_>> = Vec::with_capacity(messages.len());
-    if leading_system_count >= 2 {
-        let mut merged = String::new();
-        for (i, m) in messages.iter().take(leading_system_count).enumerate() {
-            if i > 0 {
-                merged.push_str("\n\n---\n\n");
-            }
-            merged.push_str(&m.content);
-        }
-        out.push(MergedMessage {
-            role: "system",
-            content: std::borrow::Cow::Owned(merged),
-        });
-    } else if leading_system_count == 1 {
-        out.push(MergedMessage {
-            role: "system",
-            content: std::borrow::Cow::Borrowed(&messages[0].content),
-        });
-    }
-    for m in messages.iter().skip(leading_system_count) {
-        out.push(MergedMessage {
-            role: role_str(m.role),
-            content: std::borrow::Cow::Borrowed(&m.content),
-        });
-    }
-    out
 }
 
 fn trim_trailing_slash(s: &str) -> &str {
@@ -336,6 +290,9 @@ fn tail(s: &str, max: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::agent::adaptation::{
+        GEMMA4_MODEL_FAMILY, QWEN3_6_MODEL_FAMILY, prepare_messages_for_openai_compat,
+    };
 
     #[test]
     fn role_str_maps_each_role() {
@@ -369,31 +326,31 @@ mod tests {
             msg(LlmRole::System, "third"),
             msg(LlmRole::User, "hi"),
         ];
-        let merged = merge_leading_system_messages(&messages);
+        let merged = prepare_messages_for_openai_compat(&messages, &GEMMA4_MODEL_FAMILY);
         assert_eq!(merged.len(), 2);
-        assert_eq!(merged[0].role, "system");
+        assert_eq!(role_str(merged[0].role), "system");
         assert!(merged[0].content.contains("first"));
         assert!(merged[0].content.contains("second"));
         assert!(merged[0].content.contains("third"));
         assert!(merged[0].content.contains("---"));
-        assert_eq!(merged[1].role, "user");
-        assert_eq!(merged[1].content.as_ref(), "hi");
+        assert_eq!(role_str(merged[1].role), "user");
+        assert_eq!(merged[1].content.as_str(), "hi");
     }
 
     #[test]
     fn merge_leading_system_passes_through_single_system() {
         let messages = vec![msg(LlmRole::System, "only"), msg(LlmRole::User, "hi")];
-        let merged = merge_leading_system_messages(&messages);
+        let merged = prepare_messages_for_openai_compat(&messages, &GEMMA4_MODEL_FAMILY);
         assert_eq!(merged.len(), 2);
-        assert_eq!(merged[0].content.as_ref(), "only");
+        assert_eq!(merged[0].content.as_str(), "only");
     }
 
     #[test]
     fn merge_leading_system_handles_no_system() {
         let messages = vec![msg(LlmRole::User, "hi")];
-        let merged = merge_leading_system_messages(&messages);
+        let merged = prepare_messages_for_openai_compat(&messages, &GEMMA4_MODEL_FAMILY);
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].role, "user");
+        assert_eq!(role_str(merged[0].role), "user");
     }
 
     #[test]
@@ -412,16 +369,16 @@ mod tests {
             msg(LlmRole::System, "mid-stream"),
             msg(LlmRole::User, "second"),
         ];
-        let merged = merge_leading_system_messages(&messages);
+        let merged = prepare_messages_for_openai_compat(&messages, &GEMMA4_MODEL_FAMILY);
         assert_eq!(merged.len(), 5); // 2 leading collapsed -> 1, plus 4 originals
-        assert_eq!(merged[0].role, "system");
+        assert_eq!(role_str(merged[0].role), "system");
         assert!(merged[0].content.contains("leading-1"));
         assert!(merged[0].content.contains("leading-2"));
-        assert_eq!(merged[1].role, "user");
-        assert_eq!(merged[2].role, "assistant");
-        assert_eq!(merged[3].role, "system"); // mid-stream system left in place
-        assert_eq!(merged[3].content.as_ref(), "mid-stream");
-        assert_eq!(merged[4].role, "user");
+        assert_eq!(role_str(merged[1].role), "user");
+        assert_eq!(role_str(merged[2].role), "assistant");
+        assert_eq!(role_str(merged[3].role), "system"); // mid-stream system left in place
+        assert_eq!(merged[3].content.as_str(), "mid-stream");
+        assert_eq!(role_str(merged[4].role), "user");
     }
 
     fn choice(content: Option<&str>, reasoning: Option<&str>, finish: Option<&str>) -> Choice {
@@ -437,13 +394,28 @@ mod tests {
     #[test]
     fn decode_choice_returns_content_on_normal_stop() {
         let c = choice(Some("hello"), None, Some("stop"));
-        assert_eq!(decode_choice(Some(c)).unwrap(), "hello");
+        assert_eq!(
+            decode_choice(Some(c), &GEMMA4_MODEL_FAMILY).unwrap(),
+            "hello"
+        );
     }
 
     #[test]
     fn decode_choice_falls_back_to_reasoning_when_content_empty() {
         let c = choice(None, Some("thinking text"), Some("stop"));
-        assert_eq!(decode_choice(Some(c)).unwrap(), "thinking text");
+        assert_eq!(
+            decode_choice(Some(c), &GEMMA4_MODEL_FAMILY).unwrap(),
+            "thinking text"
+        );
+    }
+
+    #[test]
+    fn decode_choice_strips_qwen_think_tags_from_content() {
+        let c = choice(Some("<think>plan</think>final answer"), None, Some("stop"));
+        assert_eq!(
+            decode_choice(Some(c), &QWEN3_6_MODEL_FAMILY).unwrap(),
+            "final answer"
+        );
     }
 
     #[test]
@@ -457,7 +429,7 @@ mod tests {
             None,
             Some("length"),
         );
-        let err = decode_choice(Some(c)).unwrap_err();
+        let err = decode_choice(Some(c), &GEMMA4_MODEL_FAMILY).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("truncated at max_tokens"), "got: {msg}");
         assert!(msg.contains("cargo tarpaulin"), "tail should appear: {msg}");
@@ -466,12 +438,12 @@ mod tests {
     #[test]
     fn decode_choice_errors_on_finish_length_with_only_reasoning() {
         let c = choice(None, Some("step 1: ..."), Some("length"));
-        let err = decode_choice(Some(c)).unwrap_err();
+        let err = decode_choice(Some(c), &GEMMA4_MODEL_FAMILY).unwrap_err();
         assert!(format!("{err}").contains("truncated at max_tokens"));
     }
 
     #[test]
     fn decode_choice_returns_empty_when_no_choice() {
-        assert_eq!(decode_choice(None).unwrap(), "");
+        assert_eq!(decode_choice(None, &GEMMA4_MODEL_FAMILY).unwrap(), "");
     }
 }

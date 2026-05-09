@@ -365,9 +365,14 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         Backend::OpenAiCompat => Box::new(OpenAiCompatAgent::new(
             args.base_url.clone(),
             args.model.clone(),
+            None,
         )),
-        Backend::Ollama => Box::new(OllamaAgent::new(args.base_url.clone(), args.model.clone())),
-        Backend::Claude => Box::new(ClaudeAgent::new(args.model.clone())),
+        Backend::Ollama => Box::new(OllamaAgent::new(
+            args.base_url.clone(),
+            args.model.clone(),
+            None,
+        )),
+        Backend::Claude => Box::new(ClaudeAgent::new(args.model.clone(), None)),
     };
 
     // Empty stdin: auto mode shouldn't need user input. Any

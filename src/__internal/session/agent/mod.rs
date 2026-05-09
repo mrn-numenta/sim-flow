@@ -21,6 +21,7 @@
 //!   llama.cpp server, TGI, ...).
 //! - [`MockAgent`] - canned-response queue used by unit tests.
 
+mod adaptation;
 mod claude;
 mod codex;
 mod gh_copilot;
@@ -30,6 +31,11 @@ mod ollama;
 mod openai_compat;
 mod openai_compatible;
 
+pub(crate) use adaptation::{
+    CLAUDE_CLI_RUNTIME, OPENAI_COMPAT_GENERIC_RUNTIME, RuntimeCapabilityProfile,
+    apply_reasoning_history_policy, normalize_response_text, prepare_messages_for_openai_compat,
+    resolve_model_family,
+};
 pub use claude::ClaudeAgent;
 pub(crate) use claude::normalize_model_for_cli;
 pub use codex::CodexAgent;
@@ -76,6 +82,9 @@ pub trait CliAgent: Send {
 #[derive(Debug, Clone, Default)]
 pub struct AgentConfig {
     pub model: Option<String>,
+    /// Optional explicit model-family override. When unset the Rust
+    /// agent path infers a family from the configured model id.
+    pub model_family_id: Option<String>,
     /// Generic base-URL override. Wins over the per-backend
     /// `ollama_base_url` / `openai_base_url` fields when set.
     /// Use this for `vllm` / generic openai-compat servers and
@@ -129,10 +138,17 @@ pub(crate) fn resolved_base_url(name: &str, config: &AgentConfig) -> Option<Stri
 pub fn build_cli_agent(name: &str, config: AgentConfig) -> Option<Box<dyn CliAgent>> {
     let resolved = resolved_base_url(name, &config);
     match name {
-        "claude" | "claude-cli" => Some(Box::new(ClaudeAgent::new(config.model))),
+        "claude" | "claude-cli" => Some(Box::new(ClaudeAgent::new(
+            config.model,
+            config.model_family_id,
+        ))),
         "codex" | "codex-cli" => Some(Box::new(CodexAgent::new(config.model))),
         "gh-copilot" | "gh_copilot" => Some(Box::new(GhCopilotAgent::new())),
-        "ollama" => Some(Box::new(OllamaAgent::new(resolved, config.model))),
+        "ollama" => Some(Box::new(OllamaAgent::new(
+            resolved,
+            config.model,
+            config.model_family_id,
+        ))),
         // LM Studio uses the OpenAI-compat agent with its
         // conventional `:1234/v1` default. Aliasing it explicitly
         // (rather than asking users to type `openai-compat`) makes
@@ -140,7 +156,11 @@ pub fn build_cli_agent(name: &str, config: AgentConfig) -> Option<Box<dyn CliAge
         // vLLM uses the same OpenAI-compat path with a `:8000/v1`
         // default that `resolved_base_url` substitutes.
         "lmstudio" | "lm-studio" | "vllm" | "openai-compat" | "openai_compat" | "openai" => {
-            Some(Box::new(OpenAiCompatAgent::new(resolved, config.model)))
+            Some(Box::new(OpenAiCompatAgent::new(
+                resolved,
+                config.model,
+                config.model_family_id,
+            )))
         }
         _ => None,
     }
@@ -170,6 +190,7 @@ mod tests {
     ) -> AgentConfig {
         AgentConfig {
             model: model.map(String::from),
+            model_family_id: None,
             base_url: base.map(String::from),
             ollama_base_url: ollama.map(String::from),
             openai_base_url: openai.map(String::from),
@@ -329,23 +350,36 @@ mod tests {
 
     #[test]
     fn ollama_agent_substitutes_default_url_and_model() {
-        let a = OllamaAgent::new(None, None);
+        let a = OllamaAgent::new(None, None, None);
         assert_eq!(a.base_url(), super::ollama::DEFAULT_BASE_URL);
         assert_eq!(a.model(), super::ollama::DEFAULT_MODEL);
+        assert_eq!(
+            a.runtime_profile().request_format,
+            "openai_chat_completions"
+        );
     }
 
     #[test]
     fn ollama_agent_respects_overrides() {
-        let a = OllamaAgent::new(Some("http://x:9/v1".into()), Some("qwen3.6".into()));
+        let a = OllamaAgent::new(
+            Some("http://x:9/v1".into()),
+            Some("qwen3.6".into()),
+            Some("qwen3_6".into()),
+        );
         assert_eq!(a.base_url(), "http://x:9/v1");
         assert_eq!(a.model(), "qwen3.6");
+        assert_eq!(a.model_family_id(), Some("qwen3_6"));
     }
 
     #[test]
     fn openai_compat_agent_substitutes_default_url() {
-        let a = OpenAiCompatAgent::new(None, None);
+        let a = OpenAiCompatAgent::new(None, None, None);
         assert_eq!(a.base_url(), super::openai_compat::DEFAULT_BASE_URL);
         assert_eq!(a.model(), super::openai_compat::DEFAULT_MODEL);
+        assert_eq!(
+            a.runtime_profile().request_format,
+            "openai_chat_completions"
+        );
     }
 
     #[test]
@@ -353,9 +387,26 @@ mod tests {
         let a = OpenAiCompatAgent::new(
             Some("http://lm-studio:1234/v1".into()),
             Some("custom".into()),
+            None,
         );
         assert_eq!(a.base_url(), "http://lm-studio:1234/v1");
         assert_eq!(a.model(), "custom");
+    }
+
+    #[test]
+    fn openai_compat_agent_preserves_explicit_model_family_override() {
+        let a = OpenAiCompatAgent::new(
+            None,
+            Some("moonshotai/Kimi-VL-A3B-Thinking-2506".into()),
+            Some("gemma4".into()),
+        );
+        assert_eq!(a.model_family_id(), Some("gemma4"));
+    }
+
+    #[test]
+    fn claude_agent_uses_claude_cli_runtime_profile() {
+        let a = ClaudeAgent::new(Some("claude-sonnet-4-6".into()), None);
+        assert_eq!(a.runtime_profile().request_format, "subprocess_prompt");
     }
 
     #[test]

@@ -1024,6 +1024,7 @@ fn ollama_agent_round_trips_against_mock_chat_completions_server() {
     let agent = OllamaAgent::new(
         Some(format!("http://127.0.0.1:{port}/v1")),
         Some("llama3.1".into()),
+        None,
     );
     let response = sim_flow::session::CliAgent::dispatch(
         &agent,

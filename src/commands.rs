@@ -722,6 +722,7 @@ fn session_cmd(
     } else {
         let agent_config = sim_flow::__internal::session::AgentConfig {
             model: llm_model.map(String::from),
+            model_family_id: None,
             base_url: llm_base_url.map(String::from),
             ollama_base_url: ollama_base_url.map(String::from),
             openai_base_url: openai_base_url.map(String::from),

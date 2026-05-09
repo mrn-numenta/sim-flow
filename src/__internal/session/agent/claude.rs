@@ -12,17 +12,31 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use super::{CliAgent, LlmCallMetrics};
+use super::{
+    CLAUDE_CLI_RUNTIME, CliAgent, LlmCallMetrics, RuntimeCapabilityProfile,
+    apply_reasoning_history_policy, resolve_model_family,
+};
 use crate::session::protocol::{LlmMessage, LlmRole};
 use crate::{Error, Result};
 
 pub struct ClaudeAgent {
     model: Option<String>,
+    model_family_id: Option<String>,
+    runtime_profile: RuntimeCapabilityProfile,
 }
 
 impl ClaudeAgent {
-    pub fn new(model: Option<String>) -> Self {
-        Self { model }
+    pub fn new(model: Option<String>, model_family_id: Option<String>) -> Self {
+        Self {
+            model,
+            model_family_id,
+            runtime_profile: CLAUDE_CLI_RUNTIME,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn runtime_profile(&self) -> RuntimeCapabilityProfile {
+        self.runtime_profile
     }
 
     /// Render the message stack into a single prompt string for
@@ -46,9 +60,15 @@ impl ClaudeAgent {
     /// from us; Claude responds in its assistant voice. The string
     /// is passed via stdin (`claude -p -`) so we don't hit argv
     /// length limits on long histories.
-    fn render_prompt(messages: &[LlmMessage]) -> String {
+    fn render_prompt(
+        messages: &[LlmMessage],
+        model_family_id: Option<&str>,
+        model: Option<&str>,
+    ) -> String {
+        let family = resolve_model_family(model_family_id, model);
+        let prepared = apply_reasoning_history_policy(messages, family);
         let mut out = String::new();
-        for m in messages {
+        for m in &prepared {
             let tag = match m.role {
                 LlmRole::System => "[SYSTEM]",
                 LlmRole::User => "[USER]",
@@ -71,8 +91,13 @@ impl CliAgent for ClaudeAgent {
     }
 
     fn dispatch(&self, messages: &[LlmMessage]) -> Result<(String, LlmCallMetrics)> {
+        debug_assert_eq!(self.runtime_profile.request_format, "subprocess_prompt");
         let started = std::time::Instant::now();
-        let prompt = Self::render_prompt(messages);
+        let prompt = Self::render_prompt(
+            messages,
+            self.model_family_id.as_deref(),
+            self.model.as_deref(),
+        );
         let mut cmd = Command::new("claude");
         cmd.arg("-p");
         if let Some(model) = &self.model {
@@ -192,12 +217,16 @@ mod tests {
 
     #[test]
     fn render_prompt_orders_messages_with_role_tags() {
-        let prompt = ClaudeAgent::render_prompt(&[
-            system("rules"),
-            user("hi"),
-            assistant("hello"),
-            user("more"),
-        ]);
+        let prompt = ClaudeAgent::render_prompt(
+            &[
+                system("rules"),
+                user("hi"),
+                assistant("hello"),
+                user("more"),
+            ],
+            None,
+            None,
+        );
         assert!(prompt.starts_with("[SYSTEM]\nrules"));
         assert!(prompt.contains("[USER]\nhi"));
         assert!(prompt.contains("[ASSISTANT]\nhello"));
@@ -206,7 +235,7 @@ mod tests {
 
     #[test]
     fn render_prompt_handles_empty_message_list() {
-        assert_eq!(ClaudeAgent::render_prompt(&[]), "");
+        assert_eq!(ClaudeAgent::render_prompt(&[], None, None), "");
     }
 
     #[test]

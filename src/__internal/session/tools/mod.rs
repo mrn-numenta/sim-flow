@@ -327,7 +327,7 @@ pub struct ParsedToolCall {
 /// function-call shape with a path-only body and put the content in
 /// a SEPARATE adjacent language fence (```rust, ```text, etc.):
 ///
-/// ```text
+/// ````text
 /// ```tool:write_file
 /// src/model/mod.rs
 /// ```
@@ -335,7 +335,7 @@ pub struct ParsedToolCall {
 /// ```rust
 /// pub mod foo;
 /// ```
-/// ```
+/// ````
 ///
 /// The strict reading rejects the first fence (no content) and
 /// silently drops the second (info-string isn't a path), so the
