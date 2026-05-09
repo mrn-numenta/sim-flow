@@ -155,16 +155,16 @@ After M4: all supported TS-backed runtimes emit one normalized internal stream.
 Mirror the same adaptation model into the Rust session-agent path so the CLI and
 extension do not drift.
 
-- [ ] Introduce Rust-side runtime capability and model-family profile
+- [x] Introduce Rust-side runtime capability and model-family profile
   abstractions aligned with the TS design.
-- [ ] Move current Rust OpenAI-compatible and Anthropic adaptations behind the
+- [x] Move current Rust OpenAI-compatible and Anthropic adaptations behind the
   new layers without regressing existing behavior.
-- [ ] Ensure the Rust path shares the same conceptual normalization contract as
+- [x] Ensure the Rust path shares the same conceptual normalization contract as
   the TS path for:
   - reasoning
   - tool calls
   - structured vs raw-text outputs
-- [ ] Add Rust tests for the profile logic and normalization boundaries.
+- [x] Add Rust tests for the profile logic and normalization boundaries.
 
 After M5: the Rust and TS paths differ by host/transport details, not by
 adaptation architecture.
@@ -233,4 +233,6 @@ surface, then mirrors the design into Rust once the seam has proven itself.
 - [x] Milestone 4 completed in the TypeScript backend path with shared response
   normalizers, raw-text thinking-tag parsing, and Anthropic structured block
   preservation.
-- [ ] Rust parity work not started.
+- [x] Milestone 5 completed in the Rust session-agent path with shared
+  adaptation helpers, model-family inference/override support, OpenAI-compatible
+  request/response normalization, and Claude CLI runtime alignment.
