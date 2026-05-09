@@ -249,6 +249,14 @@
                 "type": "string",
                 "description": "Optional model identifier (overrides `sim-flow.llm.model` for this server)."
               },
+              "modelFamilyId": {
+                "type": "string",
+                "description": "Optional explicit model-family override for this server (for example `qwen3_6`, `kimi_vl_thinking`, `claude_messages`). When set, this server-specific value overrides the global `sim-flow.llm.modelFamily` setting."
+              },
+              "runtimeProfileId": {
+                "type": "string",
+                "description": "Optional explicit runtime-profile override for this server (for example `openai_compat_generic`). When set, this server-specific value overrides the global `sim-flow.llm.runtimeProfile` setting."
+              },
               "path": {
                 "type": "string",
                 "default": "/v1",

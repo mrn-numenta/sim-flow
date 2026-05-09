@@ -999,8 +999,8 @@ export class SocketSessionPump implements LiveSessionTransport {
       rawSource,
       // Per-server `model` overrides the global setting when set.
       model: resolved.model ?? model,
-      modelFamilyId,
-      runtimeProfileId,
+      modelFamilyId: resolved.modelFamilyId ?? modelFamilyId,
+      runtimeProfileId: resolved.runtimeProfileId ?? runtimeProfileId,
       ollamaBaseUrl,
       lmstudioBaseUrl,
       serverBaseUrl: resolved.baseUrl,

@@ -30,6 +30,7 @@ import { aggregateDashboardState } from "./aggregate";
 import {
   cliBackendArgFor,
   isTerminalLlmSource,
+  resolveLlmSource,
   type DashboardState,
   type HostMessage,
   type LlmSourceTag,
@@ -1249,15 +1250,22 @@ export class DashboardHost {
 
   private async postLlmConfig(): Promise<void> {
     const config = vscode.workspace.getConfiguration("sim-flow");
-    const source = (config.get<string>("llm.source") ?? "vscode") as LlmSourceTag;
-    const model = config.get<string>("llm.model")?.trim();
-    const modelFamilyId = config.get<string>("llm.modelFamily")?.trim();
-    const runtimeProfileId = config.get<string>("llm.runtimeProfile")?.trim();
+    const rawSource = (config.get<string>("llm.source") ?? "vscode") as string;
+    const servers =
+      (config.get<unknown>("llm.servers") as import("./messages").LlmServerEntry[] | undefined) ??
+      [];
+    const resolved = resolveLlmSource(rawSource, servers);
+    const globalModel = config.get<string>("llm.model")?.trim();
+    const globalModelFamilyId = config.get<string>("llm.modelFamily")?.trim();
+    const globalRuntimeProfileId = config.get<string>("llm.runtimeProfile")?.trim();
+    const model = resolved?.model ?? globalModel;
+    const modelFamilyId = resolved?.modelFamilyId ?? globalModelFamilyId;
+    const runtimeProfileId = resolved?.runtimeProfileId ?? globalRuntimeProfileId;
     const verbose = config.get<boolean>("llm.verbose") ?? true;
     const debugAdaptation = config.get<boolean>("llm.debugAdaptation") ?? false;
     await this.post({
       type: "llm-config",
-      source,
+      source: rawSource,
       model: model && model.length > 0 ? model : undefined,
       modelFamilyId: modelFamilyId && modelFamilyId.length > 0 ? modelFamilyId : undefined,
       runtimeProfileId:
@@ -1303,7 +1311,7 @@ export class DashboardHost {
     });
     await this.post({
       type: "model-list",
-      source: source as LlmSourceTag,
+      source,
       models: result.models,
       emptyReason: result.emptyReason,
       error: result.error,

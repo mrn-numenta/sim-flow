@@ -404,6 +404,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         {
           source: context.source,
           baseUrl: context.baseUrl,
+          modelFamilyId: context.modelFamilyId,
+          runtimeProfileId: context.runtimeProfileId,
           model: context.model,
           verbose: context.verbose,
           ollamaBaseUrl: context.ollamaBaseUrl,
@@ -535,6 +537,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       source: settings.source,
       rawSource: settings.rawSource,
       baseUrl: settings.baseUrl,
+      modelFamilyId: settings.modelFamilyId,
+      runtimeProfileId: settings.runtimeProfileId,
       unresolvedServer: settings.unresolvedServer,
       sourceLabel: settings.sourceLabel,
       model: settings.model,
@@ -1389,12 +1393,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
     const priorConversation = this.readConversation(projectDir);
+    const config = vscode.workspace.getConfiguration("sim-flow");
+    const reconnectLlm = buildReconnectableLlmConfig(
+      ctx,
+      this.secrets,
+      config,
+      record,
+    );
     const pump = new SocketSessionPump(
       {
         sessionId: record.sessionId,
         socketPath: record.socketPath,
       },
-      buildReconnectableLlmConfig(ctx, this.secrets, vscode.workspace.getConfiguration("sim-flow"), record),
+      reconnectLlm,
     );
     try {
       await pump.ready();
@@ -1410,7 +1421,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
     await this.persistConversation(projectDir, clearConversationState());
     await this.autoSessions.attach(
-      record,
+      {
+        ...record,
+        sourceTag: reconnectLlm.source as LlmSourceTag,
+        model: reconnectLlm.model ?? "",
+      },
       pump,
       this.autoSessionDelegate(),
     );
@@ -1637,6 +1652,10 @@ interface PanelContext {
   rawSource: string;
   /** Resolved base URL when the source maps to a custom server. */
   baseUrl: string | undefined;
+  /** Effective model-family override after server-specific resolution. */
+  modelFamilyId: string | undefined;
+  /** Effective runtime-profile override after server-specific resolution. */
+  runtimeProfileId: string | undefined;
   /** True when `rawSource` claims `server:<name>` with no entry. */
   unresolvedServer: boolean;
   sourceLabel: string;
@@ -1698,6 +1717,10 @@ function readPanelSettings(): {
    *  the composed `host:port/v1` URL the agent should hit.
    *  Undefined for built-in sources. */
   baseUrl: string | undefined;
+  /** Effective model-family override after server-specific resolution. */
+  modelFamilyId: string | undefined;
+  /** Effective runtime-profile override after server-specific resolution. */
+  runtimeProfileId: string | undefined;
   /** True when `rawSource` claims `server:<name>` but no entry
    *  matches. Callers should surface a clear error rather than
    *  silently falling back to a default. */
@@ -1711,6 +1734,9 @@ function readPanelSettings(): {
 } {
   const config = vscode.workspace.getConfiguration("sim-flow");
   const rawSource = (config.get<string>("llm.source") ?? "vscode") as string;
+  const globalModelFamilyId = (config.get<string>("llm.modelFamily") ?? "").trim() || undefined;
+  const globalRuntimeProfileId =
+    (config.get<string>("llm.runtimeProfile") ?? "").trim() || undefined;
   const servers =
     (config.get<unknown>("llm.servers") as LlmServerEntry[] | undefined) ?? [];
   const resolved = resolveLlmSource(rawSource, servers);
@@ -1720,6 +1746,8 @@ function readPanelSettings(): {
       source: fallback,
       rawSource,
       baseUrl: undefined,
+      modelFamilyId: globalModelFamilyId,
+      runtimeProfileId: globalRuntimeProfileId,
       unresolvedServer: true,
       sourceLabel: rawSource,
       model: (config.get<string>("llm.model") ?? "").trim(),
@@ -1735,6 +1763,8 @@ function readPanelSettings(): {
     source,
     rawSource,
     baseUrl: resolved.baseUrl,
+    modelFamilyId: resolved.modelFamilyId ?? globalModelFamilyId,
+    runtimeProfileId: resolved.runtimeProfileId ?? globalRuntimeProfileId,
     unresolvedServer: false,
     sourceLabel: rawSource.startsWith("server:")
       ? rawSource
@@ -1964,9 +1994,14 @@ function buildPumpLlmConfig(
   secrets: SecretStorage,
   config: vscode.WorkspaceConfiguration,
 ): PumpLlmConfig {
-  const source = (config.get<LlmSource>("llm.source") ?? "vscode") as LlmSource;
-  const model = (config.get<string>("llm.model") ?? "").trim() || undefined;
-  return buildResolvedPumpLlmConfig(ctx, secrets, config, source, model);
+  const settings = readPanelSettings();
+  return buildResolvedPumpLlmConfig(
+    ctx,
+    secrets,
+    config,
+    settings.source as LlmSource,
+    settings.model.trim() || undefined,
+  );
 }
 
 function buildReconnectableLlmConfig(
@@ -1991,6 +2026,14 @@ function buildResolvedPumpLlmConfig(
   source: LlmSource,
   model: string | undefined,
 ): PumpLlmConfig {
+  const servers =
+    (config.get<unknown>("llm.servers") as LlmServerEntry[] | undefined) ?? [];
+  const resolved = typeof source === "string" ? resolveLlmSource(source, servers) : null;
+  const effectiveSource = (resolved?.source ?? source) as LlmSource;
+  const effectiveModel = resolved?.model?.trim() || model;
+  const globalModelFamilyId = (config.get<string>("llm.modelFamily") ?? "").trim() || undefined;
+  const globalRuntimeProfileId =
+    (config.get<string>("llm.runtimeProfile") ?? "").trim() || undefined;
   const ollamaBaseUrl = (config.get<string>("llm.ollama.baseUrl") ?? "").trim() || undefined;
   const lmstudioBaseUrl =
     (config.get<string>("llm.lmstudio.baseUrl") ?? "").trim() || undefined;
@@ -1998,8 +2041,11 @@ function buildResolvedPumpLlmConfig(
   const envTokens = (process.env["SIM_FOUNDATION_DEBUG"] ?? "").trim();
   const debugTokens = settingTokens.length > 0 ? settingTokens : envTokens;
   return {
-    source,
-    model,
+    source: effectiveSource,
+    model: effectiveModel,
+    modelFamilyId: resolved?.modelFamilyId ?? globalModelFamilyId,
+    runtimeProfileId: resolved?.runtimeProfileId ?? globalRuntimeProfileId,
+    baseUrl: resolved?.baseUrl,
     ollamaBaseUrl,
     lmstudioBaseUrl,
     secrets,

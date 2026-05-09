@@ -35,7 +35,7 @@ interface UiState {
   lastError: { message: string; detail?: string } | null;
   specPath: string;
   newProjectName: string;
-  llmSource: LlmSourceTag | null;
+  llmSource: string | null;
   /** Active `sim-flow.llm.model` setting; empty string means "any". */
   llmModel: string;
   /** Active explicit model-family override; empty string means infer from model id. */
@@ -53,7 +53,7 @@ interface UiState {
    */
   llmModelList: string[];
   /** Source the cached model list was fetched for. */
-  llmModelListSource: LlmSourceTag | null;
+  llmModelListSource: string | null;
   /** Set while a model-list fetch is in flight (for the refresh button spinner). */
   llmModelListPending: boolean;
   /** Last error / empty reason from a model-list fetch, if any. */
@@ -637,6 +637,8 @@ function renderLlmServersTable(): HTMLElement {
           el("th", {}, "Host"),
           el("th", {}, "Port"),
           el("th", {}, "Model (optional)"),
+          el("th", {}, "Family (optional)"),
+          el("th", {}, "Runtime (optional)"),
           el("th", {}, ""),
         ),
       ),
@@ -689,6 +691,20 @@ function renderLlmServersTable(): HTMLElement {
             {},
             llmServerTextInput(entry.model ?? "", "default", (v) =>
               updateAt({ model: v.length === 0 ? undefined : v }),
+            ),
+          ),
+          el(
+            "td",
+            {},
+            llmServerTextInput(entry.modelFamilyId ?? "", "infer", (v) =>
+              updateAt({ modelFamilyId: v.length === 0 ? undefined : v }),
+            ),
+          ),
+          el(
+            "td",
+            {},
+            llmServerTextInput(entry.runtimeProfileId ?? "", "source default", (v) =>
+              updateAt({ runtimeProfileId: v.length === 0 ? undefined : v }),
             ),
           ),
           el(
@@ -1113,14 +1129,14 @@ function renderLlmSourcePicker(): HTMLElement {
     "Active LLM backend. Changing this here writes through to `sim-flow.llm.source` (workspace scope) and takes effect on the next LLM call -- you can switch mid-run if e.g. tokens are exhausted.";
   select.addEventListener("change", () => {
     const value = select.value;
-    ui.llmSource = value as LlmSourceTag;
+    ui.llmSource = value;
     // Kick off the source-local model refresh immediately. The host
     // echoes the chosen source back via `llm-config`, but by then the
     // optimistic local `ui.llmSource` update means a pure
     // "did-source-change?" check would not fire.
     ui.llmModel = "";
     ui.llmModelList = [];
-    ui.llmModelListSource = value as LlmSourceTag;
+    ui.llmModelListSource = value;
     ui.llmModelListPending = true;
     ui.llmModelListNote = null;
     render();

@@ -219,7 +219,7 @@ export type HostMessage =
   | { type: "spec-path-picked"; path: string }
   | {
       type: "llm-config";
-      source: LlmSourceTag;
+      source: LlmSourceTag | string;
       model?: string;
       modelFamilyId?: string;
       runtimeProfileId?: string;
@@ -228,7 +228,7 @@ export type HostMessage =
     }
   | {
       type: "model-list";
-      source: LlmSourceTag;
+      source: LlmSourceTag | string;
       models: string[];
       /** Populated when the source returned no models for a non-error reason. */
       emptyReason?: string;
@@ -302,6 +302,8 @@ export interface LlmServerEntry {
   host: string;
   port: number;
   model?: string;
+  modelFamilyId?: string;
+  runtimeProfileId?: string;
   path?: string;
 }
 
@@ -326,6 +328,8 @@ export interface ResolvedLlmSource {
   source: LlmSourceTag;
   baseUrl?: string;
   model?: string;
+  modelFamilyId?: string;
+  runtimeProfileId?: string;
 }
 
 /**
@@ -356,6 +360,8 @@ export function resolveLlmSource(
     source: entry.kind as LlmSourceTag,
     baseUrl: llmServerBaseUrl(entry),
     model: entry.model,
+    modelFamilyId: entry.modelFamilyId,
+    runtimeProfileId: entry.runtimeProfileId,
   };
 }
 

@@ -1311,6 +1311,69 @@ describe("mocked dashboard/chat harness", () => {
     expect(state?.transcript).toEqual([]);
   });
 
+  it("does not treat a custom server alias as an LLM source switch on editor-tab refresh", async () => {
+    const exampleDir = createProjectFromFixture(tmpRoot, "example");
+    const specPath = path.join(exampleDir, "docs", "spec.md");
+    mock.state.currentProjectDir = exampleDir;
+    mock.state.workspaceFolders = [
+      { uri: { fsPath: exampleDir }, name: "example", index: 0 },
+    ];
+    mock.state.config.set("llm.source", "server:lmstudio-laptop");
+    mock.state.config.set("llm.servers", [
+      { name: "lmstudio-laptop", kind: "lmstudio", host: "127.0.0.1", port: 1234 },
+    ]);
+
+    mock.state.pumpScripts.set(exampleDir, [
+      {
+        onSettle: (renderer) => {
+          renderer.markdown("Working through the initial grayscale decomposition.\n");
+        },
+        waitForCancel: true,
+        result: {
+          status: "ended",
+        },
+      },
+    ]);
+
+    const workspaceState = new mock.FakeMemento();
+    const provider = new ChatPanelProvider(
+      { fsPath: "/extension" } as never,
+      workspaceState as never,
+      { get: async () => undefined },
+    );
+    mock.state.chatProvider = provider as never;
+    const chatView = new mock.FakeWebviewView();
+    await provider.resolveWebviewView(chatView as never, {} as never, {} as never);
+
+    const dashboardHost = new DashboardHost({
+      extensionUri: { fsPath: "/extension" } as never,
+      projectDir: exampleDir,
+      cli: {} as never,
+      workspaceState: workspaceState as never,
+    });
+    await dashboardHost.open();
+
+    await mock.state.lastDashboardPanel!.webview.emit({
+      type: "run-auto",
+      specPath,
+    });
+    await flushAsyncWork();
+
+    let state = latestState(chatView);
+    expect(mock.state.pumpLaunches.at(-1)?.llmSource).toBe("lmstudio");
+    expect(state?.canStop).toBe(true);
+
+    await mock.fireActiveEditorChange();
+    await flushAsyncWork();
+
+    state = latestState(chatView);
+    expect(state?.canStop).toBe(true);
+    expect(transcriptBodies(state!)).not.toContain(
+      "Stopped the running sim-flow session because the LLM source changed to `server:lmstudio-laptop`. Relaunching on the new source.",
+    );
+    expect(transcriptBodies(state!)).not.toContain("_LLM source switched:");
+  });
+
   it("ignores duplicate Play for the same active auto session", async () => {
     const exampleDir = createProjectFromFixture(tmpRoot, "example");
     const specPath = path.join(exampleDir, "docs", "spec.md");

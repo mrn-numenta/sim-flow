@@ -344,6 +344,9 @@ function buildPumpLlmConfig(
   const rawSource = (config.get<string>("llm.source") ?? "vscode").trim();
   let source: LlmSource = "vscode";
   let model = (config.get<string>("llm.model") ?? "").trim() || undefined;
+  let modelFamilyId = (config.get<string>("llm.modelFamily") ?? "").trim() || undefined;
+  let runtimeProfileId =
+    (config.get<string>("llm.runtimeProfile") ?? "").trim() || undefined;
   let baseUrl: string | undefined;
   // `server:<name>` references a row in `sim-flow.llm.servers`.
   // Resolve to the server's `kind` (passed to sim-flow as
@@ -362,6 +365,12 @@ function buildPumpLlmConfig(
       if (!model && entry.model && entry.model.length > 0) {
         model = entry.model;
       }
+      if (entry.modelFamilyId && entry.modelFamilyId.length > 0) {
+        modelFamilyId = entry.modelFamilyId;
+      }
+      if (entry.runtimeProfileId && entry.runtimeProfileId.length > 0) {
+        runtimeProfileId = entry.runtimeProfileId;
+      }
     } else {
       source = "vscode";
     }
@@ -378,6 +387,8 @@ function buildPumpLlmConfig(
   return {
     source,
     model,
+    modelFamilyId,
+    runtimeProfileId,
     baseUrl,
     ollamaBaseUrl,
     lmstudioBaseUrl,

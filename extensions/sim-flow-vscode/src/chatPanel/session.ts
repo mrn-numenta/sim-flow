@@ -21,6 +21,8 @@ export interface ChatPanelTransportConfig {
    *  Wins over the legacy per-backend URL fields. */
   baseUrl?: string;
   model: string;
+  modelFamilyId?: string;
+  runtimeProfileId?: string;
   verbose: boolean;
   ollamaBaseUrl: string;
   lmstudioBaseUrl: string;
@@ -51,6 +53,8 @@ export async function* streamPanelReply(
   const backend = createBackend({
     source: config.source as LlmSource,
     model: config.model || undefined,
+    modelFamilyId: config.modelFamilyId,
+    runtimeProfileId: config.runtimeProfileId,
     secrets: config.secrets,
     ollamaBaseUrl: config.ollamaBaseUrl,
     lmstudioBaseUrl: config.lmstudioBaseUrl,
