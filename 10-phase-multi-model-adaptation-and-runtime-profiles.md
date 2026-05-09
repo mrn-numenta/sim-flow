@@ -112,20 +112,20 @@ After M2: the TS backends stop owning runtime-policy conditionals directly.
 Add a small number of representative model-family profiles that exercise the new
 boundaries.
 
-- [ ] Add initial model-family profiles for:
+- [x] Add initial model-family profiles for:
   - `gemma4`
   - `qwen3_6`
   - `kimi_vl_thinking`
   - `claude_messages`
-- [ ] Model-family profiles own:
+- [x] Model-family profiles own:
   - thinking controls / prompt toggles
   - default sampling preferences
   - multimodal ordering preferences
   - known thought / tool-call markers
   - history policy for prior reasoning
-- [ ] Ensure these profiles can be selected explicitly and, where safe, inferred
+- [x] Ensure these profiles can be selected explicitly and, where safe, inferred
   from configured model ids without making inference mandatory.
-- [ ] Add profile-level tests for prompt shaping and multimodal content ordering.
+- [x] Add profile-level tests for prompt shaping and multimodal content ordering.
 
 After M3: the TS path can differentiate model-family behavior without adding
 more provider-conditionals to backend classes.
@@ -227,6 +227,8 @@ surface, then mirrors the design into Rust once the seam has proven itself.
 - [x] Milestone 2 completed in the TypeScript backend path with explicit
   runtime capability profiles for OpenAI-compatible, Anthropic Messages, and
   processor-local placeholder runtimes.
-- [ ] Model-family profile implementation not started.
+- [x] Milestone 3 completed in the TypeScript backend path with explicit
+  model-family profiles, inference/override support, prompt-policy helpers, and
+  multimodal ordering policy.
 - [ ] Shared response normalizer boundary not started.
 - [ ] Rust parity work not started.
