@@ -1,9 +1,4 @@
-import type {
-  LlmAttachment,
-  LlmMessage,
-  ModelFamilyProfile,
-  RuntimePreparedInput,
-} from "./types";
+import type { LlmAttachment, LlmMessage, ModelFamilyProfile, RuntimePreparedInput } from "./types";
 
 export interface ModelFamilyPromptOptions {
   enableThinking?: boolean;
@@ -70,6 +65,8 @@ const MODEL_FAMILIES: Record<string, ModelFamilyProfile> = {
   [KIMI_VL_THINKING_MODEL_FAMILY.id]: KIMI_VL_THINKING_MODEL_FAMILY,
   [CLAUDE_MESSAGES_MODEL_FAMILY.id]: CLAUDE_MESSAGES_MODEL_FAMILY,
 };
+
+export const KNOWN_MODEL_FAMILY_IDS = Object.freeze(Object.keys(MODEL_FAMILIES));
 
 export function modelFamilyById(id: string | undefined): ModelFamilyProfile | undefined {
   if (!id) {
@@ -155,8 +152,7 @@ export function orderAttachmentsByFamily(
   text: string,
   attachments: LlmAttachment[],
 ): Array<{ kind: "text"; text: string } | { kind: "attachment"; attachment: LlmAttachment }> {
-  const textParts =
-    text.length > 0 ? ([{ kind: "text", text }] as const) : ([] as const);
+  const textParts = text.length > 0 ? ([{ kind: "text", text }] as const) : ([] as const);
   const attachmentParts = attachments.map(
     (attachment) => ({ kind: "attachment", attachment }) as const,
   );

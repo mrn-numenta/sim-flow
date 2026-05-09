@@ -30,12 +30,14 @@ import * as vscode from "vscode";
 import { bundledFrameworkDocsRoot, bundledPdfiumLibPath } from "../cli";
 import {
   DEFAULT_RESPONSE_NORMALIZER,
+  formatAdaptationSummary,
   type LlmBackend,
   type LlmMessage as BackendLlmMessage,
   type SecretStorage,
   createBackend,
   LlmError,
   type LlmSource,
+  summarizeAdaptation,
 } from "../llm";
 import { estimateMessagesTokens } from "../llm/tokenEstimate";
 import type {
@@ -70,6 +72,8 @@ export interface SessionPumpOptions {
 export interface PumpLlmConfig {
   source: LlmSource;
   model?: string;
+  modelFamilyId?: string;
+  runtimeProfileId?: string;
   /**
    * Generic base-URL override for OpenAI-compat backends. Set when
    * the user picks a custom server (`server:<name>` in the source
@@ -91,6 +95,7 @@ export interface PumpLlmConfig {
    * subprocess so the orchestrator's DebugLog sees the same value.
    */
   debugTokens: string;
+  debugAdaptation?: boolean;
 }
 
 /** Snapshot of state every chat turn finishes with. */
@@ -296,9 +301,7 @@ export class SessionPump {
           spawnedAtMs: Date.now(),
         });
       } catch (err) {
-        this.debugLog.logSpawnError(
-          `pid registry write failed: ${(err as Error).message}`,
-        );
+        this.debugLog.logSpawnError(`pid registry write failed: ${(err as Error).message}`);
       }
     }
     this.process.stdout.setEncoding("utf8");
@@ -580,20 +583,29 @@ export class SessionPump {
     source: LlmSource;
     rawSource: string;
     model?: string;
+    modelFamilyId?: string;
+    runtimeProfileId?: string;
     ollamaBaseUrl?: string;
     lmstudioBaseUrl?: string;
     /** See `socketPump.readLiveLlmConfig` for semantics. */
     serverBaseUrl: string | null | undefined;
     verbose: boolean;
+    debugAdaptation: boolean;
   } {
     const config = vscode.workspace.getConfiguration("sim-flow");
     const rawSource = (config.get<string>("llm.source") ?? this.llm.source) as string;
     const model = (config.get<string>("llm.model") ?? "").trim() || this.llm.model;
+    const modelFamilyId =
+      (config.get<string>("llm.modelFamily") ?? "").trim() || this.llm.modelFamilyId;
+    const runtimeProfileId =
+      (config.get<string>("llm.runtimeProfile") ?? "").trim() || this.llm.runtimeProfileId;
     const ollamaBaseUrl =
       (config.get<string>("llm.ollama.baseUrl") ?? "").trim() || this.llm.ollamaBaseUrl;
     const lmstudioBaseUrl =
       (config.get<string>("llm.lmstudio.baseUrl") ?? "").trim() || this.llm.lmstudioBaseUrl;
     const verbose = config.get<boolean>("llm.verbose") ?? true;
+    const debugAdaptation =
+      (config.get<boolean>("llm.debugAdaptation") ?? false) || this.llm.debugAdaptation === true;
     const servers = (config.get<unknown>("llm.servers") as LlmServerEntry[] | undefined) ?? [];
     const resolved = resolveLlmSource(rawSource, servers);
     if (resolved === null) {
@@ -601,20 +613,26 @@ export class SessionPump {
         source: rawSource as LlmSource,
         rawSource,
         model,
+        modelFamilyId,
+        runtimeProfileId,
         ollamaBaseUrl,
         lmstudioBaseUrl,
         serverBaseUrl: null,
         verbose,
+        debugAdaptation,
       };
     }
     return {
       source: resolved.source as LlmSource,
       rawSource,
       model: resolved.model ?? model,
+      modelFamilyId,
+      runtimeProfileId,
       ollamaBaseUrl,
       lmstudioBaseUrl,
       serverBaseUrl: resolved.baseUrl,
       verbose,
+      debugAdaptation,
     };
   }
 
@@ -648,6 +666,8 @@ export class SessionPump {
       backend = createBackend({
         source: live.source,
         model: live.model ?? event.model ?? undefined,
+        modelFamilyId: live.modelFamilyId ?? event.model_family_id ?? undefined,
+        runtimeProfileId: live.runtimeProfileId ?? event.runtime_profile_id ?? undefined,
         secrets: this.llm.secrets,
         projectDir: this.llm.projectDir,
         binary: this.llm.binary,
@@ -667,6 +687,13 @@ export class SessionPump {
         message: (err as Error).message ?? String(err),
       });
       return;
+    }
+    const adaptationSummary = backend.adaptation
+      ? formatAdaptationSummary(summarizeAdaptation(backend.name, backend.adaptation))
+      : undefined;
+    const debugAdaptation = live.debugAdaptation || event.debug_adaptation === true;
+    if (debugAdaptation && adaptationSummary) {
+      this.currentRenderer?.markdown(`_LLM adaptation: ${adaptationSummary}_\n\n`);
     }
     const messages: BackendLlmMessage[] = (event.messages as ProtocolLlmMessage[]).map((m) => ({
       role: m.role,
@@ -781,7 +808,7 @@ export class SessionPump {
         event: "llm-error",
         request_id: event.request_id,
         kind: err instanceof LlmError ? err.kind : "stream",
-        message: composed,
+        message: adaptationSummary ? `${composed} [${adaptationSummary}]` : composed,
       });
     }
   }

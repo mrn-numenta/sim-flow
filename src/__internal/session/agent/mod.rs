@@ -34,7 +34,7 @@ mod openai_compatible;
 pub(crate) use adaptation::{
     CLAUDE_CLI_RUNTIME, OPENAI_COMPAT_GENERIC_RUNTIME, RuntimeCapabilityProfile,
     apply_reasoning_history_policy, normalize_response_text, prepare_messages_for_openai_compat,
-    resolve_model_family,
+    resolve_model_family, resolve_runtime_profile,
 };
 pub use claude::ClaudeAgent;
 pub(crate) use claude::normalize_model_for_cli;
@@ -71,9 +71,46 @@ pub struct LlmCallMetrics {
     pub wall_ms: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentAdaptationSummary {
+    pub backend: String,
+    pub runtime_profile_id: String,
+    pub model_family_id: String,
+    pub request_format: String,
+    pub system_prompt_mode: String,
+    pub credential_policy: String,
+    pub supports_structured_reasoning: bool,
+    pub supports_structured_tool_calls: bool,
+    pub supports_thinking_controls: bool,
+}
+
+impl AgentAdaptationSummary {
+    pub fn format(&self) -> String {
+        format!(
+            "backend={}, runtime={}, family={}, request={}, system={}, credentials={}, structured-reasoning={}, structured-tools={}, thinking-controls={}",
+            self.backend,
+            self.runtime_profile_id,
+            self.model_family_id,
+            self.request_format,
+            self.system_prompt_mode,
+            self.credential_policy,
+            yes_no(self.supports_structured_reasoning),
+            yes_no(self.supports_structured_tool_calls),
+            yes_no(self.supports_thinking_controls),
+        )
+    }
+}
+
 pub trait CliAgent: Send {
     fn name(&self) -> &str;
     fn dispatch(&self, messages: &[LlmMessage]) -> Result<(String, LlmCallMetrics)>;
+    fn adaptation_summary(&self) -> Option<AgentAdaptationSummary> {
+        None
+    }
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
 }
 
 /// Optional configuration for the HTTP-based agents. Subprocess
@@ -85,6 +122,10 @@ pub struct AgentConfig {
     /// Optional explicit model-family override. When unset the Rust
     /// agent path infers a family from the configured model id.
     pub model_family_id: Option<String>,
+    /// Optional explicit runtime capability profile override.
+    pub runtime_profile_id: Option<String>,
+    /// Emit extra adaptation diagnostics around LLM dispatches.
+    pub debug_adaptation: bool,
     /// Generic base-URL override. Wins over the per-backend
     /// `ollama_base_url` / `openai_base_url` fields when set.
     /// Use this for `vllm` / generic openai-compat servers and
@@ -141,6 +182,7 @@ pub fn build_cli_agent(name: &str, config: AgentConfig) -> Option<Box<dyn CliAge
         "claude" | "claude-cli" => Some(Box::new(ClaudeAgent::new(
             config.model,
             config.model_family_id,
+            config.runtime_profile_id,
         ))),
         "codex" | "codex-cli" => Some(Box::new(CodexAgent::new(config.model))),
         "gh-copilot" | "gh_copilot" => Some(Box::new(GhCopilotAgent::new())),
@@ -148,6 +190,7 @@ pub fn build_cli_agent(name: &str, config: AgentConfig) -> Option<Box<dyn CliAge
             resolved,
             config.model,
             config.model_family_id,
+            config.runtime_profile_id,
         ))),
         // LM Studio uses the OpenAI-compat agent with its
         // conventional `:1234/v1` default. Aliasing it explicitly
@@ -160,6 +203,7 @@ pub fn build_cli_agent(name: &str, config: AgentConfig) -> Option<Box<dyn CliAge
                 resolved,
                 config.model,
                 config.model_family_id,
+                config.runtime_profile_id,
             )))
         }
         _ => None,
@@ -191,6 +235,8 @@ mod tests {
         AgentConfig {
             model: model.map(String::from),
             model_family_id: None,
+            runtime_profile_id: None,
+            debug_adaptation: false,
             base_url: base.map(String::from),
             ollama_base_url: ollama.map(String::from),
             openai_base_url: openai.map(String::from),
@@ -350,7 +396,7 @@ mod tests {
 
     #[test]
     fn ollama_agent_substitutes_default_url_and_model() {
-        let a = OllamaAgent::new(None, None, None);
+        let a = OllamaAgent::new(None, None, None, None);
         assert_eq!(a.base_url(), super::ollama::DEFAULT_BASE_URL);
         assert_eq!(a.model(), super::ollama::DEFAULT_MODEL);
         assert_eq!(
@@ -365,6 +411,7 @@ mod tests {
             Some("http://x:9/v1".into()),
             Some("qwen3.6".into()),
             Some("qwen3_6".into()),
+            None,
         );
         assert_eq!(a.base_url(), "http://x:9/v1");
         assert_eq!(a.model(), "qwen3.6");
@@ -373,7 +420,7 @@ mod tests {
 
     #[test]
     fn openai_compat_agent_substitutes_default_url() {
-        let a = OpenAiCompatAgent::new(None, None, None);
+        let a = OpenAiCompatAgent::new(None, None, None, None);
         assert_eq!(a.base_url(), super::openai_compat::DEFAULT_BASE_URL);
         assert_eq!(a.model(), super::openai_compat::DEFAULT_MODEL);
         assert_eq!(
@@ -388,6 +435,7 @@ mod tests {
             Some("http://lm-studio:1234/v1".into()),
             Some("custom".into()),
             None,
+            None,
         );
         assert_eq!(a.base_url(), "http://lm-studio:1234/v1");
         assert_eq!(a.model(), "custom");
@@ -399,13 +447,14 @@ mod tests {
             None,
             Some("moonshotai/Kimi-VL-A3B-Thinking-2506".into()),
             Some("gemma4".into()),
+            None,
         );
         assert_eq!(a.model_family_id(), Some("gemma4"));
     }
 
     #[test]
     fn claude_agent_uses_claude_cli_runtime_profile() {
-        let a = ClaudeAgent::new(Some("claude-sonnet-4-6".into()), None);
+        let a = ClaudeAgent::new(Some("claude-sonnet-4-6".into()), None, None);
         assert_eq!(a.runtime_profile().request_format, "subprocess_prompt");
     }
 

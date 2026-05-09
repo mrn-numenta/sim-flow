@@ -366,13 +366,15 @@ fn run(args: &Args) -> std::result::Result<(), String> {
             args.base_url.clone(),
             args.model.clone(),
             None,
+            None,
         )),
         Backend::Ollama => Box::new(OllamaAgent::new(
             args.base_url.clone(),
             args.model.clone(),
             None,
+            None,
         )),
-        Backend::Claude => Box::new(ClaudeAgent::new(args.model.clone(), None)),
+        Backend::Claude => Box::new(ClaudeAgent::new(args.model.clone(), None, None)),
     };
 
     // Empty stdin: auto mode shouldn't need user input. Any
@@ -424,6 +426,9 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         foundation_root: args.foundation_root.clone(),
         llm_backend: backend_label.to_string(),
         llm_model: args.model.clone(),
+        llm_model_family_id: None,
+        llm_runtime_profile_id: None,
+        llm_debug_adaptation: false,
         llm_base_url: args.base_url.clone(),
         max_auto_iters: args.max_auto_iters,
         max_critique_iters: args.max_critique_iters,

@@ -18,6 +18,9 @@ without breaking existing hosts.
 sim-flow session <step>.<kind> [--jsonl] [--project <path>]
                                 [--foundation-root <path>]
                                 [--llm-backend <name>]
+                                [--llm-model-family <id>]
+                                [--llm-runtime-profile <id>]
+                                [--llm-debug-adaptation]
                                 [--candidate <name>]
 ```
 
@@ -29,6 +32,12 @@ sim-flow session <step>.<kind> [--jsonl] [--project <path>]
   it is echoed back inside `RequestLlmResponse` so the host can
   pick its own dispatcher. In TerminalHost mode it selects which
   `CliAgent` impl sim-flow uses internally.
+- `--llm-model-family` and `--llm-runtime-profile` are optional
+  explicit adaptation overrides. When omitted, the host or built-in
+  agent infers the family from `--llm-model` and uses the backend's
+  default runtime profile.
+- `--llm-debug-adaptation` asks the host or built-in agent to surface
+  backend/runtime/model-family diagnostics around each LLM request.
 - All other flags are conventional (project dir, foundation root,
   candidate scope for DSF steps).
 
@@ -80,33 +89,33 @@ from the schema.
 
 ### Orchestrator -> Host
 
-| Event                  | Purpose                                                                          |
-|------------------------|----------------------------------------------------------------------------------|
-| `HelloAck`             | Handshake reply; carries the step descriptor.                                    |
-| `AssistantText`        | A chunk of text from the LLM to render. `text: string`, `final: bool`.           |
-| `RequestUserInput`     | Pause and wait for the user's reply. Optional `prompt`, `placeholder` hints.     |
-| `RequestLlmResponse`   | Ask the host to run an LLM call. `requestId`, `messages`, `tools`, `backend`.    |
-| `ArtifactWritten`      | A project file was just written by the orchestrator. `path`, `bytes`.            |
-| `ToolInvoked`          | Notification only; the orchestrator already executed the tool. `name`, `args`, `status`, `durationMs`. |
-| `PhaseChanged`         | Code-step loop transition. `phase: "author"|"build"|"test"|"coverage"|"done"`.   |
-| `BuildOutput`          | Build / test runner output. `command`, `stdoutTail`, `stderrTail`, `exitCode`.   |
-| `GateResult`           | Gate evaluation result. `step`, `clean: bool`, `failures: [...]`.                |
-| `StateAdvanced`        | The orchestrator advanced `current_step`. `from`, `to`.                          |
-| `Followup`             | Suggested next action for the host to render as a button. `label`, `action`.     |
-| `Diagnostic`           | Non-fatal diagnostic for the host to display (e.g. truncated context warning).   |
-| `SessionEnd`           | Session finished. `reason: "completed"|"cancelled"|"error"`, optional `message`. |
+| Event                | Purpose                                                                                                                       |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ----------- | ----------------------------- | ---------- | -------- |
+| `HelloAck`           | Handshake reply; carries the step descriptor.                                                                                 |
+| `AssistantText`      | A chunk of text from the LLM to render. `text: string`, `final: bool`.                                                        |
+| `RequestUserInput`   | Pause and wait for the user's reply. Optional `prompt`, `placeholder` hints.                                                  |
+| `RequestLlmResponse` | Ask the host to run an LLM call. `requestId`, `messages`, `tools`, `backend`, plus optional adaptation override/debug fields. |
+| `ArtifactWritten`    | A project file was just written by the orchestrator. `path`, `bytes`.                                                         |
+| `ToolInvoked`        | Notification only; the orchestrator already executed the tool. `name`, `args`, `status`, `durationMs`.                        |
+| `PhaseChanged`       | Code-step loop transition. `phase: "author"                                                                                   | "build"     | "test"                        | "coverage" | "done"`. |
+| `BuildOutput`        | Build / test runner output. `command`, `stdoutTail`, `stderrTail`, `exitCode`.                                                |
+| `GateResult`         | Gate evaluation result. `step`, `clean: bool`, `failures: [...]`.                                                             |
+| `StateAdvanced`      | The orchestrator advanced `current_step`. `from`, `to`.                                                                       |
+| `Followup`           | Suggested next action for the host to render as a button. `label`, `action`.                                                  |
+| `Diagnostic`         | Non-fatal diagnostic for the host to display (e.g. truncated context warning).                                                |
+| `SessionEnd`         | Session finished. `reason: "completed"                                                                                        | "cancelled" | "error"`, optional `message`. |
 
 ### Host -> Orchestrator
 
-| Event                  | Purpose                                                                          |
-|------------------------|----------------------------------------------------------------------------------|
-| `Hello`                | Handshake.                                                                       |
-| `UserMessage`          | The user's reply to a `RequestUserInput`.                                        |
-| `LlmChunk`             | Streaming LLM response chunk. `requestId`, `text`, `toolCalls?`.                 |
-| `LlmEnd`               | LLM response finished. `requestId`, `stopReason`.                                |
-| `LlmError`             | LLM dispatch failed. `requestId`, `kind`, `message`.                             |
-| `FollowupSelected`     | User clicked a `Followup` button. `action`.                                      |
-| `Cancel`               | User cancelled the session.                                                      |
+| Event              | Purpose                                                          |
+| ------------------ | ---------------------------------------------------------------- |
+| `Hello`            | Handshake.                                                       |
+| `UserMessage`      | The user's reply to a `RequestUserInput`.                        |
+| `LlmChunk`         | Streaming LLM response chunk. `requestId`, `text`, `toolCalls?`. |
+| `LlmEnd`           | LLM response finished. `requestId`, `stopReason`.                |
+| `LlmError`         | LLM dispatch failed. `requestId`, `kind`, `message`.             |
+| `FollowupSelected` | User clicked a `Followup` button. `action`.                      |
+| `Cancel`           | User cancelled the session.                                      |
 
 `Hello` capabilities and `Followup` are optional - hosts that don't
 declare those capabilities will not receive `Followup` events and
@@ -151,10 +160,13 @@ session it is hosting:
   "phases": ["author", "build", "test"],
   "tools": ["read_file", "list_dir", "write_file", "search"],
   "expectedArtifacts": ["src/model/", "tests/"],
-  "predecessorInputs": ["spec.md", "targets.md",
-                         "analysis/decomposition.md",
-                         "analysis/data-movement.md",
-                         "analysis/pipeline-mapping.md"]
+  "predecessorInputs": [
+    "spec.md",
+    "targets.md",
+    "analysis/decomposition.md",
+    "analysis/data-movement.md",
+    "analysis/pipeline-mapping.md",
+  ],
 }
 ```
 
@@ -170,7 +182,7 @@ session.
 ## Tool Notifications
 
 The orchestrator executes tools itself (it has filesystem and
-subprocess access). Tool events are *informational* for the host:
+subprocess access). Tool events are _informational_ for the host:
 they let the chat UI show "reading src/model/lib.rs" inline, with
 no execution responsibility on the host side.
 
@@ -190,6 +202,9 @@ forward to the LLM client:
   "event": "RequestLlmResponse",
   "requestId": "lr-42",
   "backend": "vscode",
+  "modelFamilyId": "qwen3_6",
+  "runtimeProfileId": "openai_compat_generic",
+  "debugAdaptation": true,
   "messages": [...],
   "tools": [
     { "name": "read_file", "description": "...",
@@ -197,6 +212,13 @@ forward to the LLM client:
   ]
 }
 ```
+
+`modelFamilyId` and `runtimeProfileId` are advisory overrides, not
+independent transport selectors. Hosts use them to pin the adaptation
+path when inference would be ambiguous or when a debugging session needs
+deterministic behavior. `debugAdaptation` asks the host to include the
+resolved backend/runtime/model-family/capability tuple in diagnostics and
+error reporting.
 
 If the LLM emits a tool call, the host returns it inside
 `LlmChunk.toolCalls`. The orchestrator parses the tool call,
@@ -218,7 +240,7 @@ host doesn't need to know which mode is in use - it just relays
 - LLM errors (`LlmError` from host) are surfaced to the user via
   `Diagnostic`. The orchestrator may attempt a fallback backend
   (configurable) or emit `RequestUserInput { prompt: "LLM failed:
-  retry, switch backend, or cancel?" }`.
+retry, switch backend, or cancel?" }`.
 
 ## Backwards Compatibility
 

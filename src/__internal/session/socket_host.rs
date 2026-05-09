@@ -444,6 +444,9 @@ mod tests {
                 request_id: "lr-1".into(),
                 backend: "openai-compat".into(),
                 model: Some("qwen/qwen3-coder-next".into()),
+                model_family_id: Some("qwen3_6".into()),
+                runtime_profile_id: Some("openai_compat_generic".into()),
+                debug_adaptation: true,
                 messages: vec![LlmMessage {
                     role: LlmRole::System,
                     content: "x".repeat(32 * 1024),

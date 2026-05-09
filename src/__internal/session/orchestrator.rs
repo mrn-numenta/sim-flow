@@ -55,6 +55,15 @@ pub struct OrchestratorOptions {
     pub llm_backend: String,
     /// Optional model identifier the host should pass to its client.
     pub llm_model: Option<String>,
+    /// Optional explicit model-family override the host should pass
+    /// through to its backend/runtime selection.
+    pub llm_model_family_id: Option<String>,
+    /// Optional explicit runtime-profile override the host should
+    /// pass through to its backend/runtime selection.
+    pub llm_runtime_profile_id: Option<String>,
+    /// When true, hosts should surface extra adaptation diagnostics
+    /// (backend/runtime/model-family/capabilities) around LLM calls.
+    pub llm_debug_adaptation: bool,
     /// Optional base URL override for the local-server backends
     /// (`ollama`, `lmstudio`, `vllm`, `openai-compat`). Forwarded
     /// here for parity with `AutoOptions::llm_base_url`, but the
@@ -128,6 +137,9 @@ impl Default for OrchestratorOptions {
             candidate: None,
             llm_backend: String::new(),
             llm_model: None,
+            llm_model_family_id: None,
+            llm_runtime_profile_id: None,
+            llm_debug_adaptation: false,
             llm_base_url: None,
             auto: false,
             max_auto_iters: 3,
@@ -411,6 +423,9 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             request_id: request_id.clone(),
             backend: opts.llm_backend.clone(),
             model: opts.llm_model.clone(),
+            model_family_id: opts.llm_model_family_id.clone(),
+            runtime_profile_id: opts.llm_runtime_profile_id.clone(),
+            debug_adaptation: opts.llm_debug_adaptation,
             messages: messages.clone(),
             tools: llm_tools.clone(),
         })?;

@@ -150,7 +150,7 @@ fn run(args: &Args) -> std::result::Result<(), String> {
     // stdin is closed (the auto driver shouldn't need user input;
     // any RequestUserInput is treated as "fall back to the user" in
     // interactive mode and we'll see it as a stuck terminal).
-    let agent = ClaudeAgent::new(args.model.clone(), None);
+    let agent = ClaudeAgent::new(args.model.clone(), None, None);
     let stdin = BufReader::new(Cursor::new(Vec::<u8>::new()));
     let stdout = std::io::stdout();
     let stderr = std::io::stderr();
@@ -161,6 +161,9 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         foundation_root: args.foundation_root.clone(),
         llm_backend: "claude".into(),
         llm_model: args.model.clone(),
+        llm_model_family_id: None,
+        llm_runtime_profile_id: None,
+        llm_debug_adaptation: false,
         llm_base_url: None,
         max_auto_iters: 3,
         max_critique_iters: 3,

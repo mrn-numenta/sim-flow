@@ -57,6 +57,15 @@ describe("createBackend", () => {
     expect(backend.adaptation?.modelFamily.id).toBe("gemma4");
   });
 
+  it("honors an explicit runtime-profile override when compatible", () => {
+    const backend = createBackend({
+      source: "anthropic",
+      runtimeProfileId: "anthropic_messages",
+      secrets: { get: async () => undefined },
+    });
+    expect(backend.adaptation?.runtime.id).toBe("anthropic_messages");
+  });
+
   it("returns OllamaBackend for source=ollama (no secrets required)", () => {
     const backend = createBackend({ source: "ollama" });
     expect(backend).toBeInstanceOf(OllamaBackend);

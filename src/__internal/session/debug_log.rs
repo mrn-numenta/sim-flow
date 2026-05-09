@@ -190,6 +190,9 @@ impl DebugLog {
             request_id,
             backend,
             model,
+            model_family_id,
+            runtime_profile_id,
+            debug_adaptation,
             messages,
             ..
         } = event
@@ -204,8 +207,11 @@ impl DebugLog {
         .unwrap();
         writeln!(
             buf,
-            "backend: `{backend}`  model: {}",
-            model.as_deref().unwrap_or("(default)")
+            "backend: `{backend}`  model: {}  family: {}  runtime: {}  debug-adaptation: {}",
+            model.as_deref().unwrap_or("(default)"),
+            model_family_id.as_deref().unwrap_or("(infer)"),
+            runtime_profile_id.as_deref().unwrap_or("(default)"),
+            if *debug_adaptation { "on" } else { "off" }
         )
         .unwrap();
         writeln!(buf, "{} message(s):\n", messages.len()).unwrap();

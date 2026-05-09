@@ -1025,6 +1025,7 @@ fn ollama_agent_round_trips_against_mock_chat_completions_server() {
         Some(format!("http://127.0.0.1:{port}/v1")),
         Some("llama3.1".into()),
         None,
+        None,
     );
     let response = sim_flow::session::CliAgent::dispatch(
         &agent,
@@ -1106,6 +1107,9 @@ fn auto_opts(
         foundation_root: foundation_root(),
         llm_backend: "test".into(),
         llm_model: None,
+        llm_model_family_id: None,
+        llm_runtime_profile_id: None,
+        llm_debug_adaptation: false,
         llm_base_url: None,
         max_auto_iters: 3,
         max_critique_iters: 2,

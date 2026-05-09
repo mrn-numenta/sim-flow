@@ -366,10 +366,15 @@ where
             Event::RequestLlmResponse {
                 request_id,
                 messages,
+                debug_adaptation,
                 ..
             } => {
                 writeln!(self.stderr, "  [thinking via {}...]", self.agent.name())
                     .map_err(write_err)?;
+                if *debug_adaptation && let Some(summary) = self.agent.adaptation_summary() {
+                    writeln!(self.stderr, "  [llm adaptation: {}]", summary.format())
+                        .map_err(write_err)?;
+                }
                 self.stderr.flush().map_err(write_err)?;
                 match self.agent.dispatch(messages) {
                     Ok((text, metrics)) => {
@@ -401,10 +406,15 @@ where
                         });
                     }
                     Err(err) => {
+                        let adaptation = self
+                            .agent
+                            .adaptation_summary()
+                            .map(|summary| format!(" [{}]", summary.format()))
+                            .unwrap_or_default();
                         self.pending.push_back(HostEvent::LlmError {
                             request_id: request_id.clone(),
                             kind: "agent-failed".into(),
-                            message: format!("{err}"),
+                            message: format!("{err}{adaptation}"),
                         });
                     }
                 }

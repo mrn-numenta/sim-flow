@@ -94,6 +94,9 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             transport_socket,
             llm_backend,
             llm_model,
+            llm_model_family,
+            llm_runtime_profile,
+            llm_debug_adaptation,
             ollama_base_url,
             openai_base_url,
             llm_base_url,
@@ -106,6 +109,9 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             transport_socket.as_deref(),
             llm_backend,
             llm_model.as_deref(),
+            llm_model_family.as_deref(),
+            llm_runtime_profile.as_deref(),
+            *llm_debug_adaptation,
             ollama_base_url.as_deref(),
             openai_base_url.as_deref(),
             llm_base_url.as_deref(),
@@ -114,6 +120,9 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
         Command::Auto {
             llm_backend,
             llm_model,
+            llm_model_family,
+            llm_runtime_profile,
+            llm_debug_adaptation,
             llm_base_url,
             max_auto_iters,
             max_critique_iters,
@@ -131,6 +140,9 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             &project_dir,
             llm_backend,
             llm_model.as_deref(),
+            llm_model_family.as_deref(),
+            llm_runtime_profile.as_deref(),
+            *llm_debug_adaptation,
             llm_base_url.as_deref(),
             *max_auto_iters,
             *max_critique_iters,
@@ -437,6 +449,9 @@ fn auto_cmd(
     project: &Path,
     llm_backend: &str,
     llm_model: Option<&str>,
+    llm_model_family: Option<&str>,
+    llm_runtime_profile: Option<&str>,
+    llm_debug_adaptation: bool,
     llm_base_url: Option<&str>,
     max_auto_iters: u32,
     max_critique_iters: u32,
@@ -500,6 +515,9 @@ fn auto_cmd(
         foundation_root: foundation,
         llm_backend: llm_backend.to_string(),
         llm_model: llm_model.map(String::from),
+        llm_model_family_id: llm_model_family.map(String::from),
+        llm_runtime_profile_id: llm_runtime_profile.map(String::from),
+        llm_debug_adaptation,
         llm_base_url: llm_base_url.map(String::from),
         max_auto_iters,
         max_critique_iters,
@@ -682,6 +700,9 @@ fn session_cmd(
     transport_socket: Option<&Path>,
     llm_backend: &str,
     llm_model: Option<&str>,
+    llm_model_family: Option<&str>,
+    llm_runtime_profile: Option<&str>,
+    llm_debug_adaptation: bool,
     ollama_base_url: Option<&str>,
     openai_base_url: Option<&str>,
     llm_base_url: Option<&str>,
@@ -710,6 +731,9 @@ fn session_cmd(
         candidate: candidate.map(String::from),
         llm_backend: llm_backend.to_string(),
         llm_model: llm_model.map(String::from),
+        llm_model_family_id: llm_model_family.map(String::from),
+        llm_runtime_profile_id: llm_runtime_profile.map(String::from),
+        llm_debug_adaptation,
         ..Default::default()
     };
     if let Some(socket_path) = transport_socket {
@@ -722,7 +746,9 @@ fn session_cmd(
     } else {
         let agent_config = sim_flow::__internal::session::AgentConfig {
             model: llm_model.map(String::from),
-            model_family_id: None,
+            model_family_id: llm_model_family.map(String::from),
+            runtime_profile_id: llm_runtime_profile.map(String::from),
+            debug_adaptation: llm_debug_adaptation,
             base_url: llm_base_url.map(String::from),
             ollama_base_url: ollama_base_url.map(String::from),
             openai_base_url: openai_base_url.map(String::from),
@@ -825,6 +851,12 @@ impl sim_flow::__internal::session::CliAgent for BoxedAgent {
         messages: &[sim_flow::__internal::session::LlmMessage],
     ) -> sim_flow::Result<(String, sim_flow::__internal::session::agent::LlmCallMetrics)> {
         self.0.dispatch(messages)
+    }
+
+    fn adaptation_summary(
+        &self,
+    ) -> Option<sim_flow::__internal::session::agent::AgentAdaptationSummary> {
+        self.0.adaptation_summary()
     }
 }
 

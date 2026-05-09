@@ -352,6 +352,10 @@
               "backend": {
                 "type": "string"
               },
+              "debug_adaptation": {
+                "default": false,
+                "type": "boolean"
+              },
               "event": {
                 "enum": [
                   "request-llm-response"
@@ -370,8 +374,20 @@
                   "null"
                 ]
               },
+              "model_family_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "request_id": {
                 "type": "string"
+              },
+              "runtime_profile_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "tools": {
                 "default": [],

@@ -482,10 +482,25 @@ export class DashboardHost {
           .getConfiguration("sim-flow")
           .update("llm.model", msg.model, vscode.ConfigurationTarget.Workspace);
         return;
+      case "set-llm-model-family":
+        await vscode.workspace
+          .getConfiguration("sim-flow")
+          .update("llm.modelFamily", msg.modelFamilyId, vscode.ConfigurationTarget.Workspace);
+        return;
+      case "set-llm-runtime-profile":
+        await vscode.workspace
+          .getConfiguration("sim-flow")
+          .update("llm.runtimeProfile", msg.runtimeProfileId, vscode.ConfigurationTarget.Workspace);
+        return;
       case "set-llm-verbose":
         await vscode.workspace
           .getConfiguration("sim-flow")
           .update("llm.verbose", msg.verbose, vscode.ConfigurationTarget.Workspace);
+        return;
+      case "set-llm-debug-adaptation":
+        await vscode.workspace
+          .getConfiguration("sim-flow")
+          .update("llm.debugAdaptation", msg.debugAdaptation, vscode.ConfigurationTarget.Workspace);
         return;
       case "set-llm-servers":
         await vscode.workspace
@@ -1236,12 +1251,19 @@ export class DashboardHost {
     const config = vscode.workspace.getConfiguration("sim-flow");
     const source = (config.get<string>("llm.source") ?? "vscode") as LlmSourceTag;
     const model = config.get<string>("llm.model")?.trim();
+    const modelFamilyId = config.get<string>("llm.modelFamily")?.trim();
+    const runtimeProfileId = config.get<string>("llm.runtimeProfile")?.trim();
     const verbose = config.get<boolean>("llm.verbose") ?? true;
+    const debugAdaptation = config.get<boolean>("llm.debugAdaptation") ?? false;
     await this.post({
       type: "llm-config",
       source,
       model: model && model.length > 0 ? model : undefined,
+      modelFamilyId: modelFamilyId && modelFamilyId.length > 0 ? modelFamilyId : undefined,
+      runtimeProfileId:
+        runtimeProfileId && runtimeProfileId.length > 0 ? runtimeProfileId : undefined,
       verbose,
+      debugAdaptation,
     });
   }
 
@@ -1262,9 +1284,9 @@ export class DashboardHost {
     let baseUrl: string | undefined;
     if (typeof source === "string" && source.startsWith("server:")) {
       const name = source.slice("server:".length);
-      const servers = (config.get<unknown>("llm.servers") as
-        | import("./messages").LlmServerEntry[]
-        | undefined) ?? [];
+      const servers =
+        (config.get<unknown>("llm.servers") as import("./messages").LlmServerEntry[] | undefined) ??
+        [];
       const entry = servers.find((s) => s.name === name);
       if (entry) {
         resolvedSource = entry.kind as LlmSource;

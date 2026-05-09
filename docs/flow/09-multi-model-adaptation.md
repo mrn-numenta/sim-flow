@@ -211,6 +211,39 @@ Introduce four explicit layers:
 
 These layers compose into one per-session dispatch configuration.
 
+## Landed Implementation
+
+Phase 10 has now landed this design in both the TypeScript extension path
+and the Rust session-agent path.
+
+What is now explicit in code:
+
+- runtime capability profiles:
+  - `openai_compat_generic`
+  - `anthropic_messages`
+  - `processor_local` (placeholder)
+  - `vscode_language_model` (host-managed VS Code LM surface)
+- model-family profiles:
+  - `generic_chat`
+  - `gemma4`
+  - `qwen3_6`
+  - `kimi_vl_thinking`
+  - `claude_messages`
+- response normalizers:
+  - OpenAI-compatible structured reasoning/tool-call extraction
+  - Anthropic typed `thinking` / `text` / `tool_use` preservation
+  - raw-text think-tag normalization for Qwen and Kimi
+
+Operational additions that now exist:
+
+- explicit model-family and runtime-profile overrides in the VS Code
+  settings surface and in the Rust CLI/session flags
+- host/agent-side adaptation diagnostics that can report the active
+  backend, runtime profile, model-family profile, and key capability
+  flags during failures
+- fixture-driven validation scenarios that exercise representative
+  adaptation paths end-to-end rather than only unit-testing helpers
+
 ### 1. Transport Backend
 
 The transport backend is responsible only for how requests and responses cross
@@ -354,20 +387,20 @@ session-agent path.
 
 The following table defines where major decisions belong.
 
-| Concern | Owner |
-| ------- | ----- |
-| HTTP headers, SSE parsing, auth | transport backend |
-| single-leading-system-message workaround | runtime capability profile |
-| `enable_thinking` / family-specific prompt toggles | model-family profile |
-| temperature / top-p / family default sampling | model-family profile |
-| runtime-specific parser flags / extra request body | runtime capability profile |
-| env/config/secret-storage credential resolution policy | runtime capability profile |
-| image-before-text vs text-before-image | model-family profile |
-| stripping `<think>` or custom thought markers | response normalizer |
-| converting native or text tool calls to internal tool events | response normalizer |
-| deciding whether prior reasoning stays in history | model-family profile |
-| token counting / prompt caching / context-editing affordances | runtime capability profile |
-| preserving native `thinking` / `tool_use` / `tool_result` structure | response normalizer |
+| Concern                                                             | Owner                      |
+| ------------------------------------------------------------------- | -------------------------- |
+| HTTP headers, SSE parsing, auth                                     | transport backend          |
+| single-leading-system-message workaround                            | runtime capability profile |
+| `enable_thinking` / family-specific prompt toggles                  | model-family profile       |
+| temperature / top-p / family default sampling                       | model-family profile       |
+| runtime-specific parser flags / extra request body                  | runtime capability profile |
+| env/config/secret-storage credential resolution policy              | runtime capability profile |
+| image-before-text vs text-before-image                              | model-family profile       |
+| stripping `<think>` or custom thought markers                       | response normalizer        |
+| converting native or text tool calls to internal tool events        | response normalizer        |
+| deciding whether prior reasoning stays in history                   | model-family profile       |
+| token counting / prompt caching / context-editing affordances       | runtime capability profile |
+| preserving native `thinking` / `tool_use` / `tool_result` structure | response normalizer        |
 
 ## Why This Partitioning
 

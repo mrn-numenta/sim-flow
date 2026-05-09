@@ -138,7 +138,11 @@ export function normalizeLlmChunk(chunk: LlmStreamChunk): NormalizedLlmChunk {
 export interface RuntimeCapabilityProfile {
   id: string;
   /** Request family the transport/runtime expects on the wire. */
-  requestFormat?: "openai_chat_completions" | "anthropic_messages" | "processor_local";
+  requestFormat?:
+    | "openai_chat_completions"
+    | "anthropic_messages"
+    | "processor_local"
+    | "vscode_language_model";
   /** Where credential lookup policy is owned for this runtime. */
   credentialPolicy?: "shared-provider-chain" | "host-managed" | "none";
   /** How the runtime expects system prompts to be carried. */
@@ -211,6 +215,19 @@ export interface LlmAdaptationProfile {
   runtime: RuntimeCapabilityProfile;
   modelFamily: ModelFamilyProfile;
   responseNormalizer: ResponseNormalizer;
+}
+
+/** Compact, user-facing summary of the active adaptation path. */
+export interface LlmAdaptationSummary {
+  backend: string;
+  runtimeId: string;
+  modelFamilyId: string;
+  requestFormat?: RuntimeCapabilityProfile["requestFormat"];
+  systemPromptMode?: RuntimeCapabilityProfile["systemPromptMode"];
+  credentialPolicy?: RuntimeCapabilityProfile["credentialPolicy"];
+  supportsStructuredReasoning: boolean;
+  supportsStructuredToolCalls: boolean;
+  supportsThinkingControls: boolean;
 }
 
 /**

@@ -38,8 +38,14 @@ interface UiState {
   llmSource: LlmSourceTag | null;
   /** Active `sim-flow.llm.model` setting; empty string means "any". */
   llmModel: string;
+  /** Active explicit model-family override; empty string means infer from model id. */
+  llmModelFamilyId: string;
+  /** Active explicit runtime-profile override; empty string means use source default. */
+  llmRuntimeProfileId: string;
   /** Active `sim-flow.llm.verbose` setting. When false the pump prepends a "be concise" system message. */
   llmVerbose: boolean;
+  /** When true, show adaptation diagnostics around backend dispatches. */
+  llmDebugAdaptation: boolean;
   /**
    * Cached list of models for `llmModelListSource`. We refetch on
    * source change and on a manual refresh click; otherwise we keep
@@ -103,7 +109,10 @@ const ui: UiState = {
   newProjectName: "",
   llmSource: null,
   llmModel: "",
+  llmModelFamilyId: "",
+  llmRuntimeProfileId: "",
   llmVerbose: true,
+  llmDebugAdaptation: false,
   llmModelList: [],
   llmModelListSource: null,
   llmModelListPending: false,
@@ -231,7 +240,10 @@ window.addEventListener("message", (ev) => {
       const sourceChanged = ui.llmSource !== msg.source;
       ui.llmSource = msg.source;
       ui.llmModel = msg.model ?? "";
+      ui.llmModelFamilyId = msg.modelFamilyId ?? "";
+      ui.llmRuntimeProfileId = msg.runtimeProfileId ?? "";
       ui.llmVerbose = msg.verbose;
+      ui.llmDebugAdaptation = msg.debugAdaptation;
       // Source changed: drop cached models and request a fresh list.
       // The host's enumerator handles the per-source dispatch.
       if (sourceChanged) {
@@ -471,6 +483,12 @@ function renderSettingsTab(): Node[] {
       { class: "settings-section" },
       el("h3", {}, "Language model"),
       el("div", { class: "settings-row" }, renderLlmSourcePicker(), renderLlmModelPicker()),
+      el(
+        "div",
+        { class: "settings-row" },
+        renderLlmModelFamilyPicker(),
+        renderLlmRuntimeProfilePicker(),
+      ),
     ),
     el(
       "div",
@@ -487,7 +505,7 @@ function renderSettingsTab(): Node[] {
       "div",
       { class: "settings-section" },
       el("h3", {}, "Output style"),
-      el("div", { class: "settings-row" }, renderVerboseToggle()),
+      el("div", { class: "settings-row" }, renderVerboseToggle(), renderDebugAdaptationToggle()),
     ),
     el(
       "div",
@@ -699,7 +717,8 @@ function renderLlmServersTable(): HTMLElement {
     },
     "secondary",
   );
-  addBtn.title = "Append a new row. Defaults to vLLM on localhost:8000; edit in place to point elsewhere.";
+  addBtn.title =
+    "Append a new row. Defaults to vLLM on localhost:8000; edit in place to point elsewhere.";
   wrap.appendChild(el("div", { class: "llm-servers-actions" }, addBtn));
   return wrap;
 }
@@ -729,10 +748,7 @@ function llmServerTextInput(
   return input;
 }
 
-function llmServerNumberInput(
-  value: number,
-  onCommit: (value: number) => void,
-): HTMLInputElement {
+function llmServerNumberInput(value: number, onCommit: (value: number) => void): HTMLInputElement {
   const input = document.createElement("input");
   input.type = "number";
   input.className = "llm-server-input llm-server-port";
@@ -872,6 +888,22 @@ function renderCoverageLevel(): HTMLElement {
   return wrap;
 }
 
+function renderDebugAdaptationToggle(): HTMLElement {
+  const wrap = el("label", { class: "llm-verbose" });
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = ui.llmDebugAdaptation;
+  input.title =
+    "When ON, sim-flow prints the active backend, runtime profile, model-family profile, and key adaptation capabilities around LLM dispatches and failures.";
+  input.addEventListener("change", () => {
+    ui.llmDebugAdaptation = input.checked;
+    send({ type: "set-llm-debug-adaptation", debugAdaptation: input.checked });
+  });
+  wrap.appendChild(input);
+  wrap.appendChild(document.createTextNode(" Adaptation diagnostics"));
+  return wrap;
+}
+
 function renderVerboseToggle(): HTMLElement {
   const wrap = el("label", { class: "llm-verbose" });
   const input = document.createElement("input");
@@ -885,6 +917,87 @@ function renderVerboseToggle(): HTMLElement {
   });
   wrap.appendChild(input);
   wrap.appendChild(document.createTextNode(" Verbose"));
+  return wrap;
+}
+
+function renderLlmModelFamilyPicker(): HTMLElement {
+  const wrap = el("label", { class: "llm-source" }, "Model family: ");
+  const select = document.createElement("select");
+  select.className = "llm-source-select";
+  const options = [
+    { id: "", label: "(infer from model)" },
+    { id: "generic_chat", label: "generic_chat" },
+    { id: "gemma4", label: "gemma4" },
+    { id: "qwen3_6", label: "qwen3_6" },
+    { id: "kimi_vl_thinking", label: "kimi_vl_thinking" },
+    { id: "claude_messages", label: "claude_messages" },
+  ];
+  for (const option of options) {
+    const opt = document.createElement("option");
+    opt.value = option.id;
+    opt.textContent = option.label;
+    if (ui.llmModelFamilyId === option.id) {
+      opt.selected = true;
+    }
+    select.appendChild(opt);
+  }
+  if (
+    ui.llmModelFamilyId.length > 0 &&
+    !options.some((option) => option.id === ui.llmModelFamilyId)
+  ) {
+    const custom = document.createElement("option");
+    custom.value = ui.llmModelFamilyId;
+    custom.textContent = `${ui.llmModelFamilyId} (custom)`;
+    custom.selected = true;
+    select.appendChild(custom);
+  }
+  select.title =
+    "Explicit model-family override. Leave on `(infer from model)` for normal use; pin a family here when a runtime serves an ambiguous model id or when you want deterministic adaptation during debugging.";
+  select.addEventListener("change", () => {
+    ui.llmModelFamilyId = select.value;
+    send({ type: "set-llm-model-family", modelFamilyId: select.value });
+  });
+  wrap.appendChild(select);
+  return wrap;
+}
+
+function renderLlmRuntimeProfilePicker(): HTMLElement {
+  const wrap = el("label", { class: "llm-source" }, "Runtime profile: ");
+  const select = document.createElement("select");
+  select.className = "llm-source-select";
+  const options = [
+    { id: "", label: "(source default)" },
+    { id: "openai_compat_generic", label: "openai_compat_generic" },
+    { id: "anthropic_messages", label: "anthropic_messages" },
+    { id: "processor_local", label: "processor_local" },
+    { id: "vscode_language_model", label: "vscode_language_model" },
+  ];
+  for (const option of options) {
+    const opt = document.createElement("option");
+    opt.value = option.id;
+    opt.textContent = option.label;
+    if (ui.llmRuntimeProfileId === option.id) {
+      opt.selected = true;
+    }
+    select.appendChild(opt);
+  }
+  if (
+    ui.llmRuntimeProfileId.length > 0 &&
+    !options.some((option) => option.id === ui.llmRuntimeProfileId)
+  ) {
+    const custom = document.createElement("option");
+    custom.value = ui.llmRuntimeProfileId;
+    custom.textContent = `${ui.llmRuntimeProfileId} (custom)`;
+    custom.selected = true;
+    select.appendChild(custom);
+  }
+  select.title =
+    "Explicit runtime-profile override. Leave on `(source default)` unless you need to pin a serving/runtime contract for debugging or compatibility triage.";
+  select.addEventListener("change", () => {
+    ui.llmRuntimeProfileId = select.value;
+    send({ type: "set-llm-runtime-profile", runtimeProfileId: select.value });
+  });
+  wrap.appendChild(select);
   return wrap;
 }
 

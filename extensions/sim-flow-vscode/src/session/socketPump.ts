@@ -6,11 +6,13 @@ import * as vscode from "vscode";
 
 import {
   DEFAULT_RESPONSE_NORMALIZER,
+  formatAdaptationSummary,
   type LlmBackend,
   type LlmMessage as BackendLlmMessage,
   createBackend,
   LlmError,
   type LlmSource,
+  summarizeAdaptation,
 } from "../llm";
 import { estimateMessagesTokens } from "../llm/tokenEstimate";
 import { DebugLog } from "./debug-log";
@@ -201,11 +203,7 @@ export class SocketSessionPump implements LiveSessionTransport {
         stdio: ["ignore", "ignore", "ignore"],
       });
       this.child = child;
-      this.debugLog.logProcessSpawn(
-        options.launch.binary,
-        options.launch.args,
-        child.pid,
-      );
+      this.debugLog.logProcessSpawn(options.launch.binary, options.launch.args, child.pid);
       // Stash a pid record under `<project>/.sim-flow/pids/<sessionId>.json`
       // so that on the next extension activate we can reap orphans
       // left behind by a host crash. The record is removed when the
@@ -222,9 +220,7 @@ export class SocketSessionPump implements LiveSessionTransport {
         } catch (err) {
           // Non-fatal: the child still runs; we just can't reap it
           // automatically on a future activate. Log via debug log.
-          this.debugLog.logSpawnError(
-            `pid registry write failed: ${(err as Error).message}`,
-          );
+          this.debugLog.logSpawnError(`pid registry write failed: ${(err as Error).message}`);
         }
       }
       child.on("error", (err) => {
@@ -283,11 +279,13 @@ export class SocketSessionPump implements LiveSessionTransport {
     try {
       await this.connectionReady;
     } catch (err) {
-      return this.terminationReason ?? {
-        status: "ended",
-        endReason: "attach-failed",
-        endMessage: (err as Error).message ?? String(err),
-      };
+      return (
+        this.terminationReason ?? {
+          status: "ended",
+          endReason: "attach-failed",
+          endMessage: (err as Error).message ?? String(err),
+        }
+      );
     }
     this.currentRenderer = renderer;
     return new Promise<PumpSettleResult>((resolve) => {
@@ -948,6 +946,8 @@ export class SocketSessionPump implements LiveSessionTransport {
     source: LlmSource;
     rawSource: string;
     model?: string;
+    modelFamilyId?: string;
+    runtimeProfileId?: string;
     ollamaBaseUrl?: string;
     lmstudioBaseUrl?: string;
     /**
@@ -959,15 +959,22 @@ export class SocketSessionPump implements LiveSessionTransport {
      */
     serverBaseUrl: string | null | undefined;
     verbose: boolean;
+    debugAdaptation: boolean;
   } {
     const config = vscode.workspace.getConfiguration("sim-flow");
     const rawSource = (config.get<string>("llm.source") ?? this.llm.source) as string;
     const model = (config.get<string>("llm.model") ?? "").trim() || this.llm.model;
+    const modelFamilyId =
+      (config.get<string>("llm.modelFamily") ?? "").trim() || this.llm.modelFamilyId;
+    const runtimeProfileId =
+      (config.get<string>("llm.runtimeProfile") ?? "").trim() || this.llm.runtimeProfileId;
     const ollamaBaseUrl =
       (config.get<string>("llm.ollama.baseUrl") ?? "").trim() || this.llm.ollamaBaseUrl;
     const lmstudioBaseUrl =
       (config.get<string>("llm.lmstudio.baseUrl") ?? "").trim() || this.llm.lmstudioBaseUrl;
     const verbose = config.get<boolean>("llm.verbose") ?? true;
+    const debugAdaptation =
+      (config.get<boolean>("llm.debugAdaptation") ?? false) || this.llm.debugAdaptation === true;
     // Resolve `server:<name>` against `sim-flow.llm.servers` so the
     // factory sees the entry's `kind` + composed base URL instead of
     // the raw "server:..." string (which it doesn't understand).
@@ -978,10 +985,13 @@ export class SocketSessionPump implements LiveSessionTransport {
         source: rawSource as LlmSource,
         rawSource,
         model,
+        modelFamilyId,
+        runtimeProfileId,
         ollamaBaseUrl,
         lmstudioBaseUrl,
         serverBaseUrl: null,
         verbose,
+        debugAdaptation,
       };
     }
     return {
@@ -989,10 +999,13 @@ export class SocketSessionPump implements LiveSessionTransport {
       rawSource,
       // Per-server `model` overrides the global setting when set.
       model: resolved.model ?? model,
+      modelFamilyId,
+      runtimeProfileId,
       ollamaBaseUrl,
       lmstudioBaseUrl,
       serverBaseUrl: resolved.baseUrl,
       verbose,
+      debugAdaptation,
     };
   }
 
@@ -1024,6 +1037,8 @@ export class SocketSessionPump implements LiveSessionTransport {
       backend = createBackend({
         source: live.source,
         model: live.model ?? event.model ?? undefined,
+        modelFamilyId: live.modelFamilyId ?? event.model_family_id ?? undefined,
+        runtimeProfileId: live.runtimeProfileId ?? event.runtime_profile_id ?? undefined,
         secrets: this.llm.secrets,
         projectDir: this.llm.projectDir,
         binary: this.llm.binary,
@@ -1044,6 +1059,13 @@ export class SocketSessionPump implements LiveSessionTransport {
         message: (err as Error).message ?? String(err),
       });
       return;
+    }
+    const adaptationSummary = backend.adaptation
+      ? formatAdaptationSummary(summarizeAdaptation(backend.name, backend.adaptation))
+      : undefined;
+    const debugAdaptation = live.debugAdaptation || event.debug_adaptation === true;
+    if (debugAdaptation && adaptationSummary) {
+      this.currentRenderer?.markdown(`_LLM adaptation: ${adaptationSummary}_\n\n`);
     }
     const messages: BackendLlmMessage[] = (event.messages as ProtocolLlmMessage[]).map((m) => ({
       role: m.role,
@@ -1159,7 +1181,7 @@ export class SocketSessionPump implements LiveSessionTransport {
         event: "llm-error",
         request_id: event.request_id,
         kind: err instanceof LlmError ? err.kind : "stream",
-        message: composed,
+        message: adaptationSummary ? `${composed} [${adaptationSummary}]` : composed,
       });
     } finally {
       // Dispose only when this dispatch still owns the source;

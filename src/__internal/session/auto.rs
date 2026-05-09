@@ -84,6 +84,9 @@ pub struct AutoOptions {
     pub foundation_root: PathBuf,
     pub llm_backend: String,
     pub llm_model: Option<String>,
+    pub llm_model_family_id: Option<String>,
+    pub llm_runtime_profile_id: Option<String>,
+    pub llm_debug_adaptation: bool,
     /// Optional base URL override for OpenAI-compatible local
     /// backends (`ollama`, `lmstudio`, `vllm`, `openai-compat`).
     /// Forwarded into each sub-session's `OrchestratorOptions`
@@ -126,6 +129,8 @@ pub fn run_auto<H: Host>(opts: AutoOptions, host: &mut H) -> Result<()> {
         project = %opts.project_dir.display(),
         backend = %opts.llm_backend,
         model = opts.llm_model.as_deref().unwrap_or("(default)"),
+        model_family = opts.llm_model_family_id.as_deref().unwrap_or("(infer)"),
+        runtime_profile = opts.llm_runtime_profile_id.as_deref().unwrap_or("(default)"),
         step_mode = ?opts.step_mode,
         "run_auto starting"
     );
@@ -813,6 +818,9 @@ fn run_subsession<H: Host>(
         candidate: None,
         llm_backend: opts.llm_backend.clone(),
         llm_model: opts.llm_model.clone(),
+        llm_model_family_id: opts.llm_model_family_id.clone(),
+        llm_runtime_profile_id: opts.llm_runtime_profile_id.clone(),
+        llm_debug_adaptation: opts.llm_debug_adaptation,
         llm_base_url: opts.llm_base_url.clone(),
         auto,
         max_auto_iters: opts.max_auto_iters,

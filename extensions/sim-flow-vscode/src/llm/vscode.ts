@@ -9,7 +9,9 @@ import {
   orderAttachmentsByFamily,
   resolveModelFamily,
 } from "./modelFamilies";
+import { resolveRuntimeProfile, VSCODE_LM_RUNTIME } from "./runtimeProfiles";
 import {
+  type LlmAdaptationProfile,
   type CancellationLike,
   type LlmBackend,
   LlmError,
@@ -23,12 +25,35 @@ export interface VSCodeBackendOptions {
   model?: string;
   /** Optional explicit model-family override; otherwise inferred from `model`. */
   modelFamilyId?: string;
+  /** Optional explicit runtime-profile override; otherwise uses the VS Code LM default. */
+  runtimeProfileId?: string;
 }
 
 export class VSCodeLmBackend implements LlmBackend {
   readonly name = "vscode.lm";
+  readonly adaptation: LlmAdaptationProfile;
 
-  constructor(private readonly options: VSCodeBackendOptions = {}) {}
+  constructor(private readonly options: VSCodeBackendOptions = {}) {
+    const modelFamily = resolveModelFamily(this.options.modelFamilyId, this.options.model);
+    let runtime = VSCODE_LM_RUNTIME;
+    try {
+      runtime = resolveRuntimeProfile(this.options.runtimeProfileId, VSCODE_LM_RUNTIME, [
+        VSCODE_LM_RUNTIME.id,
+      ]);
+    } catch (err) {
+      throw new LlmError("unsupported", (err as Error).message);
+    }
+    this.adaptation = {
+      runtime,
+      modelFamily,
+      responseNormalizer: {
+        id: "default",
+        normalizeChunk(chunk) {
+          return [{ text: chunk.text, kind: chunk.kind ?? "content" }];
+        },
+      },
+    };
+  }
 
   async *stream(
     messages: LlmMessage[],
@@ -48,7 +73,7 @@ export class VSCodeLmBackend implements LlmBackend {
       );
     }
 
-    const modelFamily = resolveModelFamily(this.options.modelFamilyId, this.options.model);
+    const modelFamily = this.adaptation.modelFamily;
     const vmsgs = toVscodeMessages(messages, modelFamily);
     // `justification` gives VS Code the user-facing reason for the
     // consent prompt some providers gate behind. Without it, certain
@@ -68,9 +93,7 @@ export class VSCodeLmBackend implements LlmBackend {
     // existing `extract_tool_calls` dispatcher picks them up the
     // same way it does for the openai-compat backend.
     type StreamPart = unknown;
-    const responseStream = (
-      request as unknown as { stream?: AsyncIterable<StreamPart> }
-    ).stream;
+    const responseStream = (request as unknown as { stream?: AsyncIterable<StreamPart> }).stream;
     let sawAnything = false;
     const unrecognized: string[] = [];
     try {
@@ -131,7 +154,9 @@ export class VSCodeLmBackend implements LlmBackend {
         unrecognized.length > 0
           ? `Stream contained ${unrecognized.length} unrecognized part(s) (${unrecognized
               .slice(0, 3)
-              .join(", ")}${unrecognized.length > 3 ? ", ..." : ""}). The model may have emitted a content type sim-flow doesn't decode.`
+              .join(
+                ", ",
+              )}${unrecognized.length > 3 ? ", ..." : ""}). The model may have emitted a content type sim-flow doesn't decode.`
           : "The provider returned no text and no tool calls. Common causes: extension consent not granted (look for an Allow dialog), content-filter rejection, or a network issue between VS Code and the provider.";
       throw new LlmError("http", "vscode.lm returned an empty response", detail);
     }
@@ -195,8 +220,12 @@ export function extractToolCallPart(part: unknown): string | null {
 }
 
 function describePart(part: unknown): string {
-  if (part === null) {return "null";}
-  if (typeof part !== "object") {return typeof part;}
+  if (part === null) {
+    return "null";
+  }
+  if (typeof part !== "object") {
+    return typeof part;
+  }
   const ctor = (part as { constructor?: { name?: string } }).constructor?.name;
   return ctor ?? "object";
 }
@@ -216,8 +245,12 @@ async function selectModel(
   // the "you've exhausted Copilot's quota" surprise.
   const { vendor, family } = parseModelHint(prefer);
   const selector: vscode.LanguageModelChatSelector = {};
-  if (vendor) {selector.vendor = vendor;}
-  if (family) {selector.family = family;}
+  if (vendor) {
+    selector.vendor = vendor;
+  }
+  if (family) {
+    selector.family = family;
+  }
   let models = await vscode.lm.selectChatModels(selector);
   if (models.length > 0) {
     return models[0];
@@ -248,7 +281,9 @@ export function parseModelHint(value: string | undefined): {
   vendor?: string;
   family?: string;
 } {
-  if (!value) {return {};}
+  if (!value) {
+    return {};
+  }
   const idx = value.indexOf("/");
   if (idx === -1) {
     return { family: value };

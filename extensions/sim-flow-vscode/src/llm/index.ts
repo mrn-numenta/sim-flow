@@ -1,5 +1,6 @@
 export { ANTHROPIC_KEY_ID, AnthropicBackend, extractAnthropicText } from "./anthropic";
 export { createBackend, type FactoryOptions } from "./factory";
+export { formatAdaptationSummary, summarizeAdaptation } from "./adaptationDiagnostics";
 export { LMSTUDIO_DEFAULT_BASE_URL, LMSTUDIO_KEY_ID, LMStudioBackend } from "./lmstudio";
 export {
   applyModelFamilyPromptPolicy,
@@ -9,6 +10,7 @@ export {
   GENERIC_CHAT_MODEL_FAMILY,
   inferModelFamily,
   KIMI_VL_THINKING_MODEL_FAMILY,
+  KNOWN_MODEL_FAMILY_IDS,
   modelFamilyById,
   orderAttachmentsByFamily,
   QWEN3_6_MODEL_FAMILY,
@@ -23,12 +25,17 @@ export {
 } from "./responseNormalizers";
 export {
   ANTHROPIC_MESSAGES_RUNTIME,
+  KNOWN_RUNTIME_PROFILE_IDS,
   mergeLeadingSystemMessages,
   OPENAI_COMPAT_GENERIC_RUNTIME,
   prepareAnthropicMessages,
   PROCESSOR_LOCAL_RUNTIME,
+  resolveRuntimeProfile,
+  runtimeProfileById,
+  VSCODE_LM_RUNTIME,
 } from "./runtimeProfiles";
 export {
+  type LlmAdaptationSummary,
   type CancellationLike,
   type LlmAdaptationProfile,
   type LlmAttachment,

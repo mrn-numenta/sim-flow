@@ -324,10 +324,10 @@ fn run(args: &Args) -> std::result::Result<(), String> {
 
     let agent: Box<dyn CliAgent> = match args.backend.as_str() {
         "openai-compat" | "openai_compat" | "openai" => {
-            Box::new(OpenAiCompatAgent::new(None, args.model.clone(), None))
+            Box::new(OpenAiCompatAgent::new(None, args.model.clone(), None, None))
         }
-        "ollama" => Box::new(OllamaAgent::new(None, args.model.clone(), None)),
-        "claude" | "claude-cli" => Box::new(ClaudeAgent::new(args.model.clone(), None)),
+        "ollama" => Box::new(OllamaAgent::new(None, args.model.clone(), None, None)),
+        "claude" | "claude-cli" => Box::new(ClaudeAgent::new(args.model.clone(), None, None)),
         _ => unreachable!("validated in Args::parse"),
     };
 

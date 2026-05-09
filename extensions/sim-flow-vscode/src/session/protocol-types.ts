@@ -28,10 +28,13 @@ export type Event =
     }
   | {
       backend: string;
+      debug_adaptation?: boolean;
       event: "request-llm-response";
       messages: LlmMessage[];
       model?: string | null;
+      model_family_id?: string | null;
       request_id: string;
+      runtime_profile_id?: string | null;
       /**
        * Tool catalog for backends that support native tool-use. Empty in M2; populated in M3.
        */

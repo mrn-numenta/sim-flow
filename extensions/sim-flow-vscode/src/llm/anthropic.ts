@@ -14,6 +14,7 @@ import {
 import {
   ANTHROPIC_MESSAGES_RUNTIME,
   prepareAnthropicMessages,
+  resolveRuntimeProfile,
 } from "./runtimeProfiles";
 import {
   applyModelFamilyPromptPolicy,
@@ -45,6 +46,7 @@ export const ANTHROPIC_KEY_ID = secretIdFor("anthropic");
 export interface AnthropicBackendOptions {
   model?: string;
   modelFamilyId?: string;
+  runtimeProfileId?: string;
   secrets?: SecretStorage;
   apiUrl?: string;
   /** Max tokens for the response. Anthropic requires this field. */
@@ -59,8 +61,16 @@ export class AnthropicBackend implements LlmBackend {
 
   constructor(private readonly options: AnthropicBackendOptions = {}) {
     const modelFamily = resolveModelFamily(this.options.modelFamilyId, this.options.model);
+    let runtime = ANTHROPIC_MESSAGES_RUNTIME;
+    try {
+      runtime = resolveRuntimeProfile(this.options.runtimeProfileId, ANTHROPIC_MESSAGES_RUNTIME, [
+        ANTHROPIC_MESSAGES_RUNTIME.id,
+      ]);
+    } catch (err) {
+      throw new LlmError("unsupported", (err as Error).message);
+    }
     this.adaptation = {
-      runtime: ANTHROPIC_MESSAGES_RUNTIME,
+      runtime,
       modelFamily,
       responseNormalizer: createResponseNormalizerForFamily(modelFamily),
     };

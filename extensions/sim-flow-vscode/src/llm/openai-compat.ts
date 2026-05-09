@@ -3,11 +3,7 @@
 // name, default base URL, default model, and key policy; the wire
 // format is identical.
 
-import {
-  envVarFor,
-  type ProviderId,
-  resolveApiKey as resolveProviderKey,
-} from "./keyResolver";
+import { envVarFor, type ProviderId, resolveApiKey as resolveProviderKey } from "./keyResolver";
 import {
   extractToolFences,
   makeToolCallId,
@@ -18,6 +14,7 @@ import {
 import {
   mergeLeadingSystemMessages,
   OPENAI_COMPAT_GENERIC_RUNTIME,
+  resolveRuntimeProfile,
 } from "./runtimeProfiles";
 import {
   applyModelFamilyPromptPolicy,
@@ -66,6 +63,8 @@ export interface OpenAiCompatibleBackendOptions {
   model?: string;
   /** Explicit model-family override; otherwise inferred from `model`. */
   modelFamilyId?: string;
+  /** Explicit runtime-profile override; otherwise uses the backend default. */
+  runtimeProfileId?: string;
   secrets?: SecretStorage;
   /** Absolute override URL. Takes precedence over baseUrl + path. */
   apiUrl?: string;
@@ -79,8 +78,18 @@ export class OpenAiCompatibleBackend implements LlmBackend {
   constructor(protected readonly options: OpenAiCompatibleBackendOptions) {
     this.name = options.name;
     const modelFamily = resolveModelFamily(this.options.modelFamilyId, this.options.model);
+    let runtime = OPENAI_COMPAT_GENERIC_RUNTIME;
+    try {
+      runtime = resolveRuntimeProfile(
+        this.options.runtimeProfileId,
+        OPENAI_COMPAT_GENERIC_RUNTIME,
+        [OPENAI_COMPAT_GENERIC_RUNTIME.id],
+      );
+    } catch (err) {
+      throw new LlmError("unsupported", (err as Error).message);
+    }
     this.adaptation = {
-      runtime: OPENAI_COMPAT_GENERIC_RUNTIME,
+      runtime,
       modelFamily,
       responseNormalizer: createResponseNormalizerForFamily(modelFamily),
     };
@@ -296,10 +305,7 @@ export class OpenAiCompatibleBackend implements LlmBackend {
     // and config-file table. The legacy `keyId` is retained as the
     // SecretStorage id so already-stored keys keep working.
     if (this.options.provider) {
-      const resolved = await resolveProviderKey(
-        this.options.provider,
-        this.options.secrets,
-      );
+      const resolved = await resolveProviderKey(this.options.provider, this.options.secrets);
       if (resolved) {
         return resolved.key;
       }
@@ -530,16 +536,14 @@ export function transformMessagesForOpenAi(
         pendingToolCallIds = [];
         continue;
       }
-      const assistant: OpenAiToolCall[] = toolCalls.map(
-        (tc: ParsedToolCall, idx: number) => ({
-          id: makeToolCallId(i, idx),
-          type: "function" as const,
-          function: {
-            name: tc.name,
-            arguments: normalizeToolArgsForOpenAi(tc.args),
-          },
-        }),
-      );
+      const assistant: OpenAiToolCall[] = toolCalls.map((tc: ParsedToolCall, idx: number) => ({
+        id: makeToolCallId(i, idx),
+        type: "function" as const,
+        function: {
+          name: tc.name,
+          arguments: normalizeToolArgsForOpenAi(tc.args),
+        },
+      }));
       out.push({
         role: "assistant",
         content: content.length > 0 ? content : null,
@@ -556,9 +560,7 @@ export function transformMessagesForOpenAi(
       // the model still sees the data, just as a regular user
       // message.
       const sections =
-        m.attachments && m.attachments.length > 0
-          ? null
-          : parseToolResultsEnvelope(m.content);
+        m.attachments && m.attachments.length > 0 ? null : parseToolResultsEnvelope(m.content);
       if (sections === null) {
         // Plain user message — clear pending ids so we don't
         // mis-pair later, and pass through.
@@ -617,10 +619,7 @@ function trimTrailingSlash(s: string): string {
 
 type OpenAiContent =
   | string
-  | Array<
-      | { type: "text"; text: string }
-      | { type: "image_url"; image_url: { url: string } }
-    >;
+  | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }>;
 
 /**
  * OpenAI-compatible APIs (OpenAI, Ollama, LM Studio) accept either a
@@ -629,10 +628,7 @@ type OpenAiContent =
  * what GPT-4o vision and Llava expect when using the openai-compat
  * surface.
  */
-function openAiContent(
-  m: LlmMessage,
-  modelFamily = GENERIC_CHAT_MODEL_FAMILY,
-): OpenAiContent {
+function openAiContent(m: LlmMessage, modelFamily = GENERIC_CHAT_MODEL_FAMILY): OpenAiContent {
   if (!m.attachments || m.attachments.length === 0) {
     return m.content;
   }

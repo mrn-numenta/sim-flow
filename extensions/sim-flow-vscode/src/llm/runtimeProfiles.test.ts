@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   ANTHROPIC_MESSAGES_RUNTIME,
+  KNOWN_RUNTIME_PROFILE_IDS,
   mergeLeadingSystemMessages,
   OPENAI_COMPAT_GENERIC_RUNTIME,
   prepareAnthropicMessages,
   PROCESSOR_LOCAL_RUNTIME,
+  resolveRuntimeProfile,
+  VSCODE_LM_RUNTIME,
 } from "./runtimeProfiles";
 import type { LlmMessage } from "./types";
 
@@ -26,7 +29,10 @@ describe("OPENAI_COMPAT_GENERIC_RUNTIME", () => {
     ]);
 
     expect(prepared).toEqual({
-      messages: [{ role: "system", content: "a\n\nb" }, { role: "user", content: "hello" }],
+      messages: [
+        { role: "system", content: "a\n\nb" },
+        { role: "user", content: "hello" },
+      ],
     });
   });
 });
@@ -50,11 +56,7 @@ describe("mergeLeadingSystemMessages", () => {
 
 describe("ANTHROPIC_MESSAGES_RUNTIME", () => {
   it("moves system messages into the dedicated system field", () => {
-    const prepared = prepareAnthropicMessages([
-      system("sys-a"),
-      system("sys-b"),
-      user("hi"),
-    ]);
+    const prepared = prepareAnthropicMessages([system("sys-a"), system("sys-b"), user("hi")]);
 
     expect(prepared).toEqual({
       system: "sys-a\n\nsys-b",
@@ -73,5 +75,35 @@ describe("PROCESSOR_LOCAL_RUNTIME", () => {
   it("keeps the placeholder runtime available for processor-centric backends", () => {
     expect(PROCESSOR_LOCAL_RUNTIME.id).toBe("processor_local");
     expect(PROCESSOR_LOCAL_RUNTIME.requestFormat).toBe("processor_local");
+  });
+});
+
+describe("VSCODE_LM_RUNTIME", () => {
+  it("names the host-managed VS Code LM runtime explicitly", () => {
+    expect(VSCODE_LM_RUNTIME.id).toBe("vscode_language_model");
+    expect(VSCODE_LM_RUNTIME.requestFormat).toBe("vscode_language_model");
+  });
+});
+
+describe("resolveRuntimeProfile", () => {
+  it("returns the fallback when no explicit id is supplied", () => {
+    expect(resolveRuntimeProfile(undefined, OPENAI_COMPAT_GENERIC_RUNTIME)).toBe(
+      OPENAI_COMPAT_GENERIC_RUNTIME,
+    );
+  });
+
+  it("honors a compatible explicit override", () => {
+    expect(
+      resolveRuntimeProfile("anthropic_messages", OPENAI_COMPAT_GENERIC_RUNTIME, [
+        "anthropic_messages",
+      ]),
+    ).toBe(ANTHROPIC_MESSAGES_RUNTIME);
+  });
+
+  it("throws on unknown ids", () => {
+    expect(() => resolveRuntimeProfile("bogus", OPENAI_COMPAT_GENERIC_RUNTIME)).toThrow(
+      "Unknown runtime capability profile",
+    );
+    expect(KNOWN_RUNTIME_PROFILE_IDS).toContain("openai_compat_generic");
   });
 });

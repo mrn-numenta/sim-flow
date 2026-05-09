@@ -275,6 +275,16 @@
           "default": "",
           "description": "Model identifier passed to the configured source. Empty string delegates to the source's default."
         },
+        "sim-flow.llm.modelFamily": {
+          "type": "string",
+          "default": "",
+          "description": "Optional explicit model-family override (`gemma4`, `qwen3_6`, `kimi_vl_thinking`, `claude_messages`, `generic_chat`). Empty string infers the family from `sim-flow.llm.model`."
+        },
+        "sim-flow.llm.runtimeProfile": {
+          "type": "string",
+          "default": "",
+          "description": "Optional explicit runtime capability profile override. Leave empty to use the selected source's default runtime contract (`openai_compat_generic`, `anthropic_messages`, `vscode_language_model`, ...)."
+        },
         "sim-flow.llm.ollama.baseUrl": {
           "type": "string",
           "default": "http://localhost:11434/v1",
@@ -352,6 +362,11 @@
           "uniqueItems": true,
           "default": [],
           "description": "Debug log categories. Each enabled token writes to <project>/.sim-flow/logs/. `events` = parsed events both directions plus the full message stack on every LLM request. `raw` = JSONL lines on the wire. `llm` = vscode.lm dispatch detail (input messages, every chunk, errors). Empty disables logging. Setting overrides the SIM_FOUNDATION_DEBUG environment variable."
+        },
+        "sim-flow.llm.debugAdaptation": {
+          "type": "boolean",
+          "default": false,
+          "description": "When ON, sim-flow emits extra adaptation diagnostics around LLM dispatches and failures, including the active backend, runtime profile, model-family profile, and key capability flags."
         }
       }
     }

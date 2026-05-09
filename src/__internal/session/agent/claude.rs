@@ -13,8 +13,8 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use super::{
-    CLAUDE_CLI_RUNTIME, CliAgent, LlmCallMetrics, RuntimeCapabilityProfile,
-    apply_reasoning_history_policy, resolve_model_family,
+    AgentAdaptationSummary, CLAUDE_CLI_RUNTIME, CliAgent, LlmCallMetrics, RuntimeCapabilityProfile,
+    apply_reasoning_history_policy, resolve_model_family, resolve_runtime_profile,
 };
 use crate::session::protocol::{LlmMessage, LlmRole};
 use crate::{Error, Result};
@@ -26,11 +26,21 @@ pub struct ClaudeAgent {
 }
 
 impl ClaudeAgent {
-    pub fn new(model: Option<String>, model_family_id: Option<String>) -> Self {
+    pub fn new(
+        model: Option<String>,
+        model_family_id: Option<String>,
+        runtime_profile_id: Option<String>,
+    ) -> Self {
+        let runtime_profile = resolve_runtime_profile(
+            runtime_profile_id.as_deref(),
+            CLAUDE_CLI_RUNTIME,
+            &["claude_cli"],
+        )
+        .unwrap_or(CLAUDE_CLI_RUNTIME);
         Self {
             model,
             model_family_id,
-            runtime_profile: CLAUDE_CLI_RUNTIME,
+            runtime_profile,
         }
     }
 
@@ -154,6 +164,21 @@ impl CliAgent for ClaudeAgent {
             wall_ms: started.elapsed().as_millis() as u64,
         };
         Ok((stdout, metrics))
+    }
+
+    fn adaptation_summary(&self) -> Option<AgentAdaptationSummary> {
+        let family = resolve_model_family(self.model_family_id.as_deref(), self.model.as_deref());
+        Some(AgentAdaptationSummary {
+            backend: self.name().to_string(),
+            runtime_profile_id: self.runtime_profile.id.as_str().to_string(),
+            model_family_id: family.id.to_string(),
+            request_format: self.runtime_profile.request_format.to_string(),
+            system_prompt_mode: self.runtime_profile.system_prompt_mode.to_string(),
+            credential_policy: self.runtime_profile.credential_policy.to_string(),
+            supports_structured_reasoning: self.runtime_profile.supports_structured_reasoning,
+            supports_structured_tool_calls: self.runtime_profile.supports_structured_tool_calls,
+            supports_thinking_controls: family.supports_thinking_controls,
+        })
     }
 }
 

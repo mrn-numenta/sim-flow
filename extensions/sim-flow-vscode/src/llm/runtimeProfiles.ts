@@ -1,8 +1,4 @@
-import {
-  type LlmMessage,
-  type RuntimeCapabilityProfile,
-  type RuntimePreparedInput,
-} from "./types";
+import { type LlmMessage, type RuntimeCapabilityProfile, type RuntimePreparedInput } from "./types";
 
 /**
  * Collapse a run of leading `role: "system"` messages into one,
@@ -104,3 +100,60 @@ export const PROCESSOR_LOCAL_RUNTIME: RuntimeCapabilityProfile = {
     return { messages };
   },
 };
+
+/**
+ * VS Code's built-in LM API is host-managed rather than plain
+ * OpenAI-compatible HTTP, but it still benefits from explicit
+ * runtime naming in diagnostics and debug surfaces.
+ */
+export const VSCODE_LM_RUNTIME: RuntimeCapabilityProfile = {
+  id: "vscode_language_model",
+  requestFormat: "vscode_language_model",
+  credentialPolicy: "host-managed",
+  systemPromptMode: "message-array",
+  collapseLeadingSystemMessages: false,
+  supportsStructuredReasoning: false,
+  supportsStructuredToolCalls: false,
+  supportsSharedCredentialChain: false,
+  prepareInput(messages) {
+    return { messages };
+  },
+};
+
+const RUNTIME_PROFILES: Record<string, RuntimeCapabilityProfile> = {
+  [OPENAI_COMPAT_GENERIC_RUNTIME.id]: OPENAI_COMPAT_GENERIC_RUNTIME,
+  [ANTHROPIC_MESSAGES_RUNTIME.id]: ANTHROPIC_MESSAGES_RUNTIME,
+  [PROCESSOR_LOCAL_RUNTIME.id]: PROCESSOR_LOCAL_RUNTIME,
+  [VSCODE_LM_RUNTIME.id]: VSCODE_LM_RUNTIME,
+};
+
+export const KNOWN_RUNTIME_PROFILE_IDS = Object.freeze(Object.keys(RUNTIME_PROFILES));
+
+export function runtimeProfileById(id: string | undefined): RuntimeCapabilityProfile | undefined {
+  if (!id) {
+    return undefined;
+  }
+  return RUNTIME_PROFILES[id];
+}
+
+export function resolveRuntimeProfile(
+  explicitId: string | undefined,
+  fallback: RuntimeCapabilityProfile,
+  allowedIds?: readonly string[],
+): RuntimeCapabilityProfile {
+  if (!explicitId) {
+    return fallback;
+  }
+  const profile = runtimeProfileById(explicitId);
+  if (!profile) {
+    throw new Error(
+      `Unknown runtime capability profile \`${explicitId}\`. Known ids: ${KNOWN_RUNTIME_PROFILE_IDS.join(", ")}.`,
+    );
+  }
+  if (allowedIds && !allowedIds.includes(profile.id)) {
+    throw new Error(
+      `Runtime capability profile \`${explicitId}\` is not compatible here. Allowed ids: ${allowedIds.join(", ")}.`,
+    );
+  }
+  return profile;
+}

@@ -52,6 +52,12 @@ pub enum Event {
         request_id: String,
         backend: String,
         model: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model_family_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        runtime_profile_id: Option<String>,
+        #[serde(default)]
+        debug_adaptation: bool,
         messages: Vec<LlmMessage>,
         /// Tool catalog for backends that support native tool-use.
         /// Empty in M2; populated in M3.

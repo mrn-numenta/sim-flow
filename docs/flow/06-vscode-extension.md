@@ -85,7 +85,7 @@ The extension consists of:
    to its LLM clients.
 2. A **dashboard webview** rendering state read from
    `sim-flow status --json`, `runs --json`, `gate --json`, and the
-   project's `.sim-flow/` files. Buttons that *do* things just spawn
+   project's `.sim-flow/` files. Buttons that _do_ things just spawn
    `sim-flow session ...` (for sessions) or invoke other CLI
    subcommands (`init`, `reset`, `advance`).
 3. A **file-system watcher** on `.sim-flow/state.toml`,
@@ -93,8 +93,14 @@ The extension consists of:
    dashboard auto-refreshes when artifacts land.
 4. A **VS Code Language Model dispatcher** (`vscode.lm`) that
    responds to orchestrator-emitted `RequestLlmResponse` events.
-   Other LLM backends are accessed via sim-flow's own `CliAgent` /
-   HTTP layer; the extension does not duplicate them.
+   The dispatcher now resolves an explicit adaptation tuple per
+   request:
+   - transport/backend kind
+   - runtime capability profile
+   - model-family profile
+   - response normalizer
+     Other LLM backends are accessed via sim-flow's own `CliAgent` /
+     HTTP layer; the extension does not duplicate them.
 
 ## Chat Participant: `@sim-flow` (renderer mode)
 
@@ -162,12 +168,16 @@ setting and forwarded to sim-flow via a CLI flag:
    `vscode.lm.selectChatModels(...).sendRequest(...)` and streams
    `LlmChunk` events back. This is the path that uses the user's
    Copilot / Claude / Codex VS Code subscription.
+   The request is shaped through the extension's runtime/model-family
+   adaptation layer before dispatch, and the streamed response is
+   normalized before the orchestrator sees it so reasoning never leaks
+   into artifact writes.
 
 2. **Orchestrator-internal**: any backend `sim-flow` knows how to
    reach without VS Code's help. Includes:
    - HTTP (`anthropic`, `openai`, `ollama`, `lmstudio`)
    - Subprocess CLI agents (`claude`, `codex`, `gh-copilot`)
-   sim-flow handles these directly; no host events fire.
+     sim-flow handles these directly; no host events fire.
 
 API keys for HTTP backends still flow through VS Code SecretStorage
 when configured from the extension; the extension exports them as
@@ -181,8 +191,14 @@ Settings contributed under `sim-flow.*`:
 - `sim-flow.binaryPath` (string)
 - `sim-flow.foundationRoot` (string)
 - `sim-flow.llm.source`: `"vscode" | "anthropic" | "openai" |
-  "ollama" | "lmstudio" | "claude-cli" | "codex-cli" | "gh-copilot"`
+"ollama" | "lmstudio" | "claude-cli" | "codex-cli" | "gh-copilot"`
 - `sim-flow.llm.model` (string)
+- `sim-flow.llm.modelFamily` (string; optional explicit adaptation
+  override, otherwise inferred from the model id)
+- `sim-flow.llm.runtimeProfile` (string; optional explicit runtime
+  capability override, otherwise the source/backend default)
+- `sim-flow.llm.debugAdaptation` (bool; when true, render extra
+  backend/runtime/model-family diagnostics around LLM requests)
 - `sim-flow.llm.ollama.baseUrl`, `sim-flow.llm.lmstudio.baseUrl`
 - `sim-flow.dashboard.openOnActivate` (bool)
 - `sim-flow.chat.scope`: `"session"` (default - each session opens a

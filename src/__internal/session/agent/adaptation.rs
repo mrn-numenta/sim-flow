@@ -6,6 +6,15 @@ pub enum RuntimeProfileId {
     ClaudeCli,
 }
 
+impl RuntimeProfileId {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenAiCompatGeneric => "openai_compat_generic",
+            Self::ClaudeCli => "claude_cli",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThoughtMarkerStyle {
     None,
@@ -107,6 +116,36 @@ pub const CLAUDE_MESSAGES_MODEL_FAMILY: ModelFamilyProfile = ModelFamilyProfile 
     thinking_control_mode: "runtime_flag",
     reasoning_history_policy: ReasoningHistoryPolicy::DropPriorReasoning,
 };
+
+pub fn runtime_profile_by_id(id: Option<&str>) -> Option<RuntimeCapabilityProfile> {
+    match id {
+        Some("openai_compat_generic") => Some(OPENAI_COMPAT_GENERIC_RUNTIME),
+        Some("claude_cli") => Some(CLAUDE_CLI_RUNTIME),
+        _ => None,
+    }
+}
+
+pub fn resolve_runtime_profile(
+    explicit_id: Option<&str>,
+    fallback: RuntimeCapabilityProfile,
+    allowed_ids: &[&str],
+) -> crate::Result<RuntimeCapabilityProfile> {
+    let Some(explicit_id) = explicit_id.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(fallback);
+    };
+    let Some(profile) = runtime_profile_by_id(Some(explicit_id)) else {
+        return Err(crate::Error::Client(format!(
+            "unknown runtime capability profile `{explicit_id}`; known ids: openai_compat_generic, claude_cli"
+        )));
+    };
+    if !allowed_ids.contains(&profile.id.as_str()) {
+        return Err(crate::Error::Client(format!(
+            "runtime capability profile `{explicit_id}` is not compatible here; allowed ids: {}",
+            allowed_ids.join(", ")
+        )));
+    }
+    Ok(profile)
+}
 
 pub fn model_family_by_id(id: Option<&str>) -> Option<&'static ModelFamilyProfile> {
     match id {

@@ -175,6 +175,17 @@ pub(crate) enum Command {
         /// Optional model identifier.
         #[arg(long)]
         llm_model: Option<String>,
+        /// Optional explicit model-family override. Empty means infer
+        /// from `--llm-model`.
+        #[arg(long)]
+        llm_model_family: Option<String>,
+        /// Optional explicit runtime capability profile override.
+        #[arg(long)]
+        llm_runtime_profile: Option<String>,
+        /// Emit extra backend/runtime/model-family diagnostics around
+        /// each LLM dispatch. Useful when debugging adaptation issues.
+        #[arg(long, default_value_t = false)]
+        llm_debug_adaptation: bool,
         /// Base URL override for the local-server backends
         /// (`ollama`, `lmstudio`, `vllm`, `openai-compat`). Each
         /// of these speaks an OpenAI-compatible chat-completions
@@ -287,6 +298,17 @@ pub(crate) enum Command {
         /// `--model` flag.
         #[arg(long)]
         llm_model: Option<String>,
+        /// Optional explicit model-family override. Empty means infer
+        /// from `--llm-model`.
+        #[arg(long)]
+        llm_model_family: Option<String>,
+        /// Optional explicit runtime capability profile override.
+        #[arg(long)]
+        llm_runtime_profile: Option<String>,
+        /// Emit extra backend/runtime/model-family diagnostics around
+        /// each LLM dispatch. Useful when debugging adaptation issues.
+        #[arg(long, default_value_t = false)]
+        llm_debug_adaptation: bool,
         /// Override the Ollama base URL (default
         /// `http://localhost:11434/v1` — Ollama's OpenAI-compat
         /// shim; the native API at `/api` isn't used). Only

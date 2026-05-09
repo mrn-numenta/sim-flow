@@ -217,7 +217,15 @@ export type HostMessage =
   | { type: "error"; message: string; detail?: string }
   | { type: "gate-result"; step: string; result: GateResult }
   | { type: "spec-path-picked"; path: string }
-  | { type: "llm-config"; source: LlmSourceTag; model?: string; verbose: boolean }
+  | {
+      type: "llm-config";
+      source: LlmSourceTag;
+      model?: string;
+      modelFamilyId?: string;
+      runtimeProfileId?: string;
+      verbose: boolean;
+      debugAdaptation: boolean;
+    }
   | {
       type: "model-list";
       source: LlmSourceTag;
@@ -430,8 +438,11 @@ export type WebviewMessage =
   | { type: "rename-project" }
   | { type: "set-llm-source"; source: LlmSourceTag | string }
   | { type: "set-llm-model"; model: string }
+  | { type: "set-llm-model-family"; modelFamilyId: string }
+  | { type: "set-llm-runtime-profile"; runtimeProfileId: string }
   | { type: "request-model-list"; source: LlmSourceTag | string }
   | { type: "set-llm-verbose"; verbose: boolean }
+  | { type: "set-llm-debug-adaptation"; debugAdaptation: boolean }
   | { type: "set-llm-servers"; servers: LlmServerEntry[] }
   | { type: "set-coverage"; coverage: CoverageState }
   | { type: "prompts-list" }
