@@ -16,7 +16,6 @@ import {
   type ParsedToolCall,
 } from "./tool-translation";
 import {
-  DEFAULT_RESPONSE_NORMALIZER,
   mergeLeadingSystemMessages,
   OPENAI_COMPAT_GENERIC_RUNTIME,
 } from "./runtimeProfiles";
@@ -27,6 +26,7 @@ import {
   orderAttachmentsByFamily,
   resolveModelFamily,
 } from "./modelFamilies";
+import { createResponseNormalizerForFamily } from "./responseNormalizers";
 import {
   type LlmAdaptationProfile,
   type CancellationLike,
@@ -74,16 +74,15 @@ export interface OpenAiCompatibleBackendOptions {
 
 export class OpenAiCompatibleBackend implements LlmBackend {
   readonly name: string;
+  readonly adaptation: LlmAdaptationProfile;
 
   constructor(protected readonly options: OpenAiCompatibleBackendOptions) {
     this.name = options.name;
-  }
-
-  get adaptation(): LlmAdaptationProfile {
-    return {
+    const modelFamily = resolveModelFamily(this.options.modelFamilyId, this.options.model);
+    this.adaptation = {
       runtime: OPENAI_COMPAT_GENERIC_RUNTIME,
-      modelFamily: resolveModelFamily(this.options.modelFamilyId, this.options.model),
-      responseNormalizer: DEFAULT_RESPONSE_NORMALIZER,
+      modelFamily,
+      responseNormalizer: createResponseNormalizerForFamily(modelFamily),
     };
   }
 

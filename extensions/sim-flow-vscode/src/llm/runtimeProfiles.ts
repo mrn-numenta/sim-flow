@@ -1,7 +1,5 @@
 import {
-  normalizeLlmChunk,
   type LlmMessage,
-  type ResponseNormalizer,
   type RuntimeCapabilityProfile,
   type RuntimePreparedInput,
 } from "./types";
@@ -60,12 +58,6 @@ export function prepareAnthropicMessages(messages: LlmMessage[]): RuntimePrepare
     messages: messages.filter((m) => m.role !== "system"),
   };
 }
-
-/** Default response normalizer until model-family specializations land. */
-export const DEFAULT_RESPONSE_NORMALIZER: ResponseNormalizer = {
-  id: "default",
-  normalizeChunk: normalizeLlmChunk,
-};
 
 export const OPENAI_COMPAT_GENERIC_RUNTIME: RuntimeCapabilityProfile = {
   id: "openai_compat_generic",

@@ -1,11 +1,11 @@
 import {
   createBackend,
+  DEFAULT_RESPONSE_NORMALIZER,
   LlmError,
   type LlmMessage,
   type LlmSource,
   type SecretStorage,
   type CancellationLike,
-  normalizeLlmChunk,
 } from "../llm";
 import { BREVITY_DIRECTIVE } from "../session/pump";
 import { isTerminalLlmSource, type LlmSourceTag } from "../webview/messages";
@@ -63,8 +63,17 @@ export async function* streamPanelReply(
     context.transcript,
     config.verbose,
   );
+  const responseNormalizer =
+    backend.adaptation?.responseNormalizer ?? DEFAULT_RESPONSE_NORMALIZER;
   for await (const rawChunk of backend.stream(messages, token)) {
-    const chunk = normalizeLlmChunk(rawChunk);
+    for (const chunk of responseNormalizer.normalizeChunk(rawChunk)) {
+      if (chunk.kind === "reasoning" || chunk.text.length === 0) {
+        continue;
+      }
+      yield chunk.text;
+    }
+  }
+  for (const chunk of responseNormalizer.flush?.() ?? []) {
     if (chunk.kind === "reasoning" || chunk.text.length === 0) {
       continue;
     }

@@ -47,15 +47,17 @@ describe("LlmAdaptationProfile shape", () => {
       },
       responseNormalizer: {
         id: "default",
-        normalizeChunk: normalizeLlmChunk,
+        normalizeChunk: (chunk) => [normalizeLlmChunk(chunk)],
       },
     };
 
     expect(profile.runtime.id).toBe("openai_compat_generic");
     expect(profile.modelFamily.id).toBe("qwen3_6");
-    expect(profile.responseNormalizer.normalizeChunk({ text: "x" })).toEqual({
-      text: "x",
-      kind: "content",
-    });
+    expect(profile.responseNormalizer.normalizeChunk({ text: "x" })).toEqual([
+      {
+        text: "x",
+        kind: "content",
+      },
+    ]);
   });
 });

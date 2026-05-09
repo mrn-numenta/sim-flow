@@ -6,8 +6,13 @@
 
 import { envVarFor, resolveApiKey, secretIdFor } from "./keyResolver";
 import {
+  extractToolFences,
+  makeToolCallId,
+  parseToolResultsEnvelope,
+  type ParsedToolCall,
+} from "./tool-translation";
+import {
   ANTHROPIC_MESSAGES_RUNTIME,
-  DEFAULT_RESPONSE_NORMALIZER,
   prepareAnthropicMessages,
 } from "./runtimeProfiles";
 import {
@@ -17,6 +22,7 @@ import {
   orderAttachmentsByFamily,
   resolveModelFamily,
 } from "./modelFamilies";
+import { createResponseNormalizerForFamily } from "./responseNormalizers";
 import {
   type LlmAdaptationProfile,
   type CancellationLike,
@@ -49,25 +55,22 @@ export interface AnthropicBackendOptions {
 
 export class AnthropicBackend implements LlmBackend {
   readonly name = "anthropic";
+  readonly adaptation: LlmAdaptationProfile;
 
-  constructor(private readonly options: AnthropicBackendOptions = {}) {}
-
-  get adaptation(): LlmAdaptationProfile {
-    return {
+  constructor(private readonly options: AnthropicBackendOptions = {}) {
+    const modelFamily = resolveModelFamily(this.options.modelFamilyId, this.options.model);
+    this.adaptation = {
       runtime: ANTHROPIC_MESSAGES_RUNTIME,
-      modelFamily: resolveModelFamily(this.options.modelFamilyId, this.options.model),
-      responseNormalizer: DEFAULT_RESPONSE_NORMALIZER,
+      modelFamily,
+      responseNormalizer: createResponseNormalizerForFamily(modelFamily),
     };
   }
 
   async *stream(
     messages: LlmMessage[],
     token: CancellationLike,
-    _tools?: LlmTool[],
+    tools?: LlmTool[],
   ): AsyncIterable<LlmStreamChunk> {
-    // Anthropic native tool-use is on the v2 roadmap; v1 stays with
-    // the fenced-block fallback driven by sim-flow's system prompt.
-    void _tools;
     const apiKey = await this.readApiKey();
     if (token.isCancellationRequested) {
       throw new LlmError("cancelled", "Anthropic request cancelled.");
@@ -86,12 +89,21 @@ export class AnthropicBackend implements LlmBackend {
       },
       modelFamily,
     );
-    const body = {
+    const body: {
+      model: string;
+      max_tokens: number;
+      system?: string;
+      messages: Array<{ role: "user" | "assistant"; content: AnthropicContent }>;
+      tools?: AnthropicTool[];
+    } = {
       model,
       max_tokens: this.options.maxTokens ?? 4096,
       system: familyInput.system,
-      messages: convertMessages(familyInput.messages, modelFamily),
+      messages: convertMessagesForAnthropic(familyInput.messages, modelFamily),
     };
+    if (tools && tools.length > 0) {
+      body.tools = tools.map(toAnthropicTool);
+    }
 
     const doFetch = this.options.fetchImpl ?? globalThis.fetch;
     if (typeof doFetch !== "function") {
@@ -136,9 +148,8 @@ export class AnthropicBackend implements LlmBackend {
     }
     const json = (await res.json()) as unknown;
     cancelSubscription?.dispose();
-    const text = extractAnthropicText(json);
-    if (text.length > 0) {
-      yield { text };
+    for (const chunk of extractAnthropicChunks(json)) {
+      yield chunk;
     }
   }
 
@@ -161,17 +172,73 @@ export class AnthropicBackend implements LlmBackend {
   }
 }
 
-/** Strip system messages and map remaining roles to Anthropic shapes. */
-function convertMessages(
+/** Strip system messages and map remaining roles to Anthropic native shapes. */
+function convertMessagesForAnthropic(
   messages: LlmMessage[],
   modelFamily = GENERIC_CHAT_MODEL_FAMILY,
 ): Array<{ role: "user" | "assistant"; content: AnthropicContent }> {
-  return messages
-    .filter((m) => m.role !== "system")
-    .map((m) => ({
-      role: m.role as "user" | "assistant",
-      content: anthropicContent(m, modelFamily),
-    }));
+  const out: Array<{ role: "user" | "assistant"; content: AnthropicContent }> = [];
+  let pendingToolUses: AnthropicToolUseBlock[] = [];
+
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
+    if (message.role === "system") {
+      continue;
+    }
+
+    if (message.role === "assistant") {
+      if (message.attachments && message.attachments.length > 0) {
+        out.push({ role: "assistant", content: anthropicContent(message, modelFamily) });
+        pendingToolUses = [];
+        continue;
+      }
+      const { content, toolCalls } = extractToolFences(message.content);
+      if (toolCalls.length === 0) {
+        out.push({ role: "assistant", content: anthropicContent(message, modelFamily) });
+        pendingToolUses = [];
+        continue;
+      }
+      const blocks: Exclude<AnthropicContent, string> = [];
+      if (content.length > 0) {
+        blocks.push({ type: "text", text: content });
+      }
+      const toolUses = toolCalls.map((tc: ParsedToolCall, idx: number) =>
+        toAnthropicToolUseBlock(tc, i, idx),
+      );
+      blocks.push(...toolUses);
+      out.push({ role: "assistant", content: blocks });
+      pendingToolUses = toolUses;
+      continue;
+    }
+
+    if (pendingToolUses.length > 0 && (!message.attachments || message.attachments.length === 0)) {
+      const sections = parseToolResultsEnvelope(message.content);
+      if (sections !== null) {
+        const blocks: Exclude<AnthropicContent, string> = [];
+        const paired = Math.min(sections.length, pendingToolUses.length);
+        for (let idx = 0; idx < paired; idx += 1) {
+          blocks.push({
+            type: "tool_result",
+            tool_use_id: pendingToolUses[idx].id,
+            content: sections[idx],
+          });
+        }
+        if (sections.length > paired) {
+          for (const extra of sections.slice(paired)) {
+            blocks.push({ type: "text", text: extra });
+          }
+        }
+        out.push({ role: "user", content: blocks });
+        pendingToolUses = [];
+        continue;
+      }
+    }
+
+    pendingToolUses = [];
+    out.push({ role: "user", content: anthropicContent(message, modelFamily) });
+  }
+
+  return out;
 }
 
 type AnthropicContent =
@@ -182,7 +249,26 @@ type AnthropicContent =
           type: "image";
           source: { type: "base64"; media_type: string; data: string };
         }
+      | AnthropicToolUseBlock
+      | {
+          type: "tool_result";
+          tool_use_id: string;
+          content: string;
+        }
     >;
+
+type AnthropicToolUseBlock = {
+  type: "tool_use";
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+};
+
+type AnthropicTool = {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+};
 
 /**
  * Anthropic supports multimodal via `content` arrays of typed blocks.
@@ -216,24 +302,104 @@ function anthropicContent(
 }
 
 export function extractAnthropicText(json: unknown): string {
-  if (!json || typeof json !== "object") {
-    return "";
-  }
-  const body = json as { content?: unknown };
-  const content = body.content;
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
-    .filter(
-      (c): c is { type: "text"; text: string } =>
-        !!c && typeof c === "object" && (c as { type: unknown }).type === "text",
-    )
-    .map((c) => c.text)
+  return extractAnthropicChunks(json)
+    .filter((chunk) => chunk.kind === undefined || chunk.kind === "content")
+    .map((chunk) => chunk.text)
     .join("");
 }
 
 export { prepareAnthropicMessages };
+
+export function extractAnthropicChunks(json: unknown): LlmStreamChunk[] {
+  if (!json || typeof json !== "object") {
+    return [];
+  }
+  const body = json as { content?: unknown };
+  const content = body.content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+
+  const out: LlmStreamChunk[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typed = block as {
+      type?: unknown;
+      text?: unknown;
+      thinking?: unknown;
+      name?: unknown;
+      input?: unknown;
+    };
+    if (typed.type === "text" && typeof typed.text === "string") {
+      out.push({ text: typed.text, kind: "content" });
+      continue;
+    }
+    if (typed.type === "thinking") {
+      const thinkingText =
+        typeof typed.thinking === "string"
+          ? typed.thinking
+          : typeof typed.text === "string"
+            ? typed.text
+            : "";
+      if (thinkingText.length > 0) {
+        out.push({ text: thinkingText, kind: "reasoning" });
+      }
+      continue;
+    }
+    if (typed.type === "tool_use" && typeof typed.name === "string" && typed.name.length > 0) {
+      let inputBody = "{}";
+      if (typeof typed.input === "string") {
+        inputBody = typed.input;
+      } else if (typed.input && typeof typed.input === "object") {
+        inputBody = JSON.stringify(typed.input);
+      }
+      out.push({
+        text: `\n\n\`\`\`tool:${typed.name}\n${inputBody}\n\`\`\`\n`,
+        kind: "tool_call",
+      });
+    }
+  }
+  return out;
+}
+
+function toAnthropicTool(tool: LlmTool): AnthropicTool {
+  return {
+    name: tool.name,
+    description: tool.description,
+    input_schema: tool.args_schema,
+  };
+}
+
+function toAnthropicToolUseBlock(
+  toolCall: ParsedToolCall,
+  messageIndex: number,
+  callIndex: number,
+): AnthropicToolUseBlock {
+  return {
+    type: "tool_use",
+    id: makeToolCallId(messageIndex, callIndex),
+    name: toolCall.name,
+    input: parseAnthropicToolInput(toolCall.args),
+  };
+}
+
+function parseAnthropicToolInput(args: string): Record<string, unknown> {
+  const trimmed = args.trim();
+  if (trimmed.length === 0) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return { raw: parsed };
+  } catch {
+    return { raw: trimmed };
+  }
+}
 
 async function safeText(res: Response): Promise<string | undefined> {
   try {

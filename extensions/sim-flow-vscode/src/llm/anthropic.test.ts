@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { AnthropicBackend, extractAnthropicText } from "./anthropic";
+import { AnthropicBackend, extractAnthropicChunks, extractAnthropicText } from "./anthropic";
 import { LlmError, type SecretStorage } from "./types";
 
 function stubSecrets(map: Record<string, string>): SecretStorage {
@@ -53,6 +53,24 @@ describe("extractAnthropicText", () => {
     expect(extractAnthropicText({})).toBe("");
     expect(extractAnthropicText({ content: "nope" })).toBe("");
     expect(extractAnthropicText({ content: [{ type: "text" }] })).toBe("");
+  });
+});
+
+describe("extractAnthropicChunks", () => {
+  it("preserves text, thinking, and tool_use blocks distinctly", () => {
+    const payload = {
+      content: [
+        { type: "thinking", thinking: "plan" },
+        { type: "text", text: "answer" },
+        { type: "tool_use", name: "read_file", input: { path: "spec.md" } },
+      ],
+    };
+
+    expect(extractAnthropicChunks(payload)).toEqual([
+      { text: "plan", kind: "reasoning" },
+      { text: "answer", kind: "content" },
+      { text: "\n\n```tool:read_file\n{\"path\":\"spec.md\"}\n```\n", kind: "tool_call" },
+    ]);
   });
 });
 
@@ -112,6 +130,118 @@ describe("AnthropicBackend", () => {
     };
     expect(body.system).toBe("sys-a\n\nsys-b");
     expect(body.messages).toEqual([{ role: "user", content: "hi" }]);
+  });
+
+  it("translates fenced tool calls and tool results into Anthropic native blocks", async () => {
+    let seenBody: unknown;
+    const fakeFetch = (async (_url: string, init: RequestInit) => {
+      seenBody = JSON.parse(init.body as string);
+      return new Response(JSON.stringify({ content: [{ type: "text", text: "ok" }] }), {
+        status: 200,
+      });
+    }) as unknown as typeof fetch;
+
+    const backend = new AnthropicBackend({
+      model: "claude-sonnet-4-6",
+      secrets: stubSecrets({ "sim-flow.anthropic.apiKey": "k" }),
+      fetchImpl: fakeFetch,
+    });
+
+    for await (const _ of backend.stream(
+      [
+        { role: "user", content: "inspect the spec" },
+        { role: "assistant", content: "```tool:read_file\n{\"path\":\"docs/spec.md\"}\n```\n" },
+        { role: "user", content: "Tool results:\n\n[read_file `docs/spec.md`]\n\n# Spec\n" },
+      ],
+      noCancel(),
+      [
+        {
+          name: "read_file",
+          description: "Read a file",
+          args_schema: {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+            },
+          },
+        },
+      ],
+    )) {
+      // drain
+    }
+
+    expect(seenBody).toEqual({
+      model: "claude-sonnet-4-6",
+      max_tokens: 4096,
+      system: undefined,
+      messages: [
+        { role: "user", content: "inspect the spec" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "call_1_0",
+              name: "read_file",
+              input: { path: "docs/spec.md" },
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "call_1_0",
+              content: "[read_file `docs/spec.md`]\n\n# Spec",
+            },
+          ],
+        },
+      ],
+      tools: [
+        {
+          name: "read_file",
+          description: "Read a file",
+          input_schema: {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("returns thinking and tool_use blocks without flattening them to plain text", async () => {
+    const fakeFetch = (async () =>
+      new Response(
+        JSON.stringify({
+          content: [
+            { type: "thinking", thinking: "plan" },
+            { type: "tool_use", name: "read_file", input: { path: "spec.md" } },
+            { type: "text", text: "done" },
+          ],
+        }),
+        { status: 200 },
+      )) as unknown as typeof fetch;
+
+    const backend = new AnthropicBackend({
+      model: "claude-sonnet-4-6",
+      secrets: stubSecrets({ "sim-flow.anthropic.apiKey": "k" }),
+      fetchImpl: fakeFetch,
+    });
+
+    const chunks = [];
+    for await (const chunk of backend.stream([{ role: "user", content: "hi" }], noCancel())) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toEqual([
+      { text: "plan", kind: "reasoning" },
+      { text: "\n\n```tool:read_file\n{\"path\":\"spec.md\"}\n```\n", kind: "tool_call" },
+      { text: "done", kind: "content" },
+    ]);
   });
 
   it("wraps non-2xx responses in an http LlmError", async () => {

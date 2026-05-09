@@ -18,8 +18,11 @@ export { OLLAMA_DEFAULT_BASE_URL, OLLAMA_KEY_ID, OllamaBackend } from "./ollama"
 export { OpenAiCompatibleBackend, extractOpenAiText } from "./openai-compat";
 export { OPENAI_KEY_ID, OpenAiBackend } from "./openai";
 export {
-  ANTHROPIC_MESSAGES_RUNTIME,
+  createResponseNormalizerForFamily,
   DEFAULT_RESPONSE_NORMALIZER,
+} from "./responseNormalizers";
+export {
+  ANTHROPIC_MESSAGES_RUNTIME,
   mergeLeadingSystemMessages,
   OPENAI_COMPAT_GENERIC_RUNTIME,
   prepareAnthropicMessages,

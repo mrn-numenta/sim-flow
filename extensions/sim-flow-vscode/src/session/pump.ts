@@ -29,13 +29,13 @@ import * as vscode from "vscode";
 
 import { bundledFrameworkDocsRoot, bundledPdfiumLibPath } from "../cli";
 import {
+  DEFAULT_RESPONSE_NORMALIZER,
   type LlmBackend,
   type LlmMessage as BackendLlmMessage,
   type SecretStorage,
   createBackend,
   LlmError,
   type LlmSource,
-  normalizeLlmChunk,
 } from "../llm";
 import { estimateMessagesTokens } from "../llm/tokenEstimate";
 import type {
@@ -707,8 +707,37 @@ export class SessionPump {
       }
     };
     try {
+      const responseNormalizer =
+        backend.adaptation?.responseNormalizer ?? DEFAULT_RESPONSE_NORMALIZER;
       for await (const rawChunk of backend.stream(messages, token, tools)) {
-        const chunk = normalizeLlmChunk(rawChunk);
+        for (const chunk of responseNormalizer.normalizeChunk(rawChunk)) {
+          if (chunk.text.length === 0) {
+            continue;
+          }
+          if (chunk.kind === "reasoning") {
+            if (!reasoningOpen) {
+              this.currentRenderer?.markdown(
+                "\n<details>\n<summary>Model reasoning (click to expand)</summary>\n\n",
+              );
+              reasoningOpen = true;
+            }
+            this.currentRenderer?.markdown(chunk.text);
+            continue;
+          }
+          // Real content arrived; finalize any open reasoning block first
+          // so the collapsible doesn't swallow the answer.
+          closeReasoning();
+          chunkCount++;
+          totalChars += chunk.text.length;
+          this.debugLog.logLlmChunk(chunk.text);
+          this.sendHostEvent({
+            event: "llm-chunk",
+            request_id: event.request_id,
+            text: chunk.text,
+          });
+        }
+      }
+      for (const chunk of responseNormalizer.flush?.() ?? []) {
         if (chunk.text.length === 0) {
           continue;
         }
@@ -722,8 +751,6 @@ export class SessionPump {
           this.currentRenderer?.markdown(chunk.text);
           continue;
         }
-        // Real content arrived; finalize any open reasoning block first
-        // so the collapsible doesn't swallow the answer.
         closeReasoning();
         chunkCount++;
         totalChars += chunk.text.length;

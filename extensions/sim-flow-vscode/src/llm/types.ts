@@ -202,7 +202,8 @@ export interface ModelFamilyProfile {
  */
 export interface ResponseNormalizer {
   id: string;
-  normalizeChunk(chunk: LlmStreamChunk): NormalizedLlmChunk;
+  normalizeChunk(chunk: LlmStreamChunk): NormalizedLlmChunk[];
+  flush?(): NormalizedLlmChunk[];
 }
 
 /** Optional adaptation metadata a backend may expose for diagnostics. */
