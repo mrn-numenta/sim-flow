@@ -37,7 +37,7 @@ own the wrong policy and makes multi-model support brittle.
 
 ## Examples of Divergence
 
-The current research set already shows four distinct categories of divergence.
+The current research set already shows five distinct categories of divergence.
 
 ### Gemma 4
 
@@ -113,6 +113,30 @@ Implications:
 - transport and runtime capability must be modeled separately
 - server-specific features must not leak into model-family policy by accident
 
+### Cross-Context Credential Resolution
+
+The same model/backend may be launched from multiple host contexts:
+
+- the Rust CLI
+- the VS Code extension
+- a panel-backed API session
+- a terminal-backed automated run
+
+The shared key-resolution stack now explicitly supports a cross-context chain:
+
+- provider environment variable
+- shared `credentials.toml`
+- host-specific secret storage, when available
+
+Implications:
+
+- API key sourcing is an integration/runtime concern, not a model-family
+  concern
+- credential behavior should be shared across hosts so a key set once works in
+  both CLI and IDE paths where possible
+- provider naming, key-source reporting, and config-file layout should be
+  stable across implementations so diagnostics and tooling agree
+
 ## Current Failure Modes
 
 Without a clearer separation of concerns, `sim-flow` risks the following
@@ -149,6 +173,11 @@ classes of bugs:
    - Example: a Claude backend that extracts only `text` blocks loses
      `thinking`, `tool_use`, and tool-loop continuity features that are already
      available in the API.
+
+8. Credentials fragment by host instead of following a shared policy.
+   - Example: the CLI, VS Code extension, and panel-backed sessions each look in
+     different places for the same Anthropic or OpenAI key, so a backend that
+     works in one surface mysteriously fails in another.
 
 ## Design Goals
 
@@ -239,6 +268,7 @@ This layer owns statements like:
 - "this runtime supports token counting before dispatch"
 - "this runtime supports prompt caching or context editing"
 - "this runtime returns native structured tool/thinking blocks"
+- "this runtime shares credentials with other hosts via a common config chain"
 
 ### 3. Model-Family Profile
 
@@ -331,6 +361,7 @@ The following table defines where major decisions belong.
 | `enable_thinking` / family-specific prompt toggles | model-family profile |
 | temperature / top-p / family default sampling | model-family profile |
 | runtime-specific parser flags / extra request body | runtime capability profile |
+| env/config/secret-storage credential resolution policy | runtime capability profile |
 | image-before-text vs text-before-image | model-family profile |
 | stripping `<think>` or custom thought markers | response normalizer |
 | converting native or text tool calls to internal tool events | response normalizer |
@@ -357,6 +388,11 @@ This separation prevents three common mistakes:
    - Example: Claude's typed `thinking` and `tool_use` blocks should flow into
      the internal normalized event model instead of being converted to plain
      concatenated text at the transport edge.
+
+5. Re-implementing host integration policy per surface.
+   - Example: API-key lookup order should not be independently reinvented in
+     the CLI, extension, and panel transports when they can share one stable
+     cross-context contract.
 
 ## Migration Strategy
 
