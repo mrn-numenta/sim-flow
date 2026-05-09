@@ -69,18 +69,18 @@ session-agent path, and it must preserve the orchestrator's existing invariants:
 Define the core internal vocabulary and make it concrete enough that both the TS
 and Rust code paths can target the same conceptual boundary.
 
-- [ ] Add a small design-oriented module / type set for:
+- [x] Add a small design-oriented module / type set for:
   - `TransportBackend`
   - `RuntimeCapabilityProfile`
   - `ModelFamilyProfile`
   - `ResponseNormalizer`
-- [ ] Define a normalized output shape for the session-driving layer:
+- [x] Define a normalized output shape for the session-driving layer:
   - `content`
   - `reasoning`
   - `tool_call`
-- [ ] Document which concerns belong to which layer in code comments near the
+- [x] Document which concerns belong to which layer in code comments near the
   new interfaces so future contributors do not re-collapse the boundaries.
-- [ ] Add regression-oriented unit tests for the interface adapters that do not
+- [x] Add regression-oriented unit tests for the interface adapters that do not
   require a real network backend.
 
 After M1: `sim-flow` has explicit adaptation seams instead of relying on
@@ -221,6 +221,9 @@ surface, then mirrors the design into Rust once the seam has proven itself.
   `tools/sim-flow/docs/flow/09-multi-model-adaptation.md`.
 - [x] Shared API key resolution landed across CLI and VS Code as an example of
   cross-context runtime behavior.
+- [x] Milestone 1 completed in the TypeScript LLM layer with shared adaptation
+  interfaces, normalized chunk vocabulary, and session-consumer adoption of
+  `normalizeLlmChunk`.
 - [ ] Runtime capability profile implementation not started.
 - [ ] Model-family profile implementation not started.
 - [ ] Shared response normalizer boundary not started.
