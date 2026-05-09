@@ -91,18 +91,18 @@ backend-local conventions.
 The VS Code extension already has the richest backend surface and should be the
 first place we factor out runtime-specific behavior.
 
-- [ ] Introduce runtime capability profiles for at least:
+- [x] Introduce runtime capability profiles for at least:
   - `openai_compat_generic`
   - `anthropic_messages`
   - `processor_local` (or equivalent placeholder for processor-centric flows)
-- [ ] Move current OpenAI-compatible runtime constraints behind this layer:
+- [x] Move current OpenAI-compatible runtime constraints behind this layer:
   - single-leading-system-message handling
   - runtime-specific request-body support
   - reasoning field availability
   - native tool-call field availability
-- [ ] Move the shared key-resolution chain under the runtime/integration policy
+- [x] Move the shared key-resolution chain under the runtime/integration policy
   vocabulary rather than letting it remain implicit backend glue.
-- [ ] Keep existing user-facing behavior stable while the implementation moves
+- [x] Keep existing user-facing behavior stable while the implementation moves
   behind the new runtime profile interface.
 
 After M2: the TS backends stop owning runtime-policy conditionals directly.
@@ -224,7 +224,9 @@ surface, then mirrors the design into Rust once the seam has proven itself.
 - [x] Milestone 1 completed in the TypeScript LLM layer with shared adaptation
   interfaces, normalized chunk vocabulary, and session-consumer adoption of
   `normalizeLlmChunk`.
-- [ ] Runtime capability profile implementation not started.
+- [x] Milestone 2 completed in the TypeScript backend path with explicit
+  runtime capability profiles for OpenAI-compatible, Anthropic Messages, and
+  processor-local placeholder runtimes.
 - [ ] Model-family profile implementation not started.
 - [ ] Shared response normalizer boundary not started.
 - [ ] Rust parity work not started.
