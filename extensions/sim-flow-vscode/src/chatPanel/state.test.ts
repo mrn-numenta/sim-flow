@@ -8,6 +8,7 @@ import {
   completeAssistantTurn,
   createConversationState,
   setEntryRequestTokensEstimate,
+  stripProtocolFences,
   stripToolCallFences,
   stripToolCallFencesForDisplay,
   stripToolCallFencesForStreaming,
@@ -168,6 +169,74 @@ describe("chatPanel/state", () => {
   it("hides unterminated tool fences while a response is still streaming", () => {
     const partial = ["Visible intro.", "", "```tool:read_file", "{\"path\":\"src/lib.rs\"}"].join("\n");
     expect(stripToolCallFencesForDisplay(partial)).toBe("Visible intro.");
+  });
+
+  it("hides orchestrator artifact-write blocks from display and transcript reuse", () => {
+    const text = [
+      "Short visible preface.",
+      "",
+      "```docs/spec.md",
+      "# Spec",
+      "generic generated content",
+      "```",
+      "",
+      "Visible tail.",
+    ].join("\n");
+
+    expect(stripProtocolFences(text)).toBe(
+      ["Short visible preface.", "", "Visible tail."].join("\n"),
+    );
+  });
+
+  it("drops artifact-only orchestrator assistant entries when restoring persisted conversations", () => {
+    const restored = createConversationState({
+      nextId: 3,
+      transcript: [
+        {
+          id: "entry-1",
+          kind: "assistant",
+          title: "sim-flow",
+          body: ["```docs/spec.md", "# Spec", "```"].join("\n"),
+          meta: "orchestrator",
+          streaming: false,
+        },
+        {
+          id: "entry-2",
+          kind: "user",
+          title: "You",
+          body: "Continue.",
+        },
+      ],
+    });
+
+    expect(restored.transcript).toHaveLength(1);
+    expect(restored.transcript[0]).toMatchObject({
+      kind: "user",
+      body: "Continue.",
+    });
+  });
+
+  it("strips orchestrator artifact blocks before reusing assistant turns as LLM context", () => {
+    const messages = toLlmMessages(
+      [
+        {
+          id: "entry-1",
+          kind: "assistant",
+          title: "sim-flow",
+          body: [
+            "Visible summary.",
+            "",
+            "```docs/spec.md",
+            "# Spec",
+            "```",
+          ].join("\n"),
+          meta: "orchestrator",
+        },
+      ],
+      undefined,
+    );
+
+    expect(messages).toEqual([{ role: "assistant", content: "Visible summary." }]);
   });
 
   it("preserves leading whitespace for streamed assistant chunks", () => {

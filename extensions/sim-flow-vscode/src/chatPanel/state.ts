@@ -183,7 +183,13 @@ export function toStoredConversation(
         if (entry.kind !== "assistant") {
           return entry;
         }
-        return { ...entry, streaming: false };
+        return {
+          ...entry,
+          body: isOrchestratorAssistantEntry(entry)
+            ? stripProtocolFences(entry.body)
+            : entry.body,
+          streaming: false,
+        };
       }),
     nextId: state.nextId,
   };
@@ -207,7 +213,12 @@ export function toLlmMessages(
     }
     messages.push({
       role: entry.kind,
-      content: entry.kind === "assistant" ? stripToolCallFences(entry.body) : entry.body,
+      content:
+        entry.kind === "assistant"
+          ? isOrchestratorAssistantEntry(entry)
+            ? stripProtocolFences(entry.body)
+            : stripToolCallFences(entry.body)
+          : entry.body,
     });
   }
   return messages;
@@ -231,6 +242,20 @@ export function stripToolCallFencesForStreaming(text: string): string {
   return normalizeToolFenceText(text).replace(/\n?```tool:[\s\S]*$/, "");
 }
 
+/**
+ * Strip hidden protocol blocks from orchestrator transcript entries.
+ *
+ * Tool-call fences are never user-facing, and artifact-write fences
+ * duplicate file contents that the dashboard already surfaces via the
+ * artifact list / write notifications.
+ */
+export function stripProtocolFences(text: string): string {
+  if (text.length === 0) {
+    return text;
+  }
+  return normalizeProtocolFenceText(text).trim();
+}
+
 export function summarizeTokenEstimates(
   transcript: ChatTranscriptEntry[],
 ): { input: number; output: number } {
@@ -249,7 +274,11 @@ export function summarizeTokenEstimates(
 export function filterPresentationEntries(
   transcript: ChatTranscriptEntry[],
 ): ChatTranscriptEntry[] {
-  return transcript.filter((entry) => !isLegacyPresentationNote(entry));
+  return transcript.filter(
+    (entry) =>
+      !isLegacyPresentationNote(entry) &&
+      !isHiddenOrchestratorAssistantEntry(entry),
+  );
 }
 
 function entryId(id: number): string {
@@ -279,4 +308,25 @@ function normalizeToolFenceText(text: string): string {
   return text
     .replace(/(?:^|\n)```tool:[^\n]*\n[\s\S]*?\n```[ \t]*(?=\n|$)/g, "\n")
     .replace(/\n{3,}/g, "\n\n");
+}
+
+function normalizeProtocolFenceText(text: string): string {
+  return normalizeToolFenceText(text)
+    .replace(/(?:^|\n)```[^\s`]*[/.][^\s`]*\n[\s\S]*?\n```[ \t]*(?=\n|$)/g, "\n")
+    .replace(/\n?```[^\s`]*[/.][^\s`]*[\s\S]*$/, "")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+function isOrchestratorAssistantEntry(
+  entry: ChatTranscriptEntry,
+): boolean {
+  return entry.kind === "assistant" && entry.meta === "orchestrator";
+}
+
+function isHiddenOrchestratorAssistantEntry(entry: ChatTranscriptEntry): boolean {
+  return (
+    entry.kind === "assistant" &&
+    isOrchestratorAssistantEntry(entry) &&
+    stripProtocolFences(entry.body).length === 0
+  );
 }

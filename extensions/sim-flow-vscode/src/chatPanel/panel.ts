@@ -5,7 +5,7 @@ import type {
   WebviewMessage,
 } from "./messages";
 import { renderMarkdownFragment } from "./renderMarkdown";
-import { stripToolCallFencesForDisplay } from "./state";
+import { stripProtocolFences, stripToolCallFencesForDisplay } from "./state";
 
 declare function acquireVsCodeApi(): {
   postMessage(message: WebviewMessage): void;
@@ -66,10 +66,9 @@ function render(): void {
     ui.transcriptPinnedToBottom = isNearBottom(previousTranscript);
     ui.transcriptScrollTop = previousTranscript.scrollTop;
   }
-  app.replaceChildren();
 
   if (!ui.state) {
-    app.appendChild(
+    app.replaceChildren(
       section(
         "chat-shell loading",
         titleBlock("sim-flow Chat", "Preparing chat panel..."),
@@ -78,15 +77,21 @@ function render(): void {
     return;
   }
 
-  const indicator = bottomStatusIndicator(ui.state);
-  const root = section("chat-shell");
-  root.append(
-    header(ui.state),
-    transcript(ui.state.transcript),
-    ...(indicator ? [indicator] : []),
-    composer(ui.state),
-  );
-  app.appendChild(root);
+  // Keep the scroll container stable across streamed state updates.
+  // Replacing `.transcript` on every chunk tears down an in-flight
+  // scrollbar drag / wheel gesture, which makes the panel feel like
+  // it "won't scroll" while a response is streaming.
+  let root = app.querySelector<HTMLElement>(".chat-shell");
+  if (!root || root.classList.contains("loading")) {
+    root = section("chat-shell");
+    app.replaceChildren(root);
+  }
+
+  const transcriptRoot = ensureTranscriptRoot(root);
+  renderTranscript(transcriptRoot, ui.state.transcript);
+  syncHero(root, header(ui.state));
+  syncIndicator(root, bottomStatusIndicator(ui.state));
+  syncComposer(root, composer(ui.state));
 }
 
 /**
@@ -245,12 +250,27 @@ function header(state: ChatPanelState): HTMLElement {
   return root;
 }
 
-function transcript(entries: ChatTranscriptEntry[]): HTMLElement {
+function ensureTranscriptRoot(shell: HTMLElement): HTMLElement {
+  const existing = shell.querySelector<HTMLElement>(".transcript");
+  if (existing) {
+    return existing;
+  }
   const root = section("transcript");
   root.addEventListener("scroll", () => {
     ui.transcriptPinnedToBottom = isNearBottom(root);
     ui.transcriptScrollTop = root.scrollTop;
   });
+  const heroNode = shell.querySelector<HTMLElement>(".hero");
+  if (heroNode?.nextSibling) {
+    shell.insertBefore(root, heroNode.nextSibling);
+  } else {
+    shell.appendChild(root);
+  }
+  return root;
+}
+
+function renderTranscript(root: HTMLElement, entries: ChatTranscriptEntry[]): void {
+  root.replaceChildren();
   if (entries.length === 0) {
     root.appendChild(
       section(
@@ -263,16 +283,18 @@ function transcript(entries: ChatTranscriptEntry[]): HTMLElement {
         ),
       ),
     );
-    return root;
+    return;
   }
   for (const entry of entries) {
     switch (entry.kind) {
       case "note":
         root.appendChild(noteEntry(entry));
         break;
-      case "assistant":
-      case "user":
-        const body = entry.body;
+      case "assistant": {
+        const body = renderableAssistantBody(entry);
+        if (entry.kind === "assistant" && body.length === 0) {
+          break;
+        }
         root.appendChild(
           section(
             `entry entry-${entry.kind}${entry.streaming ? " entry-streaming" : ""}`,
@@ -280,7 +302,20 @@ function transcript(entries: ChatTranscriptEntry[]): HTMLElement {
               entry.title,
               entryMeta(entry),
             ),
-            markdownBody(body, true),
+            markdownBody(body, false),
+          ),
+        );
+        break;
+      }
+      case "user":
+        root.appendChild(
+          section(
+            `entry entry-${entry.kind}${entry.streaming ? " entry-streaming" : ""}`,
+            messageHeader(
+              entry.title,
+              entryMeta(entry),
+            ),
+            markdownBody(entry.body, false),
           ),
         );
         break;
@@ -294,7 +329,42 @@ function transcript(entries: ChatTranscriptEntry[]): HTMLElement {
     const maxScrollTop = Math.max(0, root.scrollHeight - root.clientHeight);
     root.scrollTop = Math.min(ui.transcriptScrollTop, maxScrollTop);
   });
-  return root;
+}
+
+function syncHero(shell: HTMLElement, next: HTMLElement): void {
+  const existing = shell.querySelector<HTMLElement>(".hero");
+  if (existing) {
+    existing.replaceWith(next);
+    return;
+  }
+  shell.insertBefore(next, shell.firstChild);
+}
+
+function syncIndicator(shell: HTMLElement, next: HTMLElement | null): void {
+  const existing = shell.querySelector<HTMLElement>(".streaming-indicator");
+  if (!next) {
+    existing?.remove();
+    return;
+  }
+  const composerNode = shell.querySelector<HTMLElement>(".composer");
+  if (existing) {
+    existing.replaceWith(next);
+    return;
+  }
+  if (composerNode) {
+    shell.insertBefore(next, composerNode);
+    return;
+  }
+  shell.appendChild(next);
+}
+
+function syncComposer(shell: HTMLElement, next: HTMLElement): void {
+  const existing = shell.querySelector<HTMLElement>(".composer");
+  if (existing) {
+    existing.replaceWith(next);
+    return;
+  }
+  shell.appendChild(next);
 }
 
 function composer(state: ChatPanelState): HTMLElement {
@@ -525,6 +595,17 @@ function formatTokenCount(tokens: number): string {
     return `~${(tokens / 1000).toFixed(tokens >= 10000 ? 0 : 1)}k tok`;
   }
   return `~${tokens} tok`;
+}
+
+function renderableAssistantBody(
+  entry: ChatTranscriptEntry,
+): string {
+  if (entry.kind !== "assistant") {
+    return "";
+  }
+  return entry.meta === "orchestrator"
+    ? stripProtocolFences(entry.body)
+    : stripToolCallFencesForDisplay(entry.body);
 }
 
 function section(className: string, ...children: Node[]): HTMLElement {
