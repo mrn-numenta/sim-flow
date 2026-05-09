@@ -79,9 +79,9 @@ and Rust code paths can target the same conceptual boundary.
   - `reasoning`
   - `tool_call`
 - [x] Document which concerns belong to which layer in code comments near the
-  new interfaces so future contributors do not re-collapse the boundaries.
+      new interfaces so future contributors do not re-collapse the boundaries.
 - [x] Add regression-oriented unit tests for the interface adapters that do not
-  require a real network backend.
+      require a real network backend.
 
 After M1: `sim-flow` has explicit adaptation seams instead of relying on
 backend-local conventions.
@@ -101,9 +101,9 @@ first place we factor out runtime-specific behavior.
   - reasoning field availability
   - native tool-call field availability
 - [x] Move the shared key-resolution chain under the runtime/integration policy
-  vocabulary rather than letting it remain implicit backend glue.
+      vocabulary rather than letting it remain implicit backend glue.
 - [x] Keep existing user-facing behavior stable while the implementation moves
-  behind the new runtime profile interface.
+      behind the new runtime profile interface.
 
 After M2: the TS backends stop owning runtime-policy conditionals directly.
 
@@ -124,7 +124,7 @@ boundaries.
   - known thought / tool-call markers
   - history policy for prior reasoning
 - [x] Ensure these profiles can be selected explicitly and, where safe, inferred
-  from configured model ids without making inference mandatory.
+      from configured model ids without making inference mandatory.
 - [x] Add profile-level tests for prompt shaping and multimodal content ordering.
 
 After M3: the TS path can differentiate model-family behavior without adding
@@ -136,17 +136,17 @@ Build the response normalizer into a first-class layer and use it to stop
 flattening structured output too early.
 
 - [x] Normalize OpenAI-compatible reasoning and tool-call output into the shared
-  internal chunk/event shape.
+      internal chunk/event shape.
 - [x] Normalize Anthropic / Claude typed blocks into the same shape, preserving
-  `thinking`, `tool_use`, and `tool_result` semantics rather than collapsing to
-  concatenated text.
+      `thinking`, `tool_use`, and `tool_result` semantics rather than collapsing to
+      concatenated text.
 - [x] Add raw-text normalizers for families whose thinking is exposed as text
-  markers rather than typed blocks:
+      markers rather than typed blocks:
   - Qwen `<think>...</think>`
   - Kimi custom think delimiters
   - any Gemma family marker handling needed by the selected runtime
 - [x] Add negative tests that prove reasoning cannot leak into artifact writing
-  or tool-call parsing once the normalizer boundary is in place.
+      or tool-call parsing once the normalizer boundary is in place.
 
 After M4: all supported TS-backed runtimes emit one normalized internal stream.
 
@@ -156,11 +156,11 @@ Mirror the same adaptation model into the Rust session-agent path so the CLI and
 extension do not drift.
 
 - [x] Introduce Rust-side runtime capability and model-family profile
-  abstractions aligned with the TS design.
+      abstractions aligned with the TS design.
 - [x] Move current Rust OpenAI-compatible and Anthropic adaptations behind the
-  new layers without regressing existing behavior.
+      new layers without regressing existing behavior.
 - [x] Ensure the Rust path shares the same conceptual normalization contract as
-  the TS path for:
+      the TS path for:
   - reasoning
   - tool calls
   - structured vs raw-text outputs
@@ -174,16 +174,16 @@ adaptation architecture.
 Make the new adaptation model operable and debuggable for users and
 contributors.
 
-- [ ] Add configuration support for selecting or overriding:
+- [x] Add configuration support for selecting or overriding:
   - runtime capability profile
   - model-family profile
   - profile-specific debug logging when needed
-- [ ] Improve diagnostics so failures report the active backend, runtime
-  profile, model-family profile, and key runtime capabilities in effect.
-- [ ] Update flow docs and architecture notes to describe the landed
-  implementation, not just the planned design.
-- [ ] Add at least one end-to-end validation scenario per representative family
-  or runtime category that can run in mocked or fixture-driven form.
+- [x] Improve diagnostics so failures report the active backend, runtime
+      profile, model-family profile, and key runtime capabilities in effect.
+- [x] Update flow docs and architecture notes to describe the landed
+      implementation, not just the planned design.
+- [x] Add at least one end-to-end validation scenario per representative family
+      or runtime category that can run in mocked or fixture-driven form.
 
 After M6: the adaptation system is documented, configurable, and testable.
 
@@ -218,21 +218,25 @@ surface, then mirrors the design into Rust once the seam has proven itself.
 ## Status
 
 - [x] Multi-model adaptation design note added under
-  `tools/sim-flow/docs/flow/09-multi-model-adaptation.md`.
+      `tools/sim-flow/docs/flow/09-multi-model-adaptation.md`.
 - [x] Shared API key resolution landed across CLI and VS Code as an example of
-  cross-context runtime behavior.
+      cross-context runtime behavior.
 - [x] Milestone 1 completed in the TypeScript LLM layer with shared adaptation
-  interfaces, normalized chunk vocabulary, and session-consumer adoption of
-  `normalizeLlmChunk`.
+      interfaces, normalized chunk vocabulary, and session-consumer adoption of
+      `normalizeLlmChunk`.
 - [x] Milestone 2 completed in the TypeScript backend path with explicit
-  runtime capability profiles for OpenAI-compatible, Anthropic Messages, and
-  processor-local placeholder runtimes.
+      runtime capability profiles for OpenAI-compatible, Anthropic Messages, and
+      processor-local placeholder runtimes.
 - [x] Milestone 3 completed in the TypeScript backend path with explicit
-  model-family profiles, inference/override support, prompt-policy helpers, and
-  multimodal ordering policy.
+      model-family profiles, inference/override support, prompt-policy helpers, and
+      multimodal ordering policy.
 - [x] Milestone 4 completed in the TypeScript backend path with shared response
-  normalizers, raw-text thinking-tag parsing, and Anthropic structured block
-  preservation.
+      normalizers, raw-text thinking-tag parsing, and Anthropic structured block
+      preservation.
 - [x] Milestone 5 completed in the Rust session-agent path with shared
-  adaptation helpers, model-family inference/override support, OpenAI-compatible
-  request/response normalization, and Claude CLI runtime alignment.
+      adaptation helpers, model-family inference/override support, OpenAI-compatible
+      request/response normalization, and Claude CLI runtime alignment.
+- [x] Milestone 6 completed with explicit runtime/model-family override
+      configuration in the VS Code settings and Rust session/auto CLI paths,
+      adaptation-aware diagnostics, protocol/schema updates, fixture-driven
+      validation scenarios, and architecture/doc cleanup.
