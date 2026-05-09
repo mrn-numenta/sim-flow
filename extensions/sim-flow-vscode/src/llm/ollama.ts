@@ -23,6 +23,7 @@ export class OllamaBackend extends OpenAiCompatibleBackend {
       name: "ollama",
       baseUrl: options.baseUrl ?? OLLAMA_DEFAULT_BASE_URL,
       defaultModel: "llama3.1",
+      provider: "ollama",
       keyId: OLLAMA_KEY_ID,
       requireKey: false,
       model: options.model,

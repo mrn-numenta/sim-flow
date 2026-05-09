@@ -349,6 +349,16 @@ pub(crate) enum Command {
         #[arg(long)]
         netlist: Option<PathBuf>,
     },
+    /// Manage stored API keys for LLM backends. Resolution order at
+    /// run time: provider env var (e.g. `ANTHROPIC_API_KEY`) →
+    /// `<config>/sim-flow/credentials.toml` → (in the VS Code
+    /// extension only) OS keychain via SecretStorage. Both the CLI
+    /// and the extension share this on-disk file so a key set
+    /// once works in both contexts.
+    Keys {
+        #[command(subcommand)]
+        action: KeysAction,
+    },
     /// Discover running orchestrators that have a `--watch-socket`
     /// observer surface bound. Reads the registry directory each
     /// `sim-flow auto --watch-socket ...` registers on bind and
@@ -360,6 +370,41 @@ pub(crate) enum Command {
         #[command(subcommand)]
         action: WatchersAction,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum KeysAction {
+    /// Store an API key in `<config>/sim-flow/credentials.toml`.
+    /// The file is created (and made owner-only `0600` on POSIX) if
+    /// it doesn't already exist; existing entries for other
+    /// providers are preserved.
+    Set {
+        /// Provider id (`anthropic`, `openai`, `ollama`, `lmstudio`).
+        provider: String,
+        /// Read the key from this env var instead of prompting on
+        /// stdin. Useful for scripted setup
+        /// (`ANTHROPIC_API_KEY=… sim-flow keys set anthropic
+        /// --from-env ANTHROPIC_API_KEY`).
+        #[arg(long)]
+        from_env: Option<String>,
+    },
+    /// Remove a provider's entry from `credentials.toml`. The env
+    /// var is untouched (the CLI can't edit your shell rc); a key
+    /// resolution can still succeed via the env var after `clear`.
+    Clear {
+        /// Provider id (`anthropic`, `openai`, `ollama`, `lmstudio`).
+        provider: String,
+    },
+    /// Show, per provider, whether a key is reachable and via which
+    /// source. Never prints the key value itself.
+    List {
+        /// Emit machine-readable JSON for tooling.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print the absolute path the credentials file would live at.
+    /// Useful for `cat`-ing or editing it directly when scripting.
+    Path,
 }
 
 #[derive(Debug, Subcommand)]

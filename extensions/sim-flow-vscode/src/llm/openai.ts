@@ -21,6 +21,7 @@ export class OpenAiBackend extends OpenAiCompatibleBackend {
       name: "openai",
       baseUrl: options.baseUrl ?? "https://api.openai.com/v1",
       defaultModel: "gpt-4o-mini",
+      provider: "openai",
       keyId: OPENAI_KEY_ID,
       requireKey: true,
       model: options.model,

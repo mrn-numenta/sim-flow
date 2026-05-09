@@ -9,8 +9,8 @@ use sim_flow::__internal::state::{Flow, State};
 use sim_flow::__internal::steps::registry_for;
 
 use crate::cli::{
-    BaselineAction, Cli, Command, ConfigAction, CoverageAction, NewKind, PromptResetScope,
-    PromptScopeArg, PromptsAction, SessionMode, WatchersAction,
+    BaselineAction, Cli, Command, ConfigAction, CoverageAction, KeysAction, NewKind,
+    PromptResetScope, PromptScopeArg, PromptsAction, SessionMode, WatchersAction,
 };
 
 pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
@@ -158,6 +158,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             *show_types,
             netlist.as_deref(),
         ),
+        Command::Keys { action } => keys_cmd(action),
         Command::Watchers { action } => watchers_cmd(action),
     }
 }
@@ -1660,4 +1661,220 @@ fn config_cmd(project: &Path, action: &ConfigAction) -> sim_flow::Result<()> {
             Ok(())
         }
     }
+}
+
+fn keys_cmd(action: &KeysAction) -> sim_flow::Result<()> {
+    use sim_flow::__internal::keys::{
+        self, KeySource, Provider, SOURCE_CODE_CONFIG_FILE, SOURCE_CODE_ENV, SOURCE_CODE_NONE,
+        config_file_path, list_status,
+    };
+
+    /// Width used by the human-readable `keys list` output for the
+    /// provider column. Long enough to fit `lmstudio` plus padding.
+    const PROVIDER_COLUMN_WIDTH: usize = 9;
+
+    /// Label shown in `keys list` (non-JSON) when no source has a
+    /// key for a provider.
+    const NO_KEY_LABEL: &str = "(unset)";
+
+    fn parse_provider(raw: &str) -> sim_flow::Result<Provider> {
+        Provider::from_str_ci(raw).ok_or_else(|| {
+            sim_flow::Error::Config(format!(
+                "unknown provider `{raw}`; expected one of: anthropic, openai, ollama, lmstudio"
+            ))
+        })
+    }
+
+    match action {
+        KeysAction::Set { provider, from_env } => {
+            let p = parse_provider(provider)?;
+            let key = if let Some(var) = from_env {
+                std::env::var(var).map_err(|_| {
+                    sim_flow::Error::Config(format!(
+                        "--from-env: env var `{var}` is not set in this shell"
+                    ))
+                })?
+            } else {
+                read_key_from_stdin(p.config_key())?
+            };
+            let trimmed = key.trim();
+            if trimmed.is_empty() {
+                return Err(sim_flow::Error::Config("api key cannot be empty".into()));
+            }
+            let path = keys::write_api_key(p, trimmed)?;
+            println!("sim-flow: stored {p} key in {}", path.display());
+            Ok(())
+        }
+        KeysAction::Clear { provider } => {
+            let p = parse_provider(provider)?;
+            let removed = keys::clear_api_key(p)?;
+            if removed {
+                println!("sim-flow: cleared {p} entry from credentials.toml");
+            } else {
+                println!("sim-flow: no {p} entry found to clear");
+            }
+            Ok(())
+        }
+        KeysAction::List { json } => {
+            let statuses = list_status()?;
+            let path = config_file_path();
+            if *json {
+                let rows: Vec<serde_json::Value> = statuses
+                    .iter()
+                    .map(|s| {
+                        let source_code =
+                            s.source.map(KeySource::as_str).unwrap_or(SOURCE_CODE_NONE);
+                        serde_json::json!({
+                            "provider": s.provider.config_key(),
+                            "env_var": s.provider.env_var(),
+                            "source": source_code,
+                        })
+                    })
+                    .collect();
+                let body = serde_json::json!({
+                    "config_file": path.as_ref().map(|p| p.display().to_string()),
+                    "providers": rows,
+                });
+                let text = serde_json::to_string_pretty(&body).map_err(|e| {
+                    sim_flow::Error::State(format!("keys list --json serialize: {e}"))
+                })?;
+                println!("{text}");
+                return Ok(());
+            }
+            if let Some(path) = path {
+                println!("credentials file: {}", path.display());
+            } else {
+                println!("credentials file: (no usable config dir on this platform)");
+            }
+            for s in statuses {
+                let label = match s.source {
+                    Some(KeySource::Env) => {
+                        format!("{SOURCE_CODE_ENV} (${})", s.provider.env_var())
+                    }
+                    Some(KeySource::ConfigFile) => SOURCE_CODE_CONFIG_FILE.to_string(),
+                    None => NO_KEY_LABEL.to_string(),
+                };
+                println!(
+                    "  {provider:width$}  {label}",
+                    provider = s.provider.to_string(),
+                    width = PROVIDER_COLUMN_WIDTH,
+                );
+            }
+            Ok(())
+        }
+        KeysAction::Path => {
+            match config_file_path() {
+                Some(path) => println!("{}", path.display()),
+                None => {
+                    return Err(sim_flow::Error::Config(
+                        "no usable config directory on this platform".into(),
+                    ));
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Prompt the user for an API key on stdin. When stdin is a TTY we
+/// suppress echo via the standard libc tcgetattr / tcsetattr dance
+/// (no extra crate; small enough to inline). On a non-TTY stdin
+/// (CI, piped input), we read normally — the caller decided to
+/// provide the key non-interactively.
+fn read_key_from_stdin(label: &str) -> sim_flow::Result<String> {
+    use std::io::{BufRead, Write};
+
+    let mut stderr = std::io::stderr();
+    write!(
+        stderr,
+        "Paste {label} API key (input will be hidden if stdin is a TTY): "
+    )
+    .map_err(|source| sim_flow::Error::Io {
+        path: PathBuf::from("<stderr>"),
+        source,
+    })?;
+    stderr.flush().ok();
+
+    let stdin = std::io::stdin();
+    let is_tty = is_stdin_tty();
+    let mut line = String::new();
+    let result = if is_tty {
+        with_echo_suppressed(|| stdin.lock().read_line(&mut line))
+    } else {
+        stdin.lock().read_line(&mut line)
+    };
+    if is_tty {
+        // The user's enter keystroke wasn't echoed; print a newline
+        // so the next shell prompt isn't crammed up against our text.
+        let _ = writeln!(stderr);
+    }
+    result.map_err(|source| sim_flow::Error::Io {
+        path: PathBuf::from("<stdin>"),
+        source,
+    })?;
+    Ok(line.trim_end_matches(['\r', '\n']).to_string())
+}
+
+#[cfg(unix)]
+fn is_stdin_tty() -> bool {
+    // SAFETY: isatty(3) is reentrant and side-effect-free.
+    unsafe { libc::isatty(libc::STDIN_FILENO) != 0 }
+}
+
+#[cfg(not(unix))]
+fn is_stdin_tty() -> bool {
+    // Non-POSIX: be conservative and assume non-tty so we don't try
+    // termios. Users on Windows can pipe input or use --from-env.
+    false
+}
+
+#[cfg(unix)]
+fn with_echo_suppressed<F, T>(f: F) -> T
+where
+    F: FnOnce() -> T,
+{
+    use libc::{ECHO, STDIN_FILENO, TCSANOW, tcgetattr, tcsetattr, termios};
+    use std::mem::MaybeUninit;
+
+    // Read current termios.
+    let mut original: MaybeUninit<termios> = MaybeUninit::uninit();
+    // SAFETY: tcgetattr writes a complete termios on success.
+    let ok = unsafe { tcgetattr(STDIN_FILENO, original.as_mut_ptr()) };
+    if ok != 0 {
+        // Couldn't read termios (rare — e.g. stdin redirected since
+        // is_stdin_tty()). Fall back to plain read; key may echo.
+        return f();
+    }
+    let original = unsafe { original.assume_init() };
+    let mut quiet = original;
+    quiet.c_lflag &= !ECHO;
+    // SAFETY: quiet is a valid termios derived from a successful
+    // tcgetattr above.
+    if unsafe { tcsetattr(STDIN_FILENO, TCSANOW, &quiet) } != 0 {
+        // Couldn't disable echo; run without it.
+        return f();
+    }
+    let result = f();
+    // Restore. Best-effort -- if this fails the user's terminal is
+    // stuck without echo until they `stty echo`. Surface a warning
+    // so they know what happened; we've already taken their input
+    // by this point so there's nothing else to do.
+    // SAFETY: `original` was returned by a successful `tcgetattr`
+    // above and we haven't mutated it since.
+    let restored = unsafe { tcsetattr(STDIN_FILENO, TCSANOW, &original) };
+    if restored != 0 {
+        eprintln!(
+            "sim-flow: warning: terminal echo could not be restored. \
+             Run `stty echo` to re-enable echoing.",
+        );
+    }
+    result
+}
+
+#[cfg(not(unix))]
+fn with_echo_suppressed<F, T>(f: F) -> T
+where
+    F: FnOnce() -> T,
+{
+    f()
 }

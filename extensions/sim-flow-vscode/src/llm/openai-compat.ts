@@ -4,6 +4,11 @@
 // format is identical.
 
 import {
+  envVarFor,
+  type ProviderId,
+  resolveApiKey as resolveProviderKey,
+} from "./keyResolver";
+import {
   extractToolFences,
   makeToolCallId,
   normalizeToolArgsForOpenAi,
@@ -27,7 +32,17 @@ export interface OpenAiCompatibleBackendOptions {
   baseUrl: string;
   /** Default model id when the caller doesn't supply one. */
   defaultModel: string;
-  /** Optional API key identifier in SecretStorage. */
+  /**
+   * Provider id (`openai` / `ollama` / `lmstudio`). Drives the
+   * env-var name and config-file table the resolver consults.
+   * When set, takes precedence over the legacy `keyId` path so the
+   * backend benefits from the shared CLI / extension key chain.
+   */
+  provider?: ProviderId;
+  /**
+   * Legacy SecretStorage key id. Kept for back-compat with callers
+   * that pre-date `provider`; new subclasses should set both.
+   */
   keyId?: string;
   /** When true, the backend throws `missing-api-key` if the key is absent. */
   requireKey: boolean;
@@ -243,6 +258,29 @@ export class OpenAiCompatibleBackend implements LlmBackend {
   }
 
   protected async resolveApiKey(): Promise<string | undefined> {
+    // Resolution chain (shared with the Rust CLI for env + config
+    // file): env var → `<config>/sim-flow/credentials.toml` → VS
+    // Code SecretStorage. The provider id drives the env var name
+    // and config-file table. The legacy `keyId` is retained as the
+    // SecretStorage id so already-stored keys keep working.
+    if (this.options.provider) {
+      const resolved = await resolveProviderKey(
+        this.options.provider,
+        this.options.secrets,
+      );
+      if (resolved) {
+        return resolved.key;
+      }
+      if (this.options.requireKey) {
+        throw new LlmError(
+          "missing-api-key",
+          `${this.options.name} API key not found. Set ${envVarFor(this.options.provider)} in your shell, run \`sim-flow keys set ${this.options.provider}\`, or use the "sim-flow: Set LLM API Key" command.`,
+        );
+      }
+      return undefined;
+    }
+    // Fallback for backends without a provider id (legacy callers
+    // and tests) — keep the original SecretStorage-only path.
     if (!this.options.keyId) {
       return undefined;
     }

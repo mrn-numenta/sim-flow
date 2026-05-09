@@ -32,6 +32,7 @@ export class LMStudioBackend extends OpenAiCompatibleBackend {
       name: options.name ?? "lmstudio",
       baseUrl: options.baseUrl ?? LMSTUDIO_DEFAULT_BASE_URL,
       defaultModel: "local-model",
+      provider: "lmstudio",
       keyId: LMSTUDIO_KEY_ID,
       requireKey: false,
       model: options.model,

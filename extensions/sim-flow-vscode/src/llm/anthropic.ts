@@ -1,8 +1,10 @@
 // Anthropic Messages API backend. v1 uses a single POST (not
 // streaming) to keep the implementation small; a streaming upgrade is
-// tracked as a polish pass in the Phase 8 plan. The key is read from
-// VS Code SecretStorage under the `sim-flow.anthropic.apiKey` name.
+// tracked as a polish pass in the Phase 8 plan. The key is resolved
+// via the shared key chain (env var → `<config>/sim-flow/credentials.toml`
+// → VS Code SecretStorage); see `keyResolver.ts`.
 
+import { envVarFor, resolveApiKey, secretIdFor } from "./keyResolver";
 import {
   type CancellationLike,
   type LlmBackend,
@@ -13,7 +15,13 @@ import {
   type SecretStorage,
 } from "./types";
 
-export const ANTHROPIC_KEY_ID = "sim-flow.anthropic.apiKey";
+/**
+ * SecretStorage key id for the Anthropic API key. Re-exported for
+ * back-compat with callers (`apiKey.ts`, the migration test) that
+ * referenced this constant before `keyResolver.ts` centralized the
+ * naming. New code should call `secretIdFor("anthropic")` instead.
+ */
+export const ANTHROPIC_KEY_ID = secretIdFor("anthropic");
 
 export interface AnthropicBackendOptions {
   model?: string;
@@ -102,20 +110,21 @@ export class AnthropicBackend implements LlmBackend {
   }
 
   private async readApiKey(): Promise<string> {
-    if (!this.options.secrets) {
-      throw new LlmError(
-        "missing-api-key",
-        "Anthropic backend needs access to VS Code SecretStorage.",
-      );
+    // Resolution chain: env var → shared credentials.toml → VS Code
+    // SecretStorage. The first two work outside VS Code (the CLI's
+    // Rust resolver shares the same on-disk file), so a user who
+    // runs `sim-flow auto` from a terminal picks up the same key
+    // the extension does.
+    const resolved = await resolveApiKey("anthropic", this.options.secrets);
+    if (resolved) {
+      return resolved.key;
     }
-    const key = await this.options.secrets.get(ANTHROPIC_KEY_ID);
-    if (!key || key.length === 0) {
-      throw new LlmError(
-        "missing-api-key",
-        `Anthropic API key is not set. Run the command "sim-flow: Set LLM API Key" and paste your ${ANTHROPIC_KEY_ID}.`,
-      );
-    }
-    return key;
+    throw new LlmError(
+      "missing-api-key",
+      this.options.secrets
+        ? `Anthropic API key not found. Set ${envVarFor("anthropic")} in your shell, run \`sim-flow keys set anthropic\`, or use the "sim-flow: Set LLM API Key" command and pick "VS Code keychain".`
+        : `Anthropic API key not found. Set ${envVarFor("anthropic")} in your shell or run \`sim-flow keys set anthropic\`.`,
+    );
   }
 }
 
