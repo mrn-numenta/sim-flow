@@ -89,6 +89,18 @@ export interface NormalizedLlmChunk {
   kind: LlmChunkKind;
 }
 
+/** Runtime-owned prompt shape after request preparation. */
+export interface RuntimePreparedInput {
+  /**
+   * Dedicated system prompt field for runtimes like Anthropic's
+   * Messages API. Omitted when the runtime keeps system prompts in
+   * the regular message array.
+   */
+  system?: string;
+  /** Provider-neutral messages after runtime-level reshaping. */
+  messages: LlmMessage[];
+}
+
 export interface LlmStreamChunk {
   /** Incremental text to append to the response. */
   text: string;
@@ -125,6 +137,12 @@ export function normalizeLlmChunk(chunk: LlmStreamChunk): NormalizedLlmChunk {
  */
 export interface RuntimeCapabilityProfile {
   id: string;
+  /** Request family the transport/runtime expects on the wire. */
+  requestFormat?: "openai_chat_completions" | "anthropic_messages" | "processor_local";
+  /** Where credential lookup policy is owned for this runtime. */
+  credentialPolicy?: "shared-provider-chain" | "host-managed" | "none";
+  /** How the runtime expects system prompts to be carried. */
+  systemPromptMode?: "message-array" | "collapsed-leading-message" | "dedicated-field";
   /**
    * True when the runtime requires or prefers multiple leading
    * system messages to be collapsed before serialization.
@@ -136,6 +154,13 @@ export interface RuntimeCapabilityProfile {
   supportsStructuredToolCalls?: boolean;
   /** True when the runtime supports a shared cross-host credential chain. */
   supportsSharedCredentialChain?: boolean;
+  /**
+   * Runtime-level prompt shaping that happens before model-family
+   * policy and transport serialization. This is where serving-stack
+   * quirks like "collapse leading system messages" or "split system
+   * into a dedicated request field" belong.
+   */
+  prepareInput?(messages: LlmMessage[]): RuntimePreparedInput;
 }
 
 /**

@@ -5,6 +5,15 @@ export { OLLAMA_DEFAULT_BASE_URL, OLLAMA_KEY_ID, OllamaBackend } from "./ollama"
 export { OpenAiCompatibleBackend, extractOpenAiText } from "./openai-compat";
 export { OPENAI_KEY_ID, OpenAiBackend } from "./openai";
 export {
+  ANTHROPIC_MESSAGES_RUNTIME,
+  DEFAULT_RESPONSE_NORMALIZER,
+  GENERIC_MODEL_FAMILY,
+  mergeLeadingSystemMessages,
+  OPENAI_COMPAT_GENERIC_RUNTIME,
+  prepareAnthropicMessages,
+  PROCESSOR_LOCAL_RUNTIME,
+} from "./runtimeProfiles";
+export {
   type CancellationLike,
   type LlmAdaptationProfile,
   type LlmAttachment,
@@ -21,6 +30,7 @@ export {
   type ModelFamilyProfile,
   type ResponseNormalizer,
   type RuntimeCapabilityProfile,
+  type RuntimePreparedInput,
   type SecretStorage,
 } from "./types";
 export { VSCodeLmBackend } from "./vscode";

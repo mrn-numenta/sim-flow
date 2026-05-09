@@ -27,6 +27,7 @@ describe("createBackend", () => {
     });
     expect(backend).toBeInstanceOf(AnthropicBackend);
     expect(backend.name).toBe("anthropic");
+    expect(backend.adaptation?.runtime.id).toBe("anthropic_messages");
   });
 
   it("returns OpenAiBackend for source=openai", () => {
@@ -36,18 +37,21 @@ describe("createBackend", () => {
     });
     expect(backend).toBeInstanceOf(OpenAiBackend);
     expect(backend.name).toBe("openai");
+    expect(backend.adaptation?.runtime.id).toBe("openai_compat_generic");
   });
 
   it("returns OllamaBackend for source=ollama (no secrets required)", () => {
     const backend = createBackend({ source: "ollama" });
     expect(backend).toBeInstanceOf(OllamaBackend);
     expect(backend.name).toBe("ollama");
+    expect(backend.adaptation?.runtime.id).toBe("openai_compat_generic");
   });
 
   it("returns LMStudioBackend for source=lmstudio (no secrets required)", () => {
     const backend = createBackend({ source: "lmstudio" });
     expect(backend).toBeInstanceOf(LMStudioBackend);
     expect(backend.name).toBe("lmstudio");
+    expect(backend.adaptation?.runtime.id).toBe("openai_compat_generic");
   });
 
   it("throws unsupported for an unknown source", () => {

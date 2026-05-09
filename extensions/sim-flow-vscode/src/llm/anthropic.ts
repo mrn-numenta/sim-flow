@@ -6,6 +6,13 @@
 
 import { envVarFor, resolveApiKey, secretIdFor } from "./keyResolver";
 import {
+  ANTHROPIC_MESSAGES_RUNTIME,
+  DEFAULT_RESPONSE_NORMALIZER,
+  GENERIC_MODEL_FAMILY,
+  prepareAnthropicMessages,
+} from "./runtimeProfiles";
+import {
+  type LlmAdaptationProfile,
   type CancellationLike,
   type LlmBackend,
   LlmError,
@@ -35,6 +42,11 @@ export interface AnthropicBackendOptions {
 
 export class AnthropicBackend implements LlmBackend {
   readonly name = "anthropic";
+  readonly adaptation: LlmAdaptationProfile = {
+    runtime: ANTHROPIC_MESSAGES_RUNTIME,
+    modelFamily: GENERIC_MODEL_FAMILY,
+    responseNormalizer: DEFAULT_RESPONSE_NORMALIZER,
+  };
 
   constructor(private readonly options: AnthropicBackendOptions = {}) {}
 
@@ -53,11 +65,14 @@ export class AnthropicBackend implements LlmBackend {
     const url = this.options.apiUrl ?? "https://api.anthropic.com/v1/messages";
     const model = this.options.model ?? "claude-sonnet-4-6";
 
+    const prepared = this.adaptation.runtime.prepareInput
+      ? this.adaptation.runtime.prepareInput(messages)
+      : { messages };
     const body = {
       model,
       max_tokens: this.options.maxTokens ?? 4096,
-      system: extractSystem(messages),
-      messages: convertMessages(messages),
+      system: prepared.system,
+      messages: convertMessages(prepared.messages),
     };
 
     const doFetch = this.options.fetchImpl ?? globalThis.fetch;
@@ -128,18 +143,6 @@ export class AnthropicBackend implements LlmBackend {
   }
 }
 
-/**
- * Anthropic takes the system prompt out of the messages array and into
- * a dedicated `system` field. Collapse consecutive system messages.
- */
-function extractSystem(messages: LlmMessage[]): string | undefined {
-  const systems = messages.filter((m) => m.role === "system").map((m) => m.content);
-  if (systems.length === 0) {
-    return undefined;
-  }
-  return systems.join("\n\n");
-}
-
 /** Strip system messages and map remaining roles to Anthropic shapes. */
 function convertMessages(
   messages: LlmMessage[],
@@ -202,6 +205,8 @@ export function extractAnthropicText(json: unknown): string {
     .map((c) => c.text)
     .join("");
 }
+
+export { prepareAnthropicMessages };
 
 async function safeText(res: Response): Promise<string | undefined> {
   try {

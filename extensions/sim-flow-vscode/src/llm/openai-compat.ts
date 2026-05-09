@@ -16,6 +16,13 @@ import {
   type ParsedToolCall,
 } from "./tool-translation";
 import {
+  DEFAULT_RESPONSE_NORMALIZER,
+  GENERIC_MODEL_FAMILY,
+  mergeLeadingSystemMessages,
+  OPENAI_COMPAT_GENERIC_RUNTIME,
+} from "./runtimeProfiles";
+import {
+  type LlmAdaptationProfile,
   type CancellationLike,
   type LlmBackend,
   LlmError,
@@ -59,6 +66,11 @@ export interface OpenAiCompatibleBackendOptions {
 
 export class OpenAiCompatibleBackend implements LlmBackend {
   readonly name: string;
+  readonly adaptation: LlmAdaptationProfile = {
+    runtime: OPENAI_COMPAT_GENERIC_RUNTIME,
+    modelFamily: GENERIC_MODEL_FAMILY,
+    responseNormalizer: DEFAULT_RESPONSE_NORMALIZER,
+  };
 
   constructor(protected readonly options: OpenAiCompatibleBackendOptions) {
     this.name = options.name;
@@ -103,7 +115,9 @@ export class OpenAiCompatibleBackend implements LlmBackend {
     // Collapse them into one before serializing -- LM Studio /
     // Ollama / OpenAI tolerate the merged form just fine, so this
     // is uniform behavior, not a vllm-special-case.
-    const merged = mergeLeadingSystemMessages(messages);
+    const prepared = this.adaptation.runtime.prepareInput
+      ? this.adaptation.runtime.prepareInput(messages)
+      : { messages };
     const body: {
       model: string;
       messages: OpenAiMessage[];
@@ -111,7 +125,7 @@ export class OpenAiCompatibleBackend implements LlmBackend {
       stream: boolean;
     } = {
       model,
-      messages: transformMessagesForOpenAi(merged),
+      messages: transformMessagesForOpenAi(prepared.messages),
       stream: true,
     };
     if (tools && tools.length > 0) {
@@ -467,32 +481,6 @@ function toOpenAiTool(tool: LlmTool): OpenAiTool {
  * is still token-identical across dispatches that share their
  * stable inputs) while satisfying the strict template.
  */
-export function mergeLeadingSystemMessages(messages: LlmMessage[]): LlmMessage[] {
-  let leading = 0;
-  while (leading < messages.length && messages[leading].role === "system") {
-    leading += 1;
-  }
-  if (leading <= 1) {
-    return messages;
-  }
-  const head = messages.slice(0, leading);
-  // Multimodal attachments on a system message are unusual but
-  // possible (image-based system prompts). Concatenate them in
-  // order so nothing is lost; the underlying `openAiContent`
-  // helper handles the multimodal serialization.
-  const mergedAttachments = head.flatMap((m) => m.attachments ?? []);
-  const mergedContent = head.map((m) => m.content).join("\n\n");
-  const tail = messages.slice(leading);
-  return [
-    {
-      role: "system",
-      content: mergedContent,
-      ...(mergedAttachments.length > 0 ? { attachments: mergedAttachments } : {}),
-    },
-    ...tail,
-  ];
-}
-
 export function transformMessagesForOpenAi(messages: LlmMessage[]): OpenAiMessage[] {
   const out: OpenAiMessage[] = [];
   // Outstanding tool_call ids from the most recent assistant message.
@@ -599,6 +587,8 @@ export function transformMessagesForOpenAi(messages: LlmMessage[]): OpenAiMessag
   }
   return out;
 }
+
+export { mergeLeadingSystemMessages };
 
 function trimTrailingSlash(s: string): string {
   return s.endsWith("/") ? s.slice(0, -1) : s;
