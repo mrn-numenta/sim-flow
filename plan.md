@@ -66,3 +66,4 @@ for the staged migration.
 - [ ] [Phase 7 - Polish, Guided Mode, And Deferred Work](./07-phase-polish-and-deferred.md)
 - [/] [Phase 8 - VS Code Extension (chat-driven, superseded)](./08-phase-vscode-extension.md)
 - [ ] [Phase 9 - Orchestrator-Driven Sessions And Multi-Host Support](./09-phase-orchestrator-driven-sessions.md)
+- [ ] [Phase 10 - Multi-Model Adaptation And Runtime Profiles](./10-phase-multi-model-adaptation-and-runtime-profiles.md)
