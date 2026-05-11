@@ -34,6 +34,7 @@ use std::thread;
 use std::time::Instant;
 
 use serde_json::Value;
+use sim_flow::session::JsonlCapture;
 use sim_flow::session::agent::{ClaudeAgent, CliAgent, OllamaAgent, OpenAiCompatAgent};
 use sim_flow::session::ingest_spec_file;
 use sim_flow::session::protocol::{
@@ -73,6 +74,13 @@ struct Args {
     /// per-pid path under the system temp dir so every run is
     /// observable out of the box.
     watch_socket: Option<PathBuf>,
+    /// Optional JSONL capture file. When set, every protocol
+    /// event in both directions (orchestrator -> host AND
+    /// host -> orchestrator) is teed to this path as
+    /// `{"ts": <unix_ms>, "dir": "out"|"in", "event": {...}}`.
+    /// Used by the model-robustness study; the capture is
+    /// observational only.
+    capture_jsonl: Option<PathBuf>,
 }
 
 impl Args {
@@ -88,6 +96,7 @@ impl Args {
         let mut max_llm_requests = 50u32;
         let mut watch_socket: Option<PathBuf> = None;
         let mut watch_disabled = false;
+        let mut capture_jsonl: Option<PathBuf> = None;
         let mut iter = argv.into_iter().skip(1);
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -120,6 +129,7 @@ impl Args {
                 }
                 "--watch-socket" => watch_socket = iter.next().map(PathBuf::from),
                 "--no-watch-socket" => watch_disabled = true,
+                "--capture-jsonl" => capture_jsonl = iter.next().map(PathBuf::from),
                 "--help" | "-h" => {
                     println!(
                         "usage: e2e_manual --project-dir <P> --foundation-root <F> \
@@ -127,13 +137,18 @@ impl Args {
                          [--spec <PATH>] [--sim-flow-bin <PATH>] \
                          [--max-auto-iters <N>] [--max-critique-iters <N>] \
                          [--max-llm-requests <N>] \
-                         [--watch-socket <PATH>] [--no-watch-socket]\n\
+                         [--watch-socket <PATH>] [--no-watch-socket] \
+                         [--capture-jsonl <PATH>]\n\
                          \n\
                          By default a `--watch-socket` path is auto-generated under the \
                          system temp dir so the VS Code dashboard's `sim-flow: Attach to \
                          Running Watcher` picker can attach as a read-only viewer. Pass \
                          `--no-watch-socket` to disable, or `--watch-socket <PATH>` to \
-                         choose your own path."
+                         choose your own path.\n\
+                         \n\
+                         `--capture-jsonl <PATH>` writes every protocol event in both \
+                         directions to a JSONL file. Used by the model-robustness study \
+                         to build per-model anomaly catalogs and a replay corpus."
                     );
                     std::process::exit(0);
                 }
@@ -173,6 +188,7 @@ impl Args {
             max_critique_iters,
             max_llm_requests,
             watch_socket,
+            capture_jsonl,
         })
     }
 }
@@ -313,13 +329,49 @@ fn run(args: &Args) -> std::result::Result<(), String> {
     let stdin = child.stdin.take().expect("piped stdin");
     let stdout = child.stdout.take().expect("piped stdout");
 
+    // Optional JSONL capture for the model-robustness study. Both
+    // the reader (subprocess -> us) and the writer (us ->
+    // subprocess) tee through the same `JsonlCapture`, so a single
+    // file carries a faithful transcript of every protocol exchange
+    // for this trial.
+    let capture: Option<JsonlCapture> = match &args.capture_jsonl {
+        Some(path) => {
+            if let Some(parent) = path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent)
+                    .map_err(|err| format!("create capture dir {}: {err}", parent.display()))?;
+            }
+            let file = std::fs::File::create(path)
+                .map_err(|err| format!("create capture file {}: {err}", path.display()))?;
+            let cap = JsonlCapture::new(std::io::BufWriter::new(file));
+            cap.record_meta(serde_json::json!({
+                "kind": "run-start",
+                "tool": "e2e_manual",
+                "backend": args.backend,
+                "model": args.model.clone(),
+                "project_dir": args.project_dir.display().to_string(),
+                "foundation_root": args.foundation_root.display().to_string(),
+                "spec": args.spec.as_ref().map(|p| p.display().to_string()),
+                "max_auto_iters": args.max_auto_iters,
+                "max_critique_iters": args.max_critique_iters,
+                "max_llm_requests": args.max_llm_requests,
+                "pid": std::process::id(),
+            }));
+            eprintln!("e2e_manual: capture-jsonl = {}", path.display());
+            Some(cap)
+        }
+        None => None,
+    };
+
     // Reader thread: parse one Event per stdout line and forward on
     // a channel so the main loop can do a straight `recv()` even
     // though stdin/stdout are independent file descriptors.
     let (event_tx, event_rx) = channel::<EventFromOrch>();
+    let reader_capture = capture.clone();
     let reader_handle = thread::Builder::new()
         .name("e2e-manual-reader".into())
-        .spawn(move || reader_loop(stdout, event_tx))
+        .spawn(move || reader_loop(stdout, event_tx, reader_capture))
         .map_err(|err| format!("spawn reader thread: {err}"))?;
 
     let agent: Box<dyn CliAgent> = match args.backend.as_str() {
@@ -331,7 +383,13 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         _ => unreachable!("validated in Args::parse"),
     };
 
-    let outcome = drive(stdin, &event_rx, agent.as_ref(), &args.project_dir);
+    let outcome = drive(
+        stdin,
+        &event_rx,
+        agent.as_ref(),
+        &args.project_dir,
+        capture.as_ref(),
+    );
 
     // Tear down: signal Shutdown if the loop didn't already, then
     // wait for child and reader.
@@ -395,7 +453,7 @@ enum EventFromOrch {
     Err(String),
 }
 
-fn reader_loop(stdout: ChildStdout, tx: Sender<EventFromOrch>) {
+fn reader_loop(stdout: ChildStdout, tx: Sender<EventFromOrch>, capture: Option<JsonlCapture>) {
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
     loop {
@@ -412,6 +470,9 @@ fn reader_loop(stdout: ChildStdout, tx: Sender<EventFromOrch>) {
                 }
                 match serde_json::from_str::<Event>(trimmed) {
                     Ok(event) => {
+                        if let Some(cap) = &capture {
+                            cap.record_out(&event);
+                        }
                         if tx.send(EventFromOrch::Event(Box::new(event))).is_err() {
                             return;
                         }
@@ -453,6 +514,7 @@ fn drive(
     rx: &Receiver<EventFromOrch>,
     agent: &dyn CliAgent,
     project_dir: &std::path::Path,
+    capture: Option<&JsonlCapture>,
 ) -> std::result::Result<TestVerdict, String> {
     // 1. Send Hello to kick off the handshake.
     send_host_event(
@@ -470,6 +532,7 @@ fn drive(
                 "tool-notifications".into(),
             ],
         },
+        capture,
     )?;
 
     // State machine. `current_step` tracks the orchestrator's view
@@ -493,7 +556,15 @@ fn drive(
                 continue;
             }
             EventFromOrch::Event(event) => {
-                phase = handle_event(phase, *event, &mut stdin, agent, project_dir, &mut verdict)?;
+                phase = handle_event(
+                    phase,
+                    *event,
+                    &mut stdin,
+                    agent,
+                    project_dir,
+                    &mut verdict,
+                    capture,
+                )?;
                 if matches!(phase, ManualPhase::Done) {
                     return Ok(verdict);
                 }
@@ -538,6 +609,7 @@ fn handle_event(
     agent: &dyn CliAgent,
     project_dir: &std::path::Path,
     verdict: &mut TestVerdict,
+    capture: Option<&JsonlCapture>,
 ) -> std::result::Result<ManualPhase, String> {
     match event {
         Event::HelloAck { session, .. } => {
@@ -574,6 +646,7 @@ fn handle_event(
                     step: step.clone(),
                     kind: SessionKindOut::Work,
                 },
+                capture,
             )?;
             Ok(ManualPhase::InStep {
                 step,
@@ -679,6 +752,7 @@ fn handle_event(
                             step: next.clone(),
                             kind: SessionKindOut::Work,
                         },
+                        capture,
                     )?;
                     Ok(ManualPhase::InStep {
                         step: next,
@@ -687,7 +761,7 @@ fn handle_event(
                 }
                 None => {
                     println!("e2e_manual: StateAdvanced {from} -> (end of flow); shutting down");
-                    send_host_event(stdin, &HostEvent::Shutdown)?;
+                    send_host_event(stdin, &HostEvent::Shutdown, capture)?;
                     Ok(ManualPhase::Done)
                 }
             }
@@ -705,6 +779,7 @@ fn handle_event(
                 &HostEvent::UserMessage {
                     text: "/end-session".into(),
                 },
+                capture,
             )?;
             Ok(phase)
         }
@@ -749,6 +824,7 @@ fn handle_event(
                             request_id: request_id.clone(),
                             text,
                         },
+                        capture,
                     )?;
                     send_host_event(
                         stdin,
@@ -756,6 +832,7 @@ fn handle_event(
                             request_id,
                             stop_reason: Some("stop".into()),
                         },
+                        capture,
                     )?;
                 }
                 Err(err) => {
@@ -772,6 +849,7 @@ fn handle_event(
                             kind: "dispatch".into(),
                             message: format!("{err}"),
                         },
+                        capture,
                     )?;
                 }
             }
@@ -822,6 +900,7 @@ fn handle_event(
                             step: step.clone(),
                             kind: SessionKindOut::Critique,
                         },
+                        capture,
                     )?;
                     Ok(ManualPhase::InStep {
                         step: step.clone(),
@@ -830,7 +909,7 @@ fn handle_event(
                 }
                 SessionKindOut::Critique => {
                     println!("e2e_manual: -> Advance for {step}");
-                    send_host_event(stdin, &HostEvent::Advance { step: step.clone() })?;
+                    send_host_event(stdin, &HostEvent::Advance { step: step.clone() }, capture)?;
                     Ok(ManualPhase::AwaitAdvance {
                         from_step: step.clone(),
                     })
@@ -841,7 +920,14 @@ fn handle_event(
     })
 }
 
-fn send_host_event(stdin: &mut ChildStdin, event: &HostEvent) -> std::result::Result<(), String> {
+fn send_host_event(
+    stdin: &mut ChildStdin,
+    event: &HostEvent,
+    capture: Option<&JsonlCapture>,
+) -> std::result::Result<(), String> {
+    if let Some(cap) = capture {
+        cap.record_in(event);
+    }
     let line =
         serde_json::to_string(event).map_err(|err| format!("serialize host event: {err}"))?;
     stdin

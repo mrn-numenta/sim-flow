@@ -41,7 +41,8 @@ use sim_flow::session::agent::{
 use sim_flow::session::host::TerminalHost;
 use sim_flow::session::protocol::{LlmMessage, StepMode};
 use sim_flow::session::{
-    AutoOptions, EventTap, TappedHost, WatchRegistration, ingest_spec_file, run_auto,
+    AutoOptions, CaptureHost, EventTap, JsonlCapture, TappedHost, WatchRegistration,
+    ingest_spec_file, run_auto,
 };
 
 fn main() {
@@ -88,6 +89,16 @@ struct Args {
     /// can list this run and observe events without touching
     /// e2e_auto's in-process command path.
     watch_socket: Option<PathBuf>,
+    /// Optional JSONL capture file. When set, every protocol
+    /// event (orchestrator -> host) AND every host event
+    /// (host -> orchestrator) is teed to this path as a JSONL
+    /// stream. Format: `{"ts": <unix_ms>, "dir": "out"|"in",
+    /// "event": {...}}`. Used by the model-robustness study
+    /// (see docs/brainstorming/model-robustness-study.md) to
+    /// build per-model anomaly catalogs and a replay corpus.
+    /// The capture is purely observational; the orchestrator's
+    /// behavior is identical whether this flag is set or not.
+    capture_jsonl: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy)]
@@ -113,6 +124,7 @@ impl Args {
         let mut healthcheck = true;
         let mut watch_socket: Option<PathBuf> = None;
         let mut watch_disabled = false;
+        let mut capture_jsonl: Option<PathBuf> = None;
         let mut iter = argv.into_iter().skip(1);
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -156,6 +168,7 @@ impl Args {
                 "--healthcheck" => healthcheck = true,
                 "--watch-socket" => watch_socket = iter.next().map(PathBuf::from),
                 "--no-watch-socket" => watch_disabled = true,
+                "--capture-jsonl" => capture_jsonl = iter.next().map(PathBuf::from),
                 "--help" | "-h" => {
                     println!(
                         "usage: e2e_auto --project-dir <P> --foundation-root <F> \
@@ -165,13 +178,18 @@ impl Args {
                          [--max-llm-requests <N>] [--max-identical-responses <N>] \
                          [--preamble | --no-preamble] \
                          [--healthcheck | --no-healthcheck] \
-                         [--watch-socket <PATH>] [--no-watch-socket]\n\
+                         [--watch-socket <PATH>] [--no-watch-socket] \
+                         [--capture-jsonl <PATH>]\n\
                          \n\
                          By default a `--watch-socket` path is auto-generated under the \
                          system temp dir so the VS Code dashboard's `sim-flow: Attach \
                          to Running Watcher` picker can attach as a read-only viewer. \
                          Pass `--no-watch-socket` to disable, or `--watch-socket <PATH>` \
-                         to choose your own path."
+                         to choose your own path.\n\
+                         \n\
+                         `--capture-jsonl <PATH>` writes every protocol event in both \
+                         directions to a JSONL file. Used by the model-robustness study \
+                         to build per-model anomaly catalogs and a replay corpus."
                     );
                     std::process::exit(0);
                 }
@@ -207,6 +225,7 @@ impl Args {
             no_preamble,
             healthcheck,
             watch_socket,
+            capture_jsonl,
         })
     }
 }
@@ -439,15 +458,75 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         no_preamble: args.no_preamble,
     };
 
+    // Optional JSONL capture for the model-robustness study. The
+    // wrapper goes OUTERMOST (closest to the orchestrator) so it
+    // sees every event before TappedHost broadcasts it AND every
+    // host event after TerminalHost reads from stdin.
+    let capture = match &args.capture_jsonl {
+        Some(path) => {
+            if let Some(parent) = path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent)
+                    .map_err(|err| format!("create capture dir {}: {err}", parent.display()))?;
+            }
+            let file = std::fs::File::create(path)
+                .map_err(|err| format!("create capture file {}: {err}", path.display()))?;
+            let writer = std::io::BufWriter::new(file);
+            let cap = JsonlCapture::new(writer);
+            // Header line: lets the analyzer interpret a capture
+            // standalone without needing to consult external config.
+            cap.record_meta(serde_json::json!({
+                "kind": "run-start",
+                "tool": "e2e_auto",
+                "backend": backend_label,
+                "model": args.model.clone(),
+                "base_url": args.base_url.clone(),
+                "project_dir": args.project_dir.display().to_string(),
+                "foundation_root": args.foundation_root.display().to_string(),
+                "spec": args.spec.as_ref().map(|p| p.display().to_string()),
+                "max_auto_iters": args.max_auto_iters,
+                "max_critique_iters": args.max_critique_iters,
+                "max_llm_requests": args.max_llm_requests,
+                "max_identical_responses": args.max_identical_responses,
+                "no_preamble": args.no_preamble,
+                "pid": std::process::id(),
+                "started_at_unix": now_iso8601(),
+            }));
+            eprintln!("e2e_auto: capture-jsonl = {}", path.display());
+            Some(cap)
+        }
+        None => None,
+    };
+
     println!("e2e_auto: launching run_auto...\n");
     let started = Instant::now();
-    let result = if let Some(tap) = watch_tap {
-        let mut tapped = TappedHost::new(host, tap);
-        run_auto(opts, &mut tapped)
-    } else {
-        let mut host = host;
-        run_auto(opts, &mut host)
+    let result = match (watch_tap, capture.clone()) {
+        (Some(tap), Some(cap)) => {
+            let mut host = CaptureHost::new(TappedHost::new(host, tap), cap);
+            run_auto(opts, &mut host)
+        }
+        (Some(tap), None) => {
+            let mut host = TappedHost::new(host, tap);
+            run_auto(opts, &mut host)
+        }
+        (None, Some(cap)) => {
+            let mut host = CaptureHost::new(host, cap);
+            run_auto(opts, &mut host)
+        }
+        (None, None) => {
+            let mut host = host;
+            run_auto(opts, &mut host)
+        }
     };
+    if let Some(cap) = &capture {
+        cap.record_meta(serde_json::json!({
+            "kind": "run-end",
+            "ok": result.is_ok(),
+            "error": result.as_ref().err().map(|e| format!("{e}")),
+            "wall_ms": started.elapsed().as_millis() as u64,
+        }));
+    }
     result.map_err(|err| format!("run_auto error: {err}"))?;
     let elapsed = started.elapsed();
     println!(

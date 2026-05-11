@@ -11,6 +11,7 @@
 pub mod agent;
 pub mod auto;
 pub mod auto_interactive;
+pub mod capture_host;
 pub mod control_socket;
 pub mod debug_log;
 pub mod event_tap;
@@ -26,6 +27,7 @@ pub mod tools;
 
 pub use auto::{AutoOptions, run_auto};
 pub use auto_interactive::{AutoInteractiveOptions, run_auto_interactive};
+pub use capture_host::{CaptureHost, JsonlCapture};
 pub use control_socket::{ControlCommand, ControlEvent, ControlListener, default_socket_path};
 pub use spec_ingest::{SpecIngestSummary, ingest_spec_file};
 
