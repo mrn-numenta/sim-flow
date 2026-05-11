@@ -14,14 +14,17 @@ pub mod tool_calls;
 pub mod transport;
 
 // `dispatch_chat` is the back-compat wrapper kept for the legacy
-// fenced-block path (ollama.rs, openai_compat/mod.rs::OpenAiCompatAgent).
-// The richer `dispatch_chat_with_tools` + `ChatResponse` shape and
-// the `tool_calls` types get wired in by the next migration commit.
+// fenced-block path. `dispatch_chat_with_tools` carries the richer
+// shape with tool_calls; OpenAiCompatAgent::dispatch_with_tools
+// routes through it when the orchestrator asks.
 pub use transport::{OpenAiCompatibleRequest, dispatch_chat};
 
+use self::tool_calls::ToolDescriptor;
+use self::transport::dispatch_chat_with_tools;
 use super::{
-    AgentAdaptationSummary, CliAgent, LlmCallMetrics, OPENAI_COMPAT_GENERIC_RUNTIME,
-    RuntimeCapabilityProfile, resolve_model_family, resolve_runtime_profile,
+    AdvertisedToolCall, AgentAdaptationSummary, CliAgent, LlmCallMetrics,
+    OPENAI_COMPAT_GENERIC_RUNTIME, RuntimeCapabilityProfile, ToolAdvertise, resolve_model_family,
+    resolve_runtime_profile,
 };
 use crate::Result;
 use crate::session::protocol::LlmMessage;
@@ -100,6 +103,41 @@ impl CliAgent for OpenAiCompatAgent {
             OpenAiCompatibleRequest::new(&self.base_url, &self.model, messages)
                 .with_model_family_id(self.model_family_id.as_deref()),
         )
+    }
+
+    fn dispatch_with_tools(
+        &self,
+        messages: &[LlmMessage],
+        tools: &[ToolAdvertise],
+    ) -> Result<(String, Vec<AdvertisedToolCall>, LlmCallMetrics)> {
+        if tools.is_empty() {
+            let (text, metrics) = self.dispatch(messages)?;
+            return Ok((text, Vec::new(), metrics));
+        }
+        let wire_tools: Vec<ToolDescriptor> = tools
+            .iter()
+            .map(|t| {
+                ToolDescriptor::function(
+                    t.name.clone(),
+                    t.description.clone(),
+                    t.parameters.clone(),
+                )
+            })
+            .collect();
+        let req = OpenAiCompatibleRequest::new(&self.base_url, &self.model, messages)
+            .with_model_family_id(self.model_family_id.as_deref())
+            .with_tools(wire_tools, Some("auto"));
+        let resp = dispatch_chat_with_tools(req)?;
+        let calls = resp
+            .tool_calls
+            .into_iter()
+            .map(|c| AdvertisedToolCall {
+                id: c.id,
+                name: c.function.name,
+                arguments_json: c.function.arguments,
+            })
+            .collect();
+        Ok((resp.text, calls, resp.metrics))
     }
 
     fn adaptation_summary(&self) -> Option<AgentAdaptationSummary> {

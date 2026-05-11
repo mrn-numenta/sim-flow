@@ -163,7 +163,6 @@ impl<'a> OpenAiCompatibleRequest<'a> {
         }
     }
 
-    #[allow(dead_code)] // wired by next commit (orchestrator integration)
     pub fn with_tools(
         mut self,
         tools: Vec<ToolDescriptor>,
@@ -296,7 +295,6 @@ struct ResponseMessage {
 /// What `dispatch_chat_with_tools` returns. The thin
 /// back-compat `dispatch_chat` wrapper below discards `tool_calls`
 /// and returns just the `(text, metrics)` pair.
-#[allow(dead_code)] // wired by next commit (orchestrator integration)
 #[derive(Debug, Clone)]
 pub struct ChatResponse {
     pub text: String,

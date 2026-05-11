@@ -102,9 +102,52 @@ impl AgentAdaptationSummary {
     }
 }
 
+/// Vendor-neutral tool descriptor the orchestrator hands to an
+/// agent that supports native function calling. Each impl translates
+/// to its on-the-wire shape (OpenAI `tools[].function.{name,
+/// description, parameters}`, Anthropic `tools[].{name, description,
+/// input_schema}`, etc).
+///
+/// Build one from each `crate::session::tools::Tool` at orchestrator
+/// session start: `name = t.name()`, `description = t.description()`,
+/// `parameters = t.args_schema()`.
+#[derive(Debug, Clone)]
+pub struct ToolAdvertise {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
+/// Vendor-neutral tool call returned by an agent that supports
+/// native function calling. `id` is the wire-side call id (used to
+/// thread tool results back into the next request); `arguments_json`
+/// is the raw JSON-encoded argument blob the model emitted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdvertisedToolCall {
+    pub id: Option<String>,
+    pub name: String,
+    pub arguments_json: String,
+}
+
 pub trait CliAgent: Send {
     fn name(&self) -> &str;
     fn dispatch(&self, messages: &[LlmMessage]) -> Result<(String, LlmCallMetrics)>;
+    /// Dispatch with a tool catalog advertised to the model. Default
+    /// implementation drops the catalog and returns the existing
+    /// text+metrics with no tool calls -- agents that don't support
+    /// native function calling (subprocess CLIs, OpenAI-compat
+    /// without `--enable-auto-tool-choice`) get this behavior for
+    /// free. Native-tool-aware agents override to thread tools into
+    /// the request and parse tool_calls / tool_use out of the
+    /// response.
+    fn dispatch_with_tools(
+        &self,
+        messages: &[LlmMessage],
+        _tools: &[ToolAdvertise],
+    ) -> Result<(String, Vec<AdvertisedToolCall>, LlmCallMetrics)> {
+        let (text, metrics) = self.dispatch(messages)?;
+        Ok((text, Vec::new(), metrics))
+    }
     fn adaptation_summary(&self) -> Option<AgentAdaptationSummary> {
         None
     }
@@ -470,6 +513,39 @@ mod tests {
     fn claude_agent_uses_claude_cli_runtime_profile() {
         let a = ClaudeAgent::new(Some("claude-sonnet-4-6".into()), None, None);
         assert_eq!(a.runtime_profile().request_format, "subprocess_prompt");
+    }
+
+    #[test]
+    fn default_dispatch_with_tools_drops_catalog_and_returns_no_calls() {
+        // Non-tool-aware agents (the trait default impl) must
+        // return the same (text, metrics) as plain dispatch and
+        // never invent tool calls regardless of catalog size.
+        use crate::session::protocol::{LlmAttachment, LlmRole};
+
+        struct StubAgent;
+        impl CliAgent for StubAgent {
+            fn name(&self) -> &str {
+                "stub"
+            }
+            fn dispatch(&self, _messages: &[LlmMessage]) -> Result<(String, LlmCallMetrics)> {
+                Ok(("hello".to_string(), LlmCallMetrics::default()))
+            }
+        }
+
+        let agent = StubAgent;
+        let messages: Vec<LlmMessage> = vec![LlmMessage {
+            role: LlmRole::User,
+            content: "x".into(),
+            attachments: Vec::<LlmAttachment>::new(),
+        }];
+        let tools = vec![ToolAdvertise {
+            name: "list_dir".into(),
+            description: "list dir".into(),
+            parameters: serde_json::json!({"type":"object"}),
+        }];
+        let (text, calls, _m) = agent.dispatch_with_tools(&messages, &tools).unwrap();
+        assert_eq!(text, "hello");
+        assert!(calls.is_empty());
     }
 
     #[test]

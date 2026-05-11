@@ -1,9 +1,3 @@
-// Wire-shape prep for the native-tool-calls migration. The
-// orchestrator wires these in the next commit; until then they're
-// referenced only by transport.rs's public surface, which clippy
-// doesn't see through `pub use` re-exports.
-#![allow(dead_code)]
-
 //! Native OpenAI tool-calls wire shape for the openai_compat
 //! transport.
 //!
