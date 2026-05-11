@@ -66,6 +66,7 @@ struct Args {
     model: Option<String>,
     max_auto_iters: u32,
     max_critique_iters: u32,
+    max_critique_no_progress_iters: u32,
     max_llm_requests: u32,
     /// Optional Unix socket path passed to `sim-flow auto
     /// --watch-socket ...` so the dashboard's "Attach to Running
@@ -92,7 +93,8 @@ impl Args {
         let mut backend: Option<String> = None;
         let mut model: Option<String> = None;
         let mut max_auto_iters = 3u32;
-        let mut max_critique_iters = 3u32;
+        let mut max_critique_iters = 10u32;
+        let mut max_critique_no_progress_iters = 3u32;
         let mut max_llm_requests = 50u32;
         let mut watch_socket: Option<PathBuf> = None;
         let mut watch_disabled = false;
@@ -120,6 +122,15 @@ impl Args {
                         .parse()
                         .map_err(|err| format!("--max-critique-iters: {err}"))?
                 }
+                "--max-critique-no-progress-iters" => {
+                    max_critique_no_progress_iters = iter
+                        .next()
+                        .ok_or_else(|| {
+                            "--max-critique-no-progress-iters needs a value".to_string()
+                        })?
+                        .parse()
+                        .map_err(|err| format!("--max-critique-no-progress-iters: {err}"))?
+                }
                 "--max-llm-requests" => {
                     max_llm_requests = iter
                         .next()
@@ -136,6 +147,7 @@ impl Args {
                          --backend {{openai-compat|ollama|claude}} [--model <M>] \
                          [--spec <PATH>] [--sim-flow-bin <PATH>] \
                          [--max-auto-iters <N>] [--max-critique-iters <N>] \
+                         [--max-critique-no-progress-iters <N>] \
                          [--max-llm-requests <N>] \
                          [--watch-socket <PATH>] [--no-watch-socket] \
                          [--capture-jsonl <PATH>]\n\
@@ -186,6 +198,7 @@ impl Args {
             model,
             max_auto_iters,
             max_critique_iters,
+            max_critique_no_progress_iters,
             max_llm_requests,
             watch_socket,
             capture_jsonl,
@@ -291,6 +304,8 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         .arg(args.max_auto_iters.to_string())
         .arg("--max-critique-iters")
         .arg(args.max_critique_iters.to_string())
+        .arg("--max-critique-no-progress-iters")
+        .arg(args.max_critique_no_progress_iters.to_string())
         .arg("--max-llm-requests")
         .arg(args.max_llm_requests.to_string());
     if let Some(model) = &args.model {
@@ -355,6 +370,7 @@ fn run(args: &Args) -> std::result::Result<(), String> {
                 "spec": args.spec.as_ref().map(|p| p.display().to_string()),
                 "max_auto_iters": args.max_auto_iters,
                 "max_critique_iters": args.max_critique_iters,
+                "max_critique_no_progress_iters": args.max_critique_no_progress_iters,
                 "max_llm_requests": args.max_llm_requests,
                 "pid": std::process::id(),
             }));

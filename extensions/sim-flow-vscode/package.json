@@ -332,8 +332,14 @@
         "sim-flow.auto.maxCritiqueIterations": {
           "type": "integer",
           "minimum": 0,
+          "default": 10,
+          "description": "Absolute ceiling on critique retries per step in automated mode. Even genuinely-progressing runs stop here — 10+ retries means something else is wrong (prompt, gate, model)."
+        },
+        "sim-flow.auto.maxCritiqueNoProgressIterations": {
+          "type": "integer",
+          "minimum": 0,
           "default": 3,
-          "description": "Maximum number of times the auto driver re-runs a step's work session in response to critique blockers before stopping the auto run."
+          "description": "No-progress cap: stop auto retries when this many consecutive critique passes do NOT strictly decrease the gate-failing-finding count. Catches plateaus / oscillations early so we don't burn the absolute retry budget on a stuck model. Set to 0 to disable (the absolute cap then becomes the only signal)."
         },
         "sim-flow.auto.maxLlmRequests": {
           "type": "integer",

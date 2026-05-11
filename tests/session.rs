@@ -1113,6 +1113,11 @@ fn auto_opts(
         llm_base_url: None,
         max_auto_iters: 3,
         max_critique_iters: 2,
+        // Tests that drive the critique-iter cap explicitly rely
+        // on flat-retry behavior (the original semantics). 0
+        // disables the no-progress cap so the absolute cap is
+        // the only signal.
+        max_critique_no_progress_iters: 0,
         dm0_interactive: false,
         max_llm_requests: 50,
         max_identical_responses: 0,
@@ -1520,6 +1525,91 @@ fn auto_mode_cap_exceeded_flips_to_manual_and_emits_step_mode_changed() {
         saw_diag,
         "cap-exceeded path should emit a clarifying Diagnostic; events: {:?}",
         host.written,
+    );
+}
+
+#[test]
+fn auto_mode_no_progress_cap_fires_when_critique_count_stays_flat() {
+    // Two caps on the critique-retry loop now: an absolute one
+    // (max_critique_iters -- backstop even for progressing runs)
+    // and a no-progress one (max_critique_no_progress_iters --
+    // catches plateaus / oscillations early). This test pins the
+    // no-progress path: we feed the orchestrator a critique that
+    // reports a flat 1 blocker on every pass, so the absolute cap
+    // is far away but the no-progress streak trips after the
+    // configured number of stuck retries.
+    use sim_flow::session::protocol::StepMode;
+    use sim_flow::session::{MockAgent, TerminalHost};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let project = init_project(&tmp);
+    // Pre-write a clean spec.md so each Work session sees the
+    // structural gate clean immediately and winds down on the
+    // first "Done." mock response. That removes Work-side
+    // variability from the test and lets every cycle through
+    // run_auto_loop drive ONE Critique pass.
+    std::fs::write(
+        project.join("docs/spec.md"),
+        "# Spec\n\nClock: 2 GHz\nNode: 7 nm\n",
+    )
+    .unwrap();
+
+    let agent = MockAgent::new();
+    // Per cycle: one "Done." for Work (wind-down on clean gate),
+    // one fenced critique with a BLOCKER for Critique. Three
+    // cycles -- the 3rd one's no_progress_iters=2 trips a cap
+    // of 1.
+    let bad_critique = "Critique done.\n\n\
+        ```docs/critiques/DM0-critique.md\n\
+        # DM0 Critique\n\nBLOCKER: missing technology details.\n\
+        ```\n";
+    for _ in 0..3 {
+        agent.enqueue("Done.");
+        agent.enqueue(bad_critique);
+    }
+    // Plus a safety pad so a runaway under-cap doesn't hang.
+    for _ in 0..6 {
+        agent.enqueue("Done.");
+    }
+
+    let stdin_bytes = "/end-session\n".repeat(3);
+    let stdin = std::io::Cursor::new(stdin_bytes.into_bytes());
+    let mut stdout: Vec<u8> = Vec::new();
+    let mut stderr: Vec<u8> = Vec::new();
+    let mut host = TerminalHost::new(agent, stdin, &mut stdout, &mut stderr);
+
+    let mut opts = auto_opts(&project, StepMode::Auto);
+    opts.max_auto_iters = 4;
+    // Absolute cap deliberately far away -- we want the
+    // no-progress cap to be what trips. If the absolute cap
+    // fires first the diagnostic message names a different
+    // reason and the assertion below catches it.
+    opts.max_critique_iters = 50;
+    // Pass 1 has no prior count (no_progress stays 0); pass 2
+    // bumps no_progress to 1 (1>1 false); pass 3 bumps to 2
+    // (2>1 true) -> fire.
+    opts.max_critique_no_progress_iters = 1;
+
+    sim_flow::session::run_auto(opts, &mut host).unwrap();
+
+    // The terminator must be the no-progress diagnostic, not the
+    // absolute one. The wording is the stable contract; the
+    // VS Code extension keys on the setting name in the message.
+    let stderr_str = String::from_utf8(stderr).unwrap();
+    assert!(
+        stderr_str.contains("made no progress for") && stderr_str.contains("DM0"),
+        "expected the no-progress diagnostic on DM0; stderr:\n{stderr_str}",
+    );
+    assert!(
+        !stderr_str.contains("still has 1 gate-failing finding(s) after"),
+        "absolute-cap diagnostic should NOT fire when no-progress is the smaller cap; \
+         stderr:\n{stderr_str}",
+    );
+    // And the run should have flipped to manual mode (matching
+    // the existing absolute-cap behavior).
+    assert!(
+        stderr_str.contains("step mode now: Manual"),
+        "no-progress cap should still flip to manual; stderr:\n{stderr_str}",
     );
 }
 

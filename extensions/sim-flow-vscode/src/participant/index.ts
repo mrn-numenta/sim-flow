@@ -227,7 +227,9 @@ async function runAutoCommand(
   const config = vscode.workspace.getConfiguration("sim-flow");
   const llmConfig = buildPumpLlmConfig(ctx, secrets, config);
   const maxWorkIters = config.get<number>("auto.maxWorkIterations") ?? 3;
-  const maxCritiqueIters = config.get<number>("auto.maxCritiqueIterations") ?? 3;
+  const maxCritiqueIters = config.get<number>("auto.maxCritiqueIterations") ?? 10;
+  const maxCritiqueNoProgressIters =
+    config.get<number>("auto.maxCritiqueNoProgressIterations") ?? 3;
   const maxLlmRequests = config.get<number>("auto.maxLlmRequests") ?? 500;
   const noPreamble = config.get<boolean>("auto.noPreamble") ?? true;
   const cargoTimeoutSecs = config.get<number>("auto.cargoTimeoutSeconds") ?? 300;
@@ -247,6 +249,10 @@ async function runAutoCommand(
   }
   args.push("--max-auto-iters", String(maxWorkIters));
   args.push("--max-critique-iters", String(maxCritiqueIters));
+  args.push(
+    "--max-critique-no-progress-iters",
+    String(maxCritiqueNoProgressIters),
+  );
   args.push("--max-llm-requests", String(maxLlmRequests));
   args.push("--no-preamble", String(noPreamble));
   if (specPath) {
@@ -269,7 +275,7 @@ async function runAutoCommand(
     : "_No spec provided; DM0.work runs interactively (the agent will ask you what to build), the rest of the flow runs unattended._";
   stream.markdown(
     [
-      `**Starting automated flow.** Settings: \`maxWorkIterations\`=${maxWorkIters}, \`maxCritiqueIterations\`=${maxCritiqueIters}, \`maxLlmRequests\`=${maxLlmRequests}, \`noPreamble\`=${noPreamble}, \`cargoTimeoutSeconds\`=${cargoTimeoutSecs}. Backend: \`${llmConfig.source}\`.`,
+      `**Starting automated flow.** Settings: \`maxWorkIterations\`=${maxWorkIters}, \`maxCritiqueIterations\`=${maxCritiqueIters}, \`maxCritiqueNoProgressIterations\`=${maxCritiqueNoProgressIters}, \`maxLlmRequests\`=${maxLlmRequests}, \`noPreamble\`=${noPreamble}, \`cargoTimeoutSeconds\`=${cargoTimeoutSecs}. Backend: \`${llmConfig.source}\`.`,
       "",
       specLine,
       "",
@@ -498,7 +504,7 @@ function renderHelp(stream: vscode.ChatResponseStream): void {
       "- `/advance [step]` — gate-validate and advance current_step",
       "- `/reset <step>` — reset a step, cascading downstream gates",
       "- `/step <step>.work` or `/step <step>.critique` — start an interactive session",
-      "- `/auto` — drive the entire flow unattended from the current step (work → critique → advance per step). Settings: `sim-flow.auto.maxWorkIterations`, `sim-flow.auto.maxCritiqueIterations`, `sim-flow.auto.maxLlmRequests`, `sim-flow.auto.noPreamble`, `sim-flow.auto.cargoTimeoutSeconds`, `sim-flow.auto.healthcheck`.",
+      "- `/auto` — drive the entire flow unattended from the current step (work → critique → advance per step). Settings: `sim-flow.auto.maxWorkIterations`, `sim-flow.auto.maxCritiqueIterations`, `sim-flow.auto.maxCritiqueNoProgressIterations`, `sim-flow.auto.maxLlmRequests`, `sim-flow.auto.noPreamble`, `sim-flow.auto.cargoTimeoutSeconds`, `sim-flow.auto.healthcheck`.",
       "- `/init` — initialize sim-flow state in this workspace",
       "",
       "Any command accepts `--project <path>` to target a specific sim-flow project.",

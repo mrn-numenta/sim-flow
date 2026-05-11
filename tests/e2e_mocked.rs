@@ -86,6 +86,10 @@ fn auto_opts(project: &Path, mode: StepMode) -> AutoOptions {
         llm_base_url: None,
         max_auto_iters: 4,
         max_critique_iters: 2,
+        // The mocked walk pre-writes clean critiques; the
+        // no-progress cap isn't exercised here. Disable it so
+        // we only test the absolute-cap path.
+        max_critique_no_progress_iters: 0,
         dm0_interactive: false,
         max_llm_requests: 50,
         // Cancel the loop-guard substring matcher: identical mock

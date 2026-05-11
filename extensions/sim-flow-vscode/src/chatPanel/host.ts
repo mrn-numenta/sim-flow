@@ -841,7 +841,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     const config = vscode.workspace.getConfiguration("sim-flow");
     const llmConfig = buildPumpLlmConfig(ctx, this.secrets, config);
     const maxWorkIters = config.get<number>("auto.maxWorkIterations") ?? 3;
-    const maxCritiqueIters = config.get<number>("auto.maxCritiqueIterations") ?? 3;
+    const maxCritiqueIters = config.get<number>("auto.maxCritiqueIterations") ?? 10;
+    const maxCritiqueNoProgressIters =
+      config.get<number>("auto.maxCritiqueNoProgressIterations") ?? 3;
     const stepMode = readStepModeSetting(config);
 
     const sessionId = randomUUID();
@@ -857,6 +859,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
     args.push("--max-auto-iters", String(maxWorkIters));
     args.push("--max-critique-iters", String(maxCritiqueIters));
+    args.push(
+      "--max-critique-no-progress-iters",
+      String(maxCritiqueNoProgressIters),
+    );
     args.push("--step-mode", stepMode);
     if (trimmedSpec) {
       args.push("--spec", trimmedSpec);

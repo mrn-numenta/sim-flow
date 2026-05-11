@@ -126,6 +126,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             llm_base_url,
             max_auto_iters,
             max_critique_iters,
+            max_critique_no_progress_iters,
             dm0_interactive,
             spec,
             transport_socket,
@@ -146,6 +147,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             llm_base_url.as_deref(),
             *max_auto_iters,
             *max_critique_iters,
+            *max_critique_no_progress_iters,
             *dm0_interactive,
             spec.as_deref(),
             transport_socket.as_deref(),
@@ -455,6 +457,7 @@ fn auto_cmd(
     llm_base_url: Option<&str>,
     max_auto_iters: u32,
     max_critique_iters: u32,
+    max_critique_no_progress_iters: u32,
     dm0_interactive: bool,
     spec: Option<&Path>,
     transport_socket: Option<&Path>,
@@ -500,7 +503,14 @@ fn auto_cmd(
             llm_model: llm_model.map(String::from),
             dm0_interactive,
         };
-        let _ = (max_auto_iters, max_critique_iters); // not used in interactive mode
+        // Not used in interactive mode (the PTY-driven CLI agent
+        // doesn't go through the JSONL host loop where the caps
+        // fire).
+        let _ = (
+            max_auto_iters,
+            max_critique_iters,
+            max_critique_no_progress_iters,
+        );
         return match session_mode {
             SessionMode::PerStep => sim_flow::__internal::session::run_auto_interactive(opts),
             SessionMode::Single => {
@@ -521,6 +531,7 @@ fn auto_cmd(
         llm_base_url: llm_base_url.map(String::from),
         max_auto_iters,
         max_critique_iters,
+        max_critique_no_progress_iters,
         dm0_interactive,
         max_llm_requests,
         max_identical_responses,

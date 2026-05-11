@@ -203,9 +203,21 @@ pub(crate) enum Command {
         /// Per-session structural-gate iteration cap.
         #[arg(long, default_value_t = 3)]
         max_auto_iters: u32,
-        /// Cross-session retry cap when the critique reports blockers.
-        #[arg(long, default_value_t = 3)]
+        /// Cross-session retry cap (absolute ceiling) when the
+        /// critique reports gate-failing findings. Even
+        /// genuinely-progressing runs stop here -- if the model is
+        /// still chipping at the problem after 10+ retries,
+        /// something else is wrong (prompt, gate, model).
+        #[arg(long, default_value_t = 10)]
         max_critique_iters: u32,
+        /// No-progress cap: flip to manual after this many
+        /// consecutive critique retries whose gate-failing-finding
+        /// count did NOT strictly decrease. Catches "model
+        /// plateaued / oscillating" patterns early without
+        /// burning the absolute retry budget. Set to 0 to disable
+        /// (the absolute cap then becomes the only signal).
+        #[arg(long, default_value_t = 3)]
+        max_critique_no_progress_iters: u32,
         /// Run DM0.work in interactive mode (the user describes what
         /// to build). Subsequent sessions still run in auto mode.
         #[arg(long)]

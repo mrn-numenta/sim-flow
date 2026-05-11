@@ -96,10 +96,24 @@ pub struct AutoOptions {
     /// Per-session structural-gate iteration cap (forwarded to the
     /// orchestrator's auto mode).
     pub max_auto_iters: u32,
-    /// Cross-session retry cap. Each retry re-runs the work session
-    /// for the same step (the orchestrator inlines the critique file
-    /// so the agent sees what to fix).
+    /// Cross-session retry cap (absolute ceiling). Each retry re-runs
+    /// the work session for the same step (the orchestrator inlines
+    /// the critique file so the agent sees what to fix). Hard backstop
+    /// even when the agent is still making progress -- if the model
+    /// keeps shaving one blocker per pass for 10+ passes, something
+    /// is wrong with the prompt or the gate, not just the model.
     pub max_critique_iters: u32,
+    /// Cross-session no-progress retry cap. Increments on every retry
+    /// whose gate-failing-finding count is NOT strictly less than the
+    /// previous pass; resets to 0 on strict progress. Catches the
+    /// "model plateaued or is flipping the same finding back and
+    /// forth" pattern that `max_critique_iters` (an absolute count)
+    /// would only catch after wasting more retries.
+    ///
+    /// We DO NOT count the first critique pass as a no-progress event
+    /// (there's no `previous_count` to compare against on pass 1);
+    /// the counter only starts after the first delta is observable.
+    pub max_critique_no_progress_iters: u32,
     /// If set, DM0 work runs in interactive mode (auto=false). The
     /// rest of the flow runs auto. Used when no spec has been
     /// provided -- the user collaborates on DM0, then auto takes
@@ -305,13 +319,16 @@ fn run_auto_loop<H: Host>(
         let is_first_step = step_pos == 0;
         // Resume retry counters from checkpoint when this is the
         // first step of the resumed run AND the checkpoint matches.
-        let (mut critique_iters, mut prev_blocker_count): (u32, Option<usize>) =
-            if step_pos == 0 && resumed.as_ref().map(|c| c.step.as_str()) == Some(*step_id) {
-                let c = resumed.as_ref().unwrap();
-                (c.critique_iters, c.prev_blocker_count)
-            } else {
-                (0, None)
-            };
+        let (mut critique_iters, mut no_progress_iters, mut prev_blocker_count): (
+            u32,
+            u32,
+            Option<usize>,
+        ) = if step_pos == 0 && resumed.as_ref().map(|c| c.step.as_str()) == Some(*step_id) {
+            let c = resumed.as_ref().unwrap();
+            (c.critique_iters, c.no_progress_iters, c.prev_blocker_count)
+        } else {
+            (0, 0, None)
+        };
         let step_started = std::time::Instant::now();
 
         loop {
@@ -380,21 +397,32 @@ fn run_auto_loop<H: Host>(
             // proceed to advance.
             let gate_findings = read_gate_findings(&opts.project_dir, step_id);
             let cur_count = gate_findings.len();
-            // Checkpoint after each Critique boundary so a kill
-            // during the next Work session resumes with the right
-            // retry counter rather than starting the step over.
-            save_checkpoint(
-                &opts.project_dir,
-                step_id,
-                critique_iters,
-                Some(cur_count),
-                "critique",
-            );
             // Per-critique-pass delta. `delta` is signed because a
             // retry can introduce regressions (count strictly
             // increasing) -- worth surfacing so a stuck-loop is
             // visible without parsing the critique file.
             let delta = prev_blocker_count.map(|prev| cur_count as i64 - prev as i64);
+            // No-progress accounting. A strict-decrease counts as
+            // progress and resets the streak; a flat or
+            // increasing count extends it. The very first pass
+            // (`delta.is_none()`) does not extend the streak --
+            // there's no previous count to compare against.
+            match delta {
+                Some(d) if d < 0 => no_progress_iters = 0,
+                Some(_) => no_progress_iters = no_progress_iters.saturating_add(1),
+                None => {}
+            }
+            // Checkpoint after each Critique boundary so a kill
+            // during the next Work session resumes with the right
+            // retry counters rather than starting the step over.
+            save_checkpoint(
+                &opts.project_dir,
+                step_id,
+                critique_iters,
+                no_progress_iters,
+                Some(cur_count),
+                "critique",
+            );
             tracing::info!(
                 target: "sim_flow::metrics",
                 event = "critique_pass",
@@ -403,6 +431,7 @@ fn run_auto_loop<H: Host>(
                 blockers = cur_count,
                 prev_blockers = ?prev_blocker_count,
                 delta = ?delta,
+                no_progress_iters,
             );
             prev_blocker_count = Some(cur_count);
             if gate_findings.is_empty() {
@@ -437,11 +466,13 @@ fn run_auto_loop<H: Host>(
                     }
                     AdvanceOutcome::MoreMilestonesPending => {
                         critique_iters = 0;
+                        no_progress_iters = 0;
                         prev_blocker_count = None;
                         save_checkpoint(
                             &opts.project_dir,
                             step_id,
                             critique_iters,
+                            no_progress_iters,
                             prev_blocker_count,
                             "advance-milestone",
                         );
@@ -461,10 +492,28 @@ fn run_auto_loop<H: Host>(
                 }
             }
             critique_iters += 1;
-            if critique_iters > opts.max_critique_iters {
-                auto_host.write(&Event::Diagnostic {
-                    level: DiagnosticLevel::Error,
-                    message: format!(
+            // Two caps. Absolute (`max_critique_iters`) is the hard
+            // backstop -- even genuinely-progressing runs stop here
+            // because something is wrong if 10+ retries are needed.
+            // No-progress (`max_critique_no_progress_iters`) catches
+            // plateaus / oscillations early so we don't waste retries
+            // on a stuck model. Both flip to manual on trip.
+            let hit_absolute = critique_iters > opts.max_critique_iters;
+            let hit_no_progress = opts.max_critique_no_progress_iters > 0
+                && no_progress_iters > opts.max_critique_no_progress_iters;
+            if hit_absolute || hit_no_progress {
+                let reason = if hit_no_progress && !hit_absolute {
+                    format!(
+                        "auto: {} critique made no progress for {} consecutive retry(ies) (blocker count {} did not strictly decrease); flipping to manual mode. \
+                         Total retries this step: {}/{}. Raise `sim-flow.auto.maxCritiqueNoProgressIterations` to allow more plateau retries.",
+                        step_id,
+                        no_progress_iters,
+                        gate_findings.len(),
+                        critique_iters - 1,
+                        opts.max_critique_iters,
+                    )
+                } else {
+                    format!(
                         "auto: {} critique still has {} gate-failing finding(s) after {} retries; flipping to manual mode. \
                          Use the dashboard's per-step controls to inspect, re-run, or advance. Raise \
                          `sim-flow.auto.maxCritiqueIterations` and toggle back to auto if you want more retries per resume \
@@ -473,19 +522,40 @@ fn run_auto_loop<H: Host>(
                         gate_findings.len(),
                         critique_iters - 1,
                         opts.max_critique_iters,
-                    ),
+                    )
+                };
+                auto_host.write(&Event::Diagnostic {
+                    level: DiagnosticLevel::Error,
+                    message: reason,
                 })?;
                 flip_to_manual(auto_host)?;
                 return Ok(AutoLoopOutcome::FlippedToManual);
             }
+            // Retry diagnostic: include the no-progress streak so an
+            // operator watching the run sees an early signal when
+            // the model has plateaued rather than only learning
+            // about it at the cap.
+            let progress_note = match delta {
+                Some(d) if d < 0 => format!(" (-{} from prior pass)", -d),
+                Some(0) => format!(
+                    " (no progress, streak {}/{})",
+                    no_progress_iters, opts.max_critique_no_progress_iters
+                ),
+                Some(d) => format!(
+                    " (+{} from prior pass, streak {}/{})",
+                    d, no_progress_iters, opts.max_critique_no_progress_iters
+                ),
+                None => String::new(),
+            };
             auto_host.write(&Event::Diagnostic {
                 level: DiagnosticLevel::Info,
                 message: format!(
-                    "auto: {} critique reported {} gate-failing finding(s); re-running work (retry {}/{})",
+                    "auto: {} critique reported {} gate-failing finding(s); re-running work (retry {}/{}{})",
                     step_id,
                     gate_findings.len(),
                     critique_iters,
                     opts.max_critique_iters,
+                    progress_note,
                 ),
             })?;
             // Loop body re-runs work; the orchestrator's
@@ -622,6 +692,15 @@ struct AutoCheckpoint {
     /// on resume so a process that died mid-retry doesn't spin
     /// `max_critique_iters` extra retries.
     critique_iters: u32,
+    /// Consecutive no-progress retry count. Counts critique
+    /// passes whose blocker count did NOT strictly decrease from
+    /// the previous pass. Resets to 0 on strict progress.
+    /// Restored on resume so the no-progress cap doesn't get a
+    /// free reset after a process restart.
+    /// `#[serde(default)]` so old checkpoints (written before the
+    /// no-progress cap landed) still load.
+    #[serde(default)]
+    no_progress_iters: u32,
     /// Last critique's blocker count, for the delta-tracking
     /// metric. Restored on resume so the post-restart pass can
     /// still compute a sensible delta.
@@ -643,6 +722,7 @@ fn save_checkpoint(
     project_dir: &Path,
     step: &str,
     critique_iters: u32,
+    no_progress_iters: u32,
     prev_blocker_count: Option<usize>,
     last_kind: &str,
 ) {
@@ -653,6 +733,7 @@ fn save_checkpoint(
     let checkpoint = AutoCheckpoint {
         step: step.to_string(),
         critique_iters,
+        no_progress_iters,
         prev_blocker_count,
         last_kind: last_kind.to_string(),
         timestamp_unix,
@@ -1198,6 +1279,8 @@ fn run_manual_advance<H: Host>(
     const MILESTONE_WALK_CAP: u32 = 50;
     let mut walk_iter: u32 = 0;
     let mut critique_iters: u32 = 0;
+    let mut no_progress_iters: u32 = 0;
+    let mut prev_blocker_count: Option<usize> = None;
     loop {
         // Critique retry path: read the on-disk critique BEFORE
         // attempting advance. If gate-failing findings are present we
@@ -1207,28 +1290,59 @@ fn run_manual_advance<H: Host>(
         // misleading "cannot advance" Error.
         let gate_findings = read_gate_findings(&opts.project_dir, step_id);
         if !gate_findings.is_empty() {
+            let cur_count = gate_findings.len();
+            let delta = prev_blocker_count.map(|prev| cur_count as i64 - prev as i64);
+            match delta {
+                Some(d) if d < 0 => no_progress_iters = 0,
+                Some(_) => no_progress_iters = no_progress_iters.saturating_add(1),
+                None => {}
+            }
+            prev_blocker_count = Some(cur_count);
             critique_iters += 1;
-            if critique_iters > opts.max_critique_iters {
-                auto_host.write(&Event::Diagnostic {
-                    level: DiagnosticLevel::Error,
-                    message: format!(
+            let hit_absolute = critique_iters > opts.max_critique_iters;
+            let hit_no_progress = opts.max_critique_no_progress_iters > 0
+                && no_progress_iters > opts.max_critique_no_progress_iters;
+            if hit_absolute || hit_no_progress {
+                let reason = if hit_no_progress && !hit_absolute {
+                    format!(
+                        "Advance: {step_id} critique made no progress for {} consecutive retry(ies) \
+                         (blocker count {} did not strictly decrease); giving up. Inspect \
+                         `docs/critiques/{step_id}-critique.json` and re-issue RunStep / RunCritique \
+                         manually after fixing.",
+                        no_progress_iters, cur_count,
+                    )
+                } else {
+                    format!(
                         "Advance: {step_id} critique still has {} gate-failing finding(s) after {} retries; \
                          giving up. Inspect `docs/critiques/{step_id}-critique.json` and re-issue \
                          RunStep / RunCritique manually after fixing.",
-                        gate_findings.len(),
-                        opts.max_critique_iters,
-                    ),
+                        cur_count, opts.max_critique_iters,
+                    )
+                };
+                auto_host.write(&Event::Diagnostic {
+                    level: DiagnosticLevel::Error,
+                    message: reason,
                 })?;
                 return Ok(());
             }
+            let progress_note = match delta {
+                Some(d) if d < 0 => format!(" (-{} from prior pass)", -d),
+                Some(0) => format!(
+                    " (no progress, streak {}/{})",
+                    no_progress_iters, opts.max_critique_no_progress_iters
+                ),
+                Some(d) => format!(
+                    " (+{} from prior pass, streak {}/{})",
+                    d, no_progress_iters, opts.max_critique_no_progress_iters
+                ),
+                None => String::new(),
+            };
             auto_host.write(&Event::Diagnostic {
                 level: DiagnosticLevel::Info,
                 message: format!(
                     "Advance: {step_id} critique has {} gate-failing finding(s); re-running Work + Critique \
-                     (retry {}/{}).",
-                    gate_findings.len(),
-                    critique_iters,
-                    opts.max_critique_iters,
+                     (retry {}/{}{}).",
+                    cur_count, critique_iters, opts.max_critique_iters, progress_note,
                 ),
             })?;
             run_subsession(
@@ -1271,8 +1385,12 @@ fn run_manual_advance<H: Host>(
                     })?;
                     return Ok(());
                 }
-                // New milestone targeted: reset critique-iter budget.
+                // New milestone targeted: reset critique-iter +
+                // no-progress budgets and the prior blocker count
+                // (the new milestone starts fresh).
                 critique_iters = 0;
+                no_progress_iters = 0;
+                prev_blocker_count = None;
                 auto_host.write(&Event::Diagnostic {
                     level: DiagnosticLevel::Info,
                     message: format!(

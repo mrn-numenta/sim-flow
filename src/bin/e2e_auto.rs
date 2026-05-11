@@ -73,6 +73,7 @@ struct Args {
     base_url: Option<String>,
     max_auto_iters: u32,
     max_critique_iters: u32,
+    max_critique_no_progress_iters: u32,
     max_llm_requests: u32,
     max_identical_responses: u32,
     no_preamble: bool,
@@ -117,7 +118,8 @@ impl Args {
         let mut model: Option<String> = None;
         let mut base_url: Option<String> = None;
         let mut max_auto_iters = 3u32;
-        let mut max_critique_iters = 3u32;
+        let mut max_critique_iters = 10u32;
+        let mut max_critique_no_progress_iters = 3u32;
         let mut max_llm_requests = 500u32;
         let mut max_identical_responses = 3u32;
         let mut no_preamble = true;
@@ -148,6 +150,15 @@ impl Args {
                         .parse()
                         .map_err(|err| format!("--max-critique-iters: {err}"))?
                 }
+                "--max-critique-no-progress-iters" => {
+                    max_critique_no_progress_iters = iter
+                        .next()
+                        .ok_or_else(|| {
+                            "--max-critique-no-progress-iters needs a value".to_string()
+                        })?
+                        .parse()
+                        .map_err(|err| format!("--max-critique-no-progress-iters: {err}"))?
+                }
                 "--max-llm-requests" => {
                     max_llm_requests = iter
                         .next()
@@ -175,6 +186,7 @@ impl Args {
                          --backend {{openai-compat|ollama|claude}} [--model <M>] \
                          [--base-url <URL>] [--spec <PATH>] \
                          [--max-auto-iters <N>] [--max-critique-iters <N>] \
+                         [--max-critique-no-progress-iters <N>] \
                          [--max-llm-requests <N>] [--max-identical-responses <N>] \
                          [--preamble | --no-preamble] \
                          [--healthcheck | --no-healthcheck] \
@@ -220,6 +232,7 @@ impl Args {
             base_url,
             max_auto_iters,
             max_critique_iters,
+            max_critique_no_progress_iters,
             max_llm_requests,
             max_identical_responses,
             no_preamble,
@@ -301,9 +314,10 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         args.model.as_deref().unwrap_or("(default)")
     );
     println!(
-        "e2e_auto: caps              = max_auto_iters={} max_critique_iters={} max_llm_requests={} max_identical_responses={} no_preamble={}",
+        "e2e_auto: caps              = max_auto_iters={} max_critique_iters={} max_critique_no_progress_iters={} max_llm_requests={} max_identical_responses={} no_preamble={}",
         args.max_auto_iters,
         args.max_critique_iters,
+        args.max_critique_no_progress_iters,
         args.max_llm_requests,
         args.max_identical_responses,
         args.no_preamble,
@@ -451,6 +465,7 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         llm_base_url: args.base_url.clone(),
         max_auto_iters: args.max_auto_iters,
         max_critique_iters: args.max_critique_iters,
+        max_critique_no_progress_iters: args.max_critique_no_progress_iters,
         dm0_interactive: false,
         max_llm_requests: args.max_llm_requests,
         max_identical_responses: args.max_identical_responses,
@@ -487,6 +502,7 @@ fn run(args: &Args) -> std::result::Result<(), String> {
                 "spec": args.spec.as_ref().map(|p| p.display().to_string()),
                 "max_auto_iters": args.max_auto_iters,
                 "max_critique_iters": args.max_critique_iters,
+                "max_critique_no_progress_iters": args.max_critique_no_progress_iters,
                 "max_llm_requests": args.max_llm_requests,
                 "max_identical_responses": args.max_identical_responses,
                 "no_preamble": args.no_preamble,

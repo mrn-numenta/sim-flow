@@ -221,23 +221,23 @@ A small Rust binary `study_analyze` next to `e2e_auto` that:
    each anomaly kind above. Most are pattern matches on `Event::*`
    shapes; a few (drift, semantic) need to look across N turns.
 3. Emits one `anomalies.jsonl` per run + a per-model aggregate
-   `summary.json`:
+   `summary.json` (sketch):
 
-```json
-{
-  "model": "qwen3-coder-6b@lmstudio",
-  "fixture": "dm_flow_smoke_spec",
-  "trials": 3,
-  "steps_completed": {"median": 4, "min": 4, "max": 6},
-  "anomalies": {
-    "empty-response":             { "median_per_run": 1, "max": 4 },
-    "write-outside-allowlist":    { "median_per_run": 0, "max": 1 },
-    "identical-response-streak":  { "median_per_run": 0, "max": 1 },
-    "preamble-burning-budget":    { "median_per_run": 6, "max": 11 }
-  },
-  "terminated_by": {"auto-iter-cap": 2, "critique-iter-cap": 1}
-}
-```
+   ```json
+   {
+     "model": "qwen3-coder-6b@lmstudio",
+     "fixture": "dm_flow_smoke_spec",
+     "trials": 3,
+     "steps_completed": {"median": 4, "min": 4, "max": 6},
+     "anomalies": {
+       "empty-response":             { "median_per_run": 1, "max": 4 },
+       "write-outside-allowlist":    { "median_per_run": 0, "max": 1 },
+       "identical-response-streak":  { "median_per_run": 0, "max": 1 },
+       "preamble-burning-budget":    { "median_per_run": 6, "max": 11 }
+     },
+     "terminated_by": {"auto-iter-cap": 2, "critique-iter-cap": 1}
+   }
+   ```
 
 4. (Stretch) Renders a per-model markdown report with the worst
    offending turn quoted verbatim per anomaly kind, so we can scan
@@ -444,11 +444,26 @@ range" reason K=20 is the production target.
    Qwen runtime profile in `agent/adaptation.rs` to expect
    bare-JSON output and skip the warning.
 2. `critique-iter-cap` is the dominant terminator. The retries
-   are running with `max_critique_iters=3`. Worth checking whether
-   the critique is actually identifying real gate-blocking issues
-   each retry, or whether the agent keeps surfacing the same
-   nit that the gate happens to flag. Sample the captured
-   `<step>-critique.json` per trial to find out.
+   are running with `max_critique_iters=3`. The captures'
+   per-retry blocker counts on the terminator step were:
+   trial 1 DM1 `2 -> 2 -> 2` (flat), trial 2 DM2b `3 -> 2 -> 2`
+   (one step of progress then plateau), trial 3 DM2c
+   `3 -> 3 -> 3` (flat). Two takeaways:
+   - The cap today is flat-retries (`critique_iters >
+     max_critique_iters` in `auto.rs::run_auto_loop`), NOT a
+     no-progress check. Changing it to "fail after N
+     consecutive retries with non-decreasing blocker count"
+     would have spared the last wasted retry in trials 1 and 3
+     (~25-30% wall savings on those trials) and let trial 2
+     run a 4th retry while it was still making progress. The
+     `critique_pass` tracing event already computes the per-pass
+     `delta`; the no-progress logic would consume that signal.
+   - The flat-count trials are pointing at the same finding
+     across retries -- worth dumping the per-retry
+     `<step>-critique.json` to confirm whether the agent is
+     literally re-flagging the same item, and if so whether
+     it's a real gate-blocking issue or a model-stuck-on-nit
+     pattern. That sample-and-classify task is open.
 3. `llm-truncated-at-max-tokens` confirms the doc's hypothesis
    that long-turn steps would trip the upstream cap. The default
    `SIM_FLOW_MAX_TOKENS` is too tight for qwen3.6's tool-heavy
@@ -488,6 +503,12 @@ Two parallel tracks, both informed by the K=3 catalog above:
      critique body for long-turn steps.
    - Update the DM2-step critique prompts to lead with the
      fenced-write block before any reasoning.
+   - Convert the critique-iter cap from flat retries to a
+     no-progress cap (fail after N retries with non-decreasing
+     blocker count). The `critique_pass` tracing event already
+     emits the per-pass delta; the change is purely in
+     `auto.rs::run_auto_loop`. Backend-agnostic, so it
+     benefits every model in the study.
 
 We should NOT scale to K=20 yet -- the hardening work above
 might reshape the anomaly rates, so K=20 against a tightened
@@ -545,6 +566,25 @@ orchestrator is worth more than K=20 against today's.
   of hardening lands (bare-JSON-as-canonical for the Qwen runtime
   profile, max-tokens bump for verbose-tool-use families,
   fenced-write-first critique prompts).
+- **2026-05-11 -- two-cap critique policy landed**: the
+  critique-retry cap is now two caps that flip to manual
+  whichever trips first. `max_critique_iters` is the absolute
+  ceiling, default 10 (was 3). `max_critique_no_progress_iters`
+  is new, default 3, and trips when this many consecutive
+  retries fail to strictly decrease the gate-failing-finding
+  count. The `critique_pass` tracing event already emitted the
+  per-pass delta; the no-progress logic consumes it. Wired
+  through `sim-flow auto`, `e2e_auto`, `e2e_manual`,
+  `dm_flow_smoke`, the VS Code dashboard settings, and the
+  capture meta header. Reapplying this policy to the Phase 0
+  captures: trial 1 (`2 -> 2 -> 2`) would have flipped one
+  retry earlier; trial 2 (`3 -> 2 -> 2`) would have been
+  allowed retry 3 because retry 2 made progress, then stopped
+  on the no-progress trip; trial 3 (`3 -> 3 -> 3`) would have
+  flipped one retry earlier. The absolute cap (10) covers the
+  pathological "agent shaves one blocker per pass forever"
+  case while preserving freedom for legitimately-progressing
+  runs.
 
 ## Open questions
 
