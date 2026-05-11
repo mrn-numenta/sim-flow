@@ -715,17 +715,79 @@ Standard OpenAI tool-call shape. `id`, `type`, `function.name`,
 deserializer parses this verbatim; the orchestrator threads
 the id back as Tool-role `tool_call_id` on the next request.
 
-### What still needs to land before Phase B can K=3-measure
+### Phase C -- Anthropic tool_use (commit `3889d6e`)
 
-- **Live e2e_auto smoke run** with
-  `SIM_FLOW_TOOL_MODE=native` against the same vLLM instance.
-  Curl confirmed the wire; the orchestrator's multi-turn tool
-  loop hasn't been exercised against a real model yet. Risk:
-  the model may emit a tool_call shape we don't handle (e.g.
-  parallel calls, malformed JSON in `arguments`).
-- **K=3 measurement** comparing native vs Phase 0e
-  non-thinking. The deciding signal for whether to promote
-  native to default + start Phase C (Anthropic).
+`AnthropicAgent::dispatch_with_tools` now supports native
+tool calls end-to-end. The orchestrator path is identical to
+OpenAI -- `dispatch_with_tools(&[ToolAdvertise]) ->
+(text, Vec<AdvertisedToolCall>, metrics)` -- because the
+converter handles Anthropic's wire-shape differences
+internally:
+
+- Tools advertised via `tools: [{name, description,
+  input_schema}]` instead of OpenAI's `{type: "function",
+  function: {...}}`.
+- Assistant tool calls arrive as `tool_use` content blocks
+  inside the response's `content[]`, not as a sibling
+  `tool_calls[]` field.
+- Tool-role reply messages coalesce into a single user-role
+  message with `[{type: "tool_result", tool_use_id, content},
+  ...]` content blocks (Anthropic's multi-call requirement).
+- Assistant turns that emitted tool_calls re-serialize as
+  `[{type: "text"}, {type: "tool_use", id, name, input}]`
+  (input is a JSON object, not stringified).
+
+New module `agent/anthropic/tool_use.rs` (146 lines + 96 lines
+of tests) holds the wire shapes. `mod.rs` got a
+`dispatch_inner` shared helper so `dispatch` and
+`dispatch_with_tools` route through one code path.
+`supports_structured_tool_calls` flipped to true in the
+adaptation summary.
+
+### Module-layout symmetry achieved
+
+The two HTTP backends now share the same shape:
+
+```text
+agent/
+├── openai_compat/
+│   ├── mod.rs           OpenAiCompatAgent + dispatch_with_tools
+│   ├── transport.rs     wire types + dispatch_chat / dispatch_chat_with_tools
+│   └── tool_calls.rs    OpenAI tool-call wire types
+├── anthropic/
+│   ├── mod.rs           AnthropicAgent + dispatch_with_tools
+│   └── tool_use.rs      Anthropic tool-use / tool-result wire types
+├── adaptation.rs        per-family + per-runtime profiles
+├── mock.rs              test agent
+└── (subprocess shims: claude.rs / codex.rs / gh_copilot.rs /
+    ollama.rs / interactive_pty.rs)
+```
+
+Orchestrator code is fully backend-agnostic from here forward.
+
+### What still needs to land before K=3-measuring native mode
+
+- **Live e2e_auto smoke runs**:
+  - OpenAI/vLLM: curl confirmed the wire; orchestrator's
+    multi-turn tool loop hasn't been exercised against a real
+    model yet.
+  - Anthropic: even the curl-level wire hasn't been verified
+    (the unit tests pin the body shape but no live request
+    has been made through dispatch_with_tools). K=1 against
+    api.anthropic.com when the API budget allows.
+- **K=3 vLLM measurement**: native vs Phase 0e non-thinking.
+  Decides whether to promote native to default.
+- **K=1 Anthropic measurement**: rerun the Phase 0c K=1
+  fixture with `SIM_FLOW_TOOL_MODE=native` against
+  api.anthropic.com to validate the Anthropic round trip.
+- **Prompt rewrite (Phase D)**: every DM work + critique
+  prompt's `## Output` section currently describes the
+  fenced-block artifact convention. Once native mode is the
+  default, prompts should reference `write_file(path, content)`
+  and the orchestrator's tool catalog instead. Deferred
+  until the K=3 measurements vote yes on promoting native.
+- **Cleanup (Phase E)**: delete fenced-block code paths once
+  native has been default for two weeks without regressions.
 
 ### Decision point ahead
 
