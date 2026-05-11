@@ -10,8 +10,13 @@
 //! `/api/...` paths Ollama sometimes uses outside the OpenAI-compat
 //! surface.
 
+pub mod tool_calls;
 pub mod transport;
 
+// `dispatch_chat` is the back-compat wrapper kept for the legacy
+// fenced-block path (ollama.rs, openai_compat/mod.rs::OpenAiCompatAgent).
+// The richer `dispatch_chat_with_tools` + `ChatResponse` shape and
+// the `tool_calls` types get wired in by the next migration commit.
 pub use transport::{OpenAiCompatibleRequest, dispatch_chat};
 
 use super::{

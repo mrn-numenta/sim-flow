@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::super::{
     normalize_response_text, prepare_messages_for_openai_compat, resolve_model_family,
 };
+use super::tool_calls::{NativeToolCall, ToolDescriptor};
 use crate::session::agent::LlmCallMetrics;
 use crate::session::protocol::{LlmMessage, LlmRole};
 use crate::{Error, Result};
@@ -83,6 +84,23 @@ pub struct OpenAiCompatibleRequest<'a> {
     pub min_p_override: Option<f32>,
     pub presence_penalty_override: Option<f32>,
     pub repetition_penalty_override: Option<f32>,
+    /// Tool catalog to advertise on this request. When `Some` and
+    /// non-empty, serializes as the OpenAI `tools` field; the
+    /// server is expected to return `tool_calls` in the response
+    /// when the model decided to call one. Today the orchestrator
+    /// only populates this when running in native-tool-call mode
+    /// (Phase B+ of the native-tool-calls migration); the legacy
+    /// fenced-block path leaves it `None` so the wire body stays
+    /// minimal.
+    pub tools: Option<Vec<ToolDescriptor>>,
+    /// Sets the OpenAI `tool_choice` parameter. `"auto"` lets the
+    /// model decide; `"required"` forces a tool call; specific
+    /// `{"type":"function","function":{"name":"..."}}` shapes are
+    /// not modeled yet. `None` means the field is omitted from the
+    /// wire body, which is equivalent to `"auto"` on every
+    /// conformant backend but avoids tripping minimal proxies that
+    /// reject the field outright.
+    pub tool_choice: Option<&'static str>,
 }
 
 fn truthy_env(name: &str) -> bool {
@@ -140,7 +158,25 @@ impl<'a> OpenAiCompatibleRequest<'a> {
             min_p_override: float_env("SIM_FLOW_MIN_P"),
             presence_penalty_override: float_env("SIM_FLOW_PRESENCE_PENALTY"),
             repetition_penalty_override: float_env("SIM_FLOW_REPETITION_PENALTY"),
+            tools: None,
+            tool_choice: None,
         }
+    }
+
+    #[allow(dead_code)] // wired by next commit (orchestrator integration)
+    pub fn with_tools(
+        mut self,
+        tools: Vec<ToolDescriptor>,
+        tool_choice: Option<&'static str>,
+    ) -> Self {
+        if tools.is_empty() {
+            self.tools = None;
+            self.tool_choice = None;
+        } else {
+            self.tools = Some(tools);
+            self.tool_choice = tool_choice;
+        }
+        self
     }
 
     pub fn with_model_family_id(mut self, model_family_id: Option<&'a str>) -> Self {
@@ -188,6 +224,14 @@ struct ChatRequestBody<'a> {
     presence_penalty: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     repetition_penalty: Option<f32>,
+    /// Tool catalog. When `Some` and non-empty, the server is
+    /// instructed to consider these functions as tool-call targets.
+    /// `skip_serializing_if = None` keeps the wire body unchanged
+    /// for fence-mode requests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<ToolDescriptor>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -242,6 +286,22 @@ struct ResponseMessage {
     content: Option<String>,
     #[serde(default)]
     reasoning: Option<String>,
+    /// Native tool calls returned by `--enable-auto-tool-choice` /
+    /// OpenAI's tool-use endpoint. May be empty or omitted on
+    /// non-tool turns; we tolerate either shape.
+    #[serde(default)]
+    tool_calls: Option<Vec<NativeToolCall>>,
+}
+
+/// What `dispatch_chat_with_tools` returns. The thin
+/// back-compat `dispatch_chat` wrapper below discards `tool_calls`
+/// and returns just the `(text, metrics)` pair.
+#[allow(dead_code)] // wired by next commit (orchestrator integration)
+#[derive(Debug, Clone)]
+pub struct ChatResponse {
+    pub text: String,
+    pub tool_calls: Vec<NativeToolCall>,
+    pub metrics: LlmCallMetrics,
 }
 
 /// Send a synchronous chat-completions request and return the
@@ -249,7 +309,19 @@ struct ResponseMessage {
 /// completion tokens from the response `usage` object, total
 /// wall-clock round-trip time). The endpoint defaults to
 /// `<base_url>/chat/completions`.
+///
+/// Back-compat shim. Callers that need tool_calls should switch to
+/// `dispatch_chat_with_tools`.
 pub fn dispatch_chat(req: OpenAiCompatibleRequest<'_>) -> Result<(String, LlmCallMetrics)> {
+    let resp = dispatch_chat_with_tools(req)?;
+    Ok((resp.text, resp.metrics))
+}
+
+/// Same as `dispatch_chat` but also returns any native tool calls
+/// the model emitted. The transport stays decoupled from the tool
+/// registry: it just hands the raw OpenAI tool-call records back so
+/// the orchestrator can map them through the `Tool` dispatcher.
+pub fn dispatch_chat_with_tools(req: OpenAiCompatibleRequest<'_>) -> Result<ChatResponse> {
     let started = std::time::Instant::now();
     let model_family = resolve_model_family(req.model_family_id, Some(req.model));
     let prepared_messages = prepare_messages_for_openai_compat(req.messages, model_family);
@@ -306,6 +378,8 @@ pub fn dispatch_chat(req: OpenAiCompatibleRequest<'_>) -> Result<(String, LlmCal
         min_p,
         presence_penalty,
         repetition_penalty,
+        tools: req.tools,
+        tool_choice: req.tool_choice,
     };
     let url = format!("{}/chat/completions", trim_trailing_slash(req.base_url));
     let mut request = ureq::post(&url)
@@ -362,8 +436,17 @@ pub fn dispatch_chat(req: OpenAiCompatibleRequest<'_>) -> Result<(String, LlmCal
         tokens_out: parsed.usage.as_ref().and_then(|u| u.completion_tokens),
         wall_ms: started.elapsed().as_millis() as u64,
     };
-    let text = decode_choice(parsed.choices.into_iter().next(), model_family)?;
-    Ok((text, metrics))
+    let choice = parsed.choices.into_iter().next();
+    let tool_calls = choice
+        .as_ref()
+        .and_then(|c| c.message.tool_calls.clone())
+        .unwrap_or_default();
+    let text = decode_choice(choice, model_family)?;
+    Ok(ChatResponse {
+        text,
+        tool_calls,
+        metrics,
+    })
 }
 
 /// Convert a single chat-completions choice into the assistant text
@@ -458,6 +541,8 @@ mod tests {
             min_p: None,
             presence_penalty: None,
             repetition_penalty: None,
+            tools: None,
+            tool_choice: None,
         }
     }
 
@@ -504,20 +589,13 @@ mod tests {
         // All six sampling knobs are independent skip-if-None
         // fields. Pin their on-the-wire shape so a future refactor
         // can't silently rename them and break vLLM acceptance.
-        let body = ChatRequestBody {
-            model: "qwen3.6",
-            messages: vec![],
-            stream: false,
-            max_tokens: 64,
-            seed: None,
-            chat_template_kwargs: None,
-            temperature: Some(0.7),
-            top_p: Some(0.8),
-            top_k: Some(20),
-            min_p: Some(0.0),
-            presence_penalty: Some(1.5),
-            repetition_penalty: Some(1.0),
-        };
+        let mut body = empty_body("qwen3.6", 64);
+        body.temperature = Some(0.7);
+        body.top_p = Some(0.8);
+        body.top_k = Some(20);
+        body.min_p = Some(0.0);
+        body.presence_penalty = Some(1.5);
+        body.repetition_penalty = Some(1.0);
         let json = serde_json::to_string(&body).unwrap();
         assert!(json.contains("\"temperature\":0.7"), "json: {json}");
         assert!(json.contains("\"top_p\":0.8"), "json: {json}");
@@ -525,6 +603,36 @@ mod tests {
         assert!(json.contains("\"min_p\":0.0"), "json: {json}");
         assert!(json.contains("\"presence_penalty\":1.5"), "json: {json}");
         assert!(json.contains("\"repetition_penalty\":1.0"), "json: {json}");
+    }
+
+    #[test]
+    fn request_body_serializes_tools_and_tool_choice_when_set() {
+        let mut body = empty_body("qwen3.6", 64);
+        body.tools = Some(vec![ToolDescriptor::function(
+            "list_dir".into(),
+            "List a directory".into(),
+            serde_json::json!({
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"]
+            }),
+        )]);
+        body.tool_choice = Some("auto");
+        let v: serde_json::Value = serde_json::to_value(&body).unwrap();
+        assert_eq!(v["tools"][0]["type"], "function");
+        assert_eq!(v["tools"][0]["function"]["name"], "list_dir");
+        assert_eq!(v["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn request_body_omits_tools_by_default() {
+        // Fence-mode callers (the default today) leave tools unset
+        // so vLLM / LM Studio's tool-call parser stays dormant and
+        // the wire shape is identical to the pre-Phase-B wire body.
+        let body = empty_body("qwen3.6", 64);
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(!json.contains("\"tools\""), "json: {json}");
+        assert!(!json.contains("\"tool_choice\""), "json: {json}");
     }
 
     #[test]
@@ -619,6 +727,7 @@ mod tests {
             message: ResponseMessage {
                 content: content.map(String::from),
                 reasoning: reasoning.map(String::from),
+                tool_calls: None,
             },
             finish_reason: finish.map(String::from),
         }
