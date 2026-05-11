@@ -585,6 +585,32 @@ orchestrator is worth more than K=20 against today's.
   pathological "agent shaves one blocker per pass forever"
   case while preserving freedom for legitimately-progressing
   runs.
+- **2026-05-11 -- first hardening pass landed** (3 changes
+  motivated by the Phase 0 catalog):
+  1. Added `prefers_bare_json_critique: bool` to
+     `ModelFamilyProfile`. `qwen3_6 / gemma4 / kimi_vl_thinking`
+     get `true`; `claude_messages / generic_chat` get `false`.
+     The orchestrator's salvage path consults the flag and
+     downgrades the post-salvage diagnostic from `Warning` to
+     `Info` when the family routinely emits bare-JSON. Phase 0
+     captures had every Qwen3.6 critique trip a Warning; that
+     noise is gone now, and a regression on Claude / generic
+     still pings.
+  2. Bumped the `openai-compat` default `max_tokens` 32K -> 65K.
+     Qwen3.6's max_model_len is 262K and the truncations we
+     saw in Phase 0 (1 each on trials 2/3) were on long-turn
+     DM2a / DM2b steps where 32K was tight; 65K still leaves
+     ~200K for context. Env var `SIM_FLOW_MAX_TOKENS` still
+     wins for narrower-context backends.
+  3. Updated every DM*-critique prompt to lead the `## Output`
+     section with the canonical fenced-write form (info-string
+     = path, JSON inline, no `json` language tag). The
+     orchestrator's salvage path still catches bare-prose and
+     `\`\`\`json`-fenced variants -- this is just the
+     documented happy path, not a behavior change.
+
+  K=3 reruns with these in place are the next milestone, then
+  K=20 to draw rates from.
 
 ## Open questions
 

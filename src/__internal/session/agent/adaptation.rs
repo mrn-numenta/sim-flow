@@ -50,6 +50,23 @@ pub struct ModelFamilyProfile {
     pub supports_thinking_controls: bool,
     pub thinking_control_mode: &'static str,
     pub reasoning_history_policy: ReasoningHistoryPolicy,
+    /// True when this family routinely emits the critique JSON
+    /// as bare prose / a ```json fence rather than the canonical
+    /// ```docs/critiques/<step>-critique.json fence the
+    /// artifact-write convention asks for. The orchestrator's
+    /// `salvage_critique_json` path catches both shapes; this
+    /// flag downgrades the post-salvage diagnostic from
+    /// `Warning` to `Info` so the dashboard's chat panel doesn't
+    /// scare the operator with a yellow banner on a 100%-expected
+    /// path. Confirmed for `qwen3_6` in Phase 0 of the
+    /// model-robustness study (4/4 critique sessions across 3
+    /// trials hit the salvage). Hypothesized true for similar
+    /// verbose-tool-use families (`gemma4`, `kimi_vl_thinking`)
+    /// pending Phase 1 confirmation; `claude_messages` is false
+    /// (Claude reliably emits fenced blocks) and
+    /// `generic_chat` is false (default = warn for unknown
+    /// models).
+    pub prefers_bare_json_critique: bool,
 }
 
 pub const OPENAI_COMPAT_GENERIC_RUNTIME: RuntimeCapabilityProfile = RuntimeCapabilityProfile {
@@ -79,6 +96,7 @@ pub const GENERIC_CHAT_MODEL_FAMILY: ModelFamilyProfile = ModelFamilyProfile {
     supports_thinking_controls: false,
     thinking_control_mode: "none",
     reasoning_history_policy: ReasoningHistoryPolicy::PreserveAll,
+    prefers_bare_json_critique: false,
 };
 
 pub const GEMMA4_MODEL_FAMILY: ModelFamilyProfile = ModelFamilyProfile {
@@ -88,6 +106,10 @@ pub const GEMMA4_MODEL_FAMILY: ModelFamilyProfile = ModelFamilyProfile {
     supports_thinking_controls: true,
     thinking_control_mode: "prompt_tag",
     reasoning_history_policy: ReasoningHistoryPolicy::DropPriorReasoning,
+    // Hypothesized true (similar verbose-tool-use style to
+    // Qwen3.6); Phase 1 of the model-robustness study will
+    // confirm or reset.
+    prefers_bare_json_critique: true,
 };
 
 pub const QWEN3_6_MODEL_FAMILY: ModelFamilyProfile = ModelFamilyProfile {
@@ -97,6 +119,10 @@ pub const QWEN3_6_MODEL_FAMILY: ModelFamilyProfile = ModelFamilyProfile {
     supports_thinking_controls: true,
     thinking_control_mode: "runtime_flag",
     reasoning_history_policy: ReasoningHistoryPolicy::RuntimeControlled,
+    // Confirmed in Phase 0 of the model-robustness study:
+    // 4/4 critique sessions across 3 trials hit
+    // `salvage_critique_json`.
+    prefers_bare_json_critique: true,
 };
 
 pub const KIMI_VL_THINKING_MODEL_FAMILY: ModelFamilyProfile = ModelFamilyProfile {
@@ -106,6 +132,8 @@ pub const KIMI_VL_THINKING_MODEL_FAMILY: ModelFamilyProfile = ModelFamilyProfile
     supports_thinking_controls: false,
     thinking_control_mode: "none",
     reasoning_history_policy: ReasoningHistoryPolicy::PreserveAll,
+    // Hypothesized true pending Phase 1 confirmation.
+    prefers_bare_json_critique: true,
 };
 
 pub const CLAUDE_MESSAGES_MODEL_FAMILY: ModelFamilyProfile = ModelFamilyProfile {
@@ -115,6 +143,10 @@ pub const CLAUDE_MESSAGES_MODEL_FAMILY: ModelFamilyProfile = ModelFamilyProfile 
     supports_thinking_controls: true,
     thinking_control_mode: "runtime_flag",
     reasoning_history_policy: ReasoningHistoryPolicy::DropPriorReasoning,
+    // Claude reliably emits the fenced ```docs/critiques/...
+    // block per the prompt; salvage on Claude IS a bug worth
+    // surfacing.
+    prefers_bare_json_critique: false,
 };
 
 pub fn runtime_profile_by_id(id: Option<&str>) -> Option<RuntimeCapabilityProfile> {
@@ -371,6 +403,35 @@ mod tests {
         assert_eq!(merged[0].attachments[1].mime, b.mime);
         assert_eq!(merged[0].attachments[1].data, b.data);
         assert_eq!(merged[0].attachments[1].source, b.source);
+    }
+
+    #[test]
+    fn prefers_bare_json_critique_is_set_per_family() {
+        // Verbose-tool-use families routinely emit critique JSON
+        // as bare prose / ```json fences -- confirmed for qwen3_6
+        // in Phase 0 of the model-robustness study (4/4 critique
+        // sessions across 3 trials). The orchestrator downgrades
+        // the post-salvage diagnostic to Info for these families
+        // so the dashboard doesn't flag the expected path with a
+        // yellow banner. Families that should reliably emit the
+        // canonical fenced block (claude_messages, generic_chat)
+        // still warn on salvage.
+        //
+        // Look up each family through `model_family_by_id` so
+        // clippy doesn't const-fold the constants away into a
+        // bare-boolean assertion.
+        let qwen = model_family_by_id(Some("qwen3_6")).expect("qwen3_6 registered");
+        let gemma = model_family_by_id(Some("gemma4")).expect("gemma4 registered");
+        let kimi =
+            model_family_by_id(Some("kimi_vl_thinking")).expect("kimi_vl_thinking registered");
+        let claude =
+            model_family_by_id(Some("claude_messages")).expect("claude_messages registered");
+        let generic = model_family_by_id(Some("generic_chat")).expect("generic_chat registered");
+        assert!(qwen.prefers_bare_json_critique);
+        assert!(gemma.prefers_bare_json_critique);
+        assert!(kimi.prefers_bare_json_critique);
+        assert!(!claude.prefers_bare_json_critique);
+        assert!(!generic.prefers_bare_json_critique);
     }
 
     #[test]

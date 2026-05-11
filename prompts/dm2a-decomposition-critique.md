@@ -46,6 +46,20 @@ historical / retry-mode.
 
 ## Output
 
+The canonical shape is a fenced artifact-write block whose
+info-string is the destination path. Emit the JSON inline between
+the open and close fence -- no leading prose, no `json` language
+tag:
+
+```docs/critiques/DM2a-critique.json
+{ ... critique JSON, see "JSON schema" below ... }
+```
+
+Bare-prose `{ ... }` JSON or a ` ```json ` fence is recoverable
+(the orchestrator's `salvage_critique_json` path catches both) but
+wastes a parser pass. Emit the canonical fenced form directly so
+the file lands first-try.
+
 Write the critique as JSON to
 `docs/critiques/DM2a-critique.json`. The orchestrator renders a
 human-readable `docs/critiques/DM2a-critique.md` from that JSON

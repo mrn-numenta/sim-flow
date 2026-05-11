@@ -694,17 +694,44 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     // it directly rather than asking the agent to
                     // retry -- a retry burns LLM tokens to
                     // reproduce content we already have.
+                    //
+                    // Level depends on the model family: families
+                    // known to *routinely* emit bare-JSON critiques
+                    // (qwen3_6, gemma4, kimi_vl_thinking) get an
+                    // Info diagnostic -- it's the expected path,
+                    // and a per-critique Warning floods the chat
+                    // panel with yellow banners for behavior we
+                    // already adapt to. Families that should be
+                    // emitting fenced blocks (claude_messages,
+                    // generic_chat) still get Warning so a
+                    // regression is loud.
+                    let family = crate::session::agent::resolve_model_family(
+                        opts.llm_model_family_id.as_deref(),
+                        opts.llm_model.as_deref(),
+                    );
                     let path = format!("docs/critiques/{}-critique.json", step.id);
-                    host.write(&Event::Diagnostic {
-                        level: DiagnosticLevel::Warning,
-                        message: format!(
-                            "{}: salvaged critique JSON from a non-fenced response and \
-                             saved to `{path}`. Tighten the critique system prompt if \
-                             this is recurrent (the agent should emit the JSON inside a \
-                             fenced block whose info-string is the path).",
-                            step.id,
-                        ),
-                    })?;
+                    let (level, message) = if family.prefers_bare_json_critique {
+                        (
+                            DiagnosticLevel::Info,
+                            format!(
+                                "{}: salvaged critique JSON from bare prose -> `{path}` \
+                                 (expected for the `{}` model family).",
+                                step.id, family.id,
+                            ),
+                        )
+                    } else {
+                        (
+                            DiagnosticLevel::Warning,
+                            format!(
+                                "{}: salvaged critique JSON from a non-fenced response and \
+                                 saved to `{path}`. Tighten the critique system prompt if \
+                                 this is recurrent (the agent should emit the JSON inside a \
+                                 fenced block whose info-string is the path).",
+                                step.id,
+                            ),
+                        )
+                    };
+                    host.write(&Event::Diagnostic { level, message })?;
                     artifacts.push(ExtractedArtifact {
                         relative_path: path,
                         content: salvaged,

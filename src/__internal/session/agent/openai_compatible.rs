@@ -31,14 +31,17 @@ pub struct OpenAiCompatibleRequest<'a> {
     /// from chain-of-thought-heavy local models (e.g. nemotron with
     /// reasoning enabled), which can otherwise burn 90K+ tokens
     /// before producing the actual artifact. Defaults read from the
-    /// `SIM_FLOW_MAX_TOKENS` env var, falling back to 32768. 16384
-    /// was the prior default but qwen3.6's milestone-level work
-    /// sessions (multi-file scoreboard / testbench writes) blow
-    /// past it on the thinking-plus-tool-calls path, hitting
-    /// `finish_reason=length` and leaving the milestone with zero
-    /// files on disk. 32768 still sits well under any local model's
-    /// context window so a runaway is killed by the server, not by
-    /// us hitting the context wall.
+    /// `SIM_FLOW_MAX_TOKENS` env var, falling back to 65536.
+    ///
+    /// Default history: 16384 -> 32768 -> 65536. Each bump was
+    /// triggered by a real truncation observed on long-turn steps
+    /// (DM2a/DM2b/DM2d for qwen3.6 most recently -- see the Phase 0
+    /// findings in docs/brainstorming/model-robustness-study.md).
+    /// 65536 still sits well under any locally-served model's
+    /// `max_model_len` (qwen3.6 = 262144, gemma-4 = 131072, kimi-vl
+    /// = 131072), so a runaway is bounded by the server's context
+    /// wall rather than by this default. Override via the env var
+    /// for narrower-context backends.
     pub max_tokens: u32,
 }
 
@@ -47,7 +50,7 @@ impl<'a> OpenAiCompatibleRequest<'a> {
         let max_tokens = std::env::var("SIM_FLOW_MAX_TOKENS")
             .ok()
             .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(32_768);
+            .unwrap_or(65_536);
         // Response-body cap. 64 KB was too tight for verbose
         // models -- qwen3.6's milestone-04 response with embedded
         // Rust code legitimately exceeded that and the JSON parser
