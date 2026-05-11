@@ -167,6 +167,15 @@ pub enum HostEvent {
         request_id: String,
         #[serde(default)]
         stop_reason: Option<String>,
+        /// Native tool calls the model emitted (when the backend
+        /// supports native tool-use AND the orchestrator advertised
+        /// a tool catalog on the matching `RequestLlmResponse`).
+        /// Empty for fence-mode dispatches and for backends that
+        /// don't support native tool calls. `#[serde(default)]`
+        /// keeps the wire shape backward compatible with hosts
+        /// that haven't been updated.
+        #[serde(default)]
+        tool_calls: Vec<LlmToolCall>,
     },
     /// LLM dispatch failed.
     LlmError {
@@ -346,6 +355,20 @@ pub struct LlmTool {
     pub description: String,
     /// JSON Schema describing the tool's argument object.
     pub args_schema: serde_json::Value,
+}
+
+/// A single tool call the model emitted in a native-tool-use turn.
+/// Returned on `HostEvent::LlmEnd.tool_calls`. `arguments_json` is
+/// the raw JSON-encoded argument blob the model emitted -- the
+/// orchestrator parses it into a `serde_json::Value` at dispatch
+/// time so a malformed payload surfaces a clear diagnostic rather
+/// than a cryptic serde error mid-pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LlmToolCall {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub name: String,
+    pub arguments_json: String,
 }
 
 /// Step descriptor sent in `HelloAck`. Same data as `sim-flow

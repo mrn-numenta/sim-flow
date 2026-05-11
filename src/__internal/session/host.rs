@@ -153,6 +153,7 @@ impl TestHost {
         self.enqueue(HostEvent::LlmEnd {
             request_id,
             stop_reason: Some("stop".into()),
+            tool_calls: Vec::new(),
         });
         self
     }
@@ -367,6 +368,7 @@ where
                 request_id,
                 messages,
                 debug_adaptation,
+                tools,
                 ..
             } => {
                 writeln!(self.stderr, "  [thinking via {}...]", self.agent.name())
@@ -376,8 +378,37 @@ where
                         .map_err(write_err)?;
                 }
                 self.stderr.flush().map_err(write_err)?;
-                match self.agent.dispatch(messages) {
-                    Ok((text, metrics)) => {
+                // Native-mode dispatch when the orchestrator advertises
+                // a tool catalog AND the operator opted in via
+                // `SIM_FLOW_TOOL_MODE=native`. Otherwise the existing
+                // fence-mode `dispatch` path stands and tool_calls is
+                // returned empty. The env-var gate keeps the wire body
+                // and behavior byte-identical to pre-migration runs.
+                let native_mode = matches!(
+                    std::env::var("SIM_FLOW_TOOL_MODE").ok().as_deref(),
+                    Some("native") | Some("native-tool-calls")
+                );
+                let dispatch_result: crate::Result<(
+                    String,
+                    Vec<crate::session::agent::AdvertisedToolCall>,
+                    crate::session::agent::LlmCallMetrics,
+                )> = if native_mode && !tools.is_empty() {
+                    let advertise: Vec<crate::session::agent::ToolAdvertise> = tools
+                        .iter()
+                        .map(|t| crate::session::agent::ToolAdvertise {
+                            name: t.name.clone(),
+                            description: t.description.clone(),
+                            parameters: t.args_schema.clone(),
+                        })
+                        .collect();
+                    self.agent.dispatch_with_tools(messages, &advertise)
+                } else {
+                    self.agent
+                        .dispatch(messages)
+                        .map(|(text, metrics)| (text, Vec::new(), metrics))
+                };
+                match dispatch_result {
+                    Ok((text, calls, metrics)) => {
                         // Per-call metrics: token usage (when the
                         // backend reports it) + wall time. Live
                         // visibility via `RUST_LOG=sim_flow::metrics=info`;
@@ -393,6 +424,7 @@ where
                             tokens_out = ?metrics.tokens_out,
                             wall_ms = metrics.wall_ms,
                             content_bytes = text.len(),
+                            native_tool_calls = calls.len(),
                         );
                         // Synthesize the chunk + end pair the
                         // orchestrator's loop expects.
@@ -400,9 +432,18 @@ where
                             request_id: request_id.clone(),
                             text,
                         });
+                        let llm_tool_calls: Vec<crate::session::protocol::LlmToolCall> = calls
+                            .into_iter()
+                            .map(|c| crate::session::protocol::LlmToolCall {
+                                id: c.id,
+                                name: c.name,
+                                arguments_json: c.arguments_json,
+                            })
+                            .collect();
                         self.pending.push_back(HostEvent::LlmEnd {
                             request_id: request_id.clone(),
                             stop_reason: Some("stop".into()),
+                            tool_calls: llm_tool_calls,
                         });
                     }
                     Err(err) => {

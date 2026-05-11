@@ -215,6 +215,15 @@ export type HostEvent =
       event: "llm-end";
       request_id: string;
       stop_reason?: string | null;
+      /**
+       * Native tool calls the model emitted (when the backend
+       * supports native tool-use). Empty for fence-mode dispatches.
+       */
+      tool_calls?: Array<{
+        id?: string | null;
+        name: string;
+        arguments_json: string;
+      }>;
     }
   | {
       event: "llm-error";

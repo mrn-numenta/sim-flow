@@ -437,6 +437,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
         })?;
 
         let mut assistant_text = String::new();
+        let mut native_tool_calls: Vec<crate::session::protocol::LlmToolCall> = Vec::new();
         let mut llm_failed = false;
         let mut llm_error_kind: Option<String> = None;
         let mut llm_error_message: Option<String> = None;
@@ -453,8 +454,11 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     assistant_text.push_str(&text);
                 }
                 Some(HostEvent::LlmEnd {
-                    request_id: rid, ..
+                    request_id: rid,
+                    tool_calls: native_calls,
+                    ..
                 }) if rid == request_id => {
+                    native_tool_calls = native_calls;
                     host.write(&Event::AssistantText {
                         text: String::new(),
                         final_chunk: true,
@@ -633,7 +637,13 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             // follow-up as "no findings, ghost-pass risk" and
             // re-prompting is wrong -- the file exists and the
             // session should end normally.
-            let pre_check_tool_calls = tools::extract_tool_calls(&assistant_text);
+            let mut pre_check_tool_calls = tools::extract_tool_calls(&assistant_text);
+            for call in &native_tool_calls {
+                pre_check_tool_calls.push(tools::ParsedToolCall {
+                    name: call.name.clone(),
+                    body: call.arguments_json.clone(),
+                });
+            }
             let critique_already_on_disk = opts.kind == SessionKind::Critique
                 && (opts
                     .project_dir
@@ -867,11 +877,26 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 continue;
             }
 
-            // 5e. Extract + dispatch fenced tool calls. Tools that
-            //     match the dispatcher run; their results feed back as
-            //     the next user message and we continue without
-            //     prompting the user.
-            let tool_calls = tools::extract_tool_calls(&assistant_text);
+            // 5e. Extract + dispatch tool calls. The model can emit
+            //     them two ways:
+            //     - Native: tool_calls arrived on the matching
+            //       HostEvent::LlmEnd (Phase B+ of the native-tool-
+            //       calls migration; gated on SIM_FLOW_TOOL_MODE=native
+            //       at the host).
+            //     - Fenced: the legacy ```tool:<name> /
+            //       ```json {"name":...} convention extracted from
+            //       the assistant text body.
+            //     Both forms feed into the same `ParsedToolCall`
+            //     dispatch path so tool-result feedback is identical
+            //     regardless of how the call arrived.
+            let mut tool_calls: Vec<tools::ParsedToolCall> = native_tool_calls
+                .iter()
+                .map(|c| tools::ParsedToolCall {
+                    name: c.name.clone(),
+                    body: c.arguments_json.clone(),
+                })
+                .collect();
+            tool_calls.extend(tools::extract_tool_calls(&assistant_text));
             if !tool_calls.is_empty() {
                 let mut feedback = String::new();
                 if loop_hint_pending {

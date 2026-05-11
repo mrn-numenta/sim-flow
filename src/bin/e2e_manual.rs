@@ -847,6 +847,7 @@ fn handle_event(
                         &HostEvent::LlmEnd {
                             request_id,
                             stop_reason: Some("stop".into()),
+                            tool_calls: Vec::new(),
                         },
                         capture,
                     )?;

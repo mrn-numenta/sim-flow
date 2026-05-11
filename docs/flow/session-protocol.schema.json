@@ -734,6 +734,28 @@
             ],
             "type": "object"
           },
+          "LlmToolCall": {
+            "description": "A single tool call the model emitted in a native-tool-use turn. Returned on `HostEvent::LlmEnd.tool_calls`. `arguments_json` is the raw JSON-encoded argument blob the model emitted -- the orchestrator parses it into a `serde_json::Value` at dispatch time so a malformed payload surfaces a clear diagnostic rather than a cryptic serde error mid-pipeline.",
+            "properties": {
+              "arguments_json": {
+                "type": "string"
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "arguments_json",
+              "name"
+            ],
+            "type": "object"
+          },
           "SessionKindOut": {
             "description": "Mirror of `client::SessionKind` exposed in the protocol. Kept independent of the internal type so the wire format stays stable even if the internal representation changes.",
             "enum": [
@@ -854,6 +876,14 @@
                   "string",
                   "null"
                 ]
+              },
+              "tool_calls": {
+                "default": [],
+                "description": "Native tool calls the model emitted (when the backend supports native tool-use AND the orchestrator advertised a tool catalog on the matching `RequestLlmResponse`). Empty for fence-mode dispatches and for backends that don't support native tool calls. `#[serde(default)]` keeps the wire shape backward compatible with hosts that haven't been updated.",
+                "items": {
+                  "$ref": "#/definitions/LlmToolCall"
+                },
+                "type": "array"
               }
             },
             "required": [
