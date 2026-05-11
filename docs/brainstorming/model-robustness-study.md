@@ -768,6 +768,75 @@ K=20 against `claude-opus-4-7` should probably wait until:
    strongly suggests disable-thinking improves token efficiency,
    so the analog for Opus is worth testing.
 
+## Work-side stall: root cause identified (2026-05-12)
+
+`scripts/investigate-work-stall.py` extracts the stalling work
+sub-session from every `work-no-artifact` trial across all
+captured study roots and classifies each turn. Aggregate over
+the 12 affected trials (127 turns total):
+
+| classification | turn count | %    |
+| -------------- | ---------- | ---- |
+| prose-only     | 59         | 46%  |
+| read-only      | 45         | 35%  |
+| mixed-tools    | 20         | 16%  |
+| rejected-write |  2         |  2%  |
+| wrote-artifact |  1         |  1%  |
+
+Inspecting the prose-only turns directly: **the model is
+emitting fenced blocks with `markdown` as the info-string and
+NO path anywhere** -- a sample turn looks like
+
+```text
+Let me write the detailed milestone file.
+
+​```markdown
+# Milestone 01: Payload Types
+
+## Scope
+...
+​```
+```
+
+The orchestrator's `extract_artifacts` requires the path AS the
+fence info-string (`​```docs/impl-plan/milestone-01-payload-types.md`).
+Without it the content is silently dropped: the model believes
+it wrote the file, the gate stays dirty, the work session burns
+its `max_auto_iters` budget. This is the `wrong-fence-info-string`
+anomaly from the taxonomy -- listed since v1 of this doc but
+never observed because nothing was counting it. The
+`work-no-artifact` terminator we kept seeing in Phase 0b/0c is
+the symptom; the root cause is the malformed fence shape.
+
+Why qwen3.6 does this with `disable-thinking=on`: hypothesis is
+that the chat template's reasoning section was where the model
+"planned" the artifact-write convention. With thinking disabled,
+the model falls back to a Markdown-fence default (`​```markdown`,
+which is the natural shape for any file containing markdown).
+The DM critique prompts now lead with the canonical fenced form
+(commit 8017519), but the DM **work** prompts -- where this stall
+fires -- don't have a parallel reminder. That's the gap.
+
+Next steps (not all bundled into this turn -- documenting for
+later):
+
+1. Add a `wrong-fence-info-string` detector to `study_analyze`
+   (regex match on `​```\\s*(markdown|json|toml|rust)\\s*\\n#\\s+`
+   in assistant text, scoped to turns with no artifact-written
+   event). Counts the bug per trial.
+2. Tighten the DM**-work** prompt's fenced-write reminder
+   (mirror what the critique prompts now do: lead the "Output"
+   section with the canonical info-string-is-path form, plus a
+   one-line warning that ` ```markdown` / ` ```json` shapes
+   are silently dropped).
+3. (Optional) Add a salvage path: when an empty work turn
+   contains a ` ```markdown` fence whose body begins with a
+   markdown H1 that matches a known artifact filename
+   convention (`# Milestone NN:`, `# <Step>: <Title>`), emit
+   a Warning diagnostic naming the inferred path and either
+   (a) drop with feedback, or (b) salvage to the inferred
+   path. (a) is safer; (b) is more recoverable.
+
 ## Decision log
 
 - **2026-05-11 -- trial count**: start at K=3 to get the pipeline
