@@ -42,7 +42,38 @@ pub struct RuntimeCapabilityProfile {
     pub supports_structured_tool_calls: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Sampling parameters a model family expects in NON-THINKING mode.
+///
+/// Used when the orchestrator runs the family with thinking disabled
+/// (`disable_thinking == true`). The values get serialized into the
+/// chat-completions request body, overriding any server-side defaults
+/// the operator has configured. Sourced from each model's official
+/// guidance:
+///
+/// - **qwen3_6**: per the Qwen3.6-27B Hugging Face model card,
+///   non-thinking (Instruct) mode wants `temperature=0.7, top_p=0.80,
+///   top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0`.
+///   The card explicitly flags `presence_penalty=1.5` as the lever to
+///   "reduce endless repetitions" -- maps directly onto our
+///   `runaway-loop` and re-reading-without-writing patterns in the
+///   model-robustness study.
+///
+/// `None` on a family means "no client-side override; let the server's
+/// configured defaults stand." That's the right default for
+/// `generic_chat` (we don't know the model's pedigree) and
+/// `claude_messages` (the Anthropic API has its own defaults that work
+/// well; tuning per-vendor is the operator's job, not ours).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SamplingDefaults {
+    pub temperature: f32,
+    pub top_p: f32,
+    pub top_k: u32,
+    pub min_p: f32,
+    pub presence_penalty: f32,
+    pub repetition_penalty: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModelFamilyProfile {
     pub id: &'static str,
     pub thought_marker_style: ThoughtMarkerStyle,
@@ -67,6 +98,10 @@ pub struct ModelFamilyProfile {
     /// `generic_chat` is false (default = warn for unknown
     /// models).
     pub prefers_bare_json_critique: bool,
+    /// Sampling defaults to send when the orchestrator runs this
+    /// family in NON-THINKING mode. `None` means "no override;
+    /// server defaults stand." See `SamplingDefaults` for sources.
+    pub non_thinking_sampling: Option<SamplingDefaults>,
 }
 
 pub const OPENAI_COMPAT_GENERIC_RUNTIME: RuntimeCapabilityProfile = RuntimeCapabilityProfile {
@@ -97,6 +132,7 @@ pub const GENERIC_CHAT_MODEL_FAMILY: ModelFamilyProfile = ModelFamilyProfile {
     thinking_control_mode: "none",
     reasoning_history_policy: ReasoningHistoryPolicy::PreserveAll,
     prefers_bare_json_critique: false,
+    non_thinking_sampling: None,
 };
 
 pub const GEMMA4_MODEL_FAMILY: ModelFamilyProfile = ModelFamilyProfile {
@@ -110,6 +146,23 @@ pub const GEMMA4_MODEL_FAMILY: ModelFamilyProfile = ModelFamilyProfile {
     // Qwen3.6); Phase 1 of the model-robustness study will
     // confirm or reset.
     prefers_bare_json_critique: true,
+    // No published non-thinking guidance for Gemma; let server
+    // defaults stand. Revisit during Phase 1 LM Studio sweep.
+    non_thinking_sampling: None,
+};
+
+/// Per the Qwen3.6-27B Hugging Face model card, non-thinking
+/// (Instruct) mode. `presence_penalty=1.5` is the card's explicit
+/// lever against endless repetition. Direct mitigation for the
+/// `runaway-loop` anomaly and the re-reading-without-writing
+/// pattern that drives `work-no-artifact`.
+const QWEN3_6_NON_THINKING_SAMPLING: SamplingDefaults = SamplingDefaults {
+    temperature: 0.7,
+    top_p: 0.80,
+    top_k: 20,
+    min_p: 0.0,
+    presence_penalty: 1.5,
+    repetition_penalty: 1.0,
 };
 
 pub const QWEN3_6_MODEL_FAMILY: ModelFamilyProfile = ModelFamilyProfile {
@@ -123,6 +176,7 @@ pub const QWEN3_6_MODEL_FAMILY: ModelFamilyProfile = ModelFamilyProfile {
     // 4/4 critique sessions across 3 trials hit
     // `salvage_critique_json`.
     prefers_bare_json_critique: true,
+    non_thinking_sampling: Some(QWEN3_6_NON_THINKING_SAMPLING),
 };
 
 pub const KIMI_VL_THINKING_MODEL_FAMILY: ModelFamilyProfile = ModelFamilyProfile {
@@ -134,6 +188,9 @@ pub const KIMI_VL_THINKING_MODEL_FAMILY: ModelFamilyProfile = ModelFamilyProfile
     reasoning_history_policy: ReasoningHistoryPolicy::PreserveAll,
     // Hypothesized true pending Phase 1 confirmation.
     prefers_bare_json_critique: true,
+    // Kimi is a thinking-only family in our usage; non-thinking
+    // sampling doesn't apply.
+    non_thinking_sampling: None,
 };
 
 pub const CLAUDE_MESSAGES_MODEL_FAMILY: ModelFamilyProfile = ModelFamilyProfile {
@@ -147,6 +204,9 @@ pub const CLAUDE_MESSAGES_MODEL_FAMILY: ModelFamilyProfile = ModelFamilyProfile 
     // block per the prompt; salvage on Claude IS a bug worth
     // surfacing.
     prefers_bare_json_critique: false,
+    // Anthropic API has well-tuned defaults; client-side overrides
+    // are the operator's job, not ours.
+    non_thinking_sampling: None,
 };
 
 pub fn runtime_profile_by_id(id: Option<&str>) -> Option<RuntimeCapabilityProfile> {
@@ -510,6 +570,46 @@ mod tests {
         assert!(kimi.prefers_bare_json_critique);
         assert!(!claude.prefers_bare_json_critique);
         assert!(!generic.prefers_bare_json_critique);
+    }
+
+    #[test]
+    fn qwen3_6_carries_non_thinking_sampling_per_hf_card() {
+        // Per the Qwen3.6-27B Hugging Face model card,
+        // non-thinking (Instruct) mode: temp=0.7, top_p=0.80,
+        // top_k=20, min_p=0.0, presence_penalty=1.5,
+        // repetition_penalty=1.0. presence_penalty=1.5 in
+        // particular is the card's explicit lever against
+        // endless repetition -- maps onto our runaway-loop and
+        // re-reading-without-writing anomalies.
+        let qwen = model_family_by_id(Some("qwen3_6")).expect("qwen3_6 registered");
+        let s = qwen
+            .non_thinking_sampling
+            .expect("qwen3_6 carries non-thinking sampling defaults");
+        assert!((s.temperature - 0.7).abs() < 1e-6);
+        assert!((s.top_p - 0.80).abs() < 1e-6);
+        assert_eq!(s.top_k, 20);
+        assert!((s.min_p - 0.0).abs() < 1e-6);
+        assert!((s.presence_penalty - 1.5).abs() < 1e-6);
+        assert!((s.repetition_penalty - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn non_thinking_sampling_is_unset_on_unspecified_families() {
+        // Families without explicit guidance (or whose tuning is
+        // the operator's job, like Claude) carry None so the
+        // server's defaults stand and we don't surprise users.
+        for id in [
+            "generic_chat",
+            "gemma4",
+            "kimi_vl_thinking",
+            "claude_messages",
+        ] {
+            let f = model_family_by_id(Some(id)).expect("family registered");
+            assert!(
+                f.non_thinking_sampling.is_none(),
+                "{id} unexpectedly carries non-thinking sampling defaults"
+            );
+        }
     }
 
     #[test]

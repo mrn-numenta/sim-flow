@@ -67,6 +67,20 @@ pub struct OpenAiCompatibleRequest<'a> {
     /// Read from the `SIM_FLOW_DISABLE_THINKING` env var (any
     /// truthy value: `1`, `true`, `yes`). Default `false`.
     pub disable_thinking: bool,
+    /// Per-knob overrides for the sampling parameters the family
+    /// would otherwise pull from its `non_thinking_sampling`
+    /// default. Sourced from env vars (`SIM_FLOW_TEMPERATURE`,
+    /// `SIM_FLOW_TOP_P`, `SIM_FLOW_TOP_K`, `SIM_FLOW_MIN_P`,
+    /// `SIM_FLOW_PRESENCE_PENALTY`, `SIM_FLOW_REPETITION_PENALTY`).
+    /// Each is independent; setting one doesn't suppress the
+    /// others. Useful for ad-hoc tuning during the
+    /// model-robustness study.
+    pub temperature_override: Option<f32>,
+    pub top_p_override: Option<f32>,
+    pub top_k_override: Option<u32>,
+    pub min_p_override: Option<f32>,
+    pub presence_penalty_override: Option<f32>,
+    pub repetition_penalty_override: Option<f32>,
 }
 
 fn truthy_env(name: &str) -> bool {
@@ -74,6 +88,14 @@ fn truthy_env(name: &str) -> bool {
         std::env::var(name).ok().as_deref(),
         Some("1") | Some("true") | Some("True") | Some("TRUE") | Some("yes") | Some("YES")
     )
+}
+
+fn float_env(name: &str) -> Option<f32> {
+    std::env::var(name).ok().and_then(|s| s.parse::<f32>().ok())
+}
+
+fn uint_env(name: &str) -> Option<u32> {
+    std::env::var(name).ok().and_then(|s| s.parse::<u32>().ok())
 }
 
 impl<'a> OpenAiCompatibleRequest<'a> {
@@ -110,6 +132,12 @@ impl<'a> OpenAiCompatibleRequest<'a> {
             max_tokens,
             seed,
             disable_thinking,
+            temperature_override: float_env("SIM_FLOW_TEMPERATURE"),
+            top_p_override: float_env("SIM_FLOW_TOP_P"),
+            top_k_override: uint_env("SIM_FLOW_TOP_K"),
+            min_p_override: float_env("SIM_FLOW_MIN_P"),
+            presence_penalty_override: float_env("SIM_FLOW_PRESENCE_PENALTY"),
+            repetition_penalty_override: float_env("SIM_FLOW_REPETITION_PENALTY"),
         }
     }
 
@@ -139,6 +167,25 @@ struct ChatRequestBody<'a> {
     /// silently ignore it.
     #[serde(skip_serializing_if = "Option::is_none")]
     chat_template_kwargs: Option<ChatTemplateKwargs>,
+    /// Sampling parameters. All `skip_serializing_if = None` so the
+    /// wire shape stays minimal for servers that reject unknown
+    /// keys. Populated from the model family's
+    /// `non_thinking_sampling` defaults when `disable_thinking` is
+    /// on, with env-var per-knob overrides on top. Empty for
+    /// families with `non_thinking_sampling: None` -- those let the
+    /// server's defaults stand.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_k: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    presence_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repetition_penalty: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -215,6 +262,29 @@ pub fn dispatch_chat(req: OpenAiCompatibleRequest<'_>) -> Result<(String, LlmCal
     } else {
         None
     };
+    // Resolve per-knob sampling params. Family `non_thinking_sampling`
+    // applies when we're running this family with thinking disabled;
+    // env-var overrides win over the family default on each knob
+    // independently. Knobs without a family default OR an env
+    // override remain `None` and are not serialized -- the server's
+    // configured default stands.
+    let family_defaults = if req.disable_thinking {
+        model_family.non_thinking_sampling
+    } else {
+        None
+    };
+    let temperature = req
+        .temperature_override
+        .or(family_defaults.map(|s| s.temperature));
+    let top_p = req.top_p_override.or(family_defaults.map(|s| s.top_p));
+    let top_k = req.top_k_override.or(family_defaults.map(|s| s.top_k));
+    let min_p = req.min_p_override.or(family_defaults.map(|s| s.min_p));
+    let presence_penalty = req
+        .presence_penalty_override
+        .or(family_defaults.map(|s| s.presence_penalty));
+    let repetition_penalty = req
+        .repetition_penalty_override
+        .or(family_defaults.map(|s| s.repetition_penalty));
     let body = ChatRequestBody {
         model: req.model,
         messages: prepared_messages
@@ -228,6 +298,12 @@ pub fn dispatch_chat(req: OpenAiCompatibleRequest<'_>) -> Result<(String, LlmCal
         max_tokens: req.max_tokens,
         seed: req.seed,
         chat_template_kwargs,
+        temperature,
+        top_p,
+        top_k,
+        min_p,
+        presence_penalty,
+        repetition_penalty,
     };
     let url = format!("{}/chat/completions", trim_trailing_slash(req.base_url));
     let mut request = ureq::post(&url)
@@ -366,35 +442,41 @@ mod tests {
         GEMMA4_MODEL_FAMILY, QWEN3_6_MODEL_FAMILY, prepare_messages_for_openai_compat,
     };
 
+    fn empty_body(model: &str, max_tokens: u32) -> ChatRequestBody<'_> {
+        ChatRequestBody {
+            model,
+            messages: vec![],
+            stream: false,
+            max_tokens,
+            seed: None,
+            chat_template_kwargs: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            min_p: None,
+            presence_penalty: None,
+            repetition_penalty: None,
+        }
+    }
+
     #[test]
     fn request_body_omits_seed_and_kwargs_by_default() {
         // Default request: no seed, no chat_template_kwargs. Some
         // openai-compat proxies reject unknown keys, so the body
         // must stay minimal when the caller hasn't asked for the
         // new knobs.
-        let body = ChatRequestBody {
-            model: "qwen3.6",
-            messages: vec![],
-            stream: false,
-            max_tokens: 65_536,
-            seed: None,
-            chat_template_kwargs: None,
-        };
+        let body = empty_body("qwen3.6", 65_536);
         let json = serde_json::to_string(&body).unwrap();
         assert!(!json.contains("\"seed\""), "json: {json}");
         assert!(!json.contains("\"chat_template_kwargs\""), "json: {json}");
+        assert!(!json.contains("\"temperature\""), "json: {json}");
+        assert!(!json.contains("\"presence_penalty\""), "json: {json}");
     }
 
     #[test]
     fn request_body_includes_seed_when_set() {
-        let body = ChatRequestBody {
-            model: "qwen3.6",
-            messages: vec![],
-            stream: false,
-            max_tokens: 64,
-            seed: Some(42),
-            chat_template_kwargs: None,
-        };
+        let mut body = empty_body("qwen3.6", 64);
+        body.seed = Some(42);
         let json = serde_json::to_string(&body).unwrap();
         assert!(json.contains("\"seed\":42"), "json: {json}");
     }
@@ -404,21 +486,43 @@ mod tests {
         // The kwarg shape is what vLLM threads into the Qwen
         // chat template. Pin the exact wire shape so a refactor
         // doesn't silently rename / move the field.
+        let mut body = empty_body("qwen3.6", 64);
+        body.chat_template_kwargs = Some(ChatTemplateKwargs {
+            enable_thinking: false,
+        });
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(
+            json.contains("\"chat_template_kwargs\":{\"enable_thinking\":false}"),
+            "json: {json}",
+        );
+    }
+
+    #[test]
+    fn request_body_serializes_sampling_knobs_when_set() {
+        // All six sampling knobs are independent skip-if-None
+        // fields. Pin their on-the-wire shape so a future refactor
+        // can't silently rename them and break vLLM acceptance.
         let body = ChatRequestBody {
             model: "qwen3.6",
             messages: vec![],
             stream: false,
             max_tokens: 64,
             seed: None,
-            chat_template_kwargs: Some(ChatTemplateKwargs {
-                enable_thinking: false,
-            }),
+            chat_template_kwargs: None,
+            temperature: Some(0.7),
+            top_p: Some(0.8),
+            top_k: Some(20),
+            min_p: Some(0.0),
+            presence_penalty: Some(1.5),
+            repetition_penalty: Some(1.0),
         };
         let json = serde_json::to_string(&body).unwrap();
-        assert!(
-            json.contains("\"chat_template_kwargs\":{\"enable_thinking\":false}"),
-            "json: {json}",
-        );
+        assert!(json.contains("\"temperature\":0.7"), "json: {json}");
+        assert!(json.contains("\"top_p\":0.8"), "json: {json}");
+        assert!(json.contains("\"top_k\":20"), "json: {json}");
+        assert!(json.contains("\"min_p\":0.0"), "json: {json}");
+        assert!(json.contains("\"presence_penalty\":1.5"), "json: {json}");
+        assert!(json.contains("\"repetition_penalty\":1.0"), "json: {json}");
     }
 
     #[test]

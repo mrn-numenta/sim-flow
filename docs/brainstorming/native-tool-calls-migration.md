@@ -461,17 +461,54 @@ for `Qwen/Qwen3.6-27B` explicitly recommends
 `--tool-call-parser qwen3_coder` for tool use on this model.
 The "qwen3_coder" parser name refers to the **XML output
 format** Qwen3.6 emits, not to the qwen3-coder model variant.
-So the operator's vLLM config is exactly correct for the
-served model. The card's recommended serving command:
+The operator's actual serving config:
 
 ```bash
 vllm serve Qwen/Qwen3.6-27B \
-  --port 8000 --tensor-parallel-size 8 \
-  --max-model-len 262144 \
-  --reasoning-parser qwen3 \
-  --enable-auto-tool-choice \
-  --tool-call-parser qwen3_coder
+    --attention-backend flashinfer \
+    --default-chat-template-kwargs '{"preserve_thinking": true}' \
+    --dtype auto \
+    --enable-auto-tool-choice \
+    --enable-chunked-prefill \
+    --enable-prefix-caching \
+    --generation-config auto \
+    --override-generation-config '{"temperature": 0.6, "presence-penalty": 0.0}' \
+    --gpu-memory-utilization 0.9658 \
+    --language-model-only \
+    --load-format instanttensor \
+    --max-model-len 262144 \
+    --performance-mode interactivity \
+    --reasoning-parser qwen3 \
+    --served-model-name qwen3.6 \
+    --speculative-config '{"method": "mtp", "num_speculative_tokens": 2}' \
+    --max-num-batched-tokens 8192 \
+    --tensor-parallel-size $SLURM_GPUS_ON_NODE \
+    --tool-call-parser qwen3_coder
 ```
+
+Three observations from this config that change our plan:
+
+- **Server-side sampling defaults are tuned for thinking
+  mode**, not the non-thinking mode we actually run.
+  `--override-generation-config` sets `temperature: 0.6`
+  (the card's "precise coding" thinking-mode value) and
+  `presence_penalty: 0.0` (also thinking-mode). Since
+  sim-flow sends `enable_thinking: false`, we are running
+  non-thinking inference with **thinking-mode sampling
+  defaults** -- the worst of both worlds. Section 7b is
+  now the highest-priority pre-migration hardening
+  (was: nice-to-have).
+- **`--reasoning-parser qwen3` is enabled.** The server
+  already splits `<think>` content out into
+  `choices[0].message.reasoning_content`. Our client-side
+  `strip_known_reasoning_markers` for Qwen turns is now
+  dead code on this endpoint. Defer cleanup until after
+  Phase A; keep the strip pass alive for backends that
+  don't have the reasoning parser configured.
+- **`--enable-auto-tool-choice` is enabled.** We can use
+  `tool_choice: "auto"` (or omit `tool_choice` entirely)
+  without worrying that vLLM will reject it. Phase B's
+  request shape is unblocked.
 
 Pre-Phase-B smoke test (verifies that vLLM's translation
 round-trips a standard OpenAI tools request into our
