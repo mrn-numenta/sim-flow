@@ -780,29 +780,41 @@ Orchestrator code is fully backend-agnostic from here forward.
 - **K=1 Anthropic measurement**: rerun the Phase 0c K=1
   fixture with `SIM_FLOW_TOOL_MODE=native` against
   api.anthropic.com to validate the Anthropic round trip.
-- **Prompt rewrite (Phase D) -- step 1 LANDED (`2dcb6d7`)**:
-  New `_conventions/orchestrator-native-tools.md` selected by
-  the orchestrator when `SIM_FLOW_TOOL_MODE=native` is on and
-  the agent isn't a CLI agent. The convention explicitly
-  overrides any fenced-block phrasing in per-step prompts:
-  "THIS CONVENTION DOES NOT APPLY IN NATIVE-TOOL-CALLS MODE";
-  every fenced-block instruction becomes a `write_file` call
-  with the same path + content.
+- **Phase D -- MVP COMPLETE**
 
-  This is the override-pattern variant (option D). The
-  per-step DM prompts' `## Output` sections still describe
-  fenced blocks; the convention-level override is what shifts
-  the model. If smoke tests show the override is too subtle,
-  Phase D step 2 will rewrite per-step prompts directly.
+  Step 1 (`2dcb6d7`): new
+  `_conventions/orchestrator-native-tools.md` selected by the
+  orchestrator when `SIM_FLOW_TOOL_MODE=native` is on and the
+  agent isn't a CLI agent. Documents the orchestrator's
+  lowercase tool catalog (`write_file`, `edit_file`, ...) and
+  the native-mode rules.
 
-  Critical observation that motivated landing Phase D before
-  any K=3: the Anthropic K=1 smoke against Opus 4.7 (with
-  Phase B and Phase C in place but Phase D step 1 NOT yet)
-  showed the API accepts our `tools[]` field without error,
-  but the model emitted fenced calls because the prompts
-  told it to.
-  Without Phase D, native mode is a silent capability -- the
-  wire is enabled but the model never uses it.
+  Step 2 (`90382f0`): minijinja-based templating substrate.
+  Per-step prompts can reference `{{output_intro}}` (and
+  future placeholders); the orchestrator loads a per-mode
+  fragment from `_templates/output-intro-{fenced,native}.md`
+  at session start and substitutes. Strict-undefined mode --
+  typos / missing keys error loudly rather than render empty.
+
+  Step 3 (`f08d670`): retemplated 28 DM prompts. Each
+  `## Output` section's fenced-block preamble (3 different
+  shared shapes across the suite) replaced with
+  `{{ output_intro }}`. Same source prompt now covers both
+  fence-mode and native-mode; the mode-specific HOW comes
+  from the fragment. Sweep test added that renders every DM
+  prompt in both modes to catch templating drift.
+
+  The original concern with the override-only approach
+  ("as long as the original text is there, the override has a
+  fair chance of not working") is resolved -- per-step prompts
+  no longer contain fenced-mode-specific text when native
+  mode is active; the fragment that gets injected describes
+  only the active mode's mechanics.
+
+  Pre-Phase-D Anthropic K=1 (with B/C only) confirmed the API
+  accepts our `tools[]` shape without error but the model
+  emitted fenced calls because the prompts told it to.
+  Without Phase D, native mode is a silent capability.
 
 - **Cleanup (Phase E)**: delete fenced-block code paths once
   native has been default for two weeks without regressions.
