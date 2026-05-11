@@ -537,6 +537,8 @@ mod tests {
             role: LlmRole::User,
             content: "x".into(),
             attachments: Vec::<LlmAttachment>::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
         }];
         let tools = vec![ToolAdvertise {
             name: "list_dir".into(),

@@ -108,7 +108,7 @@ export type Event =
  * Mirror of `client::SessionKind` exposed in the protocol. Kept independent of the internal type so the wire format stays stable even if the internal representation changes.
  */
 export type SessionKindOut = "work" | "critique";
-export type LlmRole = "system" | "user" | "assistant";
+export type LlmRole = "system" | "user" | "assistant" | "tool";
 export type DiagnosticLevel = "info" | "warning" | "error";
 /**
  * Terminal state of a `SessionEnd` event. Closed-set enum so hosts can route on it deterministically (e.g. only re-enable Connect after `Completed`/`Cancelled`/`Error` but treat `RunawayGuard` as a hard abort that requires user attention). Serialized in kebab-case to match the existing wire strings.
@@ -158,6 +158,14 @@ export interface LlmMessage {
   attachments?: LlmAttachment[];
   content: string;
   role: LlmRole;
+  /**
+   * On role=tool messages: the call id this message is replying to.
+   */
+  tool_call_id?: string | null;
+  /**
+   * On role=assistant messages: the tool calls this turn emitted.
+   */
+  tool_calls?: LlmToolCall[];
 }
 export interface LlmAttachment {
   /**
@@ -185,6 +193,15 @@ export interface LlmTool {
   };
   description: string;
   name: string;
+}
+/**
+ * Native tool call returned by the LLM. `arguments_json` is the raw
+ * JSON-encoded argument blob the model emitted.
+ */
+export interface LlmToolCall {
+  id?: string | null;
+  name: string;
+  arguments_json: string;
 }
 export interface GateFailureOut {
   description: string;

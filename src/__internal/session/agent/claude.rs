@@ -83,6 +83,10 @@ impl ClaudeAgent {
                 LlmRole::System => "[SYSTEM]",
                 LlmRole::User => "[USER]",
                 LlmRole::Assistant => "[ASSISTANT]",
+                // Subprocess CLIs have no tool-result role; render
+                // tool replies as user-side text so the agent can
+                // still see the result content in history.
+                LlmRole::Tool => "[TOOL-RESULT]",
             };
             if !out.is_empty() {
                 out.push_str("\n\n");
@@ -223,6 +227,8 @@ mod tests {
             role: LlmRole::User,
             content: text.into(),
             attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
         }
     }
     fn system(text: &str) -> LlmMessage {
@@ -230,6 +236,8 @@ mod tests {
             role: LlmRole::System,
             content: text.into(),
             attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
         }
     }
     fn assistant(text: &str) -> LlmMessage {
@@ -237,6 +245,8 @@ mod tests {
             role: LlmRole::Assistant,
             content: text.into(),
             attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
         }
     }
 

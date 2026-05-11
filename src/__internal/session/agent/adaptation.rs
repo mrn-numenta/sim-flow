@@ -293,6 +293,8 @@ pub fn apply_reasoning_history_policy(
                 .trim()
                 .to_string(),
             attachments: message.attachments.clone(),
+            tool_call_id: message.tool_call_id.clone(),
+            tool_calls: message.tool_calls.clone(),
         })
         .collect()
 }
@@ -327,6 +329,8 @@ pub fn merge_leading_system_messages(messages: &[LlmMessage], separator: &str) -
         role: LlmRole::System,
         content: merged_content,
         attachments: merged_attachments,
+        tool_call_id: None,
+        tool_calls: Vec::new(),
     });
     out.extend(messages.iter().skip(leading_system_count).cloned());
     out
@@ -420,6 +424,8 @@ mod tests {
             role,
             content: content.into(),
             attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
         }
     }
 
@@ -523,11 +529,15 @@ mod tests {
                 role: LlmRole::System,
                 content: "first".into(),
                 attachments: vec![a.clone()],
+                tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             LlmMessage {
                 role: LlmRole::System,
                 content: "second".into(),
                 attachments: vec![b.clone()],
+                tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             msg(LlmRole::User, "hi"),
         ];

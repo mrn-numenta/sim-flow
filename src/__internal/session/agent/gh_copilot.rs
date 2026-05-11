@@ -33,6 +33,7 @@ impl GhCopilotAgent {
                 LlmRole::System => "[SYSTEM]",
                 LlmRole::User => "[USER]",
                 LlmRole::Assistant => "[ASSISTANT]",
+                LlmRole::Tool => "[TOOL-RESULT]",
             };
             if !out.is_empty() {
                 out.push_str("\n\n");

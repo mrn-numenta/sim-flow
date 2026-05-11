@@ -310,6 +310,11 @@ function toVscodeMessages(
         return vscode.LanguageModelChatMessage.User(parts);
       case "assistant":
         return vscode.LanguageModelChatMessage.Assistant(parts);
+      case "tool":
+        // vscode.lm has no tool role; flatten the result body into a
+        // user-side turn so the model still sees it. Mirrors the
+        // subprocess-CLI flatten in the Rust agent layer.
+        return vscode.LanguageModelChatMessage.User(parts);
     }
   });
 }

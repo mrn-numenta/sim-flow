@@ -67,6 +67,20 @@
               },
               "role": {
                 "$ref": "#/definitions/LlmRole"
+              },
+              "tool_call_id": {
+                "description": "On `role = Tool` messages: the wire-side call id this message is replying to. Pairs with `LlmToolCall.id` from a prior `LlmEnd` so the model can match tool results to the calls that produced them. `None` on any other role. Backends without a tool-result wire shape (CLI agents, plain chat-completions without tool-use) flatten Tool-role messages into User-role text in their converter.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tool_calls": {
+                "description": "On `role = Assistant` messages: the tool calls this turn emitted (echoed back on subsequent requests so the model sees its own prior calls in history). `None` when the turn produced no native tool calls or when the backend doesn't support them.",
+                "items": {
+                  "$ref": "#/definitions/LlmToolCall"
+                },
+                "type": "array"
               }
             },
             "required": [
@@ -76,12 +90,23 @@
             "type": "object"
           },
           "LlmRole": {
-            "enum": [
-              "system",
-              "user",
-              "assistant"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "system",
+                  "user",
+                  "assistant"
+                ],
+                "type": "string"
+              },
+              {
+                "description": "Reply to a prior assistant `tool_calls[]` emission. On the OpenAI wire shape, these turns serialize as `{role: \"tool\", tool_call_id: \"<id>\", content: \"...\"}`. CLI agents and non-tool-aware HTTP backends flatten them to User-role text in the converter.",
+                "enum": [
+                  "tool"
+                ],
+                "type": "string"
+              }
+            ]
           },
           "LlmTool": {
             "description": "Tool catalog descriptor for a single advertised tool. Phase 9 M3 fills the `args_schema` with real JSON Schema for arg shapes.",
@@ -99,6 +124,28 @@
             "required": [
               "args_schema",
               "description",
+              "name"
+            ],
+            "type": "object"
+          },
+          "LlmToolCall": {
+            "description": "A single tool call the model emitted in a native-tool-use turn. Returned on `HostEvent::LlmEnd.tool_calls`. `arguments_json` is the raw JSON-encoded argument blob the model emitted -- the orchestrator parses it into a `serde_json::Value` at dispatch time so a malformed payload surfaces a clear diagnostic rather than a cryptic serde error mid-pipeline.",
+            "properties": {
+              "arguments_json": {
+                "type": "string"
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "arguments_json",
               "name"
             ],
             "type": "object"

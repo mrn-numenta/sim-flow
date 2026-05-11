@@ -581,6 +581,8 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                               instructions above. Do not return an empty response."
                         .into(),
                     attachments: Vec::new(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
                 });
                 empty_response_retries += 1;
                 continue;
@@ -601,10 +603,16 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
         if llm_failed || assistant_text.trim().is_empty() {
             // Skip post-processing on this turn; ask user for input.
         } else {
+            // Echo the assistant's native tool_calls back into history
+            // so the next outbound request shows the model its own
+            // prior call requests. OpenAI's spec requires this for
+            // the next-turn tool-result messages to bind correctly.
             messages.push(LlmMessage {
                 role: LlmRole::Assistant,
                 content: assistant_text.clone(),
                 attachments: Vec::new(),
+                tool_call_id: None,
+                tool_calls: native_tool_calls.clone(),
             });
 
             // 5d. Extract artifacts and write them.
@@ -784,6 +792,8 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                              is `{json_path}`."
                         ),
                         attachments: Vec::new(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
                     });
                     continue;
                 }
@@ -873,6 +883,8 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     role: LlmRole::User,
                     content: feedback,
                     attachments: Vec::new(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
                 });
                 continue;
             }
@@ -882,13 +894,21 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             //     - Native: tool_calls arrived on the matching
             //       HostEvent::LlmEnd (Phase B+ of the native-tool-
             //       calls migration; gated on SIM_FLOW_TOOL_MODE=native
-            //       at the host).
+            //       at the host). Their replies push as Tool-role
+            //       messages tied to the call id.
             //     - Fenced: the legacy ```tool:<name> /
             //       ```json {"name":...} convention extracted from
-            //       the assistant text body.
-            //     Both forms feed into the same `ParsedToolCall`
-            //     dispatch path so tool-result feedback is identical
-            //     regardless of how the call arrived.
+            //       the assistant text body. Their replies bundle
+            //       into one User-role feedback message (no per-call
+            //       id binding).
+            //     Each form dispatches through the same
+            //     `ParsedToolCall` / `invoke_tool` machinery; only
+            //     the conversation-history shape differs at the end.
+            //
+            //     `native_dispatch_count` lets the existing
+            //     non-empty checks below treat "tool calls happened
+            //     this turn" without re-collecting both lists.
+            let fenced_tool_calls = tools::extract_tool_calls(&assistant_text);
             let mut tool_calls: Vec<tools::ParsedToolCall> = native_tool_calls
                 .iter()
                 .map(|c| tools::ParsedToolCall {
@@ -896,14 +916,9 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     body: c.arguments_json.clone(),
                 })
                 .collect();
-            tool_calls.extend(tools::extract_tool_calls(&assistant_text));
+            let native_dispatch_count = tool_calls.len();
+            tool_calls.extend(fenced_tool_calls);
             if !tool_calls.is_empty() {
-                let mut feedback = String::new();
-                if loop_hint_pending {
-                    feedback.push_str(LOOP_HINT_PREFIX);
-                    loop_hint_pending = false;
-                }
-                feedback.push_str("Tool results:\n\n");
                 let mut tool_attachments: Vec<crate::session::protocol::LlmAttachment> = Vec::new();
                 // Take the LAST test_failure_count seen this turn.
                 // Multiple `run_cargo test` calls in one turn (e.g.
@@ -913,6 +928,12 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 let mut tool_successes: u32 = 0;
                 let mut tool_failures: u32 = 0;
                 let mut this_turn_persisted_write: bool = false;
+                // Per-call outcomes, in dispatch order. Native calls
+                // (indices < native_dispatch_count) get one
+                // Tool-role message each tied to the matching
+                // native_tool_calls[i].id. Fenced calls bundle into
+                // a User-role feedback message.
+                let mut per_call_displays: Vec<String> = Vec::with_capacity(tool_calls.len());
                 for call in &tool_calls {
                     let started = std::time::Instant::now();
                     // Read the current milestone's body fresh for
@@ -944,8 +965,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         status: status.into(),
                         duration_ms: started.elapsed().as_millis() as u64,
                     })?;
-                    feedback.push_str(&outcome.display);
-                    feedback.push_str("\n\n---\n\n");
+                    per_call_displays.push(outcome.display.clone());
                     if let Some(c) = outcome.test_failure_count {
                         this_turn_test_count = Some(c);
                     }
@@ -967,11 +987,64 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 if this_turn_persisted_write {
                     session_persisted_writes = true;
                 }
-                messages.push(LlmMessage {
-                    role: LlmRole::User,
-                    content: feedback,
-                    attachments: tool_attachments,
-                });
+                // Emit Tool-role messages for native calls (one per
+                // call, tied to the originating tool_call_id). The
+                // openai_compat converter serializes these as
+                // `{role: "tool", tool_call_id, content}`; non-tool-
+                // aware backends flatten them to user-side text.
+                for (i, native) in native_tool_calls.iter().enumerate() {
+                    if i >= per_call_displays.len() {
+                        break;
+                    }
+                    messages.push(LlmMessage {
+                        role: LlmRole::Tool,
+                        content: per_call_displays[i].clone(),
+                        attachments: Vec::new(),
+                        tool_call_id: native.id.clone(),
+                        tool_calls: Vec::new(),
+                    });
+                }
+                // Bundle fenced-mode replies (no id binding) plus any
+                // loop-hint into a single User-role feedback message.
+                // Skip emission entirely when there are no fenced
+                // calls AND no loop hint, so a pure native-tool-call
+                // turn doesn't leave a stray "Tool results:" prose
+                // message in the history.
+                let fenced_displays = &per_call_displays[native_dispatch_count..];
+                if !fenced_displays.is_empty() || loop_hint_pending {
+                    let mut feedback = String::new();
+                    if loop_hint_pending {
+                        feedback.push_str(LOOP_HINT_PREFIX);
+                        loop_hint_pending = false;
+                    }
+                    if !fenced_displays.is_empty() {
+                        feedback.push_str("Tool results:\n\n");
+                        for display in fenced_displays {
+                            feedback.push_str(display);
+                            feedback.push_str("\n\n---\n\n");
+                        }
+                    }
+                    messages.push(LlmMessage {
+                        role: LlmRole::User,
+                        content: feedback,
+                        attachments: tool_attachments,
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                    });
+                } else if !tool_attachments.is_empty() {
+                    // Native-only turn that produced attachments
+                    // (e.g. images via a future tool). The Tool-role
+                    // message shape doesn't carry attachments today;
+                    // emit them as a bare User-role attachment turn
+                    // so they don't get dropped.
+                    messages.push(LlmMessage {
+                        role: LlmRole::User,
+                        content: String::new(),
+                        attachments: tool_attachments,
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                    });
+                }
 
                 // No-progress tracker. Strictly-decreasing failure
                 // count = real progress; reset to 0. Same / higher
@@ -1057,6 +1130,8 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                                     role: LlmRole::User,
                                     content,
                                     attachments: Vec::new(),
+                                    tool_call_id: None,
+                                    tool_calls: Vec::new(),
                                 });
                                 continue;
                             }
@@ -1153,6 +1228,8 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                             role: LlmRole::User,
                             content: feedback,
                             attachments: Vec::new(),
+                            tool_call_id: None,
+                            tool_calls: Vec::new(),
                         });
                         continue; // Don't ask the user; agent retries.
                     }
@@ -1280,6 +1357,8 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     role: LlmRole::User,
                     content: "You are in automated mode. Produce the artifact file(s) now using the artifact-write convention. Do not ask questions; decide using the inlined state and document your decisions in an `## Auto-decisions` section.".into(),
                     attachments: Vec::new(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
                 });
                 continue;
             }
@@ -1336,6 +1415,8 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     role: LlmRole::User,
                     content: text,
                     attachments: Vec::new(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
                 });
                 empty_response_retries = 0;
             }
@@ -1842,6 +1923,8 @@ pub fn build_initial_messages(
         role: LlmRole::System,
         content: combined_system,
         attachments: Vec::new(),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
     });
     if !llm_tools.is_empty() {
         let write_paths = crate::steps::allowed_write_paths(step, opts.kind);
@@ -1855,6 +1938,8 @@ pub fn build_initial_messages(
                 &write_paths,
             ),
             attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
         });
     }
     // Stable-first ordering: project-stable TOCs (spec, framework
@@ -1869,6 +1954,8 @@ pub fn build_initial_messages(
             role: LlmRole::System,
             content: toc,
             attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
         });
     }
     if let Some(root) = framework_docs_root.as_deref()
@@ -1878,6 +1965,8 @@ pub fn build_initial_messages(
             role: LlmRole::System,
             content: toc,
             attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
         });
     }
     if let Some(inputs) = build_session_inputs(&opts.project_dir, step, opts.kind) {
@@ -1885,12 +1974,16 @@ pub fn build_initial_messages(
             role: LlmRole::System,
             content: inputs.stable,
             attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
         });
         if let Some(volatile) = inputs.volatile {
             messages.push(LlmMessage {
                 role: LlmRole::System,
                 content: volatile,
                 attachments: Vec::new(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
             });
         }
     }
@@ -1899,6 +1992,8 @@ pub fn build_initial_messages(
         role: LlmRole::User,
         content: opening,
         attachments: Vec::new(),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
     });
 
     Ok(MessageBundle {

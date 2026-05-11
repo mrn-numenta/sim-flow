@@ -451,6 +451,8 @@ mod tests {
                     role: LlmRole::System,
                     content: "x".repeat(32 * 1024),
                     attachments: Vec::new(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
                 }],
                 tools: Vec::new(),
             })

@@ -324,6 +324,34 @@ pub struct LlmMessage {
     /// attachments are dropped and a Diagnostic is emitted.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<LlmAttachment>,
+    /// On `role = Tool` messages: the wire-side call id this message
+    /// is replying to. Pairs with `LlmToolCall.id` from a prior
+    /// `LlmEnd` so the model can match tool results to the calls
+    /// that produced them. `None` on any other role. Backends
+    /// without a tool-result wire shape (CLI agents, plain
+    /// chat-completions without tool-use) flatten Tool-role
+    /// messages into User-role text in their converter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    /// On `role = Assistant` messages: the tool calls this turn
+    /// emitted (echoed back on subsequent requests so the model
+    /// sees its own prior calls in history). `None` when the turn
+    /// produced no native tool calls or when the backend doesn't
+    /// support them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<LlmToolCall>,
+}
+
+impl Default for LlmMessage {
+    fn default() -> Self {
+        Self {
+            role: LlmRole::User,
+            content: String::new(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -345,6 +373,12 @@ pub enum LlmRole {
     System,
     User,
     Assistant,
+    /// Reply to a prior assistant `tool_calls[]` emission. On the
+    /// OpenAI wire shape, these turns serialize as
+    /// `{role: "tool", tool_call_id: "<id>", content: "..."}`. CLI
+    /// agents and non-tool-aware HTTP backends flatten them to
+    /// User-role text in the converter.
+    Tool,
 }
 
 /// Tool catalog descriptor for a single advertised tool. Phase 9 M3

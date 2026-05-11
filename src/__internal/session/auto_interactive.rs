@@ -267,6 +267,7 @@ pub fn render_messages_for_terminal(messages: &[LlmMessage]) -> String {
             LlmRole::System => "[SYSTEM]",
             LlmRole::User => "[USER]",
             LlmRole::Assistant => "[ASSISTANT]",
+            LlmRole::Tool => "[TOOL-RESULT]",
         };
         if !out.is_empty() {
             out.push_str("\n\n");
@@ -788,11 +789,15 @@ mod tests {
                 role: LlmRole::System,
                 content: "be helpful".into(),
                 attachments: Vec::new(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             LlmMessage {
                 role: LlmRole::User,
                 content: "hi".into(),
                 attachments: Vec::new(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
             },
         ];
         let rendered = render_messages_for_terminal(&messages);

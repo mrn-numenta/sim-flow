@@ -38,6 +38,7 @@ impl CodexAgent {
                 LlmRole::System => "[SYSTEM]",
                 LlmRole::User => "[USER]",
                 LlmRole::Assistant => "[ASSISTANT]",
+                LlmRole::Tool => "[TOOL-RESULT]",
             };
             if !out.is_empty() {
                 out.push_str("\n\n");
@@ -114,11 +115,15 @@ mod tests {
                 role: LlmRole::System,
                 content: "rules".into(),
                 attachments: Vec::new(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             LlmMessage {
                 role: LlmRole::User,
                 content: "go".into(),
                 attachments: Vec::new(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
             },
         ]);
         assert!(prompt.starts_with("[SYSTEM]\nrules"));

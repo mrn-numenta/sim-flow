@@ -6,7 +6,7 @@
 
 /** Vendor-neutral LLM message. Each backend converts to its own shape. */
 export interface LlmMessage {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   content: string;
   /**
    * Optional binary attachments (e.g. image bytes from a `read_file`
@@ -16,6 +16,23 @@ export interface LlmMessage {
    * inline-data form. Backends that don't support images drop them.
    */
   attachments?: LlmAttachment[];
+  /**
+   * On role=tool messages: the call id this message is replying to.
+   * Pairs with the assistant turn's `tool_calls[i].id` so OpenAI-
+   * compatible backends can route the result back through the
+   * function-calling pipeline.
+   */
+  tool_call_id?: string;
+  /**
+   * On role=assistant messages: the tool calls this turn emitted.
+   * Backends echo them back on subsequent requests so the model
+   * sees its prior calls in history.
+   */
+  tool_calls?: Array<{
+    id?: string;
+    name: string;
+    arguments_json: string;
+  }>;
 }
 
 export interface LlmAttachment {

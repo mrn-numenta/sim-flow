@@ -220,6 +220,7 @@ impl DebugLog {
                 LlmRole::System => "system",
                 LlmRole::User => "user",
                 LlmRole::Assistant => "assistant",
+                LlmRole::Tool => "tool",
             };
             writeln!(buf, "#### [{i}] {role}").unwrap();
             writeln!(buf, "```").unwrap();

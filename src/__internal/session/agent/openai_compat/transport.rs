@@ -242,6 +242,33 @@ struct ChatTemplateKwargs {
 struct RequestMessage<'a> {
     role: &'a str,
     content: &'a str,
+    /// On `role = "tool"` messages: the call id this message is
+    /// replying to. Pairs with the assistant's `tool_calls[i].id`
+    /// from the prior turn. OpenAI's spec requires this for the
+    /// model to associate the result with its originating call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<&'a str>,
+    /// On `role = "assistant"` messages: the prior tool_calls this
+    /// turn emitted, echoed back so the model sees its own
+    /// in-flight call requests. Empty when the turn produced no
+    /// tool calls (fence-mode or plain text).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tool_calls: Vec<RequestToolCall<'a>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RequestToolCall<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<&'a str>,
+    #[serde(rename = "type")]
+    kind: &'static str, // always "function"
+    function: RequestToolFunction<'a>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RequestToolFunction<'a> {
+    name: &'a str,
+    arguments: &'a str,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -364,6 +391,19 @@ pub fn dispatch_chat_with_tools(req: OpenAiCompatibleRequest<'_>) -> Result<Chat
             .map(|m| RequestMessage {
                 role: role_str(m.role),
                 content: m.content.as_ref(),
+                tool_call_id: m.tool_call_id.as_deref(),
+                tool_calls: m
+                    .tool_calls
+                    .iter()
+                    .map(|c| RequestToolCall {
+                        id: c.id.as_deref(),
+                        kind: "function",
+                        function: RequestToolFunction {
+                            name: c.name.as_ref(),
+                            arguments: c.arguments_json.as_ref(),
+                        },
+                    })
+                    .collect(),
             })
             .collect(),
         stream: false,
@@ -503,6 +543,7 @@ fn role_str(role: LlmRole) -> &'static str {
         LlmRole::System => "system",
         LlmRole::User => "user",
         LlmRole::Assistant => "assistant",
+        LlmRole::Tool => "tool",
     }
 }
 
@@ -651,6 +692,8 @@ mod tests {
             role,
             content: content.into(),
             attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
         }
     }
 

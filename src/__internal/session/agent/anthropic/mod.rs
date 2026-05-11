@@ -232,6 +232,16 @@ fn split_system_and_messages(messages: &[LlmMessage]) -> (String, Vec<MessagePay
                 role: "assistant",
                 content: msg.content.clone(),
             }),
+            // Anthropic's native tool-use shape (`tool_result`
+            // content block) isn't wired yet; flatten Tool-role
+            // messages to a user-role text turn so the agent still
+            // sees the tool output in history. Phase C of the
+            // native-tool-calls migration will switch to the
+            // tool_result content-block shape.
+            LlmRole::Tool => conversation.push(MessagePayload {
+                role: "user",
+                content: format!("[tool-result] {}", msg.content),
+            }),
         }
     }
     (system_blocks.join("\n\n"), conversation)
@@ -299,6 +309,8 @@ mod tests {
             role,
             content: content.into(),
             attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
         }
     }
 
