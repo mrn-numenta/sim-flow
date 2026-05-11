@@ -189,6 +189,25 @@ some flip to manual).
 | `tool-call-as-json-blob`          | model emits the structured-tool-call as a JSON object inside prose, not a real tool call | fenced-tool-call fallback might catch                   |
 | `system-prompt-echoed`            | model repeats the system prompt verbatim back as the first turn                          | none today; treated as a regular turn                   |
 
+### Transport / context anomalies (added after Phase 0)
+
+| kind                          | trigger                                                                          | recovery today                                       |
+| ----------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `llm-truncated-at-max-tokens` | upstream stops the stream at `finish_reason=length` mid-turn                     | `LlmError`; retry path may absorb (see notes below)  |
+| `edit-file-stale-old-string`  | `edit_file`'s `old_string` doesn't match disk content (recent rewrite, drift)    | tool returns error; counts toward tool-error streak  |
+
+Notes on the new entries:
+
+- `llm-truncated-at-max-tokens`: real fix is to raise
+  `SIM_FLOW_MAX_TOKENS`, prompt the agent to write fewer files per
+  turn, or shrink the per-turn message stack. The orchestrator
+  refuses to commit a partial response because the agent's tool
+  calls / writes would be incomplete.
+- `edit-file-stale-old-string`: the agent's mental model of the
+  file body has drifted from disk. Stacking 5 in a row trips
+  `consecutive_tool_error_turns` and aborts the session via
+  `RunawayGuard`.
+
 The taxonomy list is the *deliverable* of the study's analyzer pass.
 The shapes above are starting hypotheses; ground truth is what the
 captured JSONL actually contains.
@@ -379,6 +398,101 @@ leaves the org without an explicit scrub pass. The L1 smoke fixture
 is intentionally generic and safe to share; L2 will be authored
 with that constraint in mind.
 
+## Phase 0 findings (qwen3.6 via vLLM, K=3, dm_flow_smoke_spec.md)
+
+First real captures landed at `/tmp/robustness-phase0/qwen3.6/`.
+This is hand-eyeballed, not analyzer output -- the goal here is
+to refine the taxonomy before the analyzer code ships (see
+"Suggested first cut" point 4).
+
+### Outcomes
+
+| trial | wall (s) | last advance       | terminator                                                |
+| ----- | -------- | ------------------ | --------------------------------------------------------- |
+| 1     | 502      | DM0 -> DM1         | DM1 critique-iter-cap (2 findings after 3 retries)        |
+| 2     | 1534     | DM2a -> DM2b       | DM2b critique-iter-cap (2 findings after 3 retries)       |
+| 3     | 1528     | DM2b -> DM2c       | DM2c critique-iter-cap (3 findings after 3 retries)       |
+
+0/3 reached DM4b. The variance is the headline: trial 1 stalled
+on DM1, trial 3 reached DM2c. Same model, same spec, different
+seeds -- exactly the "single roll lies, K trials reveal the
+range" reason K=20 is the production target.
+
+### Anomalies seen (counts across the 3 trials)
+
+| kind                            | t1 | t2 | t3 | notes                                                    |
+| ------------------------------- | -- | -- | -- | -------------------------------------------------------- |
+| `bare-json-no-fence`            |  2 |  1 |  3 | every critique session salvaged; 100% rate               |
+| `critique-iter-cap`             |  1 |  1 |  1 | the terminator in all three trials                       |
+| `llm-truncated-at-max-tokens`   |  0 |  1 |  1 | shows up on long-turn steps (DM2a / DM2b)                |
+| `tool-error-streak` (5-in-a-row)|  0 |  1 |  0 | trial 2 burned 5 consecutive failed turns                |
+| `edit-file-stale-old-string`    |  0 | 14 |  2 | t2: 14 failed `edit_file` (mental model drifted)         |
+| `write_file:error`              |  0 |  1 |  7 | t3: 7 rejected writes -- worth a follow-up to classify   |
+| `identical-response-streak`     |  0 |  0 |  0 | did NOT fire on this fixture                             |
+| `auto-iter-cap` (work-side)     |  0 |  0 |  0 | also didn't fire -- critique cap fired first             |
+| `empty-response`                |  0 |  0 |  0 | qwen3.6 never returned an empty turn                     |
+
+### Headline interpretations
+
+1. The `bare-json-no-fence` shape is a systemic qwen3.6 behavior:
+   100% of critique sessions across all 3 trials emitted the
+   critique JSON without the artifact-write fence and were caught
+   by `salvage_critique_json`. The salvage works, but every
+   critique starts with a `[warning]` diagnostic and a wasted
+   parser pass. Hardening target: tighten the critique system
+   prompt to lead with the fenced-write convention, OR teach the
+   Qwen runtime profile in `agent/adaptation.rs` to expect
+   bare-JSON output and skip the warning.
+2. `critique-iter-cap` is the dominant terminator. The retries
+   are running with `max_critique_iters=3`. Worth checking whether
+   the critique is actually identifying real gate-blocking issues
+   each retry, or whether the agent keeps surfacing the same
+   nit that the gate happens to flag. Sample the captured
+   `<step>-critique.json` per trial to find out.
+3. `llm-truncated-at-max-tokens` confirms the doc's hypothesis
+   that long-turn steps would trip the upstream cap. The default
+   `SIM_FLOW_MAX_TOKENS` is too tight for qwen3.6's tool-heavy
+   verbose style on DM2a/DM2b. Either raise the cap (cheap, but
+   masks the real "fewer files per turn" problem) or split the
+   instruction into smaller turns.
+4. The `edit-file-stale-old-string` outlier (trial 2: 14 failures
+   out of 24 attempts) is wild variance. Sometimes qwen3.6 stays
+   in sync with disk; sometimes its mental model drifts hard.
+   This is the kind of anomaly K=20 would let us call out at a
+   real rate.
+
+### Anomalies that didn't fire on this fixture
+
+- `identical-response-streak`: even when truncated/retried,
+  qwen3.6's responses varied enough.
+- `auto-iter-cap`: work-side cap of 3 never tripped; the
+  critique-side cap always fired first.
+- `empty-response`: no zero-byte turns from qwen3.6.
+
+We may still see these on other fixtures or other models. The
+taxonomy keeps them.
+
+### What to do next
+
+Two parallel tracks, both informed by the K=3 catalog above:
+
+1. Build the analyzer (`study_analyze`) so we can stop
+   hand-eyeballing. The shapes above are the seed rules; the
+   analyzer codifies them and emits per-model summaries.
+2. First hardening pass on qwen3.6 specifically:
+   - Add a Qwen-runtime-profile knob in `agent/adaptation.rs`
+     that recognizes bare-JSON critique output as canonical
+     (drop the salvage warning).
+   - Raise the per-call max-tokens default for the Qwen family,
+     or add a per-step heuristic that shrinks the inlined
+     critique body for long-turn steps.
+   - Update the DM2-step critique prompts to lead with the
+     fenced-write block before any reasoning.
+
+We should NOT scale to K=20 yet -- the hardening work above
+might reshape the anomaly rates, so K=20 against a tightened
+orchestrator is worth more than K=20 against today's.
+
 ## Decision log
 
 - **2026-05-11 -- trial count**: start at K=3 to get the pipeline
@@ -419,6 +533,18 @@ with that constraint in mind.
   behavior, not on us re-discovering things qwen3-27b already
   showed us. K=3 shake-out, then K=20, with explicit token
   budget caps to bound damage from any runaway loop.
+- **2026-05-11 -- K=3 results (qwen3.6, vLLM)**: 0/3 trials
+  reached DM4b. All three hit the critique-iter-cap on different
+  steps (DM1 / DM2b / DM2c) -- huge run-to-run variance on the
+  same fixture confirms K=3 is shake-out only, not reportable.
+  Two anomaly kinds added to the taxonomy
+  (`llm-truncated-at-max-tokens`, `edit-file-stale-old-string`);
+  three didn't fire on this fixture (`identical-response-streak`,
+  work-side `auto-iter-cap`, `empty-response`) -- kept in case
+  another model surfaces them. Hold K=20 until the first round
+  of hardening lands (bare-JSON-as-canonical for the Qwen runtime
+  profile, max-tokens bump for verbose-tool-use families,
+  fenced-write-first critique prompts).
 
 ## Open questions
 
