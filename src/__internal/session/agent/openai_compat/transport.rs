@@ -7,7 +7,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{normalize_response_text, prepare_messages_for_openai_compat, resolve_model_family};
+use super::super::{
+    normalize_response_text, prepare_messages_for_openai_compat, resolve_model_family,
+};
 use crate::session::agent::LlmCallMetrics;
 use crate::session::protocol::{LlmMessage, LlmRole};
 use crate::{Error, Result};
@@ -385,7 +387,7 @@ pub fn dispatch_chat(req: OpenAiCompatibleRequest<'_>) -> Result<(String, LlmCal
 /// reasoning-only).
 fn decode_choice(
     choice: Option<Choice>,
-    model_family: &super::adaptation::ModelFamilyProfile,
+    model_family: &super::super::adaptation::ModelFamilyProfile,
 ) -> Result<String> {
     let Some(c) = choice else {
         return Ok(String::new());

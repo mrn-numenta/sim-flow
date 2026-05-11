@@ -10,7 +10,10 @@
 //! `/api/...` paths Ollama sometimes uses outside the OpenAI-compat
 //! surface.
 
-use super::openai_compatible::{OpenAiCompatibleRequest, dispatch_chat};
+pub mod transport;
+
+pub use transport::{OpenAiCompatibleRequest, dispatch_chat};
+
 use super::{
     AgentAdaptationSummary, CliAgent, LlmCallMetrics, OPENAI_COMPAT_GENERIC_RUNTIME,
     RuntimeCapabilityProfile, resolve_model_family, resolve_runtime_profile,

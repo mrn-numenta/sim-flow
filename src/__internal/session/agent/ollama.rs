@@ -1,6 +1,6 @@
 //! `OllamaAgent` - Ollama's local OpenAI-compatible endpoint.
 
-use super::openai_compatible::{OpenAiCompatibleRequest, dispatch_chat};
+use super::openai_compat::{OpenAiCompatibleRequest, dispatch_chat};
 use super::{
     AgentAdaptationSummary, CliAgent, LlmCallMetrics, OPENAI_COMPAT_GENERIC_RUNTIME,
     RuntimeCapabilityProfile, resolve_model_family, resolve_runtime_profile,

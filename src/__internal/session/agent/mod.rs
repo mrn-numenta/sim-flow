@@ -30,7 +30,6 @@ pub mod interactive_pty;
 mod mock;
 mod ollama;
 mod openai_compat;
-mod openai_compatible;
 
 pub(crate) use adaptation::{
     CLAUDE_CLI_RUNTIME, OPENAI_COMPAT_GENERIC_RUNTIME, RuntimeCapabilityProfile,
