@@ -1,10 +1,7 @@
 # DM3c - Test Execution and Coverage (critique session)
 
 You are reviewing the DM3c test-execution and coverage results.
-Treat them as work produced by a third party even if you produced
-them yourself earlier in this conversation -- the
-independent-review property depends on you bracketing any prior
-reasoning rather than leaning on it. Do not modify the test
+{{ third_party_reviewer_note }} Do not modify the test
 artifacts; evaluate them and write the critique file.
 
 This critique runs more than once:
@@ -157,23 +154,4 @@ Write the critique as JSON to
 human-readable `docs/critiques/DM3c-critique.md` from that JSON
 automatically; do NOT write the markdown yourself.
 
-### JSON schema
-
-```json
-{
-  "step": "DM3c",
-  "summary": "1-paragraph summary of the critique outcome.",
-  "findings": [
-    {
-      "kind": "blocker",
-      "section": "free-form section name",
-      "title": "one-line summary of the finding",
-      "body": "multi-line markdown explanation"
-    }
-  ],
-  "notes": "optional free-form trailing prose"
-}
-```
-
-`kind` values: `"blocker"`, `"unresolved"`, `"resolved"`. Schema
-is strict (`deny_unknown_fields`); typos fail the parse.
+{{ critique_json_schema }}

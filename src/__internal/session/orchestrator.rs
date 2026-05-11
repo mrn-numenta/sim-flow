@@ -1866,6 +1866,30 @@ pub fn build_initial_messages(
         "output_intro".into(),
         prompts::load_template(&opts.foundation_root, output_intro_fragment)?,
     );
+    // `{{ step_id }}` substitutes to the step descriptor's id
+    // (e.g. "DM0", "DM2cd"). Used inline by per-step prompts and
+    // by the critique-json-schema fragment (which is pre-rendered
+    // below so the prompt sees a finished string).
+    template_context.insert("step_id".into(), step.id.to_string());
+    // Pre-render the critique-json-schema fragment with the step
+    // id so per-critique prompts can splice it in with a single
+    // `{{ critique_json_schema }}` placeholder. The fragment
+    // itself contains `{{ step_id }}` (Anthropic / OpenAI both
+    // need the right step id in the example JSON body).
+    let mut fragment_ctx = prompts::PromptContext::new();
+    fragment_ctx.insert("step_id".into(), step.id.to_string());
+    let critique_schema_body =
+        prompts::load_template(&opts.foundation_root, "critique-json-schema")?;
+    let critique_schema_rendered =
+        prompts::render_prompt("critique-json-schema", &critique_schema_body, &fragment_ctx)?;
+    template_context.insert("critique_json_schema".into(), critique_schema_rendered);
+    // `{{ third_party_reviewer_note }}` — the universal sentence
+    // every critique prompt shares (independent-review framing).
+    // No parameters; just a flat fragment.
+    template_context.insert(
+        "third_party_reviewer_note".into(),
+        prompts::load_template(&opts.foundation_root, "third-party-reviewer")?,
+    );
     let instruction_body = prompts::load_for_project_with_context(
         &opts.foundation_root,
         &opts.project_dir,

@@ -90,23 +90,4 @@ Write the critique as JSON to
 human-readable `docs/critiques/DM2cd-critique.md` from that JSON
 automatically; do NOT write the markdown yourself.
 
-### JSON schema
-
-```json
-{
-  "step": "DM2cd",
-  "summary": "1-paragraph summary of the critique outcome.",
-  "findings": [
-    {
-      "kind": "blocker",
-      "section": "free-form section name",
-      "title": "one-line summary of the finding",
-      "body": "multi-line markdown explanation"
-    }
-  ],
-  "notes": "optional free-form trailing prose"
-}
-```
-
-`kind` values: `"blocker"`, `"unresolved"`, `"resolved"`. Schema
-is strict (`deny_unknown_fields`); typos fail the parse.
+{{ critique_json_schema }}

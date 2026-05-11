@@ -1,9 +1,6 @@
 # DM0 - Specification (critique session)
 
-You are reviewing the DM0 work artifact. Treat it as work produced
-by a third party even if you produced it yourself earlier in this
-conversation -- the independent-review property depends on you
-bracketing any prior reasoning rather than leaning on it. Do not
+You are reviewing the DM0 work artifact. {{ third_party_reviewer_note }} Do not
 modify the spec; evaluate it and write the critique file.
 
 ## Inputs
@@ -96,26 +93,4 @@ The orchestrator renders a human-readable
 `docs/critiques/DM0-critique.md` from that JSON automatically; do
 NOT write the markdown yourself.
 
-### JSON schema
-
-```json
-{
-  "step": "DM0",
-  "summary": "1-paragraph summary of the critique outcome.",
-  "findings": [
-    {
-      "kind": "blocker",
-      "section": "free-form section name (e.g. \"External Interfaces\")",
-      "title": "one-line summary of the finding",
-      "body": "multi-line markdown explanation; quote offending lines, list remediation"
-    }
-  ],
-  "notes": "optional free-form trailing prose"
-}
-```
-
-`kind` values: `"blocker"` (gate-blocking), `"unresolved"`
-(informational), `"resolved"` (historical / retry-mode). The
-schema is strict (`deny_unknown_fields`); typos fail the parse
-and the orchestrator surfaces "malformed critique JSON". Use the
-exact field names listed.
+{{ critique_json_schema }}

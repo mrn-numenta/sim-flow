@@ -625,10 +625,15 @@ mod tests {
             .expect("output-intro-fenced fragment must exist");
         let native = load_template(foundation_root, "output-intro-native")
             .expect("output-intro-native fragment must exist");
-        let mut fenced_ctx = PromptContext::new();
-        fenced_ctx.insert("output_intro".into(), fenced);
-        let mut native_ctx = PromptContext::new();
-        native_ctx.insert("output_intro".into(), native);
+        // Mirrors the context the orchestrator builds in
+        // `build_initial_messages`: every placeholder a prompt
+        // might reference is bound. New placeholders should be
+        // added here too, or this sweep will fail loudly the
+        // moment a prompt starts using them.
+        let third_party_reviewer = load_template(foundation_root, "third-party-reviewer")
+            .expect("third-party-reviewer fragment must exist");
+        let critique_schema_body = load_template(foundation_root, "critique-json-schema")
+            .expect("critique-json-schema fragment must exist");
 
         let project_dir = PathBuf::new();
         let mut tested = 0;
@@ -649,8 +654,33 @@ mod tests {
             } else {
                 (stem.to_string(), SessionKind::Work)
             };
-            for ctx in [&fenced_ctx, &native_ctx] {
-                load_for_project_with_context(foundation_root, &project_dir, &slug, kind, ctx)
+            // Derive a synthetic step_id from the slug for the
+            // critique-json-schema fragment's `{{ step_id }}`
+            // reference. e.g. `dm0-specification` -> `DM0`.
+            // Real orchestrator passes the full step descriptor id;
+            // a uppercased prefix is faithful enough for templating
+            // verification.
+            let step_id = slug.split('-').next().unwrap_or(&slug).to_ascii_uppercase();
+            let mut frag_ctx = PromptContext::new();
+            frag_ctx.insert("step_id".into(), step_id.clone());
+            let critique_schema =
+                render_prompt("critique-json-schema", &critique_schema_body, &frag_ctx)
+                    .expect("critique-json-schema renders with step_id");
+
+            let build_ctx = |intro: &str| -> PromptContext {
+                let mut c = PromptContext::new();
+                c.insert("output_intro".into(), intro.to_string());
+                c.insert("step_id".into(), step_id.clone());
+                c.insert(
+                    "third_party_reviewer_note".into(),
+                    third_party_reviewer.clone(),
+                );
+                c.insert("critique_json_schema".into(), critique_schema.clone());
+                c
+            };
+            for intro in [&fenced, &native] {
+                let ctx = build_ctx(intro);
+                load_for_project_with_context(foundation_root, &project_dir, &slug, kind, &ctx)
                     .unwrap_or_else(|e| {
                         panic!("rendering `{name}` failed: {e}");
                     });
