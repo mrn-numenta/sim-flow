@@ -837,6 +837,80 @@ later):
    (a) drop with feedback, or (b) salvage to the inferred
    path. (a) is safer; (b) is more recoverable.
 
+## Phase 0d: fence-fix impact (K=3 vs K=12 baseline)
+
+Tightened DM work prompts + `_conventions/fenced-blocks.md`
+(commit 4ea2f9d) re-run against vLLM/qwen3.6 at the Phase 0c
+defaults (`disable-thinking=on`, `max_auto_iters=6`,
+`max_critique_iters=10`, `max_critique_no_progress_iters=3`).
+
+### Wrong-fence-info-string rate (the targeted anomaly)
+
+| phase     | trials | trials affected | total events | median per affected trial | max |
+| --------- | ------ | --------------- | ------------ | ------------------------- | --- |
+| 0c (K=12) | 12     | 11 (**92%**)    | 74           | 5                         | 18  |
+| 0d (K=3)  |  3     |  1 (**33%**)    |  2           | 2                         |  2  |
+
+Per-trial detail (Phase 0d):
+
+| trial | wrong-fence | terminator             | last advance |
+| ----- | ----------- | ---------------------- | ------------ |
+| 01    | 0           | critique-no-progress   | DM2cd        |
+| 02    | 0           | work-gate-still-dirty  | DM2d         |
+| 03    | 2           | work-no-artifact       | DM2d         |
+
+The prompt-side fix delivered. 2/3 Phase 0d trials had **zero**
+wrong-fence events; the third had 2 (vs a Phase 0c median of 5
+per affected trial). 92% -> 33% trial-affected rate; 74 -> 2
+total events on a per-trial-normalized basis.
+
+### Downstream effects
+
+| metric                               | Phase 0c (K=12) | Phase 0d (K=3) | delta            |
+| ------------------------------------ | --------------- | -------------- | ---------------- |
+| min advance depth                    | DM1             | DM2cd          | +5 steps         |
+| `work-no-artifact` terminator rate   | 8/12 (67%)      | 1/3 (33%)      | dropped ~half    |
+| `runaway-loop` trips                 | 1/12            | 0/3            | gone             |
+| trials reaching cargo-gated DM2d     | 3/12 (25%)      | 2/3 (67%)      | nearly tripled   |
+| max artifacts written in one trial   | varies          | 71             | (new high)       |
+
+Every Phase 0d trial reached DM2cd or further; Phase 0c had
+3/12 trials stalled at DM1 (DM0 critique loop killed them).
+The fence-fix let those `prose-only` turns actually land their
+content on disk, which let the work session move on.
+
+### New anomaly surfaced: `work-gate-still-dirty`
+
+Phase 0d trial 2 terminated on a NEW work-side failure mode:
+the model wrote 38 artifacts and walked DM0 -> DM2d, but
+DM2d's `milestones_all_implemented` gate complained that
+`milestone-01-payload-types.md` still had 7 unresolved `- [ ]`
+rows. Source files landed, but the milestone task checkboxes
+weren't ticked. Distinct from `work-no-artifact` (empty
+turns burning the iter budget): here the model writes, just
+not what the gate counts.
+
+The orchestrator emits a different terminator message for
+this case (`exceeded max_auto_iters (N); switching to
+interactive. Last gate failures: ...`). Added a corresponding
+`WorkGateStillDirty` variant to `study_analyze::TerminatorKind`
+so the analyzer doesn't conflate the two work-side failures.
+
+The cure for `work-gate-still-dirty` is either:
+
+- Prompt-side: remind the milestone-walk steps (DM2d / DM3b /
+  DM3c / DM4b) that the work session MUST tick the
+  corresponding `- [ ]` rows in the milestone file before the
+  gate will pass. (The orchestrator's `tick_resolved_milestone_tasks`
+  already auto-flips rows whose backtick-quoted token resolves
+  on disk, but it's conservative.)
+- Orchestrator-side: broaden the auto-tick to also flip rows
+  whose body cites a file the agent wrote this session, even
+  without a `path::Symbol` token. Risk: false positives.
+
+Lower priority than the fence fix since this only fires once
+the work session is already producing artifacts.
+
 ## Decision log
 
 - **2026-05-11 -- trial count**: start at K=3 to get the pipeline

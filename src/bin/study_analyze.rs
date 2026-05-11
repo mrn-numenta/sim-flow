@@ -201,7 +201,23 @@ pub struct TrialSummary {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TerminatorKind {
+    /// Work session burned `max_auto_iters` consecutive turns
+    /// without producing any fenced artifact-write block. The
+    /// canonical "model is reading + considering without
+    /// committing" pattern; the post-Phase-0c fence-fix work
+    /// targets this. Orchestrator message:
+    /// `"... exceeded max_auto_iters (N) without producing an
+    /// artifact ..."`.
     WorkNoArtifact,
+    /// Work session DID produce artifacts but the structural
+    /// gate stayed dirty across `max_auto_iters` retries. Distinct
+    /// from `WorkNoArtifact`: the model is writing, just not
+    /// writing what the gate wants. Orchestrator message:
+    /// `"... exceeded max_auto_iters (N); switching to interactive.
+    /// Last gate failures: ..."`. Often surfaces on milestone-walk
+    /// steps where the task rows stay `- [ ]` even though source
+    /// files landed.
+    WorkGateStillDirty,
     CritiqueIterCap,
     CritiqueNoProgress,
     CargoTestNoProgress,
@@ -215,6 +231,7 @@ impl TerminatorKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::WorkNoArtifact => "work-no-artifact",
+            Self::WorkGateStillDirty => "work-gate-still-dirty",
             Self::CritiqueIterCap => "critique-iter-cap",
             Self::CritiqueNoProgress => "critique-no-progress",
             Self::CargoTestNoProgress => "cargo-test-no-progress",
@@ -556,6 +573,13 @@ fn classify_terminator(msg: &str) -> Option<TerminatorKind> {
         Some(TerminatorKind::CargoTestNoProgress)
     } else if msg.contains("without producing an artifact") {
         Some(TerminatorKind::WorkNoArtifact)
+    } else if msg.contains("exceeded max_auto_iters") && msg.contains("Last gate failures:") {
+        // Distinct from `WorkNoArtifact`: the work session DID
+        // produce artifacts (otherwise the gate-failures branch
+        // doesn't run), but the structural gate stayed dirty.
+        // Surfaces e.g. when milestone task rows stay `- [ ]`
+        // even though the source files landed.
+        Some(TerminatorKind::WorkGateStillDirty)
     } else if msg.contains("critique still has") && msg.contains("after") && msg.contains("retries")
     {
         Some(TerminatorKind::CritiqueIterCap)
