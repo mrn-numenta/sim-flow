@@ -32,9 +32,25 @@ BACKEND="${2:-}"
 BASE_URL="${3:-}"
 MODEL="${4:-}"
 K="${5:-3}"
+# Optional starting trial index. Default 1. Use this to spawn
+# N parallel single-trial harness invocations against the same
+# study root (one trial each, different seeds, distinct
+# trial-<NN> directories) instead of N sequential trials:
+#
+#   run-robustness-study.sh ROOT vllm URL qwen3.6 1 1 &
+#   run-robustness-study.sh ROOT vllm URL qwen3.6 1 2 &
+#   run-robustness-study.sh ROOT vllm URL qwen3.6 1 3 &
+#   wait
+#
+# Each invocation writes trial-01 / trial-02 / trial-03 next
+# to each other, with seeds 1 / 2 / 3 (the seed equals the
+# trial index, same as the sequential mode). The manifest +
+# per-model trials.jsonl rows are appended atomically so the
+# analyzer sees one coherent study at the end.
+TRIAL_START="${6:-1}"
 
 if [[ -z "$STUDY_ROOT" || -z "$BACKEND" || -z "$BASE_URL" || -z "$MODEL" ]]; then
-    echo "usage: $0 <study-root> <backend> <base-url> <model> <K>" >&2
+    echo "usage: $0 <study-root> <backend> <base-url> <model> <K> [trial-start]" >&2
     exit 2
 fi
 
@@ -95,7 +111,8 @@ printf '{"started_at":"%s","model":"%s","backend":"%s","base_url":"%s","K":%s,"s
 # outcome to the per-model summary and move on so the analyzer sees
 # the failure mode rather than us erasing it.
 FAILURES=0
-for ((TRIAL=1; TRIAL<=K; TRIAL++)); do
+TRIAL_END=$((TRIAL_START + K - 1))
+for ((TRIAL=TRIAL_START; TRIAL<=TRIAL_END; TRIAL++)); do
     TRIAL_DIR="$MODEL_ROOT/trial-$(printf '%02d' "$TRIAL")"
     mkdir -p "$TRIAL_DIR"
 
