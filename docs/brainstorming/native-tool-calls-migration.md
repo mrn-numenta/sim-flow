@@ -456,13 +456,26 @@ works against this endpoint).
   already ship is orthogonal to tool calls and should
   continue to work.
 
-**Caveat to verify before Phase B**: the model is
-`qwen3-27b` (the base Qwen3), not `qwen3-coder`. Base Qwen3
-natively uses Hermes-style tool calls (`<tool_call>{"name":
-"...","arguments":{...}}</tool_call>` with inline JSON) --
-**different** from the qwen-coder XML format the configured
-parser extracts. If the parser is mismatched to the model,
-extraction quality could vary. Pre-Phase-B smoke test:
+**Caveat resolved (2026-05-11)**: the Hugging Face model card
+for `Qwen/Qwen3.6-27B` explicitly recommends
+`--tool-call-parser qwen3_coder` for tool use on this model.
+The "qwen3_coder" parser name refers to the **XML output
+format** Qwen3.6 emits, not to the qwen3-coder model variant.
+So the operator's vLLM config is exactly correct for the
+served model. The card's recommended serving command:
+
+```bash
+vllm serve Qwen/Qwen3.6-27B \
+  --port 8000 --tensor-parallel-size 8 \
+  --max-model-len 262144 \
+  --reasoning-parser qwen3 \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder
+```
+
+Pre-Phase-B smoke test (verifies that vLLM's translation
+round-trips a standard OpenAI tools request into our
+expected response shape):
 
 ```bash
 curl -s http://localhost:8012/v1/chat/completions \
@@ -482,10 +495,66 @@ curl -s http://localhost:8012/v1/chat/completions \
 Expected on success: `message.tool_calls: [{id, type:
 "function", function: {name: "list_dir", arguments:
 "{\"path\":\".\"}"}}]`. Anything else (empty `tool_calls`,
-tool call in `content`, parse errors) means the parser /
-model mismatch is real and we need to either ask the operator
-to switch the parser (`--tool-call-parser hermes` for base
-Qwen3) or thread a Hermes-shape parser of our own.
+tool call body in `content`, parse errors) means
+`--enable-auto-tool-choice` is missing or some other vLLM
+flag is off; coordinate with the operator before proceeding.
+
+### Reasoning parser separates thinking from content
+
+The model card also recommends `--reasoning-parser qwen3`.
+With that flag set, the response's `choices[0].message`
+splits into:
+
+- `content: "..."` -- the user-visible answer
+- `reasoning_content: "..."` -- the model's thinking text
+  (was `<think>...</think>` inline before)
+
+Our current `decode_choice` already prefers `content` and
+falls back to `reasoning` when content is empty, so the wire
+path works either way. Open follow-up after Phase A: if the
+operator has the reasoning parser enabled, we can drop the
+client-side `strip_known_reasoning_markers` pass for Qwen
+turns (the server already split them out). Cheap and removes
+a code path; defer until we confirm the operator's config
+includes `--reasoning-parser qwen3`.
+
+### Sampling parameters Qwen3.6 wants
+
+The model card prescribes specific sampling values for
+**non-thinking (Instruct) mode** -- the mode we use today
+via `chat_template_kwargs.enable_thinking: False`:
+
+| param | recommended | current sim-flow default |
+|---|---|---|
+| `temperature` | 0.7 | unset (vLLM default = 1.0) |
+| `top_p` | 0.80 | unset (= 1.0) |
+| `top_k` | 20 | unset (= -1) |
+| `min_p` | 0.0 | unset |
+| `presence_penalty` | **1.5** | unset (= 0.0) |
+| `repetition_penalty` | 1.0 | unset |
+
+The standout is `presence_penalty=1.5`. The card explicitly
+flags it as the lever to "reduce endless repetitions" -- which
+maps onto our `runaway-loop` anomaly (1/21 trials) and is also
+suspected to drive a chunk of `work-no-artifact` (model
+re-emits identical reading-only turns without writing). This
+is a separate, much smaller hardening that can ship now,
+independent of the tool-calls migration. Tracked as a
+follow-up action item below.
+
+Recommended values for **thinking mode** (different;
+documented for completeness):
+`temperature=1.0, top_p=0.95, top_k=20, min_p=0.0`
+(presence_penalty stays at 0). We never want this with our
+current workflow but it's the right setting if we ever flip
+disable-thinking off.
+
+### Context length
+
+Native 262K tokens, extensible to 1M via YaRN. Recommended
+max output 32K typical, 81K for complex math/coding. Our
+current 65K default sits comfortably between the two and
+leaves plenty of context room. No change needed.
 
 ### Streaming vs non-streaming
 
@@ -517,6 +586,40 @@ e2e tests. Either teach the mock to emit `ParsedToolCall`
 records directly (cleaner), or keep it on the fenced path
 and document that the mock exercises the fallback. The first
 is the right call long-term.
+
+## 7b. Pre-migration hardening: Qwen3.6 sampling params
+
+The HF model card recommendations above can ship before any
+of the tool-calls migration phases. Effort: ~1 hour. Impact:
+direct mitigation of `runaway-loop` and the
+re-reading-without-writing pattern that drives
+`work-no-artifact`.
+
+Implementation outline:
+- Add `temperature`, `top_p`, `top_k`, `min_p`,
+  `presence_penalty` fields to `OpenAiCompatibleRequest` and
+  the wire `ChatRequestBody`.
+- Source defaults from the model family profile: a new
+  `recommended_sampling: Option<SamplingDefaults>` on
+  `ModelFamilyProfile`. `qwen3_6` carries the non-thinking
+  mode values. Other families default to `None` (no override
+  on the request -- the server's defaults stand).
+- Honor env overrides (`SIM_FLOW_TEMPERATURE`,
+  `SIM_FLOW_TOP_P`, etc.) for ad-hoc tuning.
+- Skip sampling override emission when `disable_thinking ==
+  false` and the family has separate thinking-mode defaults
+  (today: never -- we always disable thinking).
+- Add unit tests covering: (a) request body includes the
+  Qwen-recommended values when the family is `qwen3_6`,
+  (b) request body omits them when the family is
+  `generic_chat` or `claude_messages`,
+  (c) env override beats the family default.
+- K=3 rerun on vLLM with these knobs to measure
+  `runaway-loop` and `work-no-artifact` impact.
+
+This is independent of the migration but should land first --
+it's faster to validate and any improvement carries forward
+into Phase B's measurements.
 
 ## 8. What we are NOT doing in this migration
 
