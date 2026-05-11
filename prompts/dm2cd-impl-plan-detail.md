@@ -89,6 +89,19 @@ Read on demand:
    re-launches a fresh session per milestone after each
    critique passes.
 
+## Output
+
+**Use the path as the fence info-string, verbatim.** When you rewrite a
+milestone file, the opening fence must be the relative path the
+milestone instruction names (e.g.
+`​```docs/impl-plan/milestone-NN-<slug>.md`). Opening with a
+language tag (`markdown`, `json`, `toml`, `rust`, `yaml`, `text`,
+`md`, `rs`, `yml`, `txt`) means the body is **silently dropped** --
+the file never updates, the gate fails, and the work session burns
+its retry budget. See `_conventions/fenced-blocks.md`
+("Language-tag info-strings are SILENTLY DROPPED") for the failure
+mode in detail.
+
 ## Constraints
 
 - DO NOT write source code. Stub-detail markdown only.

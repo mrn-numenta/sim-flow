@@ -254,6 +254,18 @@ fn analyze_capture(path: &Path) -> Result<TrialSummary, String> {
     let mut n_artifact_writes: u32 = 0;
     let mut n_tool_invocations: u32 = 0;
 
+    // Per-turn accumulator for the `wrong-fence-info-string`
+    // detector. We can't make the call until we know whether the
+    // current turn produced any `artifact-written` event -- the
+    // pattern only counts when assistant text contains a fence
+    // opening with a language tag AND no artifact landed. Reset
+    // on every `request-llm-response`; finalize when the next one
+    // arrives (or at EOF).
+    let mut turn_text = String::new();
+    let mut turn_wrote_artifact = false;
+    let mut turn_step: Option<String> = None;
+    let mut turn_ts_ms: u64 = 0;
+
     let bump = |anomalies: &mut BTreeMap<String, u32>, kind: &str| {
         *anomalies.entry(kind.to_string()).or_insert(0) += 1;
     };
@@ -303,10 +315,30 @@ fn analyze_capture(path: &Path) -> Result<TrialSummary, String> {
 
         match (dir, event_kind) {
             ("out", "request-llm-response") => {
+                // Finalize the previous turn before starting a new one.
+                if !turn_text.is_empty() && !turn_wrote_artifact && has_lang_tag_fence(&turn_text) {
+                    bump(&mut anomalies, "wrong-fence-info-string");
+                    anomaly_records.push(AnomalyRecord {
+                        kind: "wrong-fence-info-string",
+                        step: turn_step.clone(),
+                        ts_ms: turn_ts_ms,
+                        snippet: trim_snippet(&turn_text),
+                    });
+                }
+                turn_text.clear();
+                turn_wrote_artifact = false;
+                turn_step.clone_from(&last_advance);
+                turn_ts_ms = ts_ms;
                 n_llm_requests += 1;
+            }
+            ("in", "llm-chunk") => {
+                if let Some(text) = event.get("text").and_then(|v| v.as_str()) {
+                    turn_text.push_str(text);
+                }
             }
             ("out", "artifact-written") => {
                 n_artifact_writes += 1;
+                turn_wrote_artifact = true;
             }
             ("out", "tool-invoked") => {
                 n_tool_invocations += 1;
@@ -424,6 +456,18 @@ fn analyze_capture(path: &Path) -> Result<TrialSummary, String> {
         }
     }
 
+    // Flush the last turn (no follow-up `request-llm-response`
+    // arrived, so the in-loop finalizer above never fired for it).
+    if !turn_text.is_empty() && !turn_wrote_artifact && has_lang_tag_fence(&turn_text) {
+        bump(&mut anomalies, "wrong-fence-info-string");
+        anomaly_records.push(AnomalyRecord {
+            kind: "wrong-fence-info-string",
+            step: turn_step.clone(),
+            ts_ms: turn_ts_ms,
+            snippet: trim_snippet(&turn_text),
+        });
+    }
+
     // Stash the anomaly records alongside the summary so
     // `write_trial_outputs` can serialize them; we don't surface
     // them on the summary type itself (kept small + flat for the
@@ -452,6 +496,55 @@ fn analyze_capture(path: &Path) -> Result<TrialSummary, String> {
         n_artifact_writes,
         n_tool_invocations,
     })
+}
+
+/// True iff the assistant text contains a fenced block whose
+/// info-string is a language tag (`markdown`, `json`, `toml`,
+/// `rust`, `yaml`, `html`, `text`) rather than the canonical
+/// relative path required by the artifact-write convention.
+///
+/// This is the failure mode the work-stall investigation surfaced:
+/// qwen3.6 with thinking disabled often emits
+///
+/// ```text
+/// ```markdown
+/// # File content...
+/// ```
+/// ```
+///
+/// instead of `` ```docs/<step>/<file>.md ``. The orchestrator's
+/// `extract_artifacts` rejects the language-tag info-string and
+/// silently drops the body; the model believes the file landed.
+///
+/// Caller pairs this with a "no `artifact-written` this turn"
+/// check before counting an anomaly: a turn that contains
+/// fenced sample code in prose AND also writes a real artifact
+/// is fine. The combo "fence-with-lang-tag AND no artifact
+/// landed" is the actual stall signature.
+fn has_lang_tag_fence(text: &str) -> bool {
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("```") {
+            let tag = rest.trim();
+            if matches!(
+                tag,
+                "markdown"
+                    | "md"
+                    | "json"
+                    | "toml"
+                    | "rust"
+                    | "rs"
+                    | "yaml"
+                    | "yml"
+                    | "html"
+                    | "text"
+                    | "txt"
+            ) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn classify_terminator(msg: &str) -> Option<TerminatorKind> {
