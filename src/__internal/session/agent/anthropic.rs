@@ -51,10 +51,13 @@ use crate::{Error, Result};
 pub const DEFAULT_API_URL: &str = "https://api.anthropic.com/v1/messages";
 pub const DEFAULT_API_VERSION: &str = "2023-06-01";
 /// Anthropic Messages API requires `max_tokens` on every request.
-/// 8192 is conservative; raise via `SIM_FLOW_MAX_TOKENS` for long
-/// authoring turns. Opus 4.7's max output is 32K, so the env var
-/// can be raised that high before the server starts rejecting.
-pub const DEFAULT_MAX_TOKENS: u32 = 8192;
+/// Default raised 8192 -> 32768 after the K=1 Opus 4.7 smoke run
+/// hit `stop_reason=max_tokens` on 5/5 critique passes (4-blocker
+/// findings + remediation guidance + JSON shape blow past 8K).
+/// Opus 4.7 caps at 32K output server-side; the cap lands at the
+/// model's wall rather than ours. Override via `SIM_FLOW_MAX_TOKENS`
+/// for narrower-context Anthropic models if any ship later.
+pub const DEFAULT_MAX_TOKENS: u32 = 32_768;
 /// Default model when none is specified. Picked to match the
 /// brainstorming doc's Phase 4 lineup.
 pub const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
