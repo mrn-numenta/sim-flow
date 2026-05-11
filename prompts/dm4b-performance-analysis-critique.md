@@ -37,15 +37,15 @@ new work did not regress earlier milestones.
 
 Prefix gate-blocking issues with `BLOCKER:` (the flow cannot
 finish until fixed). Prefix informational notes with
-`UNRESOLVED:`. The orchestrator fails the DM4b gate on `BLOCKER:`
-lines only. If experiment tracking infrastructure is not yet
+`UNRESOLVED:`. The orchestrator fails the DM4b gate on both `BLOCKER:`
+and `UNRESOLVED:` lines. If experiment tracking infrastructure is not yet
 available (Phase 4 not landed), emit
 `BLOCKER: experiment tracking unavailable (Phase 4 pending)`
 and stop.
 
 Record findings in the critique JSON (see "Output" below for the
-schema). `kind: "blocker"` blocks the gate; `"unresolved"` is
-informational; `"resolved"` is historical / retry-mode.
+schema). `kind: "blocker"` and `kind: "unresolved"` both block the gate; `"resolved"` is
+historical / retry-mode.
 
 1. **Plan completion**. Is every task in the
    `perf-milestone-NN-*.md` files either `[x]` or documented as

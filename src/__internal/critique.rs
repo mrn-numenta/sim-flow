@@ -36,7 +36,7 @@ pub struct CritiqueJson {
     pub summary: String,
     /// The findings, in the order the agent produced them. Rendered
     /// section-by-section in the markdown view; gate-relevant for
-    /// `BLOCKER`-class entries.
+    /// `BLOCKER` and `UNRESOLVED` entries.
     pub findings: Vec<CritiqueFinding>,
     /// Optional free-form trailing prose for things that don't fit a
     /// finding (questions for the user, design observations, etc.).
@@ -110,7 +110,7 @@ impl Finding {
     }
 
     pub fn is_blocking(&self) -> bool {
-        matches!(self, Finding::Blocker(_))
+        matches!(self, Finding::Unresolved(_) | Finding::Blocker(_))
     }
 }
 
@@ -403,9 +403,9 @@ mod tests {
         let c = Critique::from_json(body).unwrap();
         assert_eq!(c.findings.len(), 2);
         assert!(c.findings[0].is_blocking());
-        assert!(!c.findings[1].is_blocking());
+        assert!(c.findings[1].is_blocking());
         assert!(c.has_blocking());
-        assert_eq!(c.blocking().len(), 1);
+        assert_eq!(c.blocking().len(), 2);
     }
 
     #[test]
@@ -614,19 +614,19 @@ mod tests {
         let c = Critique::parse(text);
         assert_eq!(c.findings.len(), 3);
         assert!(!c.findings[0].is_blocking());
-        assert!(!c.findings[1].is_blocking());
+        assert!(c.findings[1].is_blocking());
         assert!(c.findings[2].is_blocking());
-        assert_eq!(c.blocking().len(), 1);
+        assert_eq!(c.blocking().len(), 2);
         assert!(c.has_blocking());
     }
 
     #[test]
-    fn markdown_unresolved_only_does_not_block() {
+    fn markdown_unresolved_only_blocks() {
         let text = "- UNRESOLVED: minor wording nit\n- UNRESOLVED: future cleanup\n";
         let c = Critique::parse(text);
         assert_eq!(c.findings.len(), 2);
-        assert!(!c.has_blocking());
-        assert!(c.blocking().is_empty());
+        assert!(c.has_blocking());
+        assert_eq!(c.blocking().len(), 2);
     }
 
     #[test]

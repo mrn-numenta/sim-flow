@@ -42,7 +42,7 @@ Judge the spec (whichever layout) by this standard:
 
 For each question below, record a finding in the critique JSON.
 Use `kind: "blocker"` for gate-blocking issues, `"unresolved"`
-for non-blocking notes, `"resolved"` for informational
+for open follow-ups that also block the gate until resolved, `"resolved"` for informational
 acknowledgements (ignored by the gate). See "Output" below for
 the schema.
 

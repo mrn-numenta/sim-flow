@@ -237,7 +237,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
     let framework_docs_root = detect_framework_docs_root(&opts.foundation_root);
     let write_paths: Vec<String> = crate::steps::allowed_write_paths(&step, opts.kind);
     let work_retry_has_prior_blockers = opts.kind == SessionKind::Work
-        && !retry_blocker_blocks(&opts.project_dir, step.id).is_empty();
+        && !retry_gate_finding_blocks(&opts.project_dir, step.id).is_empty();
 
     // The current milestone's project-relative path, when this is a
     // milestone-walk step. WriteFileTool reads the body fresh each
@@ -2100,19 +2100,20 @@ fn build_session_inputs(
     let critique_abs = project_dir.join(&critique_rel);
     // Read the rendered markdown body for legacy fallback / first-
     // pass critique inlining; the JSON sibling (when present) is
-    // the source of truth for the BLOCKER list. `critique_body` is
+    // the source of truth for gate-failing findings. `critique_body` is
     // None when neither artifact is on disk yet.
     let critique_body = std::fs::read_to_string(&critique_abs).ok();
     // Critique-retry detection: the file exists AND it's a critique
     // session AND we're not on the first pass. The first-pass test
-    // is "no BLOCKER findings at all" -- a fresh critique file from
+    // is "no gate-failing findings at all" -- a fresh critique file from
     // a prior run that already evaluated cleanly wouldn't have any.
-    // We guard on BLOCKER presence so a previously-clean critique
+    // We guard on gate-failing finding presence so a previously-clean critique
     // doesn't suppress the full evaluation when the agent
     // legitimately needs it (e.g. the work session was edited
     // externally between runs).
-    let prior_critique_blockers = retry_blocker_blocks(project_dir, step.id);
-    let is_critique_retry = kind == SessionKind::Critique && !prior_critique_blockers.is_empty();
+    let prior_critique_gate_findings = retry_gate_finding_blocks(project_dir, step.id);
+    let is_critique_retry =
+        kind == SessionKind::Critique && !prior_critique_gate_findings.is_empty();
     let inline_critique = kind == SessionKind::Work || is_critique_retry;
 
     // Milestone-walk scoping. When a step's descriptor binds it to
@@ -2147,7 +2148,7 @@ fn build_session_inputs(
         Some(walk) => {
             let pick_touched = match kind {
                 SessionKind::Critique => true,
-                SessionKind::Work => !prior_critique_blockers.is_empty(),
+                SessionKind::Work => !prior_critique_gate_findings.is_empty(),
             };
             match crate::__internal::steps::find_current_milestone(project_dir, &walk, pick_touched)
             {
@@ -2298,15 +2299,15 @@ fn build_session_inputs(
     if inline_critique && (critique_body.is_some() || is_critique_retry) {
         volatile.push_str("\n---\n\n");
         if is_critique_retry {
-            // `prior_critique_blockers` was already JSON-first
+            // `prior_critique_gate_findings` was already JSON-first
             // resolved at the top of the function; reuse it so the
             // inline blocks match the count the gate / auto driver
             // see.
-            let blocks = &prior_critique_blockers;
+            let blocks = &prior_critique_gate_findings;
             volatile.push_str(&format!(
-                "Critique-retry mode. The prior pass flagged the BLOCKER(s) below; \
+                "Critique-retry mode. The prior pass flagged the gate-failing findings below; \
                  the work session has since re-run. Your task on THIS pass is FOCUSED:\n\n\
-                 - For each prior BLOCKER, decide whether the work session's updated \
+                 - For each prior finding, decide whether the work session's updated \
                    artifact resolves it. Quote the gap from the prior block if it is \
                    still applicable so the resolution is traceable.\n\
                  - Write the new critique fresh: emit `RESOLVED:` / `BLOCKER:` / \
@@ -2389,14 +2390,14 @@ fn build_session_inputs(
     Some(SessionInputs { stable, volatile })
 }
 
-/// JSON-first blocker extractor for the retry-inline path. When
+/// JSON-first gate-finding extractor for the retry-inline path. When
 /// `<step>-critique.json` exists, parse it and return one
-/// formatted block per `kind == blocker` finding (header line +
+/// formatted block per gate-failing finding (header line +
 /// body, mirroring the markdown shape so the agent's retry context
 /// reads naturally). Falls back to the legacy markdown regex
-/// (`extract_blocker_blocks`) when no JSON sibling is on disk so
+/// (`extract_gate_finding_blocks`) when no JSON sibling is on disk so
 /// projects mid-flight before the migration keep working.
-fn retry_blocker_blocks(project_dir: &Path, step_id: &str) -> Vec<String> {
+fn retry_gate_finding_blocks(project_dir: &Path, step_id: &str) -> Vec<String> {
     let json_rel = format!("docs/critiques/{step_id}-critique.json");
     let json_abs = project_dir.join(&json_rel);
     if let Ok(text) = std::fs::read_to_string(&json_abs)
@@ -2405,19 +2406,32 @@ fn retry_blocker_blocks(project_dir: &Path, step_id: &str) -> Vec<String> {
         return parsed
             .findings
             .iter()
-            .filter(|f| f.kind == crate::critique::FindingKind::Blocker)
+            .filter(|f| {
+                matches!(
+                    f.kind,
+                    crate::critique::FindingKind::Blocker
+                        | crate::critique::FindingKind::Unresolved
+                )
+            })
             .map(|f| {
+                let label = match f.kind {
+                    crate::critique::FindingKind::Blocker => "BLOCKER",
+                    crate::critique::FindingKind::Unresolved => "UNRESOLVED",
+                    crate::critique::FindingKind::Resolved => {
+                        unreachable!("filter excludes resolved")
+                    }
+                };
                 if f.body.trim().is_empty() {
-                    format!("**BLOCKER: {}**", f.title.trim())
+                    format!("**{label}: {}**", f.title.trim())
                 } else {
-                    format!("**BLOCKER: {}**\n\n{}", f.title.trim(), f.body.trim())
+                    format!("**{label}: {}**\n\n{}", f.title.trim(), f.body.trim())
                 }
             })
             .collect();
     }
     let md_abs = project_dir.join(format!("docs/critiques/{step_id}-critique.md"));
     let body = std::fs::read_to_string(&md_abs).unwrap_or_default();
-    extract_blocker_blocks(&body)
+    extract_gate_finding_blocks(&body)
 }
 
 fn tool_call_persists_output(tool_name: &str) -> bool {
@@ -2439,12 +2453,41 @@ fn can_auto_wind_down_clean_work_session(
 /// header line is included so the agent sees the prefix verbatim;
 /// sub-bullets and explanatory prose that follow stay attached.
 ///
-/// `extract_blocker_blocks().len()` is the gate-relevant count of
-/// blockers and replaces the older single-line `parse_blocker_lines`
+/// `extract_gate_finding_blocks().len()` is the gate-relevant count of
+/// findings and replaces the older single-line `parse_blocker_lines`
 /// helper. Whole blocks (rather than just header lines) are what we
 /// inline into a focused critique-retry: a multi-bullet BLOCKER
 /// describing three sub-gaps loses all the actionable detail if
 /// only the first line survives.
+fn extract_gate_finding_blocks(body: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let lines: Vec<&str> = body.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        if matches!(
+            line_kind(lines[i]),
+            Some(FindingKind::Blocker | FindingKind::Unresolved)
+        ) {
+            let start = i;
+            let mut j = i + 1;
+            while j < lines.len() && !is_block_terminator(lines[j]) {
+                j += 1;
+            }
+            // Trim trailing blank lines so blocks read cleanly when
+            // joined back together.
+            let mut end = j;
+            while end > start + 1 && lines[end - 1].trim().is_empty() {
+                end -= 1;
+            }
+            out.push(lines[start..end].join("\n"));
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 fn extract_blocker_blocks(body: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let lines: Vec<&str> = body.lines().collect();
@@ -2456,8 +2499,6 @@ fn extract_blocker_blocks(body: &str) -> Vec<String> {
             while j < lines.len() && !is_block_terminator(lines[j]) {
                 j += 1;
             }
-            // Trim trailing blank lines so blocks read cleanly when
-            // joined back together.
             let mut end = j;
             while end > start + 1 && lines[end - 1].trim().is_empty() {
                 end -= 1;

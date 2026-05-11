@@ -31,7 +31,7 @@ pub enum GateCheck {
         description: String,
     },
     /// The critique file at `path` must not contain any `BLOCKER:`
-    /// lines. `UNRESOLVED:` lines are informational and do not block.
+    /// or `UNRESOLVED:` lines.
     CritiqueClean { path: PathBuf, description: String },
     /// The experiments index at `.sim-flow/experiments.db` must contain
     /// at least one row in the `runs` table. Used by DM4 to confirm that
@@ -539,11 +539,11 @@ mod tests {
     }
 
     #[test]
-    fn critique_clean_fails_on_blocker() {
+    fn critique_clean_fails_on_gate_failing_findings() {
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("crit.md"),
-            "- BLOCKER: missing test for X\n",
+            "- UNRESOLVED: coverage gap remains\n- BLOCKER: missing test for X\n",
         )
         .unwrap();
         let report = evaluate(
@@ -555,6 +555,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(report.failures.len(), 1);
+        let reason = &report.failures[0].reason;
+        assert!(reason.contains("UNRESOLVED"));
+        assert!(reason.contains("BLOCKER"));
     }
 
     fn write(path: &Path, body: &str) {

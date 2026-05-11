@@ -44,17 +44,10 @@ describe("parseFindings", () => {
     const { findings, hasBlocking } = parseFindings(body);
     expect(findings).toHaveLength(1);
     expect(findings[0].kind).toBe("unresolved");
-    // Only `blocker` is gate-blocking; `unresolved` is informational
-    // and tracks open questions / nits the user should address but
-    // doesn't prevent the gate from passing. Mirrors the Rust gate.
-    expect(hasBlocking).toBe(false);
+    expect(hasBlocking).toBe(true);
   });
 
-  it("treats unresolved-only critiques as not blocking", () => {
-    // Regression: the markdown parser used to flag `unresolved` as
-    // blocking, which made the dashboard show "Critique: blocking"
-    // and lock Run Gate even though the orchestrator's gate
-    // (`Finding::is_blocking`) only fails on BLOCKER findings.
+  it("treats unresolved-only critiques as blocking", () => {
     const body = [
       "- UNRESOLVED: minor wording nit",
       "- UNRESOLVED: future cleanup",
@@ -63,7 +56,7 @@ describe("parseFindings", () => {
     ].join("\n");
     const { findings, hasBlocking } = parseFindings(body);
     expect(findings).toHaveLength(3);
-    expect(hasBlocking).toBe(false);
+    expect(hasBlocking).toBe(true);
   });
 
   it("handles leading whitespace and `*` list markers", () => {
@@ -257,12 +250,10 @@ describe("listCritiqueFiles / readCritique", () => {
     expect(got).not.toBeNull();
     expect(got!.findings).toHaveLength(1);
     expect(got!.findings[0].kind).toBe("unresolved");
-    // Unresolved alone is not gate-blocking; the dashboard should
-    // mirror the orchestrator's `Finding::is_blocking` rule.
-    expect(got!.hasBlocking).toBe(false);
+    expect(got!.hasBlocking).toBe(true);
   });
 
-  it("readCritique JSON: unresolved-only is not blocking, blocker present is", async () => {
+  it("readCritique JSON: unresolved-only is blocking, blocker present is too", async () => {
     const dir = critiquesDir(projectDir);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(

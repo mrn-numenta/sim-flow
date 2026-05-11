@@ -28,11 +28,11 @@ Read on demand:
 
 Prefix gate-blocking issues with `BLOCKER:` (DM2cd cannot
 advance past this milestone until fixed). Prefix informational
-notes with `UNRESOLVED:`. The gate fails on `BLOCKER:` lines.
+notes with `UNRESOLVED:`. The gate fails on both `BLOCKER:` and `UNRESOLVED:` lines.
 
 Record findings in the critique JSON (see "Output" below for the
-schema). `kind: "blocker"` blocks the gate; `"unresolved"` is
-informational; `"resolved"` is historical / retry-mode.
+schema). `kind: "blocker"` and `kind: "unresolved"` both block the gate; `"resolved"` is
+historical / retry-mode.
 
 This critique reviews ONE milestone's detailed task list. Do
 NOT review other milestones; sibling stubs are intentionally

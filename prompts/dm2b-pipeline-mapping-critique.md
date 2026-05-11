@@ -18,8 +18,8 @@ critique file.
 ## Evaluation
 
 Record findings in the critique JSON (see "Output" below for the
-schema). `kind: "blocker"` blocks the gate; `"unresolved"` is
-informational; `"resolved"` is historical / retry-mode.
+schema). `kind: "blocker"` and `kind: "unresolved"` both block the gate; `"resolved"` is
+historical / retry-mode.
 
 1. Does the mapping use the canonical gate-budget-per-cycle target or
    estimate from `docs/targets.md`, and is that usage clearly stated?

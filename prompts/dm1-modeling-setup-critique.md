@@ -16,8 +16,8 @@ evaluate them and write the critique file.
 ## Evaluation
 
 Record findings in the critique JSON. Use `kind: "blocker"` for
-gate-blocking issues, `"unresolved"` for non-blocking notes,
-`"resolved"` for informational acknowledgements (ignored by the
+gate-blocking issues, `"unresolved"` for open follow-ups that
+also block the gate until resolved, `"resolved"` for informational acknowledgements (ignored by the
 gate). See "Output" below for the schema.
 
 1. Does every target in `docs/targets.md` trace back to a specific line or
@@ -75,5 +75,5 @@ NOT write the markdown yourself.
 ```
 
 `kind` values: `"blocker"` (gate-blocking), `"unresolved"`
-(informational), `"resolved"` (historical / retry-mode). The
+(also gate-blocking until resolved), `"resolved"` (historical / retry-mode). The
 schema is strict (`deny_unknown_fields`); typos fail the parse.

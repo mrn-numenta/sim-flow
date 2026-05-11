@@ -62,10 +62,10 @@ internal priors):
 
 Record findings in the critique JSON (see "Output" below for the
 schema). Use `kind: "blocker"` for gate-blocking issues (DM3
-cannot proceed until fixed), `"unresolved"` for informational
-notes, `"resolved"` for historical / retry-mode acknowledgements.
-The orchestrator fails the DM2d gate on `"blocker"` findings
-only.
+cannot proceed until fixed), `"unresolved"` for open follow-ups
+that also prevent advance, `"resolved"` for historical / retry-mode acknowledgements.
+The orchestrator fails the DM2d gate on both `"blocker"` and
+`"unresolved"` findings.
 
 1. Does the `ConnectivityPlan` topology match
    `docs/analysis/pipeline-mapping.md`?

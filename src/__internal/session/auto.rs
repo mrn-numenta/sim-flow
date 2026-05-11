@@ -375,10 +375,11 @@ fn run_auto_loop<H: Host>(
                 return Ok(o);
             }
 
-            // Did the critique flag any blockers? If yes and we have
-            // budget, loop back to work. Otherwise proceed to advance.
-            let blockers = read_blockers(&opts.project_dir, step_id);
-            let cur_count = blockers.len();
+            // Did the critique flag any gate-failing findings? If
+            // yes and we have budget, loop back to work. Otherwise
+            // proceed to advance.
+            let gate_findings = read_gate_findings(&opts.project_dir, step_id);
+            let cur_count = gate_findings.len();
             // Checkpoint after each Critique boundary so a kill
             // during the next Work session resumes with the right
             // retry counter rather than starting the step over.
@@ -404,7 +405,7 @@ fn run_auto_loop<H: Host>(
                 delta = ?delta,
             );
             prev_blocker_count = Some(cur_count);
-            if blockers.is_empty() {
+            if gate_findings.is_empty() {
                 // Clean critique. Try to advance the step. For
                 // milestone-walk steps, the gate may stay dirty
                 // (`MilestonesAllResolved` fails) between
@@ -464,12 +465,12 @@ fn run_auto_loop<H: Host>(
                 auto_host.write(&Event::Diagnostic {
                     level: DiagnosticLevel::Error,
                     message: format!(
-                        "auto: {} critique still has {} blocker(s) after {} retries; flipping to manual mode. \
+                        "auto: {} critique still has {} gate-failing finding(s) after {} retries; flipping to manual mode. \
                          Use the dashboard's per-step controls to inspect, re-run, or advance. Raise \
                          `sim-flow.auto.maxCritiqueIterations` and toggle back to auto if you want more retries per resume \
                          (current cap: {}).",
                         step_id,
-                        blockers.len(),
+                        gate_findings.len(),
                         critique_iters - 1,
                         opts.max_critique_iters,
                     ),
@@ -480,9 +481,9 @@ fn run_auto_loop<H: Host>(
             auto_host.write(&Event::Diagnostic {
                 level: DiagnosticLevel::Info,
                 message: format!(
-                    "auto: {} critique reported {} blocker(s); re-running work (retry {}/{})",
+                    "auto: {} critique reported {} gate-failing finding(s); re-running work (retry {}/{})",
                     step_id,
-                    blockers.len(),
+                    gate_findings.len(),
                     critique_iters,
                     opts.max_critique_iters,
                 ),
@@ -1179,12 +1180,12 @@ fn run_manual_advance<H: Host>(
     // + stay parked. For milestone-walk steps (DM2cd, DM3ad, DM3b,
     // DM3c, DM4ad, DM4b) we mirror auto mode's two retry paths:
     //
-    //   - **Critique blockers on the current milestone**: the
+    //   - **Critique findings on the current milestone**: the
     //     agent's Work session left issues the Critique flagged
     //     (e.g. duplicate task symbols). Re-run Work + Critique
     //     for the SAME milestone (the orchestrator's per-session
-    //     `prior_critique_blockers` feedback gives the agent the
-    //     prior BLOCKERs verbatim). Bounded by `max_critique_iters`.
+    //     prior critique feedback gives the agent the prior
+    //     gate-failing findings verbatim). Bounded by `max_critique_iters`.
     //   - **More milestones pending**: the current milestone is
     //     clean and the gate's only failures are
     //     `MilestonesAllResolved` -- run Work + Critique for the
@@ -1198,23 +1199,23 @@ fn run_manual_advance<H: Host>(
     let mut walk_iter: u32 = 0;
     let mut critique_iters: u32 = 0;
     loop {
-        // Critique-blocker retry path: read the on-disk critique
-        // BEFORE attempting advance. If blockers are present we
+        // Critique retry path: read the on-disk critique BEFORE
+        // attempting advance. If gate-failing findings are present we
         // know advance would return Stuck for that reason; loop
         // back to Work directly so the agent gets the prior
-        // BLOCKERs in the next prompt without the user seeing a
+        // findings in the next prompt without the user seeing a
         // misleading "cannot advance" Error.
-        let blockers = read_blockers(&opts.project_dir, step_id);
-        if !blockers.is_empty() {
+        let gate_findings = read_gate_findings(&opts.project_dir, step_id);
+        if !gate_findings.is_empty() {
             critique_iters += 1;
             if critique_iters > opts.max_critique_iters {
                 auto_host.write(&Event::Diagnostic {
                     level: DiagnosticLevel::Error,
                     message: format!(
-                        "Advance: {step_id} critique still has {} blocker(s) after {} retries; \
+                        "Advance: {step_id} critique still has {} gate-failing finding(s) after {} retries; \
                          giving up. Inspect `docs/critiques/{step_id}-critique.json` and re-issue \
                          RunStep / RunCritique manually after fixing.",
-                        blockers.len(),
+                        gate_findings.len(),
                         opts.max_critique_iters,
                     ),
                 })?;
@@ -1223,9 +1224,9 @@ fn run_manual_advance<H: Host>(
             auto_host.write(&Event::Diagnostic {
                 level: DiagnosticLevel::Info,
                 message: format!(
-                    "Advance: {step_id} critique has {} blocker(s); re-running Work + Critique \
+                    "Advance: {step_id} critique has {} gate-failing finding(s); re-running Work + Critique \
                      (retry {}/{}).",
-                    blockers.len(),
+                    gate_findings.len(),
                     critique_iters,
                     opts.max_critique_iters,
                 ),
@@ -1669,14 +1670,12 @@ fn kind_label_for_manual(kind: crate::client::SessionKind) -> &'static str {
     }
 }
 
-/// Findings that prevent the gate from passing. Only `BLOCKER:`
-/// lines block advancement. `UNRESOLVED:` is informational -- the
-/// model uses it to flag notes/questions/follow-ups it does not
-/// consider must-fix. The auto driver MUST match
+/// Findings that prevent the gate from passing. Both `BLOCKER:`
+/// and `UNRESOLVED:` lines block advancement. The auto driver MUST match
 /// `Finding::is_blocking` in `tools/sim-flow/src/critique.rs` (which
 /// the gate's `CritiqueClean` check uses) or it will loop on issues
 /// the gate would happily pass.
-/// Returns the BLOCKER finding texts the gate's
+/// Returns the gate-failing finding texts the gate's
 /// `CritiqueClean` check would flag. Delegates to `Critique::parse`
 /// (the gate-side parser) so the auto-driver and gate can never
 /// disagree about what counts as a finding. Without this sharing
@@ -1684,7 +1683,7 @@ fn kind_label_for_manual(kind: crate::client::SessionKind) -> &'static str {
 /// while the gate held it back, or vice versa -- exactly the bug
 /// that let DM3b advance past 5 heading-style `## BLOCKER:`
 /// findings the gate-side parser missed.
-fn read_blockers(project_dir: &Path, step_id: &str) -> Vec<String> {
+fn read_gate_findings(project_dir: &Path, step_id: &str) -> Vec<String> {
     let path = project_dir
         .join("docs/critiques")
         .join(format!("{step_id}-critique.md"));
@@ -1695,7 +1694,11 @@ fn read_blockers(project_dir: &Path, step_id: &str) -> Vec<String> {
     critique
         .blocking()
         .into_iter()
-        .map(|f| format!("BLOCKER: {}", f.text()))
+        .map(|f| match f {
+            crate::critique::Finding::Resolved(_) => unreachable!("blocking() excludes resolved"),
+            crate::critique::Finding::Unresolved(text) => format!("UNRESOLVED: {text}"),
+            crate::critique::Finding::Blocker(text) => format!("BLOCKER: {text}"),
+        })
         .collect()
 }
 
@@ -1953,7 +1956,7 @@ mod tests {
     use crate::session::host::TestHost;
 
     #[test]
-    fn read_blockers_handles_numbered_bold_markdown() {
+    fn read_gate_findings_handles_numbered_bold_markdown() {
         // Replaces the old `strip_finding_prefix` test. Now that
         // `read_blockers` delegates to `Critique::parse`, the
         // expectations cover every form the gate parser
@@ -1977,24 +1980,30 @@ not a finding
 ",
         )
         .unwrap();
-        let blockers = read_blockers(tmp.path(), "DM0");
-        assert_eq!(blockers.len(), 6, "got {blockers:?}");
-        assert!(blockers.iter().any(|b| b.contains("list-style")));
-        assert!(blockers.iter().any(|b| b.contains("asterisk-list")));
-        assert!(blockers.iter().any(|b| b.contains("numbered + bold")));
-        assert!(blockers.iter().any(|b| b.contains("bare-line")));
-        assert!(blockers.iter().any(|b| b.contains("heading-style")));
-        assert!(blockers.iter().any(|b| b.contains("heading + emoji")));
+        let findings = read_gate_findings(tmp.path(), "DM0");
+        assert_eq!(findings.len(), 8, "got {findings:?}");
+        assert!(findings.iter().any(|b| b.contains("list-style")));
+        assert!(findings.iter().any(|b| b.contains("asterisk-list")));
+        assert!(
+            findings
+                .iter()
+                .any(|b| b.contains("ignored (not a blocker)"))
+        );
+        assert!(findings.iter().any(|b| b.contains("numbered + bold")));
+        assert!(findings.iter().any(|b| b.contains("also ignored")));
+        assert!(findings.iter().any(|b| b.contains("bare-line")));
+        assert!(findings.iter().any(|b| b.contains("heading-style")));
+        assert!(findings.iter().any(|b| b.contains("heading + emoji")));
     }
 
     #[test]
-    fn read_blockers_returns_empty_when_critique_missing() {
+    fn read_gate_findings_returns_empty_when_critique_missing() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(read_blockers(tmp.path(), "DM0").is_empty());
+        assert!(read_gate_findings(tmp.path(), "DM0").is_empty());
     }
 
     #[test]
-    fn read_blockers_extracts_only_blocker_findings() {
+    fn read_gate_findings_extracts_gate_failing_findings() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("docs/critiques");
         std::fs::create_dir_all(&dir).unwrap();
@@ -2007,14 +2016,15 @@ not a finding
              4. RESOLVED: cleaned up.\n",
         )
         .unwrap();
-        let blockers = read_blockers(tmp.path(), "DM0");
-        assert_eq!(blockers.len(), 2);
-        assert!(blockers[0].starts_with("BLOCKER: missing clock frequency"));
-        assert!(blockers[1].starts_with("BLOCKER: bad pinout"));
+        let findings = read_gate_findings(tmp.path(), "DM0");
+        assert_eq!(findings.len(), 3);
+        assert!(findings[0].starts_with("BLOCKER: missing clock frequency"));
+        assert!(findings[1].starts_with("UNRESOLVED: minor wording"));
+        assert!(findings[2].starts_with("BLOCKER: bad pinout"));
     }
 
     #[test]
-    fn read_blockers_treats_unresolved_only_critique_as_advanceable() {
+    fn read_gate_findings_treats_unresolved_only_critique_as_gate_failing() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("docs/critiques");
         std::fs::create_dir_all(&dir).unwrap();
@@ -2025,11 +2035,10 @@ not a finding
              2. UNRESOLVED: future cleanup note.\n",
         )
         .unwrap();
-        let blockers = read_blockers(tmp.path(), "DM0");
-        assert!(
-            blockers.is_empty(),
-            "UNRESOLVED-only critique should not produce blockers, got {blockers:?}",
-        );
+        let findings = read_gate_findings(tmp.path(), "DM0");
+        assert_eq!(findings.len(), 2, "got {findings:?}");
+        assert!(findings[0].starts_with("UNRESOLVED: minor wording nit."));
+        assert!(findings[1].starts_with("UNRESOLVED: future cleanup note."));
     }
 
     // -----------------------------------------------------------------

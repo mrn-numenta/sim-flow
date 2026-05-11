@@ -29,11 +29,11 @@ gaps here propagate as missing or mis-shaped milestones.
 
 Prefix gate-blocking issues with `BLOCKER:` (DM3ad cannot
 proceed). Prefix nits with `UNRESOLVED:`. The gate fails on
-`BLOCKER:` lines.
+both `BLOCKER:` and `UNRESOLVED:` lines.
 
 Record findings in the critique JSON (see "Output" below for the
-schema). `kind: "blocker"` blocks the gate; `"unresolved"` is
-informational; `"resolved"` is historical / retry-mode.
+schema). `kind: "blocker"` and `kind: "unresolved"` both block the gate; `"resolved"` is
+historical / retry-mode.
 
 This critique reviews the OUTLINE, not per-milestone task
 lists. Resist reviewing content that lives in
