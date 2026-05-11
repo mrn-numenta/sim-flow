@@ -658,6 +658,63 @@ This is independent of the migration but should land first --
 it's faster to validate and any improvement carries forward
 into Phase B's measurements.
 
+## 7c. Phase B implementation log (2026-05-11)
+
+Wire is end-to-end behind `SIM_FLOW_TOOL_MODE=native`. Fence
+mode remains the default; nothing changes when the env var is
+unset.
+
+### Commits
+
+| commit | step | what it does |
+|---|---|---|
+| `36dd307` | A | Module reshape: `agent/openai_compat/{mod.rs,transport.rs}`, `agent/anthropic/mod.rs`. Pure refactor. |
+| `8e24cfc` | B1 | Wire types in `openai_compat/tool_calls.rs` (`ToolDescriptor`, `NativeToolCall`); `ChatRequestBody.tools/tool_choice`; `dispatch_chat_with_tools` returning `ChatResponse {text, tool_calls, metrics}`. |
+| `e2ef5ea` | B2a | `CliAgent::dispatch_with_tools` trait method (default impl drops catalog). `OpenAiCompatAgent` overrides: translates `ToolAdvertise` → `ToolDescriptor`, sends `tool_choice: "auto"`, maps `NativeToolCall` → `AdvertisedToolCall`. |
+| `270b3b1` | B2b/c | End-to-end protocol wiring. `HostEvent::LlmEnd.tool_calls: Vec<LlmToolCall>`. Host gated on `SIM_FLOW_TOOL_MODE=native` switches dispatch path. Orchestrator merges native + fenced tool calls at the dispatch sites. Schema + VS Code TS bindings updated. |
+
+### What still needs to land before Phase B can K=3-measure
+
+- **Tool-result role/id threading.** Today's orchestrator feeds
+  tool results back as a User-role prose blob. Native mode
+  specs `{role: "tool", tool_call_id: "<id>", content: "..."}`
+  per tool call, tied to the assistant's `tool_calls[i].id`.
+  Without the proper role, vLLM still accepts the message but
+  the model may get confused about which tool result
+  corresponds to which call when multiple are in flight. Adds
+  needed:
+  - `LlmRole::Tool` variant (currently System | User | Assistant).
+  - `LlmMessage.tool_call_id: Option<String>` (or a richer
+    Message enum).
+  - openai_compat/transport converter emits the Tool-role
+    wire shape.
+  - Anthropic converter (Phase C) emits the corresponding
+    `tool_result` content block.
+- **Assistant-turn `tool_calls` history.** The model expects
+  to see its own prior tool_calls in the message history when
+  the next turn arrives. We capture them in the orchestrator
+  now but don't echo them on the next outbound request.
+  Without this, multi-turn tool sequences degrade.
+- **Smoke test.** A K=1 / K=3 run against vLLM with
+  `SIM_FLOW_TOOL_MODE=native` to verify the wire end-to-end
+  on a real session. The pre-Phase-B curl smoke worked; the
+  full sim-flow round trip hasn't been validated yet.
+
+### Decision point ahead
+
+The two missing pieces (tool role + tool_calls in history)
+are roughly a day of work on their own. Worth doing before
+the K=3 measurement so the data isn't muddied by half-shape
+issues. After that, Phase B's full K=3 vs Phase 0e
+non-thinking K=3 makes the call:
+
+- If native ≥ Phase 0e on advance depth AND `wrong-fence` /
+  `bare-json` rates stay at 0: flip native to default, start
+  Phase C (Anthropic).
+- If native regresses: study the captures, iterate on the
+  tool catalog descriptions / `tool_choice` policy / prompt
+  pruning before promoting.
+
 ## 8. What we are NOT doing in this migration
 
 - Streaming responses. Out of scope.
