@@ -673,32 +673,59 @@ unset.
 | `e2ef5ea` | B2a | `CliAgent::dispatch_with_tools` trait method (default impl drops catalog). `OpenAiCompatAgent` overrides: translates `ToolAdvertise` → `ToolDescriptor`, sends `tool_choice: "auto"`, maps `NativeToolCall` → `AdvertisedToolCall`. |
 | `270b3b1` | B2b/c | End-to-end protocol wiring. `HostEvent::LlmEnd.tool_calls: Vec<LlmToolCall>`. Host gated on `SIM_FLOW_TOOL_MODE=native` switches dispatch path. Orchestrator merges native + fenced tool calls at the dispatch sites. Schema + VS Code TS bindings updated. |
 
+### Phase B step 2d -- Tool-role + tool_call_id threading
+
+Commit `b00d71d` lands:
+- `LlmRole::Tool` variant + `LlmMessage.tool_call_id /
+  tool_calls` fields. Backward-compatible via serde-default.
+- openai_compat converter serializes assistant tool_calls and
+  tool-role tool_call_id on the wire (skip-if-empty so fence-
+  mode bodies stay byte-identical).
+- Subprocess agents (claude / codex / gh-copilot / anthropic
+  / auto_interactive) flatten Tool-role to `[TOOL-RESULT]`
+  user text. Proper Anthropic `tool_result` content blocks
+  come in Phase C.
+- Orchestrator echoes assistant tool_calls back into history
+  and emits one Tool-role message per native call (tied to
+  the originating call id) for the next request.
+
+### Wire smoke test against vLLM (2026-05-11)
+
+Validated the live wire end-to-end via curl with the exact
+body our serializer produces (sampling params + tools +
+tool_choice + chat_template_kwargs). vLLM returned:
+
+```json
+{
+  "role": "assistant",
+  "content": null,
+  "tool_calls": [{
+    "id": "chatcmpl-tool-be4f781998a49475",
+    "type": "function",
+    "function": {
+      "name": "list_dir",
+      "arguments": "{\"path\": \".\"}"
+    }
+  }]
+}
+```
+
+Standard OpenAI tool-call shape. `id`, `type`, `function.name`,
+`function.arguments` all populated. Our `NativeToolCall`
+deserializer parses this verbatim; the orchestrator threads
+the id back as Tool-role `tool_call_id` on the next request.
+
 ### What still needs to land before Phase B can K=3-measure
 
-- **Tool-result role/id threading.** Today's orchestrator feeds
-  tool results back as a User-role prose blob. Native mode
-  specs `{role: "tool", tool_call_id: "<id>", content: "..."}`
-  per tool call, tied to the assistant's `tool_calls[i].id`.
-  Without the proper role, vLLM still accepts the message but
-  the model may get confused about which tool result
-  corresponds to which call when multiple are in flight. Adds
-  needed:
-  - `LlmRole::Tool` variant (currently System | User | Assistant).
-  - `LlmMessage.tool_call_id: Option<String>` (or a richer
-    Message enum).
-  - openai_compat/transport converter emits the Tool-role
-    wire shape.
-  - Anthropic converter (Phase C) emits the corresponding
-    `tool_result` content block.
-- **Assistant-turn `tool_calls` history.** The model expects
-  to see its own prior tool_calls in the message history when
-  the next turn arrives. We capture them in the orchestrator
-  now but don't echo them on the next outbound request.
-  Without this, multi-turn tool sequences degrade.
-- **Smoke test.** A K=1 / K=3 run against vLLM with
-  `SIM_FLOW_TOOL_MODE=native` to verify the wire end-to-end
-  on a real session. The pre-Phase-B curl smoke worked; the
-  full sim-flow round trip hasn't been validated yet.
+- **Live e2e_auto smoke run** with
+  `SIM_FLOW_TOOL_MODE=native` against the same vLLM instance.
+  Curl confirmed the wire; the orchestrator's multi-turn tool
+  loop hasn't been exercised against a real model yet. Risk:
+  the model may emit a tool_call shape we don't handle (e.g.
+  parallel calls, malformed JSON in `arguments`).
+- **K=3 measurement** comparing native vs Phase 0e
+  non-thinking. The deciding signal for whether to promote
+  native to default + start Phase C (Anthropic).
 
 ### Decision point ahead
 
