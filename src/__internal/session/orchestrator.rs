@@ -1857,8 +1857,36 @@ pub fn build_initial_messages(
     //   - JSONL hosts (no native Read) keep inlining; the orchestrator
     //     loads the same file from disk so the wording is single-
     //     source-of-truth.
+    // Three artifact-write conventions today:
+    //   - `native-tools`: PTY/CLI agents (claude / codex / gh-copilot)
+    //     that have their OWN filesystem tools (Write / Edit / Read /
+    //     Glob). Their tools land bytes directly on disk; the
+    //     orchestrator just observes the gate state afterwards.
+    //   - `orchestrator-native-tools`: HTTP backends running with
+    //     `SIM_FLOW_TOOL_MODE=native` -- the orchestrator advertises
+    //     its own tool catalog (`write_file`, `edit_file`, ...) over
+    //     the OpenAI / Anthropic function-calling channel, runs the
+    //     calls inside the orchestrator process, and feeds results
+    //     back as Tool-role messages. The lowercased names + the
+    //     "orchestrator runs the call" framing distinguish this from
+    //     the CLI-side native-tools convention.
+    //   - `fenced-blocks`: legacy path. The model emits a fenced
+    //     markdown block whose info-string is the relative path; the
+    //     orchestrator parses the fence and persists the body.
+    //     Default when neither native path is active.
+    //
+    // `agent_has_native_fs_tools` is set by the PTY/interactive
+    // driver; `SIM_FLOW_TOOL_MODE=native` is read here from the env
+    // (same gate the host uses to switch dispatch_with_tools on).
+    let orchestrator_native_tools_mode = !opts.agent_has_native_fs_tools
+        && matches!(
+            std::env::var("SIM_FLOW_TOOL_MODE").ok().as_deref(),
+            Some("native") | Some("native-tool-calls")
+        );
     let convention_name = if opts.agent_has_native_fs_tools {
         "native-tools"
+    } else if orchestrator_native_tools_mode {
+        "orchestrator-native-tools"
     } else {
         "fenced-blocks"
     };
