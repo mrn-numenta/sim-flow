@@ -22,6 +22,7 @@
 //! - [`MockAgent`] - canned-response queue used by unit tests.
 
 mod adaptation;
+mod anthropic;
 mod claude;
 mod codex;
 mod gh_copilot;
@@ -36,6 +37,7 @@ pub(crate) use adaptation::{
     apply_reasoning_history_policy, normalize_response_text, prepare_messages_for_openai_compat,
     resolve_model_family, resolve_runtime_profile,
 };
+pub use anthropic::AnthropicAgent;
 pub use claude::ClaudeAgent;
 pub(crate) use claude::normalize_model_for_cli;
 pub use codex::CodexAgent;
@@ -162,6 +164,10 @@ pub const VLLM_DEFAULT_BASE_URL: &str = "http://localhost:8000/v1";
 pub(crate) fn resolved_base_url(name: &str, config: &AgentConfig) -> Option<String> {
     let pick = |fallback: Option<String>| config.base_url.clone().or(fallback);
     match name {
+        // `anthropic` only honors a generic `base_url` override
+        // (proxy / mock). No per-backend default goes in here --
+        // the agent constructor substitutes `api.anthropic.com`.
+        "anthropic" | "anthropic-api" => config.base_url.clone(),
         "ollama" => pick(config.ollama_base_url.clone()),
         "lmstudio" | "lm-studio" | "openai-compat" | "openai_compat" | "openai" => {
             pick(config.openai_base_url.clone())
@@ -179,6 +185,14 @@ pub(crate) fn resolved_base_url(name: &str, config: &AgentConfig) -> Option<Stri
 pub fn build_cli_agent(name: &str, config: AgentConfig) -> Option<Box<dyn CliAgent>> {
     let resolved = resolved_base_url(name, &config);
     match name {
+        "anthropic" | "anthropic-api" => Some(Box::new(AnthropicAgent::new(
+            // `anthropic` always talks to api.anthropic.com unless
+            // the caller supplied an explicit `--llm-base-url`
+            // (rare; useful only for proxies / mock servers).
+            resolved,
+            config.model,
+            config.model_family_id,
+        ))),
         "claude" | "claude-cli" => Some(Box::new(ClaudeAgent::new(
             config.model,
             config.model_family_id,
@@ -213,6 +227,7 @@ pub fn build_cli_agent(name: &str, config: AgentConfig) -> Option<Box<dyn CliAge
 /// Names accepted by `build_cli_agent`. Stable for help text /
 /// error messages.
 pub const KNOWN_AGENTS: &[&str] = &[
+    "anthropic",
     "claude",
     "codex",
     "gh-copilot",

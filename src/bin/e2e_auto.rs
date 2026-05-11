@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use sim_flow::session::agent::{
-    ClaudeAgent, CliAgent, LlmCallMetrics, OllamaAgent, OpenAiCompatAgent,
+    AnthropicAgent, ClaudeAgent, CliAgent, LlmCallMetrics, OllamaAgent, OpenAiCompatAgent,
 };
 use sim_flow::session::host::TerminalHost;
 use sim_flow::session::protocol::{LlmMessage, StepMode};
@@ -107,6 +107,11 @@ enum Backend {
     OpenAiCompat,
     Ollama,
     Claude,
+    /// Direct Anthropic Messages API client. Distinct from
+    /// `Claude` -- that one shells out to the `claude` Code CLI
+    /// (subscription-backed); this one hits api.anthropic.com
+    /// with an `ANTHROPIC_API_KEY`.
+    Anthropic,
 }
 
 impl Args {
@@ -183,7 +188,7 @@ impl Args {
                 "--help" | "-h" => {
                     println!(
                         "usage: e2e_auto --project-dir <P> --foundation-root <F> \
-                         --backend {{openai-compat|ollama|claude}} [--model <M>] \
+                         --backend {{openai-compat|ollama|claude|anthropic}} [--model <M>] \
                          [--base-url <URL>] [--spec <PATH>] \
                          [--max-auto-iters <N>] [--max-critique-iters <N>] \
                          [--max-critique-no-progress-iters <N>] \
@@ -212,6 +217,7 @@ impl Args {
             Some("openai-compat") | Some("openai_compat") | Some("openai") => Backend::OpenAiCompat,
             Some("ollama") => Backend::Ollama,
             Some("claude") | Some("claude-cli") => Backend::Claude,
+            Some("anthropic") | Some("anthropic-api") => Backend::Anthropic,
             Some(other) => return Err(format!("unknown backend: {other}")),
             None => return Err("--backend is required".to_string()),
         };
@@ -296,6 +302,7 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         Backend::OpenAiCompat => "openai-compat",
         Backend::Ollama => "ollama",
         Backend::Claude => "claude",
+        Backend::Anthropic => "anthropic",
     };
     println!(
         "e2e_auto: project_dir       = {}",
@@ -375,7 +382,7 @@ fn run(args: &Args) -> std::result::Result<(), String> {
     // `--no-healthcheck` was explicitly set. For OpenAI-compat /
     // Ollama with a base_url, ping `<base_url>/models` to confirm
     // the server is alive.
-    if args.healthcheck && !matches!(args.backend, Backend::Claude) {
+    if args.healthcheck && !matches!(args.backend, Backend::Claude | Backend::Anthropic) {
         let base_url_for_check = args.base_url.clone().unwrap_or_else(|| match args.backend {
             Backend::Ollama => "http://localhost:11434/v1".to_string(),
             _ => "http://localhost:1234/v1".to_string(),
@@ -408,6 +415,19 @@ fn run(args: &Args) -> std::result::Result<(), String> {
             None,
         )),
         Backend::Claude => Box::new(ClaudeAgent::new(args.model.clone(), None, None)),
+        Backend::Anthropic => {
+            // The driver script always passes `--base-url <value>`
+            // positionally, even when not applicable (claude /
+            // anthropic). Drop anything that isn't an http(s) URL
+            // so the agent falls back to its built-in default
+            // (`https://api.anthropic.com/v1/messages`) instead of
+            // trying to POST against `n/a` or similar sentinels.
+            let api_override = args
+                .base_url
+                .clone()
+                .filter(|u| u.starts_with("http://") || u.starts_with("https://"));
+            Box::new(AnthropicAgent::new(api_override, args.model.clone(), None))
+        }
     };
 
     // Empty stdin: auto mode shouldn't need user input. Any
