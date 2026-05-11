@@ -282,25 +282,48 @@ pub fn prepare_messages_for_openai_compat(
 
 fn strip_known_reasoning_markers(content: &str, family: &ModelFamilyProfile) -> String {
     match family.thought_marker_style {
-        ThoughtMarkerStyle::QwenThinkTag => {
-            strip_delimited_sections(content, "<think>", "</think>")
-        }
+        // qwen-code's TaggedThinkingParser accepts both <think> and
+        // <thinking> as aliases (with their close tags) and matches
+        // case-insensitively. qwen3.6 has been seen to emit <Think>
+        // and <thinking> on quick turns, so the strip pass must
+        // tolerate every shape upstream tolerates.
+        ThoughtMarkerStyle::QwenThinkTag => strip_delimited_sections_ci(
+            content,
+            &[("<think>", "</think>"), ("<thinking>", "</thinking>")],
+        ),
         ThoughtMarkerStyle::KimiThinkTag => {
-            strip_delimited_sections(content, "◁think▷", "◁/think▷")
+            strip_delimited_sections_ci(content, &[("◁think▷", "◁/think▷")])
         }
         _ => content.to_string(),
     }
 }
 
-fn strip_delimited_sections(content: &str, start: &str, end: &str) -> String {
+fn strip_delimited_sections_ci(content: &str, pairs: &[(&str, &str)]) -> String {
+    // ASCII-case-fold the haystack so byte offsets stay aligned with
+    // the original. Unicode `to_lowercase()` can change byte length
+    // for some characters (e.g. ß -> "ss"), which would corrupt the
+    // indices we splice with. Our patterns are all ASCII letters
+    // wrapped in either `<...>` or the Kimi `◁...▷` glyphs, so
+    // ASCII-folding is sufficient.
+    let mut lower_bytes = content.as_bytes().to_vec();
+    lower_bytes.make_ascii_lowercase();
+    let lower = match std::str::from_utf8(&lower_bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => content.to_string(),
+    };
+
     let mut out = String::with_capacity(content.len());
     let mut cursor = 0usize;
-    while let Some(start_rel) = content[cursor..].find(start) {
-        let start_idx = cursor + start_rel;
+    while cursor < content.len() {
+        let Some((start_idx, matched_start, matched_end)) =
+            find_first_start_ci(&lower, cursor, pairs)
+        else {
+            break;
+        };
         out.push_str(&content[cursor..start_idx]);
-        let after_start = start_idx + start.len();
-        if let Some(end_rel) = content[after_start..].find(end) {
-            cursor = after_start + end_rel + end.len();
+        let after_start = start_idx + matched_start.len();
+        if let Some(end_rel) = lower[after_start..].find(matched_end) {
+            cursor = after_start + end_rel + matched_end.len();
         } else {
             cursor = content.len();
             break;
@@ -308,6 +331,23 @@ fn strip_delimited_sections(content: &str, start: &str, end: &str) -> String {
     }
     out.push_str(&content[cursor..]);
     out
+}
+
+fn find_first_start_ci<'a>(
+    lower: &str,
+    cursor: usize,
+    pairs: &'a [(&'a str, &'a str)],
+) -> Option<(usize, &'a str, &'a str)> {
+    let mut best: Option<(usize, &str, &str)> = None;
+    for (start, end) in pairs {
+        if let Some(rel) = lower[cursor..].find(start) {
+            let abs = cursor + rel;
+            if best.map(|(b, _, _)| abs < b).unwrap_or(true) {
+                best = Some((abs, start, end));
+            }
+        }
+    }
+    best
 }
 
 #[cfg(test)]
@@ -357,6 +397,44 @@ mod tests {
         assert_eq!(
             normalize_response_text(&QWEN3_6_MODEL_FAMILY, "<think>plan</think>answer"),
             "answer"
+        );
+    }
+
+    #[test]
+    fn normalize_response_text_strips_qwen_thinking_alias() {
+        // qwen-code's TaggedThinkingParser accepts <thinking> as an
+        // alias for <think>. qwen3.6 has been observed emitting both
+        // shapes; the strip pass must catch each.
+        assert_eq!(
+            normalize_response_text(&QWEN3_6_MODEL_FAMILY, "<thinking>plan</thinking>answer"),
+            "answer"
+        );
+    }
+
+    #[test]
+    fn normalize_response_text_strips_qwen_think_tags_case_insensitive() {
+        // Case-insensitive matching mirrors qwen-code's parser: it
+        // pre-lowers the buffer once per call so `<Think>` / `<THINK>`
+        // are detected just like `<think>`.
+        assert_eq!(
+            normalize_response_text(&QWEN3_6_MODEL_FAMILY, "<Think>plan</Think>answer"),
+            "answer"
+        );
+        assert_eq!(
+            normalize_response_text(&QWEN3_6_MODEL_FAMILY, "<THINKING>plan</THINKING>answer"),
+            "answer"
+        );
+    }
+
+    #[test]
+    fn normalize_response_text_handles_mixed_think_and_thinking() {
+        // First a <think>, then a <thinking>; both should be stripped.
+        assert_eq!(
+            normalize_response_text(
+                &QWEN3_6_MODEL_FAMILY,
+                "a<think>x</think>b<thinking>y</thinking>c"
+            ),
+            "abc"
         );
     }
 

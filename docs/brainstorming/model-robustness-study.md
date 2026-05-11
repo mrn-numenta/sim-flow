@@ -911,6 +911,112 @@ The cure for `work-gate-still-dirty` is either:
 Lower priority than the fence fix since this only fires once
 the work session is already producing artifacts.
 
+## qwen-code (upstream) study (2026-05-11)
+
+Read through `/Users/mneilly/Projects/ThirdParty/qwen-code` (the
+official Qwen Code CLI, a fork of gemini-cli) looking for
+patterns that could harden our adaptation layer. Headline
+takeaways below; each one mapped to an action item.
+
+### What qwen-code does differently than us
+
+1. **Real OpenAI tool/function calls, not fenced blocks.**
+   qwen-code instructs models to emit artifact writes as
+   structured `tool_calls` (function name, JSON arguments) and
+   parses them through `StreamingToolCallParser`. We instruct
+   the model to emit fenced markdown blocks with the relative
+   path as the info-string. This is the structural reason
+   `wrong-fence-info-string` exists: language tags vs paths
+   are easy for the model to confuse, but tool calls have a
+   named schema the model can't accidentally substitute.
+
+   Migration cost is high (rewrite every DM prompt + the
+   artifact extractor + the salvage path), so this stays a
+   long-term consideration, not a near-term fix. The fenced-
+   block convention has the advantage of being human-readable
+   in transcripts.
+
+2. **`TaggedThinkingParser` recognizes BOTH `<think>` and
+   `<thinking>` tags, case-insensitively.** Our
+   `strip_known_reasoning_markers` only matches the literal
+   lowercase `<think>` / `</think>` and `◁think▷` /
+   `◁/think▷`. qwen3.6 has been observed to emit `<Think>`
+   (capitalized) and `<thinking>` (the longer form) on quick
+   turns. Today these would slip through our strip pass
+   unchanged and pollute the assistant message.
+
+   *Action:* extend `strip_known_reasoning_markers` to match
+   case-insensitively and to recognize `<thinking>...
+   </thinking>` as an alias for `<think>...</think>` on
+   QwenThinkTag / GemmaThinkTag families. Cheap, low risk,
+   unit-test driven.
+
+3. **`safeJsonParse` falls back to `jsonrepair` for malformed
+   JSON.** When tool-call arguments arrive as broken JSON
+   (unclosed strings, trailing commas, single quotes,
+   unquoted keys), qwen-code repairs the structure rather
+   than discarding the call. We have no JSON repair step;
+   our critique salvage path matches on fenced shapes but
+   gives up on broken JSON.
+
+   *Action:* add a `try_repair_json` helper in
+   `session/agent/adaptation.rs` callable from the critique
+   salvage path. Use a vetted Rust crate (`json-fix`,
+   `repair-json`, or a hand-rolled minimal repair for the
+   patterns we actually see). Gate behind
+   `prefers_bare_json_critique` so it only kicks in for
+   families where broken-JSON salvage is worth the risk.
+
+4. **Streaming repair: auto-close unclosed strings.** When
+   parsing reaches end-of-buffer with `inString=true`,
+   qwen-code retries with a trailing `"` appended. This is
+   the single most common JSON parse failure they hit. We
+   don't stream tool calls today, so this is less directly
+   applicable -- but the *full-response* analogue is "if the
+   only top-level fence is unclosed, try appending the
+   closing fence." That's relevant to our truncation policy
+   (`finish_reason=length`).
+
+   *Action:* defer. Today we hard-reject truncated responses
+   so no partial bytes hit disk, and the agent's next turn
+   sees the diagnostic. Adding auto-close would re-open the
+   "committed half a file" failure mode that motivated
+   today's behavior.
+
+### Things qwen-code does that we already do
+
+- Strip `<think>...</think>` from response content before
+  emitting it to the agent (we have `QwenThinkTag` /
+  `KimiThinkTag` styles + `strip_delimited_sections`).
+- Honor `chat_template_kwargs.enable_thinking=false` to tell
+  vLLM-style backends to skip the thinking preamble entirely
+  (we ship `SIM_FLOW_DISABLE_THINKING` + per-family
+  `supports_thinking_controls`).
+- Treat `finish_reason=length` as truncation (we surface it
+  as a hard error with the tail of the response in the
+  diagnostic, so the agent's next turn sees what was cut).
+- Separate `ModelFamilyProfile` per-family (we have
+  `gemma4`, `qwen3_6`, `kimi_vl_thinking`,
+  `claude_messages`, `generic_chat`).
+
+### Prioritized action items from this study
+
+1. **`<thinking>` alias + case-insensitive match.** Smallest
+   change with concrete evidence it'd catch real cases.
+   ~30 min: add the `<thinking>` strings to the strip
+   variants and lowercase the haystack in
+   `strip_delimited_sections`. Add 2 unit tests.
+2. **`try_repair_json` helper for bare-JSON salvage.**
+   Medium effort: pick a crate, wire into the critique
+   salvage path, gate behind `prefers_bare_json_critique`.
+   Validate against captured Phase 0c critique payloads
+   first to confirm it actually unblocks more bare-JSON
+   turns than today.
+3. **Long-term: evaluate switching to real tool calls.**
+   Track Phase 0d follow-up rates; if `wrong-fence-info-
+   string` stays >0 after the prompt fix, the structural
+   answer is tool calls, not more prompt nudging.
+
 ## Decision log
 
 - **2026-05-11 -- trial count**: start at K=3 to get the pipeline
