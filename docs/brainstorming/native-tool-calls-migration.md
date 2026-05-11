@@ -780,12 +780,30 @@ Orchestrator code is fully backend-agnostic from here forward.
 - **K=1 Anthropic measurement**: rerun the Phase 0c K=1
   fixture with `SIM_FLOW_TOOL_MODE=native` against
   api.anthropic.com to validate the Anthropic round trip.
-- **Prompt rewrite (Phase D)**: every DM work + critique
-  prompt's `## Output` section currently describes the
-  fenced-block artifact convention. Once native mode is the
-  default, prompts should reference `write_file(path, content)`
-  and the orchestrator's tool catalog instead. Deferred
-  until the K=3 measurements vote yes on promoting native.
+- **Prompt rewrite (Phase D) -- step 1 LANDED (`2dcb6d7`)**:
+  New `_conventions/orchestrator-native-tools.md` selected by
+  the orchestrator when `SIM_FLOW_TOOL_MODE=native` is on and
+  the agent isn't a CLI agent. The convention explicitly
+  overrides any fenced-block phrasing in per-step prompts:
+  "THIS CONVENTION DOES NOT APPLY IN NATIVE-TOOL-CALLS MODE";
+  every fenced-block instruction becomes a `write_file` call
+  with the same path + content.
+
+  This is the override-pattern variant (option D). The
+  per-step DM prompts' `## Output` sections still describe
+  fenced blocks; the convention-level override is what shifts
+  the model. If smoke tests show the override is too subtle,
+  Phase D step 2 will rewrite per-step prompts directly.
+
+  Critical observation that motivated landing Phase D before
+  any K=3: the Anthropic K=1 smoke against Opus 4.7 (with
+  Phase B and Phase C in place but Phase D step 1 NOT yet)
+  showed the API accepts our `tools[]` field without error,
+  but the model emitted fenced calls because the prompts
+  told it to.
+  Without Phase D, native mode is a silent capability -- the
+  wire is enabled but the model never uses it.
+
 - **Cleanup (Phase E)**: delete fenced-block code paths once
   native has been default for two weeks without regressions.
 
