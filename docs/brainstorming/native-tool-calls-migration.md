@@ -418,10 +418,74 @@ Effort: 1 day.
 
 ### vLLM tool-call support quality
 
-vLLM supports OpenAI `tools` but its parser is less battle-
-tested than OpenAI's. For qwen3.6 specifically, the chat
-template needs to be the tool-aware variant. Verify with a
-smoke request before committing to Phase B.
+The vLLM instance on `localhost:8012` is already configured
+with `--tool-call-parser qwen3_coder`. This parser extracts
+the XML-tagged tool-call format Qwen-Coder is trained for:
+
+```text
+<tool_call>
+<function=write_file>
+<parameter=path>
+docs/spec.md
+</parameter>
+<parameter=content>
+...file body...
+</parameter>
+</function>
+</tool_call>
+```
+
+vLLM does the format translation transparently: we send the
+standard OpenAI `tools: [...]` parameter, vLLM injects the
+schema into the chat template, the model emits the XML, the
+parser extracts it, and the response carries standard OpenAI
+`tool_calls: [{id, function: {name, arguments}}]`. Same shape
+Claude Code and Codex see (which the operator confirmed
+works against this endpoint).
+
+**Three practical implications:**
+
+- Phase B's converter does NOT need qwen-specific handling.
+  vLLM owns the XML translation; we work in the OpenAI
+  abstraction.
+- The model is RLHF'd to emit structured tool calls. The
+  pre-training distribution actively prefers the structured
+  form -- opposite of the fenced-markdown bias that hurts us
+  today.
+- The `chat_template_kwargs.enable_thinking: false` knob we
+  already ship is orthogonal to tool calls and should
+  continue to work.
+
+**Caveat to verify before Phase B**: the model is
+`qwen3-27b` (the base Qwen3), not `qwen3-coder`. Base Qwen3
+natively uses Hermes-style tool calls (`<tool_call>{"name":
+"...","arguments":{...}}</tool_call>` with inline JSON) --
+**different** from the qwen-coder XML format the configured
+parser extracts. If the parser is mismatched to the model,
+extraction quality could vary. Pre-Phase-B smoke test:
+
+```bash
+curl -s http://localhost:8012/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{
+    "model":"qwen3.6",
+    "messages":[{"role":"user","content":"list the current directory using the list_dir tool"}],
+    "tools":[{"type":"function","function":{
+      "name":"list_dir",
+      "description":"List a directory",
+      "parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}}],
+    "tool_choice":"auto",
+    "max_tokens":2048
+  }' | jq '.choices[0].message'
+```
+
+Expected on success: `message.tool_calls: [{id, type:
+"function", function: {name: "list_dir", arguments:
+"{\"path\":\".\"}"}}]`. Anything else (empty `tool_calls`,
+tool call in `content`, parse errors) means the parser /
+model mismatch is real and we need to either ask the operator
+to switch the parser (`--tool-call-parser hermes` for base
+Qwen3) or thread a Hermes-shape parser of our own.
 
 ### Streaming vs non-streaming
 
