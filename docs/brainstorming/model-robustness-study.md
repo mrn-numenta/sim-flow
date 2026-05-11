@@ -352,6 +352,69 @@ deliberate:
   covered by the existing `e2e_auto --backend claude` runs;
   Opus 4.7 is the focus here.
 
+## Trial isolation (per-trial freshness)
+
+Each trial in `scripts/run-robustness-study.sh` runs in a unique
+`mktemp -d` directory and bootstraps a fresh project via
+`sim-flow new model`. There is NO shared per-model state across
+trials -- not `state.toml`, not `docs/`, not `src/`, not
+`target/`, not `.sim-flow/checkpoint.json`. A trial reaching DM2c
+cannot bias the next trial; they don't see each other's disk.
+
+Trial-to-trial variance in advance depth on the same fixture is
+therefore purely random sampling unless the seed is fixed.
+
+**Seed control**. As of the post-Phase-0 patch, the openai-compat
+agent reads `SIM_FLOW_SEED` and forwards it as `seed` in the
+chat-completions body. The driver script sets `SIM_FLOW_SEED=$TRIAL`
+per trial, so a captured anomaly can be re-rolled with the same
+seed for debugging. vLLM, llama.cpp, and sglang honor the field;
+backends that don't ignore it silently.
+
+Phase 0 captures predate this and were fully stochastic -- the
+"each of the 3 trials got farther" pattern (DM1 -> DM2b -> DM2c)
+is a coincidence of three random rolls, not a state leak. K=20
+on seeded trials is what we draw rates from.
+
+## Transport vs. content (vLLM <-> Qwen-family separation)
+
+vLLM is the wire-format compatibility layer; the model's CONTENT
+is whatever Qwen3.6 was trained to produce. Two separable concerns:
+
+- **Wire format**: vLLM's `/v1/chat/completions` is OpenAI-shaped.
+  Our `OpenAiCompatibleRequest` produces an OpenAI-shaped body
+  (`messages[]`, `max_tokens`, optional `seed`, optional
+  `chat_template_kwargs`). vLLM passes the body through to the
+  model's Jinja chat template.
+- **Content shape**: Qwen3.6 produces Qwen-specific output:
+  `<think>...</think>` preambles, bare-JSON critiques (no fence,
+  or ```json fence), occasional tool-call-as-JSON-blob style.
+  These are NOT bugs in the OpenAI-compat layer -- they're Qwen
+  speaking Qwen.
+
+Our `agent/adaptation.rs` is the seam between the two. Per-family
+profiles (`QWEN3_6_MODEL_FAMILY`, `GEMMA4_MODEL_FAMILY`,
+`KIMI_VL_THINKING_MODEL_FAMILY`, `CLAUDE_MESSAGES_MODEL_FAMILY`)
+encode what each family does and how the orchestrator should
+adapt:
+
+- `thought_marker_style` controls how `normalize_response_text`
+  strips `<think>` / `<thinking>` blocks from surfaced content.
+- `prefers_bare_json_critique` (post-Phase-0) downgrades the
+  salvage diagnostic from Warning to Info when the family
+  routinely skips the artifact-write fence.
+- `supports_thinking_controls` + `thinking_control_mode` describe
+  whether the model has a runtime thinking toggle. The
+  openai-compat agent now consults this and, when
+  `SIM_FLOW_DISABLE_THINKING=1`, adds
+  `chat_template_kwargs.enable_thinking=false` so the chat
+  template skips the thinking section entirely.
+
+If a Qwen-specific shape ever DOES leak through the orchestrator
+to the gate or critique parser, it's a missing adaptation -- not
+a vLLM bug. Add a hypothesis to the taxonomy + a per-family flag
+under `ModelFamilyProfile`.
+
 ## Cargo-failure attribution
 
 Cargo-gated steps (DM2d / DM3b / DM3c / DM4b) can fail for reasons
@@ -585,6 +648,26 @@ orchestrator is worth more than K=20 against today's.
   pathological "agent shaves one blocker per pass forever"
   case while preserving freedom for legitimately-progressing
   runs.
+- **2026-05-11 -- seed + thinking-control plumbed**: Two
+  follow-on patches addressing operator questions on the
+  Phase 0 captures.
+  1. `OpenAiCompatibleRequest` now carries an optional `seed`,
+     read from `SIM_FLOW_SEED`. The driver script sets it to
+     `$TRIAL` so trials are reproducible per-index instead of
+     fully stochastic. Phase 0 captures predate this -- the
+     trial-to-trial advance variance (DM1 / DM2b / DM2c) was
+     random sampling, not state leakage (per-trial freshness
+     audit is now documented in the doc).
+  2. `OpenAiCompatibleRequest.disable_thinking` (env
+     `SIM_FLOW_DISABLE_THINKING=1`) emits
+     `chat_template_kwargs: {"enable_thinking": false}` in the
+     body. Gated on `supports_thinking_controls` so the kwarg
+     is only sent to families with thinking-section templates
+     (qwen3_6, gemma4, claude_messages). Hot-confirmed against
+     vLLM: a `seed=42` + `enable_thinking=false` request to
+     qwen3.6 returns a 4-byte content (`"ok"`) instead of the
+     full `<think>...</think>` preamble, saving ~99% of the
+     tokens on quick turns.
 - **2026-05-11 -- first hardening pass landed** (3 changes
   motivated by the Phase 0 catalog):
   1. Added `prefers_bare_json_critique: bool` to

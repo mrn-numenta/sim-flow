@@ -68,11 +68,28 @@ printf '{"started_at":"%s","model":"%s","backend":"%s","base_url":"%s","K":%s,"s
     "$START_TS" "$MODEL" "$BACKEND" "$BASE_URL" "$K" \
     "$SMOKE_SPEC" >> "$MANIFEST"
 
-# vLLM exposes a `seed` knob; we vary it per trial so each trial is
-# reproducible and any anomaly we observe can be re-rolled. Backends
-# without a seed knob (claude CLI, some local servers) ignore the
-# value -- the `--llm-base-url` + `--llm-backend` already pin
-# everything else.
+# Randomness control. vLLM, llama.cpp, and most openai-compat
+# servers honor `seed` in the chat-completions body; the agent
+# reads it from `SIM_FLOW_SEED`. We set `seed = trial_idx` so each
+# trial is reproducible and any anomaly can be re-rolled with the
+# same seed for debugging. Backends without a seed knob (claude
+# CLI, some local servers) silently ignore the env var.
+#
+# Per-trial isolation. Every trial gets its own tempdir, so the
+# project's `.sim-flow/state.toml`, `docs/`, `src/`, `target/`,
+# and `.sim-flow/checkpoint.json` are entirely fresh. There is
+# no shared per-model state, so a trial reaching DM2c can NOT
+# bias the next trial toward also reaching DM2c -- they don't
+# share state. Run-to-run variance you observe in the catalog is
+# purely random sampling unless the seed is fixed.
+#
+# Thinking-control (optional). When `SIM_FLOW_DISABLE_THINKING=1`
+# is exported before running this script, the agent adds
+# `chat_template_kwargs.enable_thinking=false` to the request body
+# for families with thinking-section chat templates (qwen3.6,
+# deepseek-r1, ...). Saves tokens on every turn; pairs well with
+# tight `max_tokens`. Not enabled by default for the study so
+# trial captures stay comparable to Phase 0.
 #
 # Trial loop. We do NOT abort on a single trial failure; record the
 # outcome to the per-model summary and move on so the analyzer sees
@@ -92,6 +109,7 @@ for ((TRIAL=1; TRIAL<=K; TRIAL++)); do
     echo "=== model=$MODEL trial=$TRIAL/$K ==="
     echo "    project_dir   = $PROJECT_DIR"
     echo "    capture_jsonl = $TRIAL_DIR/protocol.jsonl"
+    echo "    seed          = $TRIAL"
 
     # 1. Bootstrap a fresh model project (skip cargo check; the
     #    DM2d gate runs cargo anyway).
@@ -108,8 +126,13 @@ for ((TRIAL=1; TRIAL<=K; TRIAL++)); do
 
     # 2. Run e2e_auto with capture. Stderr (tracing rollups +
     #    orchestrator diagnostics) goes to a sibling .log.
+    #    `SIM_FLOW_SEED` is read by the openai-compat agent and
+    #    forwarded as `seed` in the chat-completions body.
+    #    `SIM_FLOW_DISABLE_THINKING` (when exported by the
+    #    caller) toggles `chat_template_kwargs.enable_thinking`.
     TRIAL_START="$(date +%s)"
-    if "$E2E_AUTO_BIN" \
+    if SIM_FLOW_SEED="$TRIAL" \
+            "$E2E_AUTO_BIN" \
             --foundation-root "$FOUNDATION_ROOT" \
             --project-dir "$PROJECT_DIR" \
             --backend "$BACKEND" \
@@ -128,8 +151,10 @@ for ((TRIAL=1; TRIAL<=K; TRIAL++)); do
     TRIAL_END="$(date +%s)"
     WALL_S=$((TRIAL_END - TRIAL_START))
 
-    printf '{"trial":%d,"outcome":"%s","wall_s":%d,"project_dir":"%s"}\n' \
-        "$TRIAL" "$OUTCOME" "$WALL_S" "$PROJECT_DIR" \
+    printf '{"trial":%d,"outcome":"%s","wall_s":%d,"seed":%d,"disable_thinking":%s,"project_dir":"%s"}\n' \
+        "$TRIAL" "$OUTCOME" "$WALL_S" "$TRIAL" \
+        "$([ "${SIM_FLOW_DISABLE_THINKING:-}" = "1" ] && echo true || echo false)" \
+        "$PROJECT_DIR" \
         >> "$MODEL_ROOT/trials.jsonl"
 
     echo "    -> $OUTCOME in ${WALL_S}s"

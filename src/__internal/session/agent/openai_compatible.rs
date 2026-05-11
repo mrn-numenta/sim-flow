@@ -43,6 +43,37 @@ pub struct OpenAiCompatibleRequest<'a> {
     /// wall rather than by this default. Override via the env var
     /// for narrower-context backends.
     pub max_tokens: u32,
+    /// Optional deterministic sampling seed. When set, included as
+    /// the `seed` field in the chat-completions request body. vLLM,
+    /// llama.cpp, and any other openai-compat server that honors
+    /// the field will replay identical token streams given the same
+    /// prompt + temperature + seed. Used by the model-robustness
+    /// study harness so K=3 trials are reproducible per-trial-index
+    /// rather than fully stochastic (Phase 0 saw 0/3 reproducible
+    /// because we hadn't yet plumbed this). Read from the
+    /// `SIM_FLOW_SEED` env var; unset means "no seed sent" (server
+    /// picks).
+    pub seed: Option<u32>,
+    /// When `true`, include `chat_template_kwargs: {"enable_thinking":
+    /// false}` in the request body so models with a thinking-section
+    /// chat template (qwen3.6, deepseek-r1, ...) skip the `<think>...
+    /// </think>` preamble. Saves tokens on every turn and improves
+    /// answer quality on tool-heavy prompts where the thinking
+    /// expands faster than the actual decision. The flag is purely
+    /// "ask the chat template not to think"; if the server doesn't
+    /// recognize the kwarg it's silently ignored (vLLM threads it
+    /// through to the model's Jinja template).
+    ///
+    /// Read from the `SIM_FLOW_DISABLE_THINKING` env var (any
+    /// truthy value: `1`, `true`, `yes`). Default `false`.
+    pub disable_thinking: bool,
+}
+
+fn truthy_env(name: &str) -> bool {
+    matches!(
+        std::env::var(name).ok().as_deref(),
+        Some("1") | Some("true") | Some("True") | Some("TRUE") | Some("yes") | Some("YES")
+    )
 }
 
 impl<'a> OpenAiCompatibleRequest<'a> {
@@ -51,6 +82,10 @@ impl<'a> OpenAiCompatibleRequest<'a> {
             .ok()
             .and_then(|s| s.parse::<u32>().ok())
             .unwrap_or(65_536);
+        let seed = std::env::var("SIM_FLOW_SEED")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok());
+        let disable_thinking = truthy_env("SIM_FLOW_DISABLE_THINKING");
         // Response-body cap. 64 KB was too tight for verbose
         // models -- qwen3.6's milestone-04 response with embedded
         // Rust code legitimately exceeded that and the JSON parser
@@ -73,6 +108,8 @@ impl<'a> OpenAiCompatibleRequest<'a> {
             api_key: None,
             max_response_bytes,
             max_tokens,
+            seed,
+            disable_thinking,
         }
     }
 
@@ -88,6 +125,25 @@ struct ChatRequestBody<'a> {
     messages: Vec<RequestMessage<'a>>,
     stream: bool,
     max_tokens: u32,
+    /// Optional deterministic-sampling seed. `skip_serializing_if`
+    /// keeps the wire body unchanged for servers that reject
+    /// unknown fields (some openai-compat proxy shims do); when
+    /// unset, no `seed` key appears.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seed: Option<u32>,
+    /// `chat_template_kwargs` is vLLM's pass-through for Jinja
+    /// template parameters. Setting `enable_thinking: false`
+    /// asks the qwen3.6 / deepseek-r1 / similar chat template to
+    /// skip the `<think>...</think>` preamble entirely. Other
+    /// servers either honor the field (llama.cpp, sglang) or
+    /// silently ignore it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    chat_template_kwargs: Option<ChatTemplateKwargs>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ChatTemplateKwargs {
+    enable_thinking: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -148,6 +204,17 @@ pub fn dispatch_chat(req: OpenAiCompatibleRequest<'_>) -> Result<(String, LlmCal
     let started = std::time::Instant::now();
     let model_family = resolve_model_family(req.model_family_id, Some(req.model));
     let prepared_messages = prepare_messages_for_openai_compat(req.messages, model_family);
+    // Only thread the thinking-control kwarg through to servers
+    // for families that have a thinking section to disable. For
+    // generic / non-thinking models the kwarg is meaningless and
+    // some servers reject unknown template kwargs.
+    let chat_template_kwargs = if req.disable_thinking && model_family.supports_thinking_controls {
+        Some(ChatTemplateKwargs {
+            enable_thinking: false,
+        })
+    } else {
+        None
+    };
     let body = ChatRequestBody {
         model: req.model,
         messages: prepared_messages
@@ -159,6 +226,8 @@ pub fn dispatch_chat(req: OpenAiCompatibleRequest<'_>) -> Result<(String, LlmCal
             .collect(),
         stream: false,
         max_tokens: req.max_tokens,
+        seed: req.seed,
+        chat_template_kwargs,
     };
     let url = format!("{}/chat/completions", trim_trailing_slash(req.base_url));
     let mut request = ureq::post(&url)
@@ -296,6 +365,61 @@ mod tests {
     use crate::session::agent::adaptation::{
         GEMMA4_MODEL_FAMILY, QWEN3_6_MODEL_FAMILY, prepare_messages_for_openai_compat,
     };
+
+    #[test]
+    fn request_body_omits_seed_and_kwargs_by_default() {
+        // Default request: no seed, no chat_template_kwargs. Some
+        // openai-compat proxies reject unknown keys, so the body
+        // must stay minimal when the caller hasn't asked for the
+        // new knobs.
+        let body = ChatRequestBody {
+            model: "qwen3.6",
+            messages: vec![],
+            stream: false,
+            max_tokens: 65_536,
+            seed: None,
+            chat_template_kwargs: None,
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(!json.contains("\"seed\""), "json: {json}");
+        assert!(!json.contains("\"chat_template_kwargs\""), "json: {json}");
+    }
+
+    #[test]
+    fn request_body_includes_seed_when_set() {
+        let body = ChatRequestBody {
+            model: "qwen3.6",
+            messages: vec![],
+            stream: false,
+            max_tokens: 64,
+            seed: Some(42),
+            chat_template_kwargs: None,
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("\"seed\":42"), "json: {json}");
+    }
+
+    #[test]
+    fn request_body_includes_enable_thinking_false_when_kwargs_set() {
+        // The kwarg shape is what vLLM threads into the Qwen
+        // chat template. Pin the exact wire shape so a refactor
+        // doesn't silently rename / move the field.
+        let body = ChatRequestBody {
+            model: "qwen3.6",
+            messages: vec![],
+            stream: false,
+            max_tokens: 64,
+            seed: None,
+            chat_template_kwargs: Some(ChatTemplateKwargs {
+                enable_thinking: false,
+            }),
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(
+            json.contains("\"chat_template_kwargs\":{\"enable_thinking\":false}"),
+            "json: {json}",
+        );
+    }
 
     #[test]
     fn role_str_maps_each_role() {
