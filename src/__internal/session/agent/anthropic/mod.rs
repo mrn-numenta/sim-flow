@@ -36,13 +36,18 @@
 //! `Err(Error::Client)` and let the auto-driver decide whether to
 //! retry / flip to manual.
 
+pub mod tool_use;
+
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
+use self::tool_use::{
+    AnthropicToolDescriptor, AssistantContentBlock, ResponseContentBlock, UserContentBlock,
+};
 use super::{
-    AgentAdaptationSummary, CliAgent, LlmCallMetrics, apply_reasoning_history_policy,
-    resolve_model_family,
+    AdvertisedToolCall, AgentAdaptationSummary, CliAgent, LlmCallMetrics, ToolAdvertise,
+    apply_reasoning_history_policy, resolve_model_family,
 };
 use crate::keys::{Provider, resolve_api_key};
 use crate::session::protocol::{LlmMessage, LlmRole};
@@ -105,14 +110,16 @@ impl AnthropicAgent {
     pub fn has_api_key(&self) -> bool {
         self.api_key.is_some()
     }
-}
 
-impl CliAgent for AnthropicAgent {
-    fn name(&self) -> &str {
-        "anthropic"
-    }
-
-    fn dispatch(&self, messages: &[LlmMessage]) -> Result<(String, LlmCallMetrics)> {
+    /// Shared dispatch path used by both `dispatch` (no tools) and
+    /// `dispatch_with_tools`. Returns `(assistant_text, tool_calls,
+    /// metrics)`. The tools list is forwarded to Anthropic via the
+    /// request body's `tools` field when `Some`.
+    fn dispatch_inner(
+        &self,
+        messages: &[LlmMessage],
+        tools: Option<Vec<AnthropicToolDescriptor>>,
+    ) -> Result<(String, Vec<AdvertisedToolCall>, LlmCallMetrics)> {
         let started = Instant::now();
         let Some(api_key) = self.api_key.as_deref() else {
             return Err(Error::Client(
@@ -138,6 +145,7 @@ impl CliAgent for AnthropicAgent {
                 Some(system)
             },
             messages: conversation,
+            tools,
         };
 
         let response_text = ureq::post(&self.api_url)
@@ -162,6 +170,7 @@ impl CliAgent for AnthropicAgent {
             .into_json()
             .map_err(|err| Error::Client(format!("anthropic api: decode response: {err}")))?;
         let text = collect_text(&body.content);
+        let tool_calls = collect_tool_uses(&body.content);
         if let Some(stop_reason) = body.stop_reason.as_deref()
             && stop_reason == "max_tokens"
         {
@@ -185,7 +194,40 @@ impl CliAgent for AnthropicAgent {
             tokens_out: body.usage.as_ref().and_then(|u| u.output_tokens),
             wall_ms: started.elapsed().as_millis() as u64,
         };
+        Ok((text, tool_calls, metrics))
+    }
+}
+
+impl CliAgent for AnthropicAgent {
+    fn name(&self) -> &str {
+        "anthropic"
+    }
+
+    fn dispatch(&self, messages: &[LlmMessage]) -> Result<(String, LlmCallMetrics)> {
+        let (text, _calls, metrics) = self.dispatch_inner(messages, None)?;
         Ok((text, metrics))
+    }
+
+    fn dispatch_with_tools(
+        &self,
+        messages: &[LlmMessage],
+        tools: &[ToolAdvertise],
+    ) -> Result<(String, Vec<AdvertisedToolCall>, LlmCallMetrics)> {
+        let wire_tools = if tools.is_empty() {
+            None
+        } else {
+            Some(
+                tools
+                    .iter()
+                    .map(|t| AnthropicToolDescriptor {
+                        name: t.name.clone(),
+                        description: t.description.clone(),
+                        input_schema: t.parameters.clone(),
+                    })
+                    .collect(),
+            )
+        };
+        self.dispatch_inner(messages, wire_tools)
     }
 
     fn adaptation_summary(&self) -> Option<AgentAdaptationSummary> {
@@ -202,7 +244,7 @@ impl CliAgent for AnthropicAgent {
             system_prompt_mode: "top-level-system-string".to_string(),
             credential_policy: "anthropic_api_key".to_string(),
             supports_structured_reasoning: false,
-            supports_structured_tool_calls: false,
+            supports_structured_tool_calls: true,
             supports_thinking_controls: family.supports_thinking_controls,
         })
     }
@@ -221,33 +263,94 @@ impl CliAgent for AnthropicAgent {
 fn split_system_and_messages(messages: &[LlmMessage]) -> (String, Vec<MessagePayload>) {
     let mut system_blocks: Vec<&str> = Vec::new();
     let mut conversation: Vec<MessagePayload> = Vec::new();
+    // Anthropic requires consecutive tool_result blocks (in reply to
+    // a multi-call assistant turn) to be coalesced into a single
+    // user-role message. We accumulate them here and flush when the
+    // role changes or the stack ends.
+    let mut pending_tool_results: Vec<UserContentBlock> = Vec::new();
+    let flush_tool_results = |pending: &mut Vec<UserContentBlock>,
+                              conversation: &mut Vec<MessagePayload>| {
+        if !pending.is_empty() {
+            let blocks = std::mem::take(pending);
+            conversation.push(MessagePayload {
+                role: "user",
+                content: AnthropicMessageContent::User(blocks),
+            });
+        }
+    };
     for msg in messages {
         match msg.role {
-            LlmRole::System => system_blocks.push(msg.content.as_str()),
-            LlmRole::User => conversation.push(MessagePayload {
-                role: "user",
-                content: msg.content.clone(),
-            }),
-            LlmRole::Assistant => conversation.push(MessagePayload {
-                role: "assistant",
-                content: msg.content.clone(),
-            }),
-            // Anthropic's native tool-use shape (`tool_result`
-            // content block) isn't wired yet; flatten Tool-role
-            // messages to a user-role text turn so the agent still
-            // sees the tool output in history. Phase C of the
-            // native-tool-calls migration will switch to the
-            // tool_result content-block shape.
-            LlmRole::Tool => conversation.push(MessagePayload {
-                role: "user",
-                content: format!("[tool-result] {}", msg.content),
-            }),
+            LlmRole::System => {
+                flush_tool_results(&mut pending_tool_results, &mut conversation);
+                system_blocks.push(msg.content.as_str());
+            }
+            LlmRole::User => {
+                flush_tool_results(&mut pending_tool_results, &mut conversation);
+                conversation.push(MessagePayload {
+                    role: "user",
+                    content: AnthropicMessageContent::Text(msg.content.clone()),
+                });
+            }
+            LlmRole::Assistant => {
+                flush_tool_results(&mut pending_tool_results, &mut conversation);
+                if msg.tool_calls.is_empty() {
+                    // No native tool calls: simple text turn.
+                    conversation.push(MessagePayload {
+                        role: "assistant",
+                        content: AnthropicMessageContent::Text(msg.content.clone()),
+                    });
+                } else {
+                    // Mixed turn: text (if any) followed by one
+                    // tool_use block per call. Anthropic's spec
+                    // requires tool_use `input` as a JSON object,
+                    // NOT a stringified one -- parse the orchestrator's
+                    // arguments_json here. On parse failure, fall
+                    // back to an empty object so the request still
+                    // ships rather than blocking the turn.
+                    let mut blocks: Vec<AssistantContentBlock> = Vec::new();
+                    if !msg.content.is_empty() {
+                        blocks.push(AssistantContentBlock::Text {
+                            text: msg.content.clone(),
+                        });
+                    }
+                    for call in &msg.tool_calls {
+                        let input = serde_json::from_str(&call.arguments_json)
+                            .unwrap_or_else(|_| serde_json::json!({}));
+                        blocks.push(AssistantContentBlock::ToolUse {
+                            id: call.id.clone().unwrap_or_default(),
+                            name: call.name.clone(),
+                            input,
+                        });
+                    }
+                    conversation.push(MessagePayload {
+                        role: "assistant",
+                        content: AnthropicMessageContent::Assistant(blocks),
+                    });
+                }
+            }
+            LlmRole::Tool => {
+                // Accumulate into the pending tool_result batch.
+                // Anthropic requires every prior `tool_use.id` to
+                // be answered before the next assistant turn; we
+                // emit one user-role message per consecutive run
+                // of Tool messages so multi-call turns thread
+                // correctly. A Tool message with no tool_call_id
+                // (legacy fenced fallback) falls back to an
+                // anonymous tool_result rather than a text turn so
+                // the model still sees the result content.
+                pending_tool_results.push(UserContentBlock::ToolResult {
+                    tool_use_id: msg.tool_call_id.clone().unwrap_or_default(),
+                    content: msg.content.clone(),
+                    is_error: false,
+                });
+            }
         }
     }
+    flush_tool_results(&mut pending_tool_results, &mut conversation);
     (system_blocks.join("\n\n"), conversation)
 }
 
-fn collect_text(blocks: &[ContentBlock]) -> String {
+fn collect_text(blocks: &[ResponseContentBlock]) -> String {
     let mut out = String::new();
     for block in blocks {
         if block.kind.as_deref() == Some("text")
@@ -259,6 +362,35 @@ fn collect_text(blocks: &[ContentBlock]) -> String {
     out
 }
 
+/// Extract every `tool_use` content block from the response and
+/// convert into the vendor-neutral `AdvertisedToolCall` shape the
+/// orchestrator dispatches through. `input` (a JSON object on the
+/// wire) gets re-serialized as a JSON string to match the same
+/// `arguments_json` contract OpenAI's native tool calls use --
+/// downstream parsers don't care which vendor produced the call.
+fn collect_tool_uses(blocks: &[ResponseContentBlock]) -> Vec<AdvertisedToolCall> {
+    let mut out = Vec::new();
+    for block in blocks {
+        if block.kind.as_deref() != Some("tool_use") {
+            continue;
+        }
+        let Some(name) = block.name.clone() else {
+            continue;
+        };
+        let arguments_json = block
+            .input
+            .as_ref()
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "{}".to_string());
+        out.push(AdvertisedToolCall {
+            id: block.id.clone(),
+            name,
+            arguments_json,
+        });
+    }
+    out
+}
+
 #[derive(Debug, Serialize)]
 struct MessagesRequestBody<'a> {
     model: &'a str,
@@ -266,30 +398,41 @@ struct MessagesRequestBody<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     system: Option<String>,
     messages: Vec<MessagePayload>,
+    /// Tool catalog. `Some` populated only on dispatch_with_tools;
+    /// the default `dispatch` path leaves this `None` so the wire
+    /// body stays byte-identical to pre-Phase-C requests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<AnthropicToolDescriptor>>,
 }
 
 #[derive(Debug, Serialize)]
 struct MessagePayload {
     role: &'static str,
-    content: String,
+    content: AnthropicMessageContent,
+}
+
+/// Anthropic accepts message content either as a simple string OR as
+/// a heterogeneous array of typed content blocks (text / tool_use /
+/// tool_result / image / etc.). We emit the simple string form when
+/// possible to keep the wire body minimal and tests stable;
+/// tool-aware turns (assistant emissions with tool_use blocks, user
+/// replies with tool_result blocks) require the array form.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum AnthropicMessageContent {
+    Text(String),
+    Assistant(Vec<AssistantContentBlock>),
+    User(Vec<UserContentBlock>),
 }
 
 #[derive(Debug, Deserialize)]
 struct MessagesResponseBody {
     #[serde(default)]
-    content: Vec<ContentBlock>,
+    content: Vec<ResponseContentBlock>,
     #[serde(default)]
     stop_reason: Option<String>,
     #[serde(default)]
     usage: Option<UsageBlock>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ContentBlock {
-    #[serde(rename = "type", default)]
-    kind: Option<String>,
-    #[serde(default)]
-    text: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -327,10 +470,10 @@ mod tests {
         assert_eq!(system, "first\n\nsecond");
         assert_eq!(convo.len(), 3);
         assert_eq!(convo[0].role, "user");
-        assert_eq!(convo[0].content, "hello");
+        assert!(matches!(&convo[0].content, AnthropicMessageContent::Text(s) if s == "hello"));
         assert_eq!(convo[1].role, "assistant");
         assert_eq!(convo[2].role, "user");
-        assert_eq!(convo[2].content, "again");
+        assert!(matches!(&convo[2].content, AnthropicMessageContent::Text(s) if s == "again"));
     }
 
     #[test]
@@ -344,20 +487,34 @@ mod tests {
     #[test]
     fn collect_text_concatenates_text_blocks_in_order() {
         let blocks = vec![
-            ContentBlock {
+            ResponseContentBlock {
                 kind: Some("text".into()),
                 text: Some("alpha".into()),
+                id: None,
+                name: None,
+                input: None,
             },
-            ContentBlock {
+            ResponseContentBlock {
                 kind: Some("tool_use".into()),
                 text: None,
+                id: Some("toolu_1".into()),
+                name: Some("read_file".into()),
+                input: Some(serde_json::json!({"path": "a.md"})),
             },
-            ContentBlock {
+            ResponseContentBlock {
                 kind: Some("text".into()),
                 text: Some(" beta".into()),
+                id: None,
+                name: None,
+                input: None,
             },
         ];
         assert_eq!(collect_text(&blocks), "alpha beta");
+        let calls = collect_tool_uses(&blocks);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id.as_deref(), Some("toolu_1"));
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].arguments_json, r#"{"path":"a.md"}"#);
     }
 
     #[test]
@@ -368,11 +525,13 @@ mod tests {
             system: None,
             messages: vec![MessagePayload {
                 role: "user",
-                content: "hi".into(),
+                content: AnthropicMessageContent::Text("hi".into()),
             }],
+            tools: None,
         };
         let json = serde_json::to_string(&body).unwrap();
         assert!(!json.contains("\"system\""), "json: {json}");
+        assert!(!json.contains("\"tools\""), "json: {json}");
         assert!(json.contains("\"max_tokens\":8192"));
         assert!(json.contains("\"model\":\"claude-opus-4-7\""));
     }
@@ -384,9 +543,109 @@ mod tests {
             max_tokens: 8192,
             system: Some("rules".into()),
             messages: vec![],
+            tools: None,
         };
         let json = serde_json::to_string(&body).unwrap();
         assert!(json.contains("\"system\":\"rules\""));
+    }
+
+    #[test]
+    fn request_body_includes_tools_when_set() {
+        // Pin the Anthropic-specific tool descriptor shape: `name`,
+        // `description`, `input_schema`. NOT OpenAI's
+        // {type:"function", function:{...}}.
+        let body = MessagesRequestBody {
+            model: "claude-opus-4-7",
+            max_tokens: 8192,
+            system: None,
+            messages: vec![],
+            tools: Some(vec![AnthropicToolDescriptor {
+                name: "list_dir".into(),
+                description: "List a directory".into(),
+                input_schema: serde_json::json!({"type":"object"}),
+            }]),
+        };
+        let v: serde_json::Value = serde_json::to_value(&body).unwrap();
+        assert_eq!(v["tools"][0]["name"], "list_dir");
+        assert_eq!(v["tools"][0]["description"], "List a directory");
+        assert_eq!(v["tools"][0]["input_schema"]["type"], "object");
+        // OpenAI-style wrappers must NOT appear -- a regression there
+        // would silently break Anthropic tool-use.
+        assert!(v["tools"][0].get("type").is_none());
+        assert!(v["tools"][0].get("function").is_none());
+        assert!(v["tools"][0].get("parameters").is_none());
+    }
+
+    #[test]
+    fn assistant_with_tool_calls_serializes_as_block_array() {
+        // The assistant turn must serialize its content as an array
+        // of typed blocks (text + tool_use) when tool_calls is
+        // non-empty; the existing simple-string form would lose the
+        // tool_use binding.
+        let messages = vec![LlmMessage {
+            role: LlmRole::Assistant,
+            content: "calling list_dir".into(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: vec![crate::session::protocol::LlmToolCall {
+                id: Some("toolu_1".into()),
+                name: "list_dir".into(),
+                arguments_json: r#"{"path":"."}"#.into(),
+            }],
+        }];
+        let (_system, convo) = split_system_and_messages(&messages);
+        assert_eq!(convo.len(), 1);
+        let json = serde_json::to_value(&convo[0]).unwrap();
+        assert_eq!(json["role"], "assistant");
+        assert!(json["content"].is_array());
+        assert_eq!(json["content"][0]["type"], "text");
+        assert_eq!(json["content"][0]["text"], "calling list_dir");
+        assert_eq!(json["content"][1]["type"], "tool_use");
+        assert_eq!(json["content"][1]["id"], "toolu_1");
+        assert_eq!(json["content"][1]["name"], "list_dir");
+        assert_eq!(json["content"][1]["input"]["path"], ".");
+    }
+
+    #[test]
+    fn tool_role_messages_coalesce_into_one_user_with_tool_result_blocks() {
+        // Anthropic requires every prior tool_use.id to be replied
+        // to in a SINGLE user message before the next assistant
+        // turn. The converter coalesces consecutive Tool-role
+        // messages into one user message with N tool_result blocks.
+        let messages = vec![
+            LlmMessage {
+                role: LlmRole::Tool,
+                content: "result 1".into(),
+                attachments: Vec::new(),
+                tool_call_id: Some("toolu_a".into()),
+                tool_calls: Vec::new(),
+            },
+            LlmMessage {
+                role: LlmRole::Tool,
+                content: "result 2".into(),
+                attachments: Vec::new(),
+                tool_call_id: Some("toolu_b".into()),
+                tool_calls: Vec::new(),
+            },
+            LlmMessage {
+                role: LlmRole::User,
+                content: "what next?".into(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+            },
+        ];
+        let (_system, convo) = split_system_and_messages(&messages);
+        assert_eq!(convo.len(), 2);
+        let json = serde_json::to_value(&convo[0]).unwrap();
+        assert_eq!(json["role"], "user");
+        assert!(json["content"].is_array());
+        assert_eq!(json["content"][0]["type"], "tool_result");
+        assert_eq!(json["content"][0]["tool_use_id"], "toolu_a");
+        assert_eq!(json["content"][0]["content"], "result 1");
+        assert_eq!(json["content"][1]["type"], "tool_result");
+        assert_eq!(json["content"][1]["tool_use_id"], "toolu_b");
+        assert_eq!(json["content"][1]["content"], "result 2");
     }
 
     #[test]
