@@ -3,7 +3,6 @@
 // `sim-flow session ... --jsonl` directly) and the per-session
 // metadata; only host-mediated dispatchers live here.
 
-import { AnthropicBackend } from "./anthropic";
 import { LMStudioBackend } from "./lmstudio";
 import { OllamaBackend } from "./ollama";
 import { OpenAiBackend } from "./openai";
@@ -39,13 +38,6 @@ export function createBackend(options: FactoryOptions): LlmBackend {
         model: options.model,
         modelFamilyId: options.modelFamilyId,
         runtimeProfileId: options.runtimeProfileId,
-      });
-    case "anthropic":
-      return new AnthropicBackend({
-        model: options.model,
-        modelFamilyId: options.modelFamilyId,
-        runtimeProfileId: options.runtimeProfileId,
-        secrets: options.secrets,
       });
     case "openai":
       return new OpenAiBackend({
@@ -100,19 +92,24 @@ export function createBackend(options: FactoryOptions): LlmBackend {
         secrets: options.secrets,
         baseUrl: options.baseUrl ?? options.lmstudioBaseUrl ?? "http://localhost:1234/v1",
       });
+    case "anthropic":
     case "claude-cli":
     case "codex-cli":
     case "gh-copilot-cli":
-      // CLI-agent sources don't have an HTTP backend the chat
-      // participant can drive. They run as `sim-flow auto
-      // --llm-backend <name>` in a terminal (see the dashboard's
-      // Run/Resume Automated Flow button). If we got here, the user
-      // somehow triggered a chat-pane dispatch (e.g. `@sim-flow
-      // /step DM2c.work`) while a CLI source is selected -- tell
-      // them why nothing's happening and how to recover.
+      // Sources without a chat-pane HTTP backend. Anthropic dispatch
+      // moved to the sim-flow Rust orchestrator (per the architecture
+      // doc: HTTP backends live in `sim-flow` Rust, not the extension)
+      // so the chat-pane factory no longer constructs an
+      // AnthropicBackend. CLI agents (claude/codex/gh-copilot)
+      // similarly run as `sim-flow auto --llm-backend <name>` in a
+      // terminal (see the dashboard's Run/Resume Automated Flow
+      // button). If we got here, the user somehow triggered a
+      // chat-pane dispatch (e.g. `@sim-flow /step DM2c.work`) while
+      // a non-chat-pane source is selected -- tell them why nothing's
+      // happening and how to recover.
       throw new LlmError(
         "unsupported",
-        `LLM source \`${options.source}\` is a CLI agent and runs in a terminal, not the chat pane. Use the dashboard's "Run / Resume Automated Flow" button, or switch the picker to an API backend (vscode / anthropic / openai / ollama / lmstudio) for in-chat use.`,
+        `LLM source \`${options.source}\` runs via the sim-flow orchestrator, not the chat pane. Use the dashboard's "Run / Resume Automated Flow" button, or switch the picker to an in-chat backend (vscode / openai / ollama / lmstudio) for chat-pane use.`,
       );
     default: {
       const _exhaustive: never = options.source;

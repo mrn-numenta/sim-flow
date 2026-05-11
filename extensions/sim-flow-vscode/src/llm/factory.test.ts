@@ -5,7 +5,6 @@ vi.mock("vscode", () => ({
   window: {},
 }));
 
-const { AnthropicBackend } = await import("./anthropic");
 const { createBackend } = await import("./factory");
 const { LMStudioBackend } = await import("./lmstudio");
 const { OllamaBackend } = await import("./ollama");
@@ -18,16 +17,6 @@ describe("createBackend", () => {
     const backend = createBackend({ source: "vscode" });
     expect(backend).toBeInstanceOf(VSCodeLmBackend);
     expect(backend.name).toBe("vscode.lm");
-  });
-
-  it("returns AnthropicBackend for source=anthropic", () => {
-    const backend = createBackend({
-      source: "anthropic",
-      secrets: { get: async () => undefined },
-    });
-    expect(backend).toBeInstanceOf(AnthropicBackend);
-    expect(backend.name).toBe("anthropic");
-    expect(backend.adaptation?.runtime.id).toBe("anthropic_messages");
   });
 
   it("returns OpenAiBackend for source=openai", () => {
@@ -57,15 +46,6 @@ describe("createBackend", () => {
     expect(backend.adaptation?.modelFamily.id).toBe("gemma4");
   });
 
-  it("honors an explicit runtime-profile override when compatible", () => {
-    const backend = createBackend({
-      source: "anthropic",
-      runtimeProfileId: "anthropic_messages",
-      secrets: { get: async () => undefined },
-    });
-    expect(backend.adaptation?.runtime.id).toBe("anthropic_messages");
-  });
-
   it("returns OllamaBackend for source=ollama (no secrets required)", () => {
     const backend = createBackend({ source: "ollama" });
     expect(backend).toBeInstanceOf(OllamaBackend);
@@ -90,14 +70,18 @@ describe("createBackend", () => {
     }
   });
 
-  it.each(["claude-cli", "codex-cli", "gh-copilot-cli"] as const)(
-    "throws unsupported with a terminal-route hint for source=%s",
+  it.each(["anthropic", "claude-cli", "codex-cli", "gh-copilot-cli"] as const)(
+    "throws unsupported with an orchestrator-route hint for source=%s",
     (source) => {
-      // CLI-agent sources never run in the chat pane. The factory
-      // must reject them with a clear message so a user who left
-      // the picker on `claude-cli` and then triggered a /step
-      // session sees why nothing's happening (instead of a silent
-      // no-op or a misleading "no model" error).
+      // Sources that don't have a chat-pane HTTP backend in the
+      // extension. Anthropic dispatch lives in the sim-flow Rust
+      // orchestrator (per the architecture doc: HTTP backends live
+      // in `sim-flow` Rust). CLI agents run via `sim-flow auto
+      // --llm-backend <name>` in a terminal. Either way the
+      // chat-pane factory rejects them with a clear message so a
+      // user who left the picker on `anthropic` and then triggered
+      // a /step session sees why nothing's happening (instead of a
+      // silent no-op or a misleading "no model" error).
       try {
         createBackend({ source });
         throw new Error("expected throw");
@@ -106,7 +90,7 @@ describe("createBackend", () => {
         const llmErr = err as InstanceType<typeof LlmError>;
         expect(llmErr.kind).toBe("unsupported");
         expect(llmErr.message).toContain(source);
-        expect(llmErr.message).toContain("terminal");
+        expect(llmErr.message).toContain("orchestrator");
       }
     },
   );

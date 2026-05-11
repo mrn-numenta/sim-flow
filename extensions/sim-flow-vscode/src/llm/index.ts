@@ -1,4 +1,3 @@
-export { ANTHROPIC_KEY_ID, AnthropicBackend, extractAnthropicText } from "./anthropic";
 export { createBackend, type FactoryOptions } from "./factory";
 export { formatAdaptationSummary, summarizeAdaptation } from "./adaptationDiagnostics";
 export { LMSTUDIO_DEFAULT_BASE_URL, LMSTUDIO_KEY_ID, LMStudioBackend } from "./lmstudio";
