@@ -599,4 +599,69 @@ mod tests {
         assert!(!out.contains("&lt;"), "escaped: {out}");
         assert!(!out.contains("&amp;"), "escaped: {out}");
     }
+
+    /// Walk every DM*.md prompt under the foundation's default
+    /// prompts dir, render it with both the fenced and native
+    /// output-intro fragments, and verify both renders succeed.
+    /// Catches templating drift (e.g. a placeholder added but not
+    /// in the context, or a fragment file missing) at test time
+    /// instead of mid-session.
+    #[test]
+    fn all_dm_prompts_render_in_both_modes() {
+        // Walk up from the crate dir to find the foundation root.
+        // The crate is at <foundation>/tools/sim-flow.
+        let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let foundation_root = crate_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("crate has two ancestors");
+        let prompts_dir = foundation_root.join(PROMPTS_DIR);
+        if !prompts_dir.is_dir() {
+            // Tarball-without-prompts edge case; skip rather than
+            // false-positive in CI.
+            return;
+        }
+        let fenced = load_template(foundation_root, "output-intro-fenced")
+            .expect("output-intro-fenced fragment must exist");
+        let native = load_template(foundation_root, "output-intro-native")
+            .expect("output-intro-native fragment must exist");
+        let mut fenced_ctx = PromptContext::new();
+        fenced_ctx.insert("output_intro".into(), fenced);
+        let mut native_ctx = PromptContext::new();
+        native_ctx.insert("output_intro".into(), native);
+
+        let project_dir = PathBuf::new();
+        let mut tested = 0;
+        for entry in std::fs::read_dir(&prompts_dir).unwrap().flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            // Only walk DM-step prompts. The smoke/generate-verilog
+            // prompts are exercised separately and don't carry an
+            // output-intro placeholder yet.
+            if !name.starts_with("dm") || !name.ends_with(".md") {
+                continue;
+            }
+            let stem = name.trim_end_matches(".md");
+            let (slug, kind) = if let Some(s) = stem.strip_suffix("-critique") {
+                (s.to_string(), SessionKind::Critique)
+            } else {
+                (stem.to_string(), SessionKind::Work)
+            };
+            for ctx in [&fenced_ctx, &native_ctx] {
+                load_for_project_with_context(foundation_root, &project_dir, &slug, kind, ctx)
+                    .unwrap_or_else(|e| {
+                        panic!("rendering `{name}` failed: {e}");
+                    });
+            }
+            tested += 1;
+        }
+        // Sanity-check: we expect 14 work + 14 critique = 28 DM
+        // prompts. A future split will need to update this floor.
+        assert!(
+            tested >= 28,
+            "tested only {tested} DM prompts; expected 28+"
+        );
+    }
 }

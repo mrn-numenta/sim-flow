@@ -89,19 +89,7 @@ hidden.
 
 ## Output
 
-The canonical shape is a fenced artifact-write block whose
-info-string is the destination path. Emit the JSON inline between
-the open and close fence -- no leading prose, no `json` language
-tag:
-
-```docs/critiques/DM3ad-critique.json
-{ ... critique JSON, see "JSON schema" below ... }
-```
-
-Bare-prose `{ ... }` JSON or a ` ```json ` fence is recoverable
-(the orchestrator's `salvage_critique_json` path catches both) but
-wastes a parser pass. Emit the canonical fenced form directly so
-the file lands first-try.
+{{ output_intro }}
 
 Write the critique as JSON to
 `docs/critiques/DM3ad-critique.json`. The orchestrator renders a
