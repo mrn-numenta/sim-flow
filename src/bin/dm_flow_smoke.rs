@@ -165,7 +165,7 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         llm_runtime_profile_id: None,
         llm_debug_adaptation: false,
         llm_base_url: None,
-        max_auto_iters: 3,
+        max_auto_iters: 6,
         max_critique_iters: 10,
         max_critique_no_progress_iters: 3,
         dm0_interactive: false,

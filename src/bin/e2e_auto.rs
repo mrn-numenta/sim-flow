@@ -117,7 +117,7 @@ impl Args {
         let mut backend_str: Option<String> = None;
         let mut model: Option<String> = None;
         let mut base_url: Option<String> = None;
-        let mut max_auto_iters = 3u32;
+        let mut max_auto_iters = 6u32;
         let mut max_critique_iters = 10u32;
         let mut max_critique_no_progress_iters = 3u32;
         let mut max_llm_requests = 500u32;

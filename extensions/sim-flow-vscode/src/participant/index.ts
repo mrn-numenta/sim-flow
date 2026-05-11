@@ -226,7 +226,7 @@ async function runAutoCommand(
 ): Promise<vscode.ChatResult> {
   const config = vscode.workspace.getConfiguration("sim-flow");
   const llmConfig = buildPumpLlmConfig(ctx, secrets, config);
-  const maxWorkIters = config.get<number>("auto.maxWorkIterations") ?? 3;
+  const maxWorkIters = config.get<number>("auto.maxWorkIterations") ?? 6;
   const maxCritiqueIters = config.get<number>("auto.maxCritiqueIterations") ?? 10;
   const maxCritiqueNoProgressIters =
     config.get<number>("auto.maxCritiqueNoProgressIterations") ?? 3;

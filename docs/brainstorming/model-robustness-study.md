@@ -577,6 +577,81 @@ We should NOT scale to K=20 yet -- the hardening work above
 might reshape the anomaly rates, so K=20 against a tightened
 orchestrator is worth more than K=20 against today's.
 
+## Phase 0b findings (qwen3.6 via vLLM, K=3, hardening pass ON)
+
+Same fixture, same K, same backend as Phase 0; with the hardening
+pass enabled: `SIM_FLOW_DISABLE_THINKING=1`,
+`max_critique_iters=10`, `max_critique_no_progress_iters=3`,
+`max_tokens` default 65K, per-trial `seed=trial_idx`.
+
+### Outcomes (Phase 0b vs Phase 0)
+
+| trial | Phase 0 wall / depth / terminator       | Phase 0b wall / depth / terminator                |
+| ----- | --------------------------------------- | ------------------------------------------------- |
+| 01    | 502s / DM1 / critique-iter-cap          | 773s / **DM2cd** / work-side `max_auto_iters`     |
+| 02    | 1534s / DM2b / critique-iter-cap        | 353s / **(none)** / work-side `max_auto_iters`    |
+| 03    | 1528s / DM2c / critique-iter-cap        | 416s / DM2a / work-side `max_auto_iters`          |
+
+### Headlines
+
+1. **Token efficiency win.** Median wall 416s vs 1528s
+   (~73% faster). Disable-thinking removed the `<think>...</think>`
+   preamble from every turn; the cost-per-turn dropped 3-4x.
+2. **New failure mode: work-side stall.** Phase 0 was 3/3
+   critique-iter-cap (model couldn't satisfy gate within the
+   retry budget). Phase 0b is 3/3 **work-side
+   `max_auto_iters`** -- the work session burned its turn budget
+   without committing a single artifact write. Trial 2 is the
+   clearest example: DM0 work pass 1 wrote spec.md OK; DM0
+   critique flagged 1 blocker; DM0 work pass 2 (retry) read
+   files for 3 turns without re-writing. Disable-thinking
+   appears to remove the planning room the model needs on
+   retry passes -- with no place to think, it reads + considers
+   in the surface text but doesn't commit a write.
+3. **Two-cap critique policy worked as intended.** Trial 1's
+   DM2cd critique trajectory was `2 -> 1 -> 1 -> 1` (one
+   strict-progress pass, then plateau). The Info diagnostic
+   surfaced the streak (`(no progress, streak 1/3)`,
+   `streak 2/3`) so an operator can see the plateau forming
+   before the cap trips.
+4. **Reproducibility plumbed.** With `SIM_FLOW_SEED=$TRIAL`, a
+   future re-run with the same seed should produce the same
+   trajectory. Phase 0 trials were unreproducible (no seed
+   plumbed); Phase 0b is the first reproducible run.
+
+### Next hardening: bump work-side cap 3 -> 6
+
+The work-side `max_auto_iters` default of 3 was set before
+`disable_thinking` existed. Post-hardening, the cap fires
+before the model settles into a write on retry passes. Bumping
+to 6 doubles the forcing-prompt budget (the orchestrator
+pushes "Produce the artifact file(s) now..." after each empty
+turn) without letting a truly-stuck run waste forever. Same
+pattern as the critique cap (3 -> 10 absolute + 3 no-progress).
+
+Phase 0c is "0b settings + work-side cap = 6". Reported in
+the next decision-log entry.
+
+### Cross-model spot-check (LM Studio / qwen3.6-35b-a3b, trial 1 only)
+
+A parallel LM Studio K=3 (`qwen/qwen3.6-35b-a3b`) was started
+with the same hardening but killed after trial 1 to land the
+work-side cap bump first. Trial 1 result is consistent with
+the vLLM cross-confirmation:
+
+- Walked: DM0 -> DM2a (same as vLLM trial 3)
+- Terminator: DM2a work-side `max_auto_iters` -- **same
+  pattern across both backends and both model sizes in the
+  family**.
+- Wall: 3388s (~4x slower than vLLM/27b). 35B model + LM
+  Studio overhead.
+- 3 `llm-truncated-at-max-tokens` events during the run
+  (vs 0 on vLLM Phase 0b) -- the 35B variant is chattier.
+
+The work-side stall isn't quirky to qwen3.6-27b or vLLM. It's
+a qwen3.6-family + disable-thinking interaction. The cap bump
+applies to both backends.
+
 ## Decision log
 
 - **2026-05-11 -- trial count**: start at K=3 to get the pipeline
@@ -668,6 +743,17 @@ orchestrator is worth more than K=20 against today's.
      qwen3.6 returns a 4-byte content (`"ok"`) instead of the
      full `<think>...</think>` preamble, saving ~99% of the
      tokens on quick turns.
+- **2026-05-11 -- work-side cap 3 -> 6 (Phase 0c prep)**:
+  Phase 0b's 3/3 trials terminated on work-side
+  `max_auto_iters` (no artifact after 3 turns). LM Studio's
+  trial 1 (qwen3.6-35b-a3b) hit the identical pattern,
+  confirming it's a family-level disable-thinking interaction
+  not specific to vLLM or the 27B variant. Bumped the default
+  3 -> 6 in `cli.rs` / `e2e_auto` / `e2e_manual` /
+  `dm_flow_smoke` and the VS Code dashboard setting; the
+  orchestrator's empty-turn forcing prompt now gets ~6 chances
+  to land an artifact instead of 3. Symmetric with the
+  critique-cap bump (3 -> 10).
 - **2026-05-11 -- first hardening pass landed** (3 changes
   motivated by the Phase 0 catalog):
   1. Added `prefers_bare_json_critique: bool` to

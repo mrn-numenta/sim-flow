@@ -326,8 +326,8 @@
         "sim-flow.auto.maxWorkIterations": {
           "type": "integer",
           "minimum": 1,
-          "default": 3,
-          "description": "Per-session structural-gate iteration cap in automated mode. If a single work or critique session can't reach a clean structural gate within this many turns, the orchestrator falls through to interactive."
+          "default": 6,
+          "description": "Per-session structural-gate iteration cap in automated mode. If a single work session has produced no fenced artifact write block for this many consecutive turns, the orchestrator flips to manual. Default raised 3 → 6 after the post-Phase-0 hardening pass: with thinking disabled, qwen3.6 retry-work sessions sometimes need extra turns to settle into a write."
         },
         "sim-flow.auto.maxCritiqueIterations": {
           "type": "integer",

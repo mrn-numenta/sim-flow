@@ -332,7 +332,7 @@ const mock = vi.hoisted(() => {
       ["llm.verbose", true],
       ["llm.ollama.baseUrl", "http://localhost:11434/v1"],
       ["llm.lmstudio.baseUrl", "http://localhost:1234/v1"],
-      ["auto.maxWorkIterations", 3],
+      ["auto.maxWorkIterations", 6],
       ["auto.maxCritiqueIterations", 10],
       ["auto.maxCritiqueNoProgressIterations", 3],
       ["dashboard.showFullyAutomated", false],

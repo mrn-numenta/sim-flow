@@ -200,8 +200,24 @@ pub(crate) enum Command {
         /// hosted-API endpoints) and the `*-cli` backends.
         #[arg(long)]
         llm_base_url: Option<String>,
-        /// Per-session structural-gate iteration cap.
-        #[arg(long, default_value_t = 3)]
+        /// Per-session structural-gate iteration cap. The
+        /// orchestrator's auto mode fires this when a Work session
+        /// has produced no artifact for this many consecutive turns
+        /// (the gate stays dirty, no fenced write block appears).
+        ///
+        /// Default history: 3 -> 6. The bump was triggered by the
+        /// post-Phase-0 hardening pass: with
+        /// `SIM_FLOW_DISABLE_THINKING=1`, qwen3.6 retry-work
+        /// sessions sometimes spend several turns reading +
+        /// considering the critique before committing a write,
+        /// and the original cap of 3 fired before the model
+        /// settled. 6 gives the forcing-prompt loop more room
+        /// (the orchestrator pushes "Produce the artifact file(s)
+        /// now ..." after each empty turn) without letting a
+        /// truly-stuck run burn forever. See the Phase 0b /
+        /// Phase 0c entries in
+        /// docs/brainstorming/model-robustness-study.md.
+        #[arg(long, default_value_t = 6)]
         max_auto_iters: u32,
         /// Cross-session retry cap (absolute ceiling) when the
         /// critique reports gate-failing findings. Even
