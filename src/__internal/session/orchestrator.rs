@@ -1837,11 +1837,41 @@ pub fn build_initial_messages(
         })
         .collect();
 
-    let instruction_body = prompts::load_for_project(
+    // Build the prompt-template context. The per-step prompts use
+    // `{{output_intro}}` to defer the "how to emit artifacts"
+    // preamble to a mode-specific fragment under `_templates/`. Same
+    // gate the convention selection below uses (env var +
+    // PTY/CLI flag); the per-step prompt directive must match the
+    // session-wide convention or the model gets contradictory
+    // instructions.
+    let orchestrator_native_tools_mode = !opts.agent_has_native_fs_tools
+        && matches!(
+            std::env::var("SIM_FLOW_TOOL_MODE").ok().as_deref(),
+            Some("native") | Some("native-tool-calls")
+        );
+    let output_intro_fragment = if opts.agent_has_native_fs_tools {
+        // PTY/CLI agents have their OWN tool catalog (Write, Edit,
+        // Read). Today they share the fenced-mode preamble because
+        // their tools cover the same use case via CLI-side syntax;
+        // a CLI-specific intro fragment can be split out later if
+        // needed.
+        "output-intro-fenced"
+    } else if orchestrator_native_tools_mode {
+        "output-intro-native"
+    } else {
+        "output-intro-fenced"
+    };
+    let mut template_context = prompts::PromptContext::new();
+    template_context.insert(
+        "output_intro".into(),
+        prompts::load_template(&opts.foundation_root, output_intro_fragment)?,
+    );
+    let instruction_body = prompts::load_for_project_with_context(
         &opts.foundation_root,
         &opts.project_dir,
         step.instruction_slug,
         opts.kind,
+        &template_context,
     )?;
     let mut messages: Vec<LlmMessage> = Vec::new();
     // Boilerplate "conventions" (artifact-write rules, automated-mode
@@ -1876,13 +1906,8 @@ pub fn build_initial_messages(
     //     Default when neither native path is active.
     //
     // `agent_has_native_fs_tools` is set by the PTY/interactive
-    // driver; `SIM_FLOW_TOOL_MODE=native` is read here from the env
-    // (same gate the host uses to switch dispatch_with_tools on).
-    let orchestrator_native_tools_mode = !opts.agent_has_native_fs_tools
-        && matches!(
-            std::env::var("SIM_FLOW_TOOL_MODE").ok().as_deref(),
-            Some("native") | Some("native-tool-calls")
-        );
+    // driver; `SIM_FLOW_TOOL_MODE=native` is read above into
+    // `orchestrator_native_tools_mode` for the template context.
     let convention_name = if opts.agent_has_native_fs_tools {
         "native-tools"
     } else if orchestrator_native_tools_mode {

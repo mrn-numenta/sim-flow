@@ -21,7 +21,10 @@
 //! the default under `<foundation>/tools/sim-flow/prompts/` is
 //! read-only here.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+use minijinja::{Environment, UndefinedBehavior};
 
 use crate::client::SessionKind;
 use crate::{Error, Result};
@@ -42,6 +45,11 @@ pub const PROMPTS_SUBDIR: &str = "prompts";
 /// dashboard's per-step prompt list ignores them -- they're shared
 /// session-wide rather than per-step, and not user-overridable.
 pub const CONVENTIONS_SUBDIR: &str = "_conventions";
+/// Subdirectory under `PROMPTS_DIR` for reusable template fragments
+/// (`{{output_intro}}` etc.) substituted into per-step prompts at
+/// load time. Underscore-prefixed for the same reason as
+/// `_conventions/`: it's not a per-step prompt list entry.
+pub const TEMPLATES_SUBDIR: &str = "_templates";
 
 /// Where a resolved prompt's content came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +138,62 @@ pub fn load_convention(foundation_root: &Path, name: &str) -> Result<String> {
     std::fs::read_to_string(&path).map_err(|source| Error::Io { path, source })
 }
 
+/// Absolute path to a template fragment (`_templates/<name>.md`)
+/// under the foundation default tree. These are short, reusable
+/// chunks substituted into per-step prompts via `{{name}}`
+/// placeholders. The orchestrator picks a per-mode fragment (e.g.
+/// `output-intro-fenced.md` vs `output-intro-native.md`) at load
+/// time based on the active artifact-write mode.
+pub fn template_path(foundation_root: &Path, name: &str) -> PathBuf {
+    foundation_root
+        .join(PROMPTS_DIR)
+        .join(TEMPLATES_SUBDIR)
+        .join(format!("{name}.md"))
+}
+
+/// Read a template fragment by name. Errors loudly when missing --
+/// fragments referenced by `{{key}}` placeholders MUST exist or
+/// the prompt is structurally broken.
+pub fn load_template(foundation_root: &Path, name: &str) -> Result<String> {
+    let path = template_path(foundation_root, name);
+    std::fs::read_to_string(&path).map_err(|source| Error::Io { path, source })
+}
+
+/// Substitution context: a map of `{{key}}` -> replacement value.
+/// `BTreeMap` for stable ordering in diagnostics; values are owned
+/// strings since the typical use case loads fragment bodies from
+/// disk and hands ownership in.
+pub type PromptContext = BTreeMap<String, String>;
+
+/// Render a prompt body through the minijinja templating engine.
+/// Strict undefined-variable handling: an unbound `{{key}}` (typo,
+/// missing context entry, etc.) returns `Err`. The strict mode is
+/// intentional -- silent omission of an `{{output_intro}}` block
+/// would leave the prompt without any artifact-write directive,
+/// and the model would have to guess.
+///
+/// `name` is used in error diagnostics only; pass the prompt's
+/// filename or slug.
+pub fn render_prompt(name: &str, body: &str, context: &PromptContext) -> Result<String> {
+    let mut env = Environment::new();
+    env.set_undefined_behavior(UndefinedBehavior::Strict);
+    // Disable HTML auto-escaping; we're emitting plain markdown, not
+    // HTML, and the artifact-write paths / JSON examples contain
+    // characters (`<`, `&`, etc.) that would otherwise get mangled
+    // into `&lt;` / `&amp;`.
+    env.set_auto_escape_callback(|_| minijinja::AutoEscape::None);
+    let tmpl = env
+        .template_from_str(body)
+        .map_err(|e| Error::State(format!("prompt template `{name}`: parse error: {e}")))?;
+    tmpl.render(context).map_err(|e| {
+        Error::State(format!(
+            "prompt template `{name}`: render error: {e}. \
+             Defined keys: [{}]",
+            context.keys().cloned().collect::<Vec<_>>().join(", ")
+        ))
+    })
+}
+
 /// Resolve the instruction prompt for `(slug, kind)`. Checks project
 /// scope first, then global, then the foundation default. Returns
 /// [`Error::InstructionMissing`] only when the default itself is
@@ -195,6 +259,29 @@ pub fn load_for_project(
     kind: SessionKind,
 ) -> Result<String> {
     load_scoped(foundation_root, project_dir, step_slug, kind).map(|r| r.content)
+}
+
+/// Like `load_for_project` but renders the loaded body through the
+/// templating engine with the supplied context, so `{{key}}`
+/// placeholders get substituted before the body is handed to the
+/// LLM. A prompt that contains no placeholders is returned
+/// unchanged.
+pub fn load_for_project_with_context(
+    foundation_root: &Path,
+    project_dir: &Path,
+    step_slug: &str,
+    kind: SessionKind,
+    context: &PromptContext,
+) -> Result<String> {
+    let resolved = load_scoped(foundation_root, project_dir, step_slug, kind)?;
+    let name = format!(
+        "{step_slug}{}",
+        match kind {
+            SessionKind::Work => "",
+            SessionKind::Critique => "-critique",
+        }
+    );
+    render_prompt(&name, &resolved.content, context)
 }
 
 /// Persist an override at the given scope. Creates the prompts
@@ -456,5 +543,60 @@ mod tests {
                 .iter()
                 .all(|e| e.active_scope == PromptScope::Default)
         );
+    }
+
+    #[test]
+    fn render_prompt_substitutes_known_keys() {
+        let mut ctx = PromptContext::new();
+        ctx.insert("output_intro".into(), "WRITE A FILE".into());
+        let body = "## Output\n\n{{ output_intro }}\n\nThe path is `docs/spec.md`.";
+        let out = render_prompt("dm0-specification", body, &ctx).unwrap();
+        assert!(out.contains("WRITE A FILE"), "out: {out}");
+        assert!(out.contains("The path is `docs/spec.md`."), "out: {out}");
+        assert!(!out.contains("{{"), "placeholder leaked: {out}");
+    }
+
+    #[test]
+    fn render_prompt_passes_through_when_no_placeholders() {
+        // Existing prompts that don't reference `{{...}}` must
+        // render to the same body verbatim. This is the migration
+        // safety net -- adding the renderer to the load path must
+        // not perturb prompts that haven't been retemplated yet.
+        let ctx = PromptContext::new();
+        let body = "## Goal\n\nNothing to substitute here.";
+        let out = render_prompt("any", body, &ctx).unwrap();
+        assert_eq!(out, body);
+    }
+
+    #[test]
+    fn render_prompt_errors_loudly_on_unknown_key() {
+        // Strict-undefined: an unbound `{{key}}` must NOT silently
+        // render as an empty string. Without this, a typo
+        // (`{{output_intr}}`) would delete the directive entirely
+        // and the model would get a prompt missing the artifact-
+        // write instructions.
+        let ctx = PromptContext::new();
+        let body = "## Output\n\n{{output_intro}}";
+        let err = render_prompt("dm0", body, &ctx).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("dm0"), "msg: {msg}");
+        assert!(
+            msg.contains("output_intro") || msg.contains("undefined"),
+            "msg: {msg}"
+        );
+    }
+
+    #[test]
+    fn render_prompt_preserves_code_chars_no_html_escape() {
+        // JSON / code examples in prompts contain `<`, `&`, etc.
+        // Auto-escape would mangle these into &lt; / &amp;.
+        let mut ctx = PromptContext::new();
+        ctx.insert("output_intro".into(), "x".into());
+        let body = "{{output_intro}}: `{\"foo\": \"<bar>\"}` & `a < b`";
+        let out = render_prompt("test", body, &ctx).unwrap();
+        assert!(out.contains("<bar>"), "escaped: {out}");
+        assert!(out.contains("a < b"), "escaped: {out}");
+        assert!(!out.contains("&lt;"), "escaped: {out}");
+        assert!(!out.contains("&amp;"), "escaped: {out}");
     }
 }
