@@ -652,6 +652,122 @@ The work-side stall isn't quirky to qwen3.6-27b or vLLM. It's
 a qwen3.6-family + disable-thinking interaction. The cap bump
 applies to both backends.
 
+## Phase 0c findings (K=12 vLLM/qwen3.6 + K=1 Anthropic/opus-4-7)
+
+K=12 captured by running four parallel `e2e_auto` jobs against
+vLLM with seeds 1/2/3 per job (12 trials total). Settings
+match the post-hardening defaults: `disable-thinking=on`,
+`max_auto_iters=6`, `max_critique_iters=10`,
+`max_critique_no_progress_iters=3`.
+
+### Advance-depth histogram (K=12)
+
+| step  | trials | %   |
+| ----- | ------ | --- |
+| DM2d  | 3      | 25% |
+| DM2cd | 3      | 25% |
+| DM1   | 3      | 25% |
+| DM2c  | 2      | 17% |
+| DM2b  | 1      |  8% |
+
+Median advance: DM2cd (placeholder-mode milestone walk). No
+trial reached DM3+; DM2d is the deepest, and the trials that
+got there terminated on either the runaway-loop guard or
+cargo-test no-progress (model couldn't drive `cargo test` to
+clean within the iter budget).
+
+### Terminator histogram (K=12)
+
+| kind                 | count | notes                                                                |
+| -------------------- | ----- | -------------------------------------------------------------------- |
+| work-no-artifact     | 8     | model burns `max_auto_iters=6` reading + considering without writing |
+| critique-no-progress | 3     | NEW cap (blocker count flat across retries -- fires correctly)       |
+| runaway-loop         | 1     | 3 structurally-identical responses                                   |
+
+Critique-iter-cap (absolute) and cargo-test-no-progress never
+fired in K=12. The work-side stall remains the dominant failure
+mode (67%) even with the cap=6 bump. **The new
+`max_critique_no_progress_iters` cap caught 25% of trials**
+cleanly -- exactly what we built it for. Without it those 3
+trials would have burned 7 more retries each before tripping
+the absolute critique cap.
+
+### Per-job × seed grid (cross-job variance at fixed seed)
+
+| job  | seed=1 | seed=2 | seed=3 |
+| ---- | ------ | ------ | ------ |
+| job1 | DM2d   | DM1    | DM2cd  |
+| job2 | DM1    | DM2c   | DM2cd  |
+| job3 | DM2c   | DM2d   | DM2cd  |
+| job4 | DM2b   | DM2d   | DM1    |
+
+Same-seed-different-job variance is enormous for seeds 1 and 2
+(spans DM1 -> DM2d). **Seed=3 matched at DM2cd on 3/4 jobs** --
+the only case where vLLM produced reproducible output under
+concurrent load. **vLLM's batched scheduler is nondeterministic
+across concurrent sessions**, so seed-fixing alone is not
+sufficient for trial reproducibility when the GPU is shared.
+Pin this in the doc; future studies running multiple parallel
+jobs against the same vLLM instance should not expect
+seed-determinism.
+
+### Phase 0 -> 0b -> 0c progression
+
+| phase | hardening                       | K  | median wall | median depth | dominant terminator   |
+| ----- | ------------------------------- | -- | ----------- | ------------ | --------------------- |
+| 0     | none                            | 3  | 1528s       | DM2b         | critique-iter-cap     |
+| 0b    | disable-thinking, cap=3         | 3  | 416s        | DM2a         | work-no-artifact      |
+| 0c    | + cap=6                         | 12 | ~915s       | DM2cd        | work-no-artifact      |
+
+- Phase 0b cut median wall ~3.7x but capped early on the work
+  side.
+- Phase 0c restored advance depth (median DM2cd vs Phase 0b's
+  DM2a) at the cost of doubling median wall.
+- Neither reached DM3+ on the smoke fixture. The work-side
+  stall is still the gating issue. Next investigation:
+  inspect what the model is actually doing in the wasted
+  work turns -- if it's reading + reading + reading without
+  committing, prompt-side intervention (forcing-prompt
+  wording, milestone-walk scoping) may help more than another
+  cap bump.
+
+### Anthropic / claude-opus-4-7 K=1 (685s, 1 trial)
+
+First direct-API run via the new `AnthropicAgent`:
+
+- Last advance: **DM1**
+- Terminator: **critique-no-progress** (4 blockers reported on
+  every retry; streak hit 3/3 and tripped at retry 5/10)
+- 5 `stop_reason=max_tokens` truncations at the prior
+  8192-token default (since bumped to 32K in commit b7b4e78)
+- **0 salvage warnings**: Claude correctly emits fenced
+  critique blocks, confirming `prefers_bare_json_critique=false`
+  for the `claude_messages` family is the right setting
+- 11 `read_file:error` events: Opus probed for files that
+  didn't exist yet (e.g. DM2-stage analysis docs on a
+  DM0/DM1-stage flow). Not in the taxonomy; new candidate.
+
+DM1's gate flagged 4 findings persistently. Hypothesis: Opus is
+more thorough about the smoke fixture's `targets.md` /
+`testbench.md` requirements than the local Qwen models, and
+refuses to drop a real finding under prompt pressure. The new
+no-progress cap kicks in to keep wall time bounded; in
+practice the right move is to either lower the gate
+expectations on the smoke fixture or accept that Opus needs
+human intervention here.
+
+K=20 against `claude-opus-4-7` should probably wait until:
+
+1. The Anthropic-side truncation cap retest confirms 32K is
+   enough.
+2. We decide whether to also disable Opus's extended-thinking
+   via the API (currently it's not threaded -- the openai-compat
+   `disable_thinking` chat_template_kwargs doesn't apply to
+   Anthropic; the equivalent would be `thinking: {type:
+   "disabled"}` in the Messages body). Phase 0c's qwen3.6 data
+   strongly suggests disable-thinking improves token efficiency,
+   so the analog for Opus is worth testing.
+
 ## Decision log
 
 - **2026-05-11 -- trial count**: start at K=3 to get the pipeline
