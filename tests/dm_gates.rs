@@ -64,10 +64,28 @@ fn dm0_gate_accepts_well_formed_spec() {
     let (_tmp, project) = new_project();
     write(
         &project.join("docs/spec.md"),
-        "# Design Spec\nClock: 2 GHz\nTech node: 7 nm\n",
+        "# Design Spec\nClock: 2 GHz\nGates per cycle: 50\nTech node: 7 nm\n",
     );
     clean_critique(&project, "DM0");
     assert_clean(evaluate(&project, "DM0"), "DM0");
+}
+
+#[test]
+fn dm0_gate_rejects_missing_gates_per_cycle() {
+    let (_tmp, project) = new_project();
+    write(
+        &project.join("docs/spec.md"),
+        "# Design Spec\nClock: 2 GHz\nTech node: 7 nm\n",
+    );
+    clean_critique(&project, "DM0");
+    let report = evaluate(&project, "DM0");
+    assert!(!report.is_clean());
+    assert!(
+        report
+            .failures
+            .iter()
+            .any(|f| f.description.contains("gates-per-cycle"))
+    );
 }
 
 #[test]

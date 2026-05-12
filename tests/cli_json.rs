@@ -318,7 +318,7 @@ fn advance_marks_passed_and_bumps_current_step_on_clean_gate() {
     std::fs::create_dir_all(project.join("docs")).unwrap();
     std::fs::write(
         project.join("docs/spec.md"),
-        "# Spec\n\nClock: 2 GHz\nNode: 7 nm\n",
+        "# Spec\n\nClock: 2 GHz\nGates per cycle: 50\nNode: 7 nm\n",
     )
     .unwrap();
     let critiques = project.join("docs").join("critiques");

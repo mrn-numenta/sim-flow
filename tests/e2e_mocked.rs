@@ -109,7 +109,7 @@ fn auto_opts(project: &Path, mode: StepMode) -> AutoOptions {
 fn dm0_work_response() -> String {
     "Drafting the spec.\n\n\
      ```docs/spec.md\n\
-     # Spec\n\nClock: 2 GHz\nNode: 7 nm\n\
+     # Spec\n\nClock: 2 GHz\nGates per cycle: 50\nNode: 7 nm\n\
      ```\n"
         .into()
 }
@@ -714,7 +714,10 @@ fn bootstrap_full_project(tmp: &tempfile::TempDir) -> PathBuf {
 
 fn pre_write_full_artifacts(project: &Path) {
     let writes: &[(&str, &str)] = &[
-        ("docs/spec.md", "# Spec\n\nClock: 2 GHz\nNode: 7 nm\n"),
+        (
+            "docs/spec.md",
+            "# Spec\n\nClock: 2 GHz\nGates per cycle: 50\nNode: 7 nm\n",
+        ),
         (
             "docs/targets.md",
             "# Targets\n\nThroughput: 100 cycles per item.\n",

@@ -158,10 +158,15 @@ fn dm0() -> StepDescriptor {
                 r"\d+\s*(MHz|GHz)",
                 "spec declares a clock frequency",
             ),
+            // Gates-per-cycle is REQUIRED -- DM2 needs an explicit
+            // budget number from the source material, not an
+            // LLM-derived estimate from frequency + technology node.
+            // Technology node is now optional (downstream context for
+            // power / area discussion) and not gate-checked.
             any_matches(
                 &["docs/spec.md", "docs/spec/"],
-                r"\d+\s*nm",
-                "spec declares a technology node",
+                r"(?i)gates\s+per\s+cycle.*\d+",
+                "spec declares an explicit gates-per-cycle budget",
             ),
             critique_clean("DM0"),
         ],

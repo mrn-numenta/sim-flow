@@ -97,16 +97,19 @@ the name; do not conflate them:
      manual mode or record an auto-decision in automated mode.
 6. At minimum, `docs/spec.md` must include enough information for later
    steps to infer the rest reasonably. That usually means:
-   - **Technology node** matching regex `\d+\s*nm`
-   - **Clock frequency** matching regex `\d+\s*(MHz|GHz)`
-   - **Gate budget per cycle** as a single concrete line in the spec.
+   - **Clock frequency** matching regex `\d+\s*(MHz|GHz)` (REQUIRED).
+   - **Gates per cycle** as an explicit concrete number on a single
+     line, matching regex `[Gg]ates\s+per\s+cycle.*\d+` (REQUIRED).
      If the source material gives an explicit value, copy it verbatim.
-     Otherwise, derive one from the frequency + technology node and
-     write it explicitly using a "Derived gate budget per cycle" line,
-     e.g.:
-     `Derived gate budget per cycle: ~50–100 (1 GHz at 7 nm, FO4 ~10 ps).`
-     Either form satisfies the requirement; downstream steps and the
-     critique gate look for the number, not the wording around it.
+     If the source material does NOT give a number, ASK the user in
+     manual mode or record an auto-decision in automated mode -- do
+     NOT silently invent a number or derive one yourself. Downstream
+     steps depend on this number being a real budget from the source,
+     not an LLM estimate. Acceptable forms:
+     `Gates per cycle: 25`
+     `Gates per cycle: 50-100` (range form when the source gave one)
+   - **Technology node** matching regex `\d+\s*nm` (OPTIONAL context
+     for power / area discussions; not gate-checked).
    - **External interfaces** with names, widths, protocols, direction,
      and semantics
    - **Functional behavior** detailed enough to derive named operations
@@ -122,15 +125,16 @@ the name; do not conflate them:
 7. Remove placeholder text as you replace it with real content. If a
    section truly does not apply, say so explicitly rather than leaving
    the placeholder in place.
-8. The gate-budget requirement is hard because DM2 needs it to reason
-   about functional decomposition and pipeline staging. ALWAYS land a
-   concrete number in `docs/spec.md` — either copied from the source
-   material or computed from the frequency + technology target via the
-   "Derived gate budget per cycle: ..." line shown above. Do not leave
-   the budget implicit and rely on a downstream step to do the
-   derivation; weaker critique models read the absence of a literal
-   number as a blocker even when the surrounding context allows
-   derivation.
+8. The gates-per-cycle requirement is hard because DM2 needs it to
+   reason about functional decomposition and pipeline staging. The
+   number MUST come from the source material -- do not estimate or
+   derive it yourself. Frequency + technology node is NOT enough; an
+   LLM-derived gate count is an unreliable budget that propagates
+   incorrect assumptions through DM2/DM3. If the source material
+   omits the number, surface that gap as a `## Open Questions` entry
+   (manual mode) or `## Auto-decisions` entry (automated mode) and
+   stop -- the human needs to provide the budget before DM2 can
+   meaningfully plan.
 9. Do not stop after creating a partially filled scaffold. The goal of
    this step is a model-ready `docs/spec.md` that preserves explicit
    requirements and makes downstream inference safe and bounded.

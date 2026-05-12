@@ -654,7 +654,7 @@ fn auto_mode_ends_when_structural_gate_clean() {
     host.enqueue(hello());
     let response = "Drafting the spec.\n\n\
         ```docs/spec.md\n\
-        # Spec\n\nClock: 2 GHz\nNode: 7 nm\n\
+        # Spec\n\nClock: 2 GHz\nGates per cycle: 50\nNode: 7 nm\n\
         ```\n";
     host.enqueue_llm_response("lr-1", response);
 
@@ -1272,7 +1272,7 @@ fn manual_mode_dispatches_run_step_and_runs_a_real_subsession() {
     // SessionEnd { completed }.
     let response = "Drafting the spec.\n\n\
         ```docs/spec.md\n\
-        # Spec\n\nClock: 2 GHz\nNode: 7 nm\n\
+        # Spec\n\nClock: 2 GHz\nGates per cycle: 50\nNode: 7 nm\n\
         ```\n";
     host.enqueue_llm_response("lr-1", response);
     host.enqueue(HostEvent::Shutdown);
@@ -1552,7 +1552,7 @@ fn auto_mode_no_progress_cap_fires_when_critique_count_stays_flat() {
     // run_auto_loop drive ONE Critique pass.
     std::fs::write(
         project.join("docs/spec.md"),
-        "# Spec\n\nClock: 2 GHz\nNode: 7 nm\n",
+        "# Spec\n\nClock: 2 GHz\nGates per cycle: 50\nNode: 7 nm\n",
     )
     .unwrap();
 

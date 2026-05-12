@@ -44,12 +44,16 @@ acknowledgements (ignored by the gate). See "Output" below for
 the schema.
 
 1. Does the spec declare a clock frequency? (regex `\d+\s*(MHz|GHz)`
-   in `docs/spec.md` OR any `docs/spec/*.md` section)
-2. Does it declare a technology node? (regex `\d+\s*nm` in either
-   layout's content files)
-3. Does it either declare an explicit gate budget per cycle or provide
-   enough information for DM1 to derive a reasonable gate-budget-per-cycle
-   estimate, usually via frequency plus technology target?
+   in `docs/spec.md` OR any `docs/spec/*.md` section) -- REQUIRED.
+2. Does it declare a gates-per-cycle budget as an EXPLICIT number?
+   (regex `[Gg]ates\s+per\s+cycle.*\d+` in either layout's content
+   files) -- REQUIRED. A frequency + technology pair is NOT a
+   substitute; DM2 needs the budget number directly, not an
+   LLM-derived estimate.
+3. (Optional context, NOT a blocker on its own) Does the spec also
+   declare a technology node (e.g. `\d+\s*nm`)? Useful for downstream
+   power / area discussion; flag as `"unresolved"` if absent, not as
+   a `"blocker"`.
 4. Is the design intent clear enough that DM2a can derive major named
    operations without guessing at the core architecture?
 5. Are the external interfaces described clearly enough to model I/O
