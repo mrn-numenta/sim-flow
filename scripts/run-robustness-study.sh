@@ -147,7 +147,11 @@ for ((TRIAL=TRIAL_START; TRIAL<=TRIAL_END; TRIAL++)); do
     #    forwarded as `seed` in the chat-completions body.
     #    `SIM_FLOW_DISABLE_THINKING` (when exported by the
     #    caller) toggles `chat_template_kwargs.enable_thinking`.
-    TRIAL_START="$(date +%s)"
+    # Wall-clock timing. Use distinct variable names from the
+    # loop-bound `TRIAL_START` / `TRIAL_END` -- earlier code
+    # collided by reusing those, which clobbered the loop bounds
+    # after the first iteration and made the harness run forever.
+    TRIAL_T0="$(date +%s)"
     if SIM_FLOW_SEED="$TRIAL" \
             "$E2E_AUTO_BIN" \
             --foundation-root "$FOUNDATION_ROOT" \
@@ -165,8 +169,8 @@ for ((TRIAL=TRIAL_START; TRIAL<=TRIAL_END; TRIAL++)); do
         OUTCOME="error"
         FAILURES=$((FAILURES + 1))
     fi
-    TRIAL_END="$(date +%s)"
-    WALL_S=$((TRIAL_END - TRIAL_START))
+    TRIAL_T1="$(date +%s)"
+    WALL_S=$((TRIAL_T1 - TRIAL_T0))
 
     printf '{"trial":%d,"outcome":"%s","wall_s":%d,"seed":%d,"disable_thinking":%s,"project_dir":"%s"}\n' \
         "$TRIAL" "$OUTCOME" "$WALL_S" "$TRIAL" \
