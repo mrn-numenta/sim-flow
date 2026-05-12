@@ -388,6 +388,15 @@ where
                     std::env::var("SIM_FLOW_TOOL_MODE").ok().as_deref(),
                     Some("native") | Some("native-tool-calls")
                 );
+                if matches!(
+                    std::env::var("SIM_FLOW_DEBUG_TOOLS").ok().as_deref(),
+                    Some("1")
+                ) {
+                    eprintln!(
+                        "  [debug] host gate: native_mode={native_mode}, tools.len()={}",
+                        tools.len()
+                    );
+                }
                 let dispatch_result: crate::Result<(
                     String,
                     Vec<crate::session::agent::AdvertisedToolCall>,

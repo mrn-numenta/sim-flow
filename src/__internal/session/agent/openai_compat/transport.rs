@@ -419,6 +419,19 @@ pub fn dispatch_chat_with_tools(req: OpenAiCompatibleRequest<'_>) -> Result<Chat
         tools: req.tools,
         tool_choice: req.tool_choice,
     };
+    // Temporary debug print: confirm the native-mode wire is
+    // sending tools on each request. Gated on
+    // SIM_FLOW_DEBUG_TOOLS=1 so production stderr stays quiet.
+    if matches!(
+        std::env::var("SIM_FLOW_DEBUG_TOOLS").ok().as_deref(),
+        Some("1")
+    ) {
+        let tools_count = body.tools.as_ref().map(|t| t.len()).unwrap_or(0);
+        eprintln!(
+            "  [debug] llm_request: tools_count={tools_count}, tool_choice={:?}",
+            body.tool_choice,
+        );
+    }
     let url = format!("{}/chat/completions", trim_trailing_slash(req.base_url));
     let mut request = ureq::post(&url)
         .set("content-type", "application/json")

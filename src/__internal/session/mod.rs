@@ -32,8 +32,9 @@ pub use control_socket::{ControlCommand, ControlEvent, ControlListener, default_
 pub use spec_ingest::{SpecIngestSummary, ingest_spec_file};
 
 pub use agent::{
-    AgentConfig, ClaudeAgent, CliAgent, CodexAgent, GhCopilotAgent, KNOWN_AGENTS, LlmCallMetrics,
-    MockAgent, OllamaAgent, OpenAiCompatAgent, build_cli_agent,
+    AdvertisedToolCall, AgentAdaptationSummary, AgentConfig, ClaudeAgent, CliAgent, CodexAgent,
+    GhCopilotAgent, KNOWN_AGENTS, LlmCallMetrics, MockAgent, OllamaAgent, OpenAiCompatAgent,
+    ToolAdvertise, build_cli_agent,
 };
 pub use event_tap::{
     EventTap, TappedHost, WatchRegistration, list_registrations as list_watch_registrations,

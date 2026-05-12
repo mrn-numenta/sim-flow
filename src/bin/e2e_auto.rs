@@ -674,6 +674,23 @@ impl CliAgent for BoxedAgent {
     fn dispatch(&self, messages: &[LlmMessage]) -> sim_flow::Result<(String, LlmCallMetrics)> {
         self.0.dispatch(messages)
     }
+    // Must delegate to inner agent or the CliAgent trait's default
+    // impl runs here and drops the tool catalog -- which silently
+    // routes native-mode requests through the legacy fence path.
+    fn dispatch_with_tools(
+        &self,
+        messages: &[LlmMessage],
+        tools: &[sim_flow::session::ToolAdvertise],
+    ) -> sim_flow::Result<(
+        String,
+        Vec<sim_flow::session::AdvertisedToolCall>,
+        LlmCallMetrics,
+    )> {
+        self.0.dispatch_with_tools(messages, tools)
+    }
+    fn adaptation_summary(&self) -> Option<sim_flow::session::AgentAdaptationSummary> {
+        self.0.adaptation_summary()
+    }
 }
 
 fn now_iso8601() -> String {
