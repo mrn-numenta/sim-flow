@@ -1253,6 +1253,19 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             }
         }
 
+        // Captured from the wind-down branch below so the no-artifact
+        // pump can include the orchestrator's gate failures verbatim
+        // (Work sessions only). Without this the orchestrator runs the
+        // entire `cargo fmt / clippy / build / test` gate every
+        // no-artifact turn for the wind-down decision, then throws
+        // the failure list away and tells the agent a generic
+        // "Produce the artifact file(s) now". The agent then
+        // rediscovers everything by calling `run_cargo` and reading
+        // files -- duplicating the work the orchestrator already
+        // did and burning turns blindly. Threading the structured
+        // failures through gives the agent directly actionable
+        // feedback identical to the post-artifact gate-dirty branch.
+        let mut work_gate_failures_for_pump: Option<String> = None;
         // Auto-mode and no artifact written this turn: the agent is
         // either thinking, asking, stuck, OR genuinely done.
         //
@@ -1375,6 +1388,20 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         return Ok(());
                     }
                 }
+                // Wind-down didn't fire and the gate has real
+                // failures. Capture them so the no-artifact pump
+                // below can hand the agent specific guidance instead
+                // of the generic "produce artifacts" prod.
+                if !report.is_clean() {
+                    let mut feedback = String::from(
+                        "Structural gate has these specific failures; \
+                         address them by writing or editing files:\n\n",
+                    );
+                    for f in &report.failures {
+                        feedback.push_str(&format!("- {}: {}\n", f.description, f.reason));
+                    }
+                    work_gate_failures_for_pump = Some(feedback);
+                }
             }
             auto_iterations += 1;
             if auto_iterations >= opts.max_auto_iters {
@@ -1387,12 +1414,22 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 })?;
                 // Fall through to RequestUserInput.
             } else {
+                let pump_content = match work_gate_failures_for_pump {
+                    Some(failures) => format!(
+                        "You are in automated mode. The structural gate is not yet clean. \
+                         {failures}\n\
+                         Use `write_file` / `edit_file` to fix the listed failures now; do not \
+                         ask questions, decide using the inlined state and document non-trivial \
+                         decisions in an `## Auto-decisions` section."
+                    ),
+                    None => "You are in automated mode. Produce the artifact file(s) now using the artifact-write convention. Do not ask questions; decide using the inlined state and document your decisions in an `## Auto-decisions` section.".to_string(),
+                };
                 messages.push(LlmMessage {
                     role: LlmRole::User,
-                    content: "You are in automated mode. Produce the artifact file(s) now using the artifact-write convention. Do not ask questions; decide using the inlined state and document your decisions in an `## Auto-decisions` section.".into(),
+                    content: pump_content,
                     attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
                 });
                 continue;
             }
