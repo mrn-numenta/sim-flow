@@ -35,11 +35,13 @@ use std::time::Instant;
 
 use serde_json::Value;
 use sim_flow::session::JsonlCapture;
-use sim_flow::session::agent::{ClaudeAgent, CliAgent, OllamaAgent, OpenAiCompatAgent};
+use sim_flow::session::agent::{
+    ClaudeAgent, CliAgent, OllamaAgent, OpenAiCompatAgent, ToolAdvertise,
+};
 use sim_flow::session::ingest_spec_file;
 use sim_flow::session::protocol::{
-    DiagnosticLevel, Event, HostEvent, HostInfo, LlmMessage, PROTOCOL_VERSION, SessionKindOut,
-    StepMode,
+    DiagnosticLevel, Event, HostEvent, HostInfo, LlmMessage, LlmToolCall, PROTOCOL_VERSION,
+    SessionKindOut, StepMode,
 };
 use sim_flow::test_validation::validate_step_advanced;
 
@@ -64,6 +66,7 @@ struct Args {
     sim_flow_bin: PathBuf,
     backend: String,
     model: Option<String>,
+    base_url: Option<String>,
     max_auto_iters: u32,
     max_critique_iters: u32,
     max_critique_no_progress_iters: u32,
@@ -92,6 +95,7 @@ impl Args {
         let mut sim_flow_bin: Option<PathBuf> = None;
         let mut backend: Option<String> = None;
         let mut model: Option<String> = None;
+        let mut base_url: Option<String> = None;
         let mut max_auto_iters = 6u32;
         let mut max_critique_iters = 10u32;
         let mut max_critique_no_progress_iters = 3u32;
@@ -108,6 +112,7 @@ impl Args {
                 "--sim-flow-bin" => sim_flow_bin = iter.next().map(PathBuf::from),
                 "--backend" => backend = iter.next(),
                 "--model" => model = iter.next(),
+                "--base-url" => base_url = iter.next(),
                 "--max-auto-iters" => {
                     max_auto_iters = iter
                         .next()
@@ -145,6 +150,7 @@ impl Args {
                     println!(
                         "usage: e2e_manual --project-dir <P> --foundation-root <F> \
                          --backend {{openai-compat|ollama|claude}} [--model <M>] \
+                         [--base-url <URL>] \
                          [--spec <PATH>] [--sim-flow-bin <PATH>] \
                          [--max-auto-iters <N>] [--max-critique-iters <N>] \
                          [--max-critique-no-progress-iters <N>] \
@@ -196,6 +202,7 @@ impl Args {
             sim_flow_bin,
             backend,
             model,
+            base_url,
             max_auto_iters,
             max_critique_iters,
             max_critique_no_progress_iters,
@@ -391,10 +398,18 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         .map_err(|err| format!("spawn reader thread: {err}"))?;
 
     let agent: Box<dyn CliAgent> = match args.backend.as_str() {
-        "openai-compat" | "openai_compat" | "openai" => {
-            Box::new(OpenAiCompatAgent::new(None, args.model.clone(), None, None))
-        }
-        "ollama" => Box::new(OllamaAgent::new(None, args.model.clone(), None, None)),
+        "openai-compat" | "openai_compat" | "openai" => Box::new(OpenAiCompatAgent::new(
+            args.base_url.clone(),
+            args.model.clone(),
+            None,
+            None,
+        )),
+        "ollama" => Box::new(OllamaAgent::new(
+            args.base_url.clone(),
+            args.model.clone(),
+            None,
+            None,
+        )),
         "claude" | "claude-cli" => Box::new(ClaudeAgent::new(args.model.clone(), None, None)),
         _ => unreachable!("validated in Args::parse"),
     };
@@ -784,11 +799,37 @@ fn handle_event(
         }
         Event::RequestUserInput { .. } => {
             // In manual mode the orchestrator parks for user input
-            // when a sub-session needs human guidance (e.g. an
-            // LlmError or a runaway-loop guard fired). For the
-            // smoke test we issue `/end-session` which the
-            // orchestrator treats as a clean session terminator and
-            // then re-parks at the top of the manual loop.
+            // when a sub-session needs human guidance. Two cases:
+            //
+            // 1. After an Error-level Diagnostic (max_auto_iters
+            //    exceeded, runaway-loop guard, tool-error-streak,
+            //    max_llm_requests cap): the orchestrator is asking
+            //    a human to intervene because automated retries
+            //    won't recover. The test driver has no human to
+            //    consult, so the right action is `Shutdown` --
+            //    tear the orchestrator down so run_auto exits and
+            //    the test fails with the diagnostic preserved in
+            //    `verdict.errors_seen`. The previous behavior
+            //    (issue `/end-session`) caused the orchestrator to
+            //    treat the failed sub-session as `Completed`, the
+            //    manual-driver phase machine to advance to the
+            //    next sub-session, and the run to loop forever
+            //    until killed externally.
+            //
+            // 2. Routine wait for next user command (no prior
+            //    Error diagnostic): the previous behavior is fine
+            //    -- `/end-session` ends the current sub-session
+            //    cleanly so the manual-driver phase machine can
+            //    dispatch the next RunStep / Advance.
+            if !verdict.errors_seen.is_empty() {
+                eprintln!(
+                    "e2e_manual: WARN: orchestrator requested user input after {} \
+                     error diagnostic(s); shutting down to surface the failure",
+                    verdict.errors_seen.len(),
+                );
+                send_host_event(stdin, &HostEvent::Shutdown, capture)?;
+                return Ok(ManualPhase::Done);
+            }
             eprintln!("e2e_manual: WARN: orchestrator requested user input; sending /end-session");
             send_host_event(
                 stdin,
@@ -802,26 +843,64 @@ fn handle_event(
         Event::RequestLlmResponse {
             request_id,
             messages,
+            tools,
             ..
         } => {
             // Dispatch synchronously to the configured backend.
             // The orchestrator blocks waiting for chunks/end on the
             // same request_id, so doing this inline (rather than on
             // a thread) is safe and keeps the driver simple.
+            //
+            // Native-mode gate matches TerminalHost (host.rs): when
+            // `SIM_FLOW_TOOL_MODE=native` (or `native-tool-calls`)
+            // AND the orchestrator advertises a non-empty tool
+            // catalog, route through `dispatch_with_tools` so the
+            // backend receives the `tools` parameter and the model
+            // can emit native `tool_calls[]`. Without this gate the
+            // tool catalog gets silently dropped and the model
+            // falls back to free-form text that looks like
+            // `read_file({...})`, which the orchestrator can't
+            // execute -- the failure mode that motivated this fix.
+            let native_mode = matches!(
+                std::env::var("SIM_FLOW_TOOL_MODE").ok().as_deref(),
+                Some("native") | Some("native-tool-calls")
+            );
             let dispatch_start = Instant::now();
             println!(
-                "e2e_manual:   LLM dispatch ({}, {} messages) ...",
+                "e2e_manual:   LLM dispatch ({}, {} messages, {} tools, native={}) ...",
                 request_id,
-                messages.len()
+                messages.len(),
+                tools.len(),
+                native_mode,
             );
             use std::io::Write;
             let _ = std::io::stdout().flush();
-            match agent.dispatch(&messages) {
-                Ok((text, metrics)) => {
+            let dispatch_result: sim_flow::Result<(
+                String,
+                Vec<sim_flow::session::agent::AdvertisedToolCall>,
+                sim_flow::session::agent::LlmCallMetrics,
+            )> = if native_mode && !tools.is_empty() {
+                let advertise: Vec<ToolAdvertise> = tools
+                    .iter()
+                    .map(|t| ToolAdvertise {
+                        name: t.name.clone(),
+                        description: t.description.clone(),
+                        parameters: t.args_schema.clone(),
+                    })
+                    .collect();
+                agent.dispatch_with_tools(&messages, &advertise)
+            } else {
+                agent
+                    .dispatch(&messages)
+                    .map(|(text, metrics)| (text, Vec::new(), metrics))
+            };
+            match dispatch_result {
+                Ok((text, calls, metrics)) => {
                     println!(
-                        "e2e_manual:   LLM dispatch ({}) -> {} bytes in {:.1}s",
+                        "e2e_manual:   LLM dispatch ({}) -> {} bytes, {} tool_call(s) in {:.1}s",
                         request_id,
                         text.len(),
+                        calls.len(),
                         dispatch_start.elapsed().as_secs_f64()
                     );
                     tracing::info!(
@@ -833,6 +912,7 @@ fn handle_event(
                         tokens_out = ?metrics.tokens_out,
                         wall_ms = metrics.wall_ms,
                         content_bytes = text.len(),
+                        tool_calls = calls.len(),
                     );
                     send_host_event(
                         stdin,
@@ -842,12 +922,25 @@ fn handle_event(
                         },
                         capture,
                     )?;
+                    let tool_calls: Vec<LlmToolCall> = calls
+                        .into_iter()
+                        .map(|c| LlmToolCall {
+                            id: c.id,
+                            name: c.name,
+                            arguments_json: c.arguments_json,
+                        })
+                        .collect();
+                    let stop_reason = if tool_calls.is_empty() {
+                        "stop"
+                    } else {
+                        "tool_calls"
+                    };
                     send_host_event(
                         stdin,
                         &HostEvent::LlmEnd {
                             request_id,
-                            stop_reason: Some("stop".into()),
-                            tool_calls: Vec::new(),
+                            stop_reason: Some(stop_reason.into()),
+                            tool_calls,
                         },
                         capture,
                     )?;
