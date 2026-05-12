@@ -77,8 +77,11 @@ scope and structure.
 
 ## Procedure
 
-1. Read `docs/impl-plan/plan.md` to orient. Then process each milestone
-   in order from `docs/impl-plan/milestone-*.md`.
+1. Read `docs/impl-plan/plan.md` to orient. The orchestrator scopes
+   each work session to ONE `docs/impl-plan/milestone-NN-*.md` file
+   at a time -- only the current milestone appears in your inputs.
+   Do that milestone and stop (see step 3 below); the auto-driver
+   re-launches you for the next milestone after the paired critique.
 2. Read `docs/targets.md` and `docs/testbench.md` before starting
    implementation.
    - Use `docs/targets.md` to preserve target-sensitive structural

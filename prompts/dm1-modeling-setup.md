@@ -123,8 +123,31 @@ plan and tests; DM4 will measure against the targets.
 
 {{ output_intro }}
 
-- `docs/targets.md` at the project root.
-- `docs/testbench.md` at the project root.
+`docs/targets.md` supports the same dual layout as the spec:
+
+- **Single-file:** `docs/targets.md` at the project root. Use this
+  when the target set is small (rough rule: under ~500 lines).
+- **Paginated:** a directory `docs/targets/` containing numbered
+  section files (`docs/targets/01-throughput.md`,
+  `docs/targets/02-area-power.md`, ...). Use this when a big design
+  has many target categories. The numbered prefix is the canonical
+  reading order; the slug is free-form. Each file holds one
+  self-contained section. The orchestrator's predecessor TOC lists
+  every section file with size so downstream steps can `read_file`
+  the specific ones they need.
+
+`docs/testbench.md` stays single-file (it's a fixed structure --
+named components + verification strategy).
+
+Either targets layout is the input to every later DM step.
+**Pick one layout per project and stick with it** -- mixing a
+populated `docs/targets.md` with a populated `docs/targets/`
+confuses downstream readers.
+
+Output artifacts:
+
+- `docs/targets.md` OR `docs/targets/<NN>-<slug>.md` files.
+- `docs/testbench.md`.
 
 When the artifacts above are complete, stop. Do not write
 `docs/critiques/DM1-critique.md`; the critique is a distinct task.

@@ -64,7 +64,25 @@ Foundation modules.
 
 {{ output_intro }}
 
-- `docs/analysis/pipeline-mapping.md`
+`docs/analysis/pipeline-mapping.md` supports the same dual layout
+as the spec:
+
+- **Single-file:** `docs/analysis/pipeline-mapping.md`. Use this
+  when the pipeline fits in one file (rough rule: under ~500 lines).
+- **Paginated:** a directory `docs/analysis/pipeline-mapping/`
+  containing numbered section files
+  (`docs/analysis/pipeline-mapping/01-stages.md`,
+  `docs/analysis/pipeline-mapping/02-flow-control.md`, ...). Use
+  this for designs with many stages or complex flow-control rules.
+
+**Pick one layout per project and stick with it** -- mixing a
+populated `docs/analysis/pipeline-mapping.md` with a populated
+`docs/analysis/pipeline-mapping/` confuses downstream readers.
+
+Output artifacts:
+
+- `docs/analysis/pipeline-mapping.md` OR
+  `docs/analysis/pipeline-mapping/<NN>-<slug>.md` files.
 
 When the artifacts above are complete, stop. Do not write
 `docs/critiques/DM2b-critique.md`; the critique is a distinct task.

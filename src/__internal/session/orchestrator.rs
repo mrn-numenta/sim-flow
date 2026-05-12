@@ -2686,8 +2686,9 @@ fn build_session_inputs(
         volatile.push_str(&format!(
             "**Milestone scope (orchestrator-enforced)**: this {session_label} \
              session targets EXACTLY ONE milestone -- `{milestone_rel}`. The plan \
-             index `{}` is also inlined for context. You MUST NOT read or modify \
-             any other `{prefix_pattern}<NN>-*.md` file in this session; sibling \
+             index `{}` is listed in the TOC above; read it with `read_file` \
+             when you need its scope blurbs. You MUST NOT read or modify any \
+             other `{prefix_pattern}<NN>-*.md` file in this session; sibling \
              milestones are intentionally hidden so each gets its own focused \
              critique. {resolution_clause}, stop and surface the canonical \
              `<milestone-name> complete; ready for critique.` notice. The \
@@ -3063,15 +3064,23 @@ fn inline_lang_hint(rel: &str) -> &'static str {
 }
 
 /// Per-file threshold below which `toc_entry_for` inlines the body.
-/// 4 KB ~= 1K tokens. Across 8 predecessor inputs adds ~8K tokens
-/// to the stable prefix but saves 5-10 `read_file` tool turns per
-/// Critique session, each of which costs 3K+ tokens of reasoning.
-/// Set `SIM_FLOW_INLINE_INPUT_THRESHOLD_BYTES=0` to disable.
+/// Default is 0 (inlining disabled) -- the rule of the flow is
+/// "every spec / plan / analysis doc is paginated or single-file
+/// referenced via TOC; the agent reads what it needs with
+/// `read_file`." Inlining small files saved 5-10 tool turns per
+/// Critique on tiny projects but broke the principle for them
+/// (large projects always hit the threshold and behaved correctly).
+/// Trading a few extra tool turns on small projects for a uniform
+/// "everything is read on demand" contract.
+///
+/// The inlining machinery is kept in place behind the env var
+/// `SIM_FLOW_INLINE_INPUT_THRESHOLD_BYTES` so we can re-enable it
+/// (set to e.g. 4096) without code changes if we change our mind.
 fn inline_input_threshold_bytes() -> u64 {
     std::env::var("SIM_FLOW_INLINE_INPUT_THRESHOLD_BYTES")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(4096)
+        .unwrap_or(0)
 }
 
 fn render_directory_block(project_dir: &Path, rel: &str) -> String {

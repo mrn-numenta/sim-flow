@@ -98,8 +98,31 @@ is realistic for later pipeline mapping.
 
 {{ output_intro }}
 
-- `docs/analysis/decomposition.md`
-- `docs/analysis/data-movement.md`
+`docs/analysis/decomposition.md` supports the same dual layout as
+the spec:
+
+- **Single-file:** `docs/analysis/decomposition.md`. Use this when
+  the operation set is small (rough rule: under ~500 lines).
+- **Paginated:** a directory `docs/analysis/decomposition/`
+  containing numbered section files
+  (`docs/analysis/decomposition/01-op-fetch.md`,
+  `docs/analysis/decomposition/02-op-decode.md`, ...). Use this
+  when a big design has many operations. The numbered prefix is
+  the canonical reading order; each file should hold one or a few
+  closely-related operations.
+
+`docs/analysis/data-movement.md` stays single-file (the
+producer/consumer/edge table is one structure).
+
+**Pick one decomposition layout per project and stick with it** --
+mixing a populated `docs/analysis/decomposition.md` with a
+populated `docs/analysis/decomposition/` confuses downstream readers.
+
+Output artifacts:
+
+- `docs/analysis/decomposition.md` OR
+  `docs/analysis/decomposition/<NN>-<slug>.md` files.
+- `docs/analysis/data-movement.md`.
 
 When the artifacts above are complete, stop. Do not write
 `docs/critiques/DM2a-critique.md`; the critique is a distinct task.

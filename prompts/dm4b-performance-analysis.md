@@ -39,8 +39,12 @@ Reference material (read on demand):
 
 ## Procedure
 
-1. Read `docs/perf-plan/perf-plan.md`. Then process each milestone in
-   order from `docs/perf-plan/perf-milestone-*.md`.
+1. Read `docs/perf-plan/perf-plan.md` to orient. The orchestrator
+   scopes each work session to ONE
+   `docs/perf-plan/perf-milestone-NN-*.md` file at a time -- only
+   the current milestone appears in your inputs. Do that milestone
+   and stop (see step 2 below); the auto-driver re-launches you
+   for the next milestone after the paired critique.
 2. **For each milestone**:
    - Read its `perf-milestone-NN-<name>.md` file.
    - Work through tasks IN ORDER. As you complete each task,

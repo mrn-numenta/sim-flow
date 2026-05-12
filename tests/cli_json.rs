@@ -262,7 +262,7 @@ fn describe_dm1_critique_lists_predecessor_spec_and_own_work_artifacts() {
     );
     assert_eq!(
         v["work_artifacts"],
-        serde_json::json!(["docs/targets.md", "docs/testbench.md"])
+        serde_json::json!(["docs/targets.md", "docs/targets/", "docs/testbench.md"])
     );
     assert!(
         v["instruction_path"]

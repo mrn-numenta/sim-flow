@@ -190,11 +190,19 @@ fn dm1() -> StepDescriptor {
         instruction_slug: "dm1-modeling-setup",
         per_candidate: false,
         gate_checks: vec![
-            file_exists("docs/targets.md", "docs/targets.md exists"),
-            file_matches(
-                "docs/targets.md",
+            // targets supports dual layout: single-file `docs/targets.md`
+            // OR paginated `docs/targets/<NN>-<slug>.md` section files,
+            // mirroring the spec layout. Big projects exceed single-file
+            // context budgets and must paginate; small projects use the
+            // single file.
+            any_exists(
+                &["docs/targets.md", "docs/targets/"],
+                "docs/targets.md or docs/targets/ exists and is non-empty",
+            ),
+            any_matches(
+                &["docs/targets.md", "docs/targets/"],
                 r"(?i)\d+\s*(cycles?|ns|MHz|GHz|items|bits|gates)",
-                "docs/targets.md contains at least one quantitative target",
+                "targets declare at least one quantitative target",
             ),
             file_exists("docs/testbench.md", "docs/testbench.md exists"),
             file_matches(
@@ -210,7 +218,7 @@ fn dm1() -> StepDescriptor {
             critique_clean("DM1"),
         ],
         walk_gate_checks: vec![],
-        work_artifacts: &["docs/targets.md", "docs/testbench.md"],
+        work_artifacts: &["docs/targets.md", "docs/targets/", "docs/testbench.md"],
         predecessor_inputs: &["docs/spec.md", "docs/spec/"],
         work_write_paths: &["docs/"],
         work_phases: &["chat"],
@@ -227,14 +235,25 @@ fn dm2a() -> StepDescriptor {
         instruction_slug: "dm2a-decomposition",
         per_candidate: false,
         gate_checks: vec![
-            file_exists(
-                "docs/analysis/decomposition.md",
-                "docs/analysis/decomposition.md exists",
+            // decomposition supports dual layout: single-file
+            // `docs/analysis/decomposition.md` OR paginated
+            // `docs/analysis/decomposition/<NN>-<slug>.md` section
+            // files. data-movement stays single-file (typically a
+            // single table even for large designs).
+            any_exists(
+                &[
+                    "docs/analysis/decomposition.md",
+                    "docs/analysis/decomposition/",
+                ],
+                "decomposition.md or decomposition/ exists and is non-empty",
             ),
-            file_matches(
-                "docs/analysis/decomposition.md",
+            any_matches(
+                &[
+                    "docs/analysis/decomposition.md",
+                    "docs/analysis/decomposition/",
+                ],
                 r"(?m)^##\s*Operation:\s*\S+",
-                "docs/analysis/decomposition.md declares at least one ## Operation: <name> heading",
+                "decomposition declares at least one ## Operation: <name> heading",
             ),
             file_exists(
                 "docs/analysis/data-movement.md",
@@ -245,9 +264,15 @@ fn dm2a() -> StepDescriptor {
         walk_gate_checks: vec![],
         work_artifacts: &[
             "docs/analysis/decomposition.md",
+            "docs/analysis/decomposition/",
             "docs/analysis/data-movement.md",
         ],
-        predecessor_inputs: &["docs/spec.md", "docs/spec/", "docs/targets.md"],
+        predecessor_inputs: &[
+            "docs/spec.md",
+            "docs/spec/",
+            "docs/targets.md",
+            "docs/targets/",
+        ],
         work_write_paths: &["docs/"],
         work_phases: &["chat"],
         critique_phases: &["chat"],
@@ -263,23 +288,36 @@ fn dm2b() -> StepDescriptor {
         instruction_slug: "dm2b-pipeline-mapping",
         per_candidate: false,
         gate_checks: vec![
-            file_exists(
-                "docs/analysis/pipeline-mapping.md",
-                "docs/analysis/pipeline-mapping.md exists",
+            // pipeline-mapping supports dual layout: single-file
+            // `docs/analysis/pipeline-mapping.md` OR paginated
+            // `docs/analysis/pipeline-mapping/<NN>-<slug>.md`.
+            any_exists(
+                &[
+                    "docs/analysis/pipeline-mapping.md",
+                    "docs/analysis/pipeline-mapping/",
+                ],
+                "pipeline-mapping.md or pipeline-mapping/ exists and is non-empty",
             ),
-            file_matches(
-                "docs/analysis/pipeline-mapping.md",
+            any_matches(
+                &[
+                    "docs/analysis/pipeline-mapping.md",
+                    "docs/analysis/pipeline-mapping/",
+                ],
                 r"(?i)stage",
-                "docs/analysis/pipeline-mapping.md mentions pipeline stages",
+                "pipeline-mapping mentions pipeline stages",
             ),
             critique_clean("DM2b"),
         ],
         walk_gate_checks: vec![],
-        work_artifacts: &["docs/analysis/pipeline-mapping.md"],
+        work_artifacts: &[
+            "docs/analysis/pipeline-mapping.md",
+            "docs/analysis/pipeline-mapping/",
+        ],
         predecessor_inputs: &[
             "docs/spec.md",
             "docs/spec/",
             "docs/analysis/decomposition.md",
+            "docs/analysis/decomposition/",
             "docs/analysis/data-movement.md",
         ],
         work_write_paths: &["docs/"],
@@ -325,8 +363,10 @@ fn dm2c() -> StepDescriptor {
             "docs/spec.md",
             "docs/spec/",
             "docs/analysis/decomposition.md",
+            "docs/analysis/decomposition/",
             "docs/analysis/data-movement.md",
             "docs/analysis/pipeline-mapping.md",
+            "docs/analysis/pipeline-mapping/",
         ],
         work_write_paths: &["docs/"],
         work_phases: &["chat"],
@@ -364,8 +404,10 @@ fn dm2cd() -> StepDescriptor {
             "docs/spec.md",
             "docs/spec/",
             "docs/analysis/decomposition.md",
+            "docs/analysis/decomposition/",
             "docs/analysis/data-movement.md",
             "docs/analysis/pipeline-mapping.md",
+            "docs/analysis/pipeline-mapping/",
             "docs/impl-plan/plan.md",
             "docs/impl-plan/plan-management.md",
         ],
@@ -496,8 +538,10 @@ fn dm2d() -> StepDescriptor {
             "docs/spec.md",
             "docs/spec/",
             "docs/analysis/decomposition.md",
+            "docs/analysis/decomposition/",
             "docs/analysis/data-movement.md",
             "docs/analysis/pipeline-mapping.md",
+            "docs/analysis/pipeline-mapping/",
             "docs/impl-plan/plan.md",
         ],
         // `docs/impl-plan/` included so the agent can tick `[ ]` -> `[x]`
@@ -588,10 +632,14 @@ fn dm3a() -> StepDescriptor {
         work_artifacts: &["docs/test-plan/"],
         predecessor_inputs: &[
             "docs/spec.md",
+            "docs/spec/",
             "docs/targets.md",
+            "docs/targets/",
             "docs/testbench.md",
             "docs/analysis/decomposition.md",
+            "docs/analysis/decomposition/",
             "docs/analysis/pipeline-mapping.md",
+            "docs/analysis/pipeline-mapping/",
             "docs/analysis/data-movement.md",
             "docs/impl-plan/plan.md",
             "src/",
@@ -638,11 +686,15 @@ fn dm3ad() -> StepDescriptor {
         work_artifacts: &["docs/test-plan/"],
         predecessor_inputs: &[
             "docs/spec.md",
+            "docs/spec/",
             "docs/targets.md",
+            "docs/targets/",
             "docs/testbench.md",
             "docs/analysis/decomposition.md",
+            "docs/analysis/decomposition/",
             "docs/analysis/data-movement.md",
             "docs/analysis/pipeline-mapping.md",
+            "docs/analysis/pipeline-mapping/",
             "docs/test-plan/test-plan.md",
             "docs/test-plan/coverage.md",
             "docs/impl-plan/plan-management.md",
@@ -872,9 +924,13 @@ fn dm4a() -> StepDescriptor {
         work_artifacts: &["docs/perf-plan/"],
         predecessor_inputs: &[
             "docs/spec.md",
+            "docs/spec/",
             "docs/targets.md",
+            "docs/targets/",
             "docs/analysis/decomposition.md",
+            "docs/analysis/decomposition/",
             "docs/analysis/pipeline-mapping.md",
+            "docs/analysis/pipeline-mapping/",
             "docs/test-plan/",
         ],
         work_write_paths: &["docs/"],
@@ -910,9 +966,13 @@ fn dm4ad() -> StepDescriptor {
         work_artifacts: &["docs/perf-plan/"],
         predecessor_inputs: &[
             "docs/spec.md",
+            "docs/spec/",
             "docs/targets.md",
+            "docs/targets/",
             "docs/analysis/decomposition.md",
+            "docs/analysis/decomposition/",
             "docs/analysis/pipeline-mapping.md",
+            "docs/analysis/pipeline-mapping/",
             "docs/perf-plan/perf-plan.md",
             "docs/impl-plan/plan-management.md",
         ],
@@ -1006,6 +1066,7 @@ fn dm4b() -> StepDescriptor {
         work_artifacts: &["docs/analysis/"],
         predecessor_inputs: &[
             "docs/targets.md",
+            "docs/targets/",
             "docs/perf-plan/perf-plan.md",
             ".sim-flow/experiments.db",
         ],

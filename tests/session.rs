@@ -205,14 +205,15 @@ fn work_session_writes_artifacts_and_emits_gate_result() {
 #[test]
 fn critique_session_lists_predecessor_inputs_as_toc() {
     // Inputs are listed as a TOC (path + size for files;
-    // one-level expansion for directories). Small text-shaped
-    // files under SIM_FLOW_INLINE_INPUT_THRESHOLD_BYTES are
-    // ALSO inlined as fenced blocks under the TOC line so the
-    // agent doesn't have to spend a `read_file` tool turn
-    // fetching them. This test pins both shapes:
-    // - File entries must include the path and byte size.
-    // - For small files, the body must follow the TOC line as a
-    //   fenced code block (the agent reads the body inline).
+    // one-level expansion for directories). By default the
+    // orchestrator does NOT inline file bodies regardless of
+    // size -- the agent reads what it needs via `read_file`,
+    // matching the "every spec / plan / analysis doc is paginated
+    // or referenced via TOC" rule. The inlining machinery is
+    // still in place behind `SIM_FLOW_INLINE_INPUT_THRESHOLD_BYTES`
+    // for callers that want to opt in; the
+    // `predecessor_inlining_can_be_enabled_via_env_var` test
+    // pins that escape hatch.
     let tmp = tempfile::tempdir().unwrap();
     let project = init_project(&tmp);
     let spec_body = "# DM0 spec\n\nClock: 2 GHz\nNode: 7 nm\n";
@@ -243,17 +244,22 @@ fn critique_session_lists_predecessor_inputs_as_toc() {
         .map(|m| m.content.as_str())
         .collect::<Vec<_>>()
         .join("\n---\n");
-    let toc_line = format!(
-        "- `docs/spec.md` ({} bytes, inlined below)",
-        spec_body.len()
-    );
+    let toc_line = format!("- `docs/spec.md` ({} bytes)", spec_body.len());
     assert!(
         system_blob.contains(&toc_line),
-        "expected inlined-TOC line `{toc_line}` in system messages; got:\n{system_blob}",
+        "expected TOC-only line `{toc_line}` in system messages; got:\n{system_blob}",
     );
     assert!(
-        system_blob.contains("# DM0 spec"),
-        "small predecessor inputs should be inlined as fenced blocks",
+        !system_blob.contains("# DM0 spec"),
+        "spec body MUST NOT be inlined by default; agent should read on demand. Got system blob:\n{system_blob}"
+    );
+    // No TOC entry should render in `(N bytes, inlined below):` form
+    // and no fenced code block should appear right after the spec.md
+    // TOC line. The general word "inlined" does appear elsewhere
+    // (e.g. critique-body inlining wording is unrelated).
+    assert!(
+        !system_blob.contains("inlined below):\n\n```"),
+        "no TOC entry should render as inlined fenced block when inlining is disabled; got:\n{system_blob}",
     );
 
     let critique = std::fs::read_to_string(project.join("docs/critiques/DM0-critique.md")).unwrap();
