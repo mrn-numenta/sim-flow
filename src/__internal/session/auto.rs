@@ -978,14 +978,22 @@ fn try_advance_classified<H: Host>(
             AdvanceOutcome::Stuck
         });
     }
-    // Gate dirty. For milestone-walk steps, classify whether the
-    // ONLY failing checks are MilestonesAllResolved -- which means
-    // the agent is mid-walk and the next iteration should be a
-    // fresh Work session for the next milestone, not a flip-to-
-    // manual.
-    let only_milestones_pending = step.milestone_walk.is_some()
+    // Gate dirty. For milestone-walk steps, classify whether ANY
+    // failing check is the MilestonesAllResolved one -- if so, the
+    // agent is mid-walk and the next iteration should be a fresh
+    // Work session for the next milestone. Previously this required
+    // EVERY failure to be milestone-pending, which gave up too eagerly:
+    // most step gates have shell checks like `cargo test --test X`
+    // or `grep -r SymbolY src` that the agent only satisfies in
+    // (often) the LAST milestone. When such a check failed at the
+    // same time as a milestone-pending check, we returned Stuck
+    // instead of letting the walk continue. Loosening to `any` keeps
+    // the walk going; once all milestones land, only the genuine
+    // structural failures remain and we (correctly) return Stuck
+    // then. MILESTONE_WALK_CAP in the caller bounds total iterations.
+    let any_milestone_pending = step.milestone_walk.is_some()
         && !report.failures.is_empty()
-        && report.failures.iter().all(|f| {
+        && report.failures.iter().any(|f| {
             // The MilestonesAllResolved gate check uses two
             // distinct failure reason strings depending on mode:
             //   - Execution-mode (DM2d / DM3b / DM3c / DM4b): the
@@ -1002,7 +1010,7 @@ fn try_advance_classified<H: Host>(
                 || f.reason.contains("milestone stubs not yet detailed")
                 || f.reason.contains("no `") && f.reason.contains("NN-*.md` files found")
         });
-    if only_milestones_pending {
+    if any_milestone_pending {
         return Ok(AdvanceOutcome::MoreMilestonesPending);
     }
     host.write(&Event::Diagnostic {
@@ -1394,10 +1402,63 @@ fn run_manual_advance<H: Host>(
 
         let outcome = try_advance_classified(&opts.project_dir, step_id, auto_host)?;
         match outcome {
-            AdvanceOutcome::Advanced | AdvanceOutcome::Stuck => {
-                // try_advance_classified already emitted the
-                // StateAdvanced / Diagnostic events on these paths.
+            AdvanceOutcome::Advanced => {
+                // try_advance_classified already emitted StateAdvanced.
                 return Ok(());
+            }
+            AdvanceOutcome::Stuck => {
+                // Critique findings are clean but the structural gate
+                // still has failures (typical: a `cargo test --test X`
+                // or symbol-grep check the milestone walk hasn't yet
+                // landed). try_advance_classified already emitted the
+                // per-failure Error diagnostics. Instead of giving up
+                // immediately, re-run Work + Critique so the agent
+                // gets another pass -- the work session's no-artifact
+                // pump surfaces the gate failures (see orchestrator
+                // commit "surface gate failures in no-artifact pump").
+                // Bounded by the existing `max_critique_iters` budget
+                // so this can't loop forever.
+                critique_iters += 1;
+                if critique_iters > opts.max_critique_iters {
+                    auto_host.write(&Event::Diagnostic {
+                        level: DiagnosticLevel::Error,
+                        message: format!(
+                            "Advance: {step_id} structural gate still dirty after \
+                             {} retries; giving up. Inspect the prior Error \
+                             diagnostics and the milestone files, then re-issue \
+                             RunStep / Advance after fixing.",
+                            opts.max_critique_iters,
+                        ),
+                    })?;
+                    return Ok(());
+                }
+                auto_host.write(&Event::Diagnostic {
+                    level: DiagnosticLevel::Info,
+                    message: format!(
+                        "Advance: {step_id} structural gate dirty; re-running Work + \
+                         Critique to address it (retry {}/{}).",
+                        critique_iters, opts.max_critique_iters,
+                    ),
+                })?;
+                run_subsession(
+                    opts,
+                    step_id,
+                    crate::client::SessionKind::Work,
+                    /*auto=*/ true,
+                    auto_host,
+                    /*consume_end=*/ true,
+                    /*synth_hello=*/ true,
+                )?;
+                run_subsession(
+                    opts,
+                    step_id,
+                    crate::client::SessionKind::Critique,
+                    /*auto=*/ true,
+                    auto_host,
+                    /*consume_end=*/ true,
+                    /*synth_hello=*/ true,
+                )?;
+                // Loop and re-attempt advance.
             }
             AdvanceOutcome::MoreMilestonesPending => {
                 walk_iter += 1;
