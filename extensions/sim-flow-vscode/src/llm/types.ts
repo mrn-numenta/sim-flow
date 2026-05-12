@@ -131,6 +131,36 @@ export interface LlmStreamChunk {
    * when omitted, so existing call sites stay unchanged.
    */
   kind?: LlmChunkKind;
+  /**
+   * Structured native tool calls the backend emitted on this chunk.
+   * Optional and additive: the backend may also synthesize fenced
+   * `tool:<name>` blocks in `text` for transcript visibility and
+   * the orchestrator's fenced-mode fallback parser; when this field
+   * is present the pump collects each entry and ships them in
+   * `LlmEnd.tool_calls` so the orchestrator's native-mode path can
+   * dispatch the calls directly without re-parsing fences. Empty /
+   * undefined means "no native tool calls on this chunk."
+   */
+  toolCalls?: StreamToolCall[];
+}
+
+export interface StreamToolCall {
+  /**
+   * Backend-supplied call id (e.g. OpenAI's `tool_calls[i].id`).
+   * Optional; pumps synthesize a deterministic placeholder when the
+   * backend doesn't carry one. Threaded through to
+   * `LlmToolCall.id` on the wire so the next request's tool-result
+   * message can pair its `tool_call_id` correctly.
+   */
+  id?: string;
+  /** Tool name as advertised in the request's tool catalog. */
+  name: string;
+  /**
+   * Raw JSON-encoded argument blob the model emitted. Pumps pass
+   * this through verbatim as `LlmToolCall.arguments_json`; the
+   * orchestrator parses it via `serde_json::Value` at dispatch.
+   */
+  argumentsJson: string;
 }
 
 /**

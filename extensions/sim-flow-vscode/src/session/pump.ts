@@ -765,7 +765,28 @@ export class SessionPump {
     try {
       const responseNormalizer =
         backend.adaptation?.responseNormalizer ?? DEFAULT_RESPONSE_NORMALIZER;
+      // Native tool calls the backend yields alongside text. Same
+      // accumulator pattern as SocketSessionPump; flowed into
+      // `LlmEnd.tool_calls` so the orchestrator's native dispatch
+      // fires.
+      const nativeToolCalls: import("./protocol-types").LlmToolCall[] = [];
+      let nextSyntheticToolCallId = 0;
+      const absorbToolCalls = (
+        chunk: { toolCalls?: import("../llm/types").StreamToolCall[] },
+      ) => {
+        if (!chunk.toolCalls || chunk.toolCalls.length === 0) {
+          return;
+        }
+        for (const tc of chunk.toolCalls) {
+          nativeToolCalls.push({
+            id: tc.id ?? `chatpump-tool-${nextSyntheticToolCallId++}`,
+            name: tc.name,
+            arguments_json: tc.argumentsJson,
+          });
+        }
+      };
       for await (const rawChunk of backend.stream(messages, token, tools)) {
+        absorbToolCalls(rawChunk);
         for (const chunk of responseNormalizer.normalizeChunk(rawChunk)) {
           if (chunk.text.length === 0) {
             continue;
@@ -822,7 +843,8 @@ export class SessionPump {
       this.sendHostEvent({
         event: "llm-end",
         request_id: event.request_id,
-        stop_reason: "stop",
+        stop_reason: nativeToolCalls.length > 0 ? "tool_calls" : "stop",
+        tool_calls: nativeToolCalls,
       });
     } catch (err) {
       closeReasoning();

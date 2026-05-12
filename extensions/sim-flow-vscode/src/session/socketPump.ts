@@ -1196,7 +1196,26 @@ export class SocketSessionPump implements LiveSessionTransport {
     try {
       const responseNormalizer =
         backend.adaptation?.responseNormalizer ?? DEFAULT_RESPONSE_NORMALIZER;
+      // Accumulator for native tool calls the backend yields
+      // alongside text chunks. Collected here BEFORE normalization
+      // because the normalizer only operates on text; tool calls
+      // are passed through structurally and shipped in `LlmEnd`.
+      const nativeToolCalls: import("../session/protocol-types").LlmToolCall[] = [];
+      let nextSyntheticToolCallId = 0;
+      const absorbToolCalls = (chunk: { toolCalls?: import("../llm/types").StreamToolCall[] }) => {
+        if (!chunk.toolCalls || chunk.toolCalls.length === 0) {
+          return;
+        }
+        for (const tc of chunk.toolCalls) {
+          nativeToolCalls.push({
+            id: tc.id ?? `chatpump-tool-${nextSyntheticToolCallId++}`,
+            name: tc.name,
+            arguments_json: tc.argumentsJson,
+          });
+        }
+      };
       for await (const rawChunk of backend.stream(messages, cancelSource.token, tools)) {
+        absorbToolCalls(rawChunk);
         for (const chunk of responseNormalizer.normalizeChunk(rawChunk)) {
           if (chunk.text.length === 0) {
             continue;
@@ -1251,7 +1270,12 @@ export class SocketSessionPump implements LiveSessionTransport {
       this.sendHostEvent({
         event: "llm-end",
         request_id: event.request_id,
-        stop_reason: "stop",
+        // Signal `tool_calls` when the backend gave us structured
+        // calls so the orchestrator's native-mode dispatch fires.
+        // Otherwise stop normally and let the orchestrator fall
+        // back to fenced-block extraction from the assistant text.
+        stop_reason: nativeToolCalls.length > 0 ? "tool_calls" : "stop",
+        tool_calls: nativeToolCalls,
       });
     } catch (err) {
       closeReasoning();

@@ -299,6 +299,16 @@ export class OpenAiCompatibleBackend implements LlmBackend {
             for (const block of synthesizeAccumulatedTools(accumulator)) {
               yield { text: block };
             }
+            // Additionally yield the same calls in structured form
+            // so the pump can ship them in `LlmEnd.tool_calls` (the
+            // orchestrator's native-mode dispatch path) without
+            // re-parsing the fenced text we just emitted. Both go
+            // out together; the orchestrator prefers structured
+            // when present.
+            const native = collectAccumulatedToolCalls(accumulator);
+            if (native.length > 0) {
+              yield { text: "", toolCalls: native };
+            }
             return;
           }
           if (delta?.finishReason === "length") {
@@ -310,7 +320,15 @@ export class OpenAiCompatibleBackend implements LlmBackend {
         }
       }
       // Body ended without an explicit `[DONE]`. Emit any
-      // tool-call blocks we accumulated.
+      // tool-call blocks we accumulated -- both fenced for the
+      // transcript / fenced-mode fallback, and structured for the
+      // pump's `LlmEnd.tool_calls` path.
+      const trailingNative = collectAccumulatedToolCalls(accumulator);
+      if (trailingNative.length > 0) {
+        // Yield the structured chunk first so the pump's accumulator
+        // sees the calls even if the consumer aborts mid-fence.
+        yield { text: "", toolCalls: trailingNative };
+      }
       for (const block of synthesizeAccumulatedTools(accumulator)) {
         yield { text: block };
       }
@@ -762,6 +780,35 @@ function absorbToolCallDeltas(
     }
     accumulator.set(idx, existing);
   }
+}
+
+/**
+ * Convert the accumulator into structured `StreamToolCall` entries
+ * the pump can ship in `LlmEnd.tool_calls`. Mirrors
+ * `synthesizeAccumulatedTools`'s drop-empty-args policy: an
+ * unfilled `name`-only entry would arrive at the orchestrator
+ * with bogus args, fail the tool dispatch, and waste a turn.
+ * Returns calls in the order the model emitted them so the
+ * orchestrator sees a stable sequence.
+ */
+function collectAccumulatedToolCalls(
+  accumulator: Map<number, { name: string; args: string }>,
+): import("./types").StreamToolCall[] {
+  const out: import("./types").StreamToolCall[] = [];
+  const indices = [...accumulator.keys()].sort((a, b) => a - b);
+  for (const idx of indices) {
+    const tc = accumulator.get(idx);
+    if (!tc || tc.name.length === 0) {
+      continue;
+    }
+    if (tc.args.trim().length === 0) {
+      // Same drop policy as the fenced synth path; the warn there
+      // already logged the rate.
+      continue;
+    }
+    out.push({ name: tc.name, argumentsJson: tc.args });
+  }
+  return out;
 }
 
 function synthesizeAccumulatedTools(
