@@ -1128,7 +1128,33 @@ fn wait_for_command<H: Host>(
             Ok(ManualOutcome::Continue)
         }
         Some(HostEvent::Advance { step }) => {
+            // Compare `current_step` before/after to detect a
+            // refused advance. `run_manual_advance` emits Diagnostic
+            // Errors on the gate-failed / critique-iters-exceeded /
+            // milestone-walk-cap paths and then returns silently;
+            // without an explicit signal here, the manual loop goes
+            // back to parking on `parked_recv` while the host (e2e_manual,
+            // dashboard) waits for a `StateAdvanced` event that
+            // will never arrive -- deadlock. Emit `RequestUserInput`
+            // when the step didn't change so the host can decide
+            // what to do (rerun, reset, shut down).
+            let before = State::load(&opts.project_dir.join(".sim-flow"))
+                .ok()
+                .map(|s| s.current_step.clone());
             run_manual_advance(opts, &step, auto_host)?;
+            let after = State::load(&opts.project_dir.join(".sim-flow"))
+                .ok()
+                .map(|s| s.current_step.clone());
+            if before == after {
+                auto_host.write(&Event::RequestUserInput {
+                    prompt: Some(format!(
+                        "Advance refused: `{step}` did not change state. \
+                         Inspect the prior Error diagnostics, then issue \
+                         RunStep / RunCritique / Reset, or end the session."
+                    )),
+                    placeholder: None,
+                })?;
+            }
             Ok(ManualOutcome::Continue)
         }
         Some(HostEvent::Reset { step }) => {
