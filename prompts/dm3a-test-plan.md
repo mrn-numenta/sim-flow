@@ -64,7 +64,10 @@ Reference material (read on demand):
      invariant in plain English, monitor inputs, comparison
      strategy.
    - The `SimEnvBuilder` wiring -- helper function name returning
-     a fully assembled `SimEnv`.
+     a fully assembled `SimEnv`. **Canonical location**:
+     `src/model/test/env.rs` (in-tree, public so integration tests
+     can import it). DM3b writes that file, NOT a duplicate
+     `tests/testbench/env.rs`.
 
    This is the UVM-lite contract for DM3b.
 

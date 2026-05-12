@@ -170,12 +170,27 @@ modification-friendly across iterations.
 
 ## File Layout
 
-DM3b writes the testbench under `tests/testbench/` -- a
+DM3b writes most of the testbench under `tests/testbench/` -- a
 subdirectory, not a single `tests/testbench.rs` file -- and splits
-concerns across multiple files:
+concerns across multiple files. The ONE exception is the
+`SimEnvBuilder` helper, which lives under `src/model/test/`
+because it is shared scaffolding reused by unit tests (in `src/`)
+AND integration tests (in `tests/`). Do NOT duplicate the helper
+in `tests/`; integration tests import the canonical helper from
+the crate.
 
+- `src/model/test/env.rs` -- **CANONICAL** location for the
+  `SimEnvBuilder` wiring helper function
+  (`make_env(...)` or per the test plan) plus the `OrderedModules`
+  type alias and any shared port-name constants. Expose
+  publicly (`pub mod test` under `src/model/mod.rs`, no
+  `#[cfg(test)]` gate) so integration tests can import via
+  `use <crate_name>::model::test::env::make_env;`. Do NOT write
+  a `tests/testbench/env.rs` -- a duplicate copy is a
+  blocker-grade violation that gets flagged in critique.
 - `tests/testbench/mod.rs` -- module root that re-exports the
-  per-component files and exposes the `SimEnvBuilder` helper.
+  per-component files. The env helper is imported from the
+  crate, not declared here.
 - `tests/testbench/payloads.rs` -- payload structs (or just
   re-exports of the `src/model/` types if those already cover
   the testbench's needs).
@@ -188,8 +203,6 @@ concerns across multiple files:
 - `tests/testbench/scoreboards.rs` -- one Scoreboard per
   correctness invariant + the reference model `compute_expected`
   helpers.
-- `tests/testbench/env.rs` -- the `SimEnvBuilder` wiring helper
-  function (`make_env(...)` or per the test plan).
 - `tests/smoke/basic_data_flow.rs` -- the basic data-flow smoke
   test (the ONE `#[test]` DM3b authors). Lives outside
   `tests/testbench/` because it's a TEST, not scaffolding;

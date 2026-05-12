@@ -138,12 +138,19 @@ earlier milestones.
       400 lines -> `BLOCKER:` with the line count and a
       suggested split axis.
 
-12. **File Layout (per the work prompt)**. Verify the
-    `tests/testbench/` subdirectory split:
-    - Testbench scaffolding lives under `tests/testbench/<file>.rs`
-      (one file per concern: `payloads.rs`, `sequencers.rs`,
-      `drivers.rs`, `monitors.rs`, `scoreboards.rs`, `env.rs`,
-      `mod.rs` as module root).
+12. **File Layout (per the work prompt)**. Verify the split:
+    - The `SimEnvBuilder` wiring helper (`make_env`,
+      `OrderedModules`, port-name consts) lives at the
+      **canonical** location `src/model/test/env.rs` and ONLY
+      there. A second copy at `tests/testbench/env.rs` ->
+      `BLOCKER:` (duplicate scaffolding; the canonical helper
+      is in-tree so unit + integration tests share it).
+      Integration tests import via
+      `use <crate_name>::model::test::env::make_env;`.
+    - Other testbench scaffolding lives under
+      `tests/testbench/<file>.rs` (one file per concern:
+      `payloads.rs`, `sequencers.rs`, `drivers.rs`,
+      `monitors.rs`, `scoreboards.rs`, `mod.rs` as module root).
     - The basic data-flow smoke test lives at
       `tests/smoke/basic_data_flow.rs` (NOT inside
       `tests/testbench/`).
