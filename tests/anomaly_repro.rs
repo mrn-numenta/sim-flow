@@ -25,8 +25,8 @@ use sim_flow::session::protocol::{
     SessionKindOut, StepMode,
 };
 use sim_flow::session::{
-    AdvertisedToolCall, AutoOptions, CliAgent, LlmCallMetrics, MockAgent, TestHost, ToolAdvertise,
-    run_auto,
+    AdvertisedToolCall, AutoOptions, CliAgent, LlmCallMetrics, MockAgent, TerminalHost, TestHost,
+    ToolAdvertise, run_auto,
 };
 use sim_flow::state::{Flow, State};
 
@@ -234,7 +234,12 @@ fn auto_opts(project: &std::path::Path, mode: StepMode) -> AutoOptions {
         max_critique_iters: 1,
         max_critique_no_progress_iters: 0,
         dm0_interactive: false,
-        max_llm_requests: 4,
+        // High enough that the cross-session runaway-loop guard
+        // doesn't preempt the per-session caps we're testing here.
+        // The per-anomaly caps (max_auto_iters, etc.) want room to
+        // fire first; the runaway guard is a safety net for cases
+        // where THOSE caps fail.
+        max_llm_requests: 100,
         max_identical_responses: 0,
         step_mode: mode,
         no_preamble: true,
@@ -378,32 +383,254 @@ fn truly_empty_response_still_triggers_diagnostic() {
 }
 
 // -------------------------------------------------------------------
+// edit-file-stale-old-string (tool layer): the EditFile tool MUST
+// return a clear, action-guiding error when the supplied
+// `old_string` isn't on disk. Live K=3 shows 57% of trials hit
+// this anomaly; a clear error message is the bridge between
+// "anomaly" and "agent recovers".
+//
+// This test invokes the tool directly (no orchestrator) so it
+// stays a tight unit-level pin. Anything that changes the error
+// wording must be intentional -- the agent's recovery prompt
+// depends on the literal "Read the file and copy the exact text"
+// guidance.
+// -------------------------------------------------------------------
+
+#[test]
+fn edit_file_stale_old_string_returns_action_guiding_error() {
+    use sim_flow::session::tools::{EditFileTool, Tool, ToolContext};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path();
+    let file_path = project.join("docs/foo.md");
+    std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+    std::fs::write(&file_path, "alpha\nbeta\ngamma\n").unwrap();
+
+    let write_paths = vec!["docs/".to_string()];
+    let ctx = ToolContext::new(project, None, None, None).with_write_paths(&write_paths);
+
+    // Stale old_string: not present in the file at all. This is
+    // the exact shape the live model emits after its mental copy
+    // has drifted from disk.
+    let args = serde_json::json!({
+        "path": "docs/foo.md",
+        "old_string": "this-substring-does-not-exist",
+        "new_string": "replacement",
+    });
+    let result = EditFileTool
+        .invoke(&ctx, &args)
+        .expect("tool returns Ok with err result");
+
+    assert!(!result.ok, "stale old_string must yield an error result");
+    let msg = &result.display;
+    assert!(
+        msg.contains("not found in"),
+        "error must say `not found in`; got: {msg}"
+    );
+    assert!(
+        msg.contains("Read the file") && msg.contains("exact text"),
+        "error must guide the agent to read-then-retry; got: {msg}"
+    );
+    // File content unchanged.
+    let final_body = std::fs::read_to_string(&file_path).unwrap();
+    assert_eq!(final_body, "alpha\nbeta\ngamma\n");
+}
+
+#[test]
+fn edit_file_multiple_matches_returns_disambiguation_error() {
+    // The other half of the stale-old-string spectrum: the
+    // substring matches multiple times. The agent needs to add
+    // surrounding context to make it unique. Pin the error wording
+    // so prompt-recovery instructions stay aligned.
+    use sim_flow::session::tools::{EditFileTool, Tool, ToolContext};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path();
+    let file_path = project.join("docs/foo.md");
+    std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+    std::fs::write(&file_path, "TODO line 1\nTODO line 2\nTODO line 3\n").unwrap();
+
+    let write_paths = vec!["docs/".to_string()];
+    let ctx = ToolContext::new(project, None, None, None).with_write_paths(&write_paths);
+
+    let args = serde_json::json!({
+        "path": "docs/foo.md",
+        "old_string": "TODO",
+        "new_string": "DONE",
+    });
+    let result = EditFileTool.invoke(&ctx, &args).unwrap();
+
+    assert!(!result.ok);
+    assert!(
+        result.display.contains("matches 3 times") || result.display.contains("matches "),
+        "should disambiguate count; got: {}",
+        result.display
+    );
+    assert!(
+        result.display.contains("Add surrounding context"),
+        "should guide the agent toward unique context; got: {}",
+        result.display
+    );
+}
+
+// -------------------------------------------------------------------
+// work-no-artifact: the orchestrator's max_auto_iters cap MUST
+// fire when the model burns its turn budget on read-only tool
+// calls. K=3 saw 12/21 vLLM trials hit this; the cap is the safety
+// net that flips to manual mode before the trial runs forever.
+//
+// This drives a real run_auto with the orchestrator's auto loop;
+// scripts a MockAgent with N read-only tool calls; asserts the
+// "max_auto_iters" diagnostic fires within the cap window.
+// -------------------------------------------------------------------
+
+#[test]
+fn work_no_artifact_trips_max_auto_iters_diagnostic() {
+    // The cap fires only in AUTO mode (`opts.auto` gate inside
+    // run_session) -- in manual mode the runaway-loop guard
+    // (max_llm_requests) is what fires instead. Use TerminalHost
+    // with a MockAgent scripted to keep emitting read-only
+    // tool_calls; capture stderr to grep for the diagnostic.
+    let tmp = tempfile::tempdir().unwrap();
+    let project = init_project(&tmp);
+
+    let agent = MockAgent::new();
+    // Script several read-only turns. The orchestrator will keep
+    // calling the agent until the max_auto_iters cap fires.
+    // max_auto_iters=2 in auto_opts -- so the cap should fire after
+    // the 2nd consecutive no-artifact turn.
+    for _ in 0..10 {
+        agent.enqueue_with_tool_calls(
+            "",
+            vec![AdvertisedToolCall {
+                id: Some("call".into()),
+                name: "list_dir".into(),
+                arguments_json: r#"{"path":"docs"}"#.into(),
+            }],
+        );
+    }
+
+    // Auto mode terminal host. Stdin: just "/end-session\n" so any
+    // RequestUserInput after the cap fires unblocks cleanly. The
+    // captured stderr Vec is where the diagnostic lands; we grep
+    // it after run_auto returns.
+    let stdin = std::io::BufReader::new(std::io::Cursor::new(b"/end-session\n".to_vec()));
+    let mut stdout = Vec::<u8>::new();
+    let mut stderr = Vec::<u8>::new();
+    let mut host = TerminalHost::new(agent, stdin, &mut stdout, &mut stderr);
+
+    // Native mode + tools advertised so the MockAgent's tool_calls
+    // actually flow through the right path. Without this the host
+    // would fall back to plain dispatch and the agent's
+    // tool_calls would be ignored.
+    // SAFETY: env var manipulation in tests; cargo test runs each
+    // test in its own thread but the env is process-wide. We
+    // restore at end.
+    let prior = std::env::var("SIM_FLOW_TOOL_MODE").ok();
+    unsafe { std::env::set_var("SIM_FLOW_TOOL_MODE", "native") };
+
+    let _ = run_auto(auto_opts(&project, StepMode::Auto), &mut host);
+
+    match prior {
+        Some(v) => unsafe { std::env::set_var("SIM_FLOW_TOOL_MODE", v) },
+        None => unsafe { std::env::remove_var("SIM_FLOW_TOOL_MODE") },
+    }
+
+    let stderr_text = String::from_utf8_lossy(&stderr);
+    assert!(
+        stderr_text.contains("max_auto_iters")
+            && stderr_text.contains("without producing an artifact"),
+        "max_auto_iters work-no-artifact diagnostic missing from stderr.\n\
+         stderr tail (last 1500 chars):\n{}",
+        &stderr_text[stderr_text.len().saturating_sub(1500)..]
+    );
+}
+
+// -------------------------------------------------------------------
+// edit_file disambiguation policy: edit_file with old_string ==
+// new_string is a no-op and SHOULD surface as an error rather than
+// silently succeeding. This protects against the agent stalling on
+// "I'll edit X to X" turns when its mental model is confused.
+// -------------------------------------------------------------------
+
+#[test]
+fn edit_file_identical_old_new_returns_error() {
+    use sim_flow::session::tools::{EditFileTool, Tool, ToolContext};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path();
+    let file_path = project.join("docs/foo.md");
+    std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+    std::fs::write(&file_path, "content\n").unwrap();
+
+    let write_paths = vec!["docs/".to_string()];
+    let ctx = ToolContext::new(project, None, None, None).with_write_paths(&write_paths);
+
+    let args = serde_json::json!({
+        "path": "docs/foo.md",
+        "old_string": "content",
+        "new_string": "content",
+    });
+    let result = EditFileTool.invoke(&ctx, &args).unwrap();
+
+    assert!(!result.ok, "no-op edit should error rather than no-op");
+    assert!(
+        result.display.contains("identical") || result.display.contains("nothing to change"),
+        "should explain why; got: {}",
+        result.display
+    );
+}
+
+// -------------------------------------------------------------------
+// edit_file path-allowlist enforcement: even a well-formed edit
+// against a path outside the step's write allowlist MUST be
+// rejected. The model-robustness study saw write-file-error spikes
+// on early steps (DM0/DM1) where the model tried to land code
+// under src/ before DM2c authorized it.
+// -------------------------------------------------------------------
+
+#[test]
+fn edit_file_outside_write_paths_is_rejected() {
+    use sim_flow::session::tools::{EditFileTool, Tool, ToolContext};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path();
+    let file_path = project.join("src/lib.rs");
+    std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+    std::fs::write(&file_path, "fn old() {}\n").unwrap();
+
+    // Step is at DM0; write_paths only allows docs/.
+    let write_paths = vec!["docs/".to_string()];
+    let ctx = ToolContext::new(project, None, None, None).with_write_paths(&write_paths);
+
+    let args = serde_json::json!({
+        "path": "src/lib.rs",
+        "old_string": "fn old() {}",
+        "new_string": "fn new() {}",
+    });
+    let result = EditFileTool.invoke(&ctx, &args).unwrap();
+
+    assert!(!result.ok, "edit outside write_paths must be rejected");
+    // The file on disk MUST NOT have changed.
+    let body = std::fs::read_to_string(&file_path).unwrap();
+    assert_eq!(body, "fn old() {}\n", "rejected edit must not touch disk");
+}
+
+// -------------------------------------------------------------------
 // Future tests to add as anomalies get fixes:
 //
-// - empty-response retry path: needs a `run_one_turn` helper or
-//   integration via TestHost driving a single Event::RequestLlmResponse
-//   round-trip. Today's `run_auto` is heavy enough that the cheaper
-//   level is to assert the new joint check (`text.is_empty() &&
-//   native_tool_calls.is_empty()`) at the unit level. Skeleton
-//   placeholder: see commit bb26a02 for the joint-check fix; a
-//   focused test would feed the orchestrator one tool-call-only
-//   turn and assert NO "Your previous response was empty"
-//   diagnostic appears in the captured events.
+// - critique-no-progress: feed two identical-blocker-count critique
+//   responses in a row and assert the no-progress cap fires at the
+//   threshold (max_critique_no_progress_iters), not at the absolute
+//   critique-iter cap. Needs auto_opts to use Auto mode (not the
+//   Manual mode the work-no-artifact test uses) and a fully-shaped
+//   critique JSON via write_file in the MockAgent script. The
+//   no-progress detector lives in auto.rs's critique-retry loop;
+//   the absolute cap fires only after the no-progress cap if both
+//   are configured.
 //
-// - edit-file-stale-old-string: feed the orchestrator a sequence
-//   like (write_file foo content_A) -> (edit_file foo old=content_A
-//   new=content_B) and assert the second call SUCCEEDS (i.e. the
-//   tool's mental-model matches disk). Then induce drift -- a
-//   second write_file in between -- and assert the edit fails with
-//   the clear "old_string not found" message rather than something
-//   ambiguous.
-//
-// - work-no-artifact: feed a script of read_file-only turns and
-//   assert the orchestrator's no-artifact cap fires at the
-//   configured iter limit (and not earlier or later). Pins the
-//   max_auto_iters / no-progress bookkeeping.
-//
-// - critique-no-progress: feed two identical (count of blockers
-//   unchanged) critique responses in a row and assert the no-progress
-//   cap fires at iter 3, not at the absolute cap.
+// - bare-json-no-fence salvage path: pre-Phase-D fenced mode emitted
+//   critique JSON as bare prose without a fenced wrapper. Salvage
+//   recovered it; pin that the salvage path still works when a
+//   future cleanup removes the fenced-blocks code path.
 // -------------------------------------------------------------------
