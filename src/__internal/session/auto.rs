@@ -71,8 +71,8 @@ use crate::session::orchestrator::{
     OrchestratorOptions, run_session, step_descriptor_for_protocol,
 };
 use crate::session::protocol::{
-    DiagnosticLevel, Event, GateFailureOut, HostEvent, HostInfo, PROTOCOL_VERSION,
-    SessionEndReason, SessionKindOut, SessionTag, StepMode,
+    DiagnosticLevel, Event, GateFailureOut, HostEvent, HostInfo, LlmMessage, LlmRole,
+    PROTOCOL_VERSION, SessionEndReason, SessionKindOut, SessionTag, StepMode,
 };
 use crate::state::State;
 use crate::steps::registry_for;
@@ -166,6 +166,14 @@ pub fn run_auto<H: Host>(opts: AutoOptions, host: &mut H) -> Result<()> {
         mode: opts.step_mode,
     })?;
 
+    // Idle-state Q&A history. Each `UserMessage` received while
+    // manual mode is parked between sub-sessions appends to this
+    // and triggers a side-conversation LLM dispatch. History
+    // persists across step commands within the same run_auto
+    // invocation so a follow-up question after a Run Step still
+    // has the prior context.
+    let mut qa_history: Vec<LlmMessage> = Vec::new();
+
     let outcome = loop {
         if auto_host.shutdown_requested {
             break RunOutcome::Shutdown;
@@ -184,7 +192,7 @@ pub fn run_auto<H: Host>(opts: AutoOptions, host: &mut H) -> Result<()> {
             }
             StepMode::Manual => {
                 debug!("dispatching to wait_for_command (manual mode)");
-                match wait_for_command(&opts, &mut auto_host)? {
+                match wait_for_command(&opts, &mut auto_host, &mut qa_history)? {
                     ManualOutcome::Continue => continue,
                     ManualOutcome::Shutdown => break RunOutcome::Shutdown,
                     ManualOutcome::HostClosed => break RunOutcome::HostClosed,
@@ -1115,6 +1123,7 @@ fn try_advance<H: Host>(project_dir: &Path, step_id: &str, host: &mut AutoHost<H
 fn wait_for_command<H: Host>(
     opts: &AutoOptions,
     auto_host: &mut AutoHost<H>,
+    qa_history: &mut Vec<LlmMessage>,
 ) -> Result<ManualOutcome> {
     match auto_host.read()? {
         None => Ok(ManualOutcome::HostClosed),
@@ -1123,6 +1132,21 @@ fn wait_for_command<H: Host>(
             let session_kind = match kind {
                 SessionKindOut::Work => crate::client::SessionKind::Work,
                 SessionKindOut::Critique => crate::client::SessionKind::Critique,
+                SessionKindOut::Qa => {
+                    // RunStep is the user's "run a sub-session"
+                    // command; Q&A is its own thing (triggered by
+                    // UserMessage). A RunStep with kind=Qa is a host
+                    // bug; warn and drop rather than dispatching.
+                    auto_host.write(&Event::Diagnostic {
+                        level: DiagnosticLevel::Warning,
+                        message: format!(
+                            "RunStep with kind=qa is not a real command; \
+                             type a UserMessage to start a Q&A turn instead. \
+                             Ignoring step={step}."
+                        ),
+                    })?;
+                    return Ok(ManualOutcome::Continue);
+                }
             };
             run_manual_subsession(opts, &step, session_kind, auto_host)?;
             Ok(ManualOutcome::Continue)
@@ -1169,11 +1193,25 @@ fn wait_for_command<H: Host>(
             run_manual_reset(opts, &step, auto_host)?;
             Ok(ManualOutcome::Continue)
         }
+        Some(HostEvent::UserMessage { text }) => {
+            // Idle-state freeform Q&A: the user typed a message while
+            // manual mode is parked between sub-sessions. Dispatch a
+            // side-conversation LLM turn against the accumulated
+            // history. The user exits Q&A by clicking a step command
+            // (RunStep / Advance / etc.) -- those still route through
+            // their own arms above and naturally leave Q&A behind.
+            //
+            // History persists across step commands within this
+            // `run_auto` invocation so a follow-up question after a
+            // Run Step retains its earlier context.
+            run_manual_qa_turn(opts, &text, qa_history, auto_host)?;
+            Ok(ManualOutcome::Continue)
+        }
         Some(other) => {
             // Stray events while parked. Most aren't meaningful here
-            // (UserMessage with nobody listening, leftover LlmChunk,
-            // …). Surface a warning so the host operator can see the
-            // event was dropped, then keep parking.
+            // (leftover LlmChunk, etc.). Surface a warning so the
+            // host operator can see the event was dropped, then keep
+            // parking.
             auto_host.write(&Event::Diagnostic {
                 level: DiagnosticLevel::Warning,
                 message: format!(
@@ -1583,6 +1621,185 @@ fn run_manual_reset<H: Host>(
             message: format!("Reset: failed to delete {rel}: {err}"),
         })?;
     }
+    Ok(())
+}
+
+/// Idle-state freeform Q&A: dispatch ONE LLM round-trip against the
+/// accumulated chat history and append both the new user message and
+/// the assistant reply.
+///
+/// **Scope of this v1**: text-only conversation. The LLM cannot read
+/// or write project files yet -- the full tool-execution loop from
+/// `run_session` hasn't been factored into a shared helper. Multi-turn
+/// works (history persists across calls), so the user can have a
+/// back-and-forth conversation about whatever's in `qa_history` plus
+/// the small project-state preamble the system prompt carries. The
+/// follow-up commit that extends this with read/write/cargo will
+/// reuse the same `qa_history` and bracket structure.
+///
+/// Each turn is bracketed by `SubSessionStarted/Ended { kind: Qa }`
+/// so hosts can mark Q&A turns visually vs flow work.
+fn run_manual_qa_turn<H: Host>(
+    opts: &AutoOptions,
+    user_text: &str,
+    qa_history: &mut Vec<LlmMessage>,
+    auto_host: &mut AutoHost<H>,
+) -> Result<()> {
+    // Determine the current step for the bracket payload + system
+    // prompt context. If state.toml is unreadable we still run Q&A,
+    // just without the step anchor.
+    let current_step = State::load(&opts.project_dir.join(".sim-flow"))
+        .ok()
+        .map(|s| s.current_step)
+        .unwrap_or_else(|| "?".to_string());
+
+    auto_host.write(&Event::SubSessionStarted {
+        step: current_step.clone(),
+        kind: SessionKindOut::Qa,
+    })?;
+
+    // Append the user turn to the persistent history BEFORE building
+    // the request so the LLM sees it. A snapshot of the history is
+    // what we ship over the wire.
+    qa_history.push(LlmMessage {
+        role: LlmRole::User,
+        content: user_text.to_string(),
+        ..LlmMessage::default()
+    });
+
+    // System prompt: small, focused on the side-conversation role.
+    // The project dir + current step give the LLM minimal grounding
+    // without dragging in step-specific instructions (which would
+    // push it toward writing artifacts -- not the Q&A intent).
+    let system = LlmMessage {
+        role: LlmRole::System,
+        content: format!(
+            "You are sim-flow's interactive assistant. The user has paused the \
+             direct-modeling flow at step `{current_step}` and is asking you a \
+             question or requesting guidance.\n\n\
+             Project root: `{}`\n\n\
+             Answer concisely. The user is in control of the flow -- they will \
+             click a step command (Run Step, Advance, etc.) when ready to \
+             resume; that exits this side conversation.\n\n\
+             NOTE: Tool execution is not yet wired for Q&A turns. You can answer \
+             from the conversation context you have, but cannot read project \
+             files, run cargo, or write changes in this turn. If the user asks \
+             for an investigation or edit, summarize what should be done and \
+             have them click a step command (or run the relevant cargo / git \
+             query manually) to take the action.",
+            opts.project_dir.display(),
+        ),
+        ..LlmMessage::default()
+    };
+    let mut messages: Vec<LlmMessage> = Vec::with_capacity(qa_history.len() + 1);
+    messages.push(system);
+    messages.extend(qa_history.iter().cloned());
+
+    let request_id = format!("qa-{}", qa_history.len());
+    auto_host.write(&Event::RequestLlmResponse {
+        request_id: request_id.clone(),
+        messages,
+        // Tools are deferred to the follow-up commit; emit an empty
+        // catalog for now so a host that gates on `tools.len() > 0`
+        // for native mode falls back to fenced / text-only dispatch.
+        tools: Vec::new(),
+        backend: opts.llm_backend.to_string(),
+        model: opts.llm_model.clone(),
+        debug_adaptation: opts.llm_debug_adaptation,
+        model_family_id: opts.llm_model_family_id.clone(),
+        runtime_profile_id: opts.llm_runtime_profile_id.clone(),
+    })?;
+
+    // Collect the assistant turn. Hosts stream `LlmChunk` and finish
+    // with `LlmEnd`; we coalesce chunks into a single content string.
+    let mut assistant_text = String::new();
+    let mut llm_failed = false;
+    let mut llm_error_message: Option<String> = None;
+    loop {
+        match auto_host.read()? {
+            None => {
+                llm_failed = true;
+                llm_error_message = Some("host closed during Q&A dispatch".to_string());
+                break;
+            }
+            Some(HostEvent::LlmChunk {
+                request_id: rid,
+                text,
+            }) if rid == request_id => {
+                assistant_text.push_str(&text);
+                // Mirror the text to host so it renders in the
+                // transcript live. AssistantText is what the chat
+                // panel listens to for streaming.
+                auto_host.write(&Event::AssistantText {
+                    text,
+                    final_chunk: false,
+                })?;
+            }
+            Some(HostEvent::LlmEnd {
+                request_id: rid, ..
+            }) if rid == request_id => break,
+            Some(HostEvent::LlmError {
+                request_id: rid,
+                kind,
+                message,
+            }) if rid == request_id => {
+                llm_failed = true;
+                llm_error_message = Some(format!("{kind}: {message}"));
+                break;
+            }
+            Some(other) => {
+                // Anything else (Shutdown, stray RunStep, etc.) is
+                // dropped here -- the user clicking a step command
+                // mid-Q&A-dispatch is a race we don't handle in v1.
+                // Log + continue; the next wait_for_command call
+                // picks it up.
+                auto_host.write(&Event::Diagnostic {
+                    level: DiagnosticLevel::Warning,
+                    message: format!(
+                        "Q&A: dropped event during dispatch: {}",
+                        host_event_label(&other),
+                    ),
+                })?;
+            }
+        }
+    }
+
+    if llm_failed {
+        auto_host.write(&Event::Diagnostic {
+            level: DiagnosticLevel::Error,
+            message: format!(
+                "Q&A turn failed: {}",
+                llm_error_message.unwrap_or_else(|| "unknown error".into()),
+            ),
+        })?;
+        // Roll back the user message so a retry doesn't double up.
+        qa_history.pop();
+        auto_host.write(&Event::SubSessionEnded {
+            step: current_step,
+            kind: SessionKindOut::Qa,
+            outcome: "error".to_string(),
+        })?;
+        return Ok(());
+    }
+
+    // Final chunk marker so the chat panel knows the streaming flush
+    // is done and can render any trailing text.
+    auto_host.write(&Event::AssistantText {
+        text: String::new(),
+        final_chunk: true,
+    })?;
+
+    qa_history.push(LlmMessage {
+        role: LlmRole::Assistant,
+        content: assistant_text,
+        ..LlmMessage::default()
+    });
+
+    auto_host.write(&Event::SubSessionEnded {
+        step: current_step,
+        kind: SessionKindOut::Qa,
+        outcome: "completed".to_string(),
+    })?;
     Ok(())
 }
 

@@ -295,6 +295,18 @@ pub enum StepMode {
 pub enum SessionKindOut {
     Work,
     Critique,
+    /// Idle-state freeform Q&A: the user typed a `UserMessage` while
+    /// manual mode was parked between sub-sessions, and the
+    /// orchestrator is running a side-conversation LLM turn against
+    /// the current project context. Sub-sessions of this kind are
+    /// bracketed by `SubSessionStarted/Ended { kind: Qa }` so hosts
+    /// can mark the turns visually (Q&A vs flow work) and gate the
+    /// chat composer behavior. Q&A turns have full tool access to
+    /// the project just like a Work session; they do NOT participate
+    /// in gate evaluation, critique, or step advancement. The user
+    /// exits Q&A by clicking a step command (RunStep / RunCritique /
+    /// Advance / Reset / Shutdown).
+    Qa,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

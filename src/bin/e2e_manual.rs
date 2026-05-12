@@ -1024,6 +1024,15 @@ fn handle_event(
                         from_step: step.clone(),
                     })
                 }
+                SessionKindOut::Qa => {
+                    // Q&A turns don't feed the work -> critique ->
+                    // advance phase machine. Stay in InStep so the
+                    // outer loop keeps reading events normally.
+                    Ok(ManualPhase::InStep {
+                        step: step.clone(),
+                        kind: SessionKindOut::Qa,
+                    })
+                }
             },
             _ => Ok(new_phase),
         }

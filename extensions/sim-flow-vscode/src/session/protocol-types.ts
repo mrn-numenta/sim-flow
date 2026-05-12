@@ -107,7 +107,7 @@ export type Event =
 /**
  * Mirror of `client::SessionKind` exposed in the protocol. Kept independent of the internal type so the wire format stays stable even if the internal representation changes.
  */
-export type SessionKindOut = "work" | "critique";
+export type SessionKindOut = ("work" | "critique") | "qa";
 export type LlmRole = ("system" | "user" | "assistant") | "tool";
 export type DiagnosticLevel = "info" | "warning" | "error";
 /**

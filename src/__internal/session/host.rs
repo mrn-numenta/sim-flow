@@ -253,6 +253,7 @@ where
                 let kind = match session.kind {
                     crate::session::protocol::SessionKindOut::Work => "work",
                     crate::session::protocol::SessionKindOut::Critique => "critique",
+                    crate::session::protocol::SessionKindOut::Qa => "qa",
                 };
                 writeln!(
                     self.stderr,

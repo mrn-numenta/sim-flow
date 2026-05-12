@@ -1895,6 +1895,14 @@ pub(crate) fn step_descriptor_for_protocol(
     let suffix = match kind {
         SessionKindOut::Work => "",
         SessionKindOut::Critique => "-critique",
+        // Q&A turns don't have a per-step instruction prompt --
+        // they're driven by `run_manual_qa_turn` and never go
+        // through `step_descriptor_for_protocol`. If we ever land
+        // here for Qa, it's a logic bug worth surfacing.
+        SessionKindOut::Qa => unreachable!(
+            "step_descriptor_for_protocol called with SessionKindOut::Qa; \
+             Q&A turns don't use per-step descriptors"
+        ),
     };
     let path = foundation_root
         .join(crate::prompts::PROMPTS_DIR)
@@ -1902,6 +1910,9 @@ pub(crate) fn step_descriptor_for_protocol(
     let (phases, tool_names) = match kind {
         SessionKindOut::Work => (step.work_phases, crate::steps::UNIVERSAL_TOOLS),
         SessionKindOut::Critique => (step.critique_phases, crate::steps::UNIVERSAL_TOOLS),
+        SessionKindOut::Qa => unreachable!(
+            "step_descriptor_for_protocol Qa branch unreachable -- see suffix arm above"
+        ),
     };
     StepDescriptorOut {
         step: step.id.into(),
