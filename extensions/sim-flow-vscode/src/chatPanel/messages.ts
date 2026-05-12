@@ -58,6 +58,16 @@ export interface ChatPanelState {
    */
   pendingFollowups: Array<{ label: string; action: string }>;
   /**
+   * Helper text rendered above the composer when the user is in
+   * idle-state Q&A (manual mode, no active sub-session, not parked
+   * at request-user-input). The orchestrator interprets any
+   * UserMessage typed during this window as a Q&A turn (a
+   * side-conversation LLM round-trip against the project context).
+   * Cleared while a sub-session is in flight or while the panel
+   * isn't anchored to a live pump.
+   */
+  idleQaHint: string | null;
+  /**
    * True when the active session is a read-only viewer attached to
    * a `--watch-socket` tap. The composer is disabled, the Stop
    * button is hidden, and the streaming indicator says "VIEWING"
@@ -75,7 +85,7 @@ export interface ChatPanelState {
    * or the orchestrator hasn't opened a sub-session yet.
    */
   sessionStep: string | null;
-  sessionKind: "work" | "critique" | null;
+  sessionKind: "work" | "critique" | "qa" | null;
   supportsPromptEntry: boolean;
   canStop: boolean;
 }

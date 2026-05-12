@@ -262,6 +262,20 @@ function header(state: ChatPanelState): HTMLElement {
       ),
     );
   }
+  // Idle-state Q&A helper. Shown when the panel is anchored to a
+  // live pump that isn't currently in a sub-session AND isn't
+  // parked at request-user-input -- the only window in which a
+  // UserMessage is interpreted as a side-conversation Q&A turn.
+  // The literal text is supplied by the host; we just style it.
+  if (state.idleQaHint && state.idleQaHint.trim().length > 0) {
+    root.appendChild(
+      el(
+        "div",
+        { class: "hero-qa-hint", role: "note" },
+        state.idleQaHint,
+      ),
+    );
+  }
   return root;
 }
 

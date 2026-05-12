@@ -228,6 +228,21 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* Idle-state Q&A helper. Sits in the same spot as `.hero-prompt`
+ * but only one of the two renders at a time -- prompt is for parked
+ * sub-sessions, this is for between sub-sessions. Lighter visual
+ * weight so it reads as informational, not a question to address. */
+.hero-qa-hint {
+  margin-top: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--chat-muted);
+  background: color-mix(in srgb, var(--chat-fg) 3%, transparent);
+  border-left: 2px dashed color-mix(in srgb, var(--chat-fg) 20%, transparent);
+  border-radius: 2px;
+}
+
 .transcript {
   min-height: 0;
   overflow-y: auto;

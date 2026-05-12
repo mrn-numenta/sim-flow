@@ -1179,6 +1179,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         this.activePump?.projectDir === context.projectDir
           ? this.activePump.pendingFollowups
           : [],
+      idleQaHint:
+        // Show the idle Q&A helper when there's a live pump for
+        // this project AND it's not currently in a sub-session and
+        // not parked at request-user-input. In those two states the
+        // notice / currentPrompt banner is more useful and the
+        // helper would be redundant. Viewers don't drive, so omit.
+        this.activePump?.projectDir === context.projectDir &&
+        !this.activePump.pump.isViewer &&
+        !this.activePump.pump.inSubSession &&
+        !this.activePump.awaitingInput
+          ? "Side-conversation Q&A: ask anything about this project. Click a step command on the right to end this conversation and run that step."
+          : null,
       isViewer,
       sessionStep:
         this.activePump?.projectDir === context.projectDir
