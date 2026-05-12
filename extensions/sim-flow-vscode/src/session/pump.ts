@@ -173,6 +173,17 @@ export interface LiveSessionTransport {
     listener: (msg: { prompt: string | null; placeholder: string | null }) => void,
   ): () => void;
   /**
+   * Subscribe to `Followup` events. Each notification carries a
+   * label (button text) and action string (the literal message
+   * that should be shipped back as a `UserMessage` on click). Hosts
+   * that declared the `followups` capability render these as
+   * clickable affordances; hosts that didn't can ignore the bus
+   * (the orchestrator also still emits the legacy "Suggested next"
+   * markdown line for plain renderers). Optional like the other
+   * pump subscriptions; the stdio pump leaves it undefined.
+   */
+  onFollowup?(listener: (msg: { label: string; action: string }) => void): () => void;
+  /**
    * True when this pump is attached as a read-only observer to a
    * `--watch-socket` tap. Dashboard / chat panel use this to
    * disable command surfaces (Run Step / Run Critique / Send /
@@ -353,7 +364,14 @@ export class SessionPump {
         name: "sim-flow-vscode",
         version: "0.2.0",
       } as HostInfo,
-      capabilities: ["text", "markdown", "user-input", "llm-request", "tool-notifications"],
+      capabilities: [
+        "text",
+        "markdown",
+        "user-input",
+        "llm-request",
+        "tool-notifications",
+        "followups",
+      ],
     });
   }
 

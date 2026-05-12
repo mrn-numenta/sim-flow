@@ -469,7 +469,31 @@ function composer(state: ChatPanelState): HTMLElement {
     actions,
   );
 
-  root.append(label, area, footer);
+  // Followup quick-action chips. Surface them between the textarea
+  // and the footer so the user sees them as a peer to typing (they
+  // are alternative ways to send the same UserMessage).
+  let followups: HTMLElement | null = null;
+  if (state.pendingFollowups && state.pendingFollowups.length > 0 && !state.isViewer) {
+    followups = section("composer-followups");
+    for (const f of state.pendingFollowups) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "followup-chip";
+      chip.textContent = f.label;
+      chip.title = f.action;
+      chip.disabled = state.isStreaming;
+      chip.addEventListener("click", () => {
+        send({ type: "followup-selected", action: f.action, label: f.label });
+      });
+      followups.appendChild(chip);
+    }
+  }
+
+  root.append(label, area);
+  if (followups) {
+    root.append(followups);
+  }
+  root.append(footer);
   return root;
 }
 

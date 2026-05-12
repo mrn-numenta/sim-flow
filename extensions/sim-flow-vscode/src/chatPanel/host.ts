@@ -114,6 +114,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
    * no indication of *what* the orchestrator is actually asking.
    */
   private requestUserInputListenerDispose: (() => void) | null = null;
+  /**
+   * Subscription to the active pump's `onFollowup`. Followup events
+   * carry the label + action for clickable quick-replies the
+   * orchestrator suggested (`/retry`, `/end-session`, course-
+   * correction). Without this, the chips never appear and the
+   * actions fall back to "user must read the suggestion and type
+   * the literal command."
+   */
+  private followupListenerDispose: (() => void) | null = null;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -149,6 +158,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     this.autoSessions.onActiveSessionChanged((session) => {
       this.attachSubSessionListener(session);
       this.attachRequestUserInputListener(session);
+      this.attachFollowupListener(session);
       // A newly attached/replaced session changes the panel's anchor
       // immediately; refresh so OFFLINE flips to VIEWING/STREAMING
       // without waiting for the next pump event. We intentionally do
@@ -159,6 +169,28 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       if (session) {
         void this.refresh();
       }
+    });
+  }
+
+  private attachFollowupListener(session: ManagedAutoSessionState | undefined): void {
+    if (this.followupListenerDispose) {
+      this.followupListenerDispose();
+      this.followupListenerDispose = null;
+    }
+    if (!session || typeof session.pump.onFollowup !== "function") {
+      return;
+    }
+    this.followupListenerDispose = session.pump.onFollowup(({ label, action }) => {
+      const current = this.activePump;
+      if (!current) {
+        return;
+      }
+      this.autoSessions.appendFollowup(current, { label, action });
+      // Repaint so the new chip surfaces immediately. Followups
+      // typically arrive in clusters just before a
+      // `request-user-input`; coalescing the refreshes would
+      // delay all but the last chip by one tick.
+      void this.refresh();
     });
   }
 
@@ -224,6 +256,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         current.currentArtifact = null;
         current.currentPrompt = null;
         current.currentPlaceholder = null;
+        // Followups belonged to the previous parked state; the
+        // new sub-session may or may not produce more.
+        current.pendingFollowups = [];
         if (!current.awaitingInput) {
           // Drive is already running (e.g. the session never
           // parked); the cleared fields will surface on the next
@@ -259,6 +294,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (this.requestUserInputListenerDispose) {
       this.requestUserInputListenerDispose();
       this.requestUserInputListenerDispose = null;
+    }
+    if (this.followupListenerDispose) {
+      this.followupListenerDispose();
+      this.followupListenerDispose = null;
     }
     for (const d of this.disposables) {
       d.dispose();
@@ -307,6 +346,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         return;
       case "send-prompt":
         await this.sendPrompt(msg.prompt);
+        return;
+      case "followup-selected":
+        // Quick-action chip click: treat the action string as the
+        // user's message (e.g. "/retry"). The literal action is
+        // what the orchestrator expects to receive verbatim --
+        // sendPrompt routes through the same path a typed message
+        // takes, so the orchestrator sees identical input shape.
+        await this.sendPrompt(msg.action);
         return;
       case "clear-transcript":
         await this.clearTranscript();
@@ -1128,6 +1175,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         this.activePump?.projectDir === context.projectDir
           ? (this.activePump.currentPlaceholder ?? null)
           : null,
+      pendingFollowups:
+        this.activePump?.projectDir === context.projectDir
+          ? this.activePump.pendingFollowups
+          : [],
       isViewer,
       sessionStep:
         this.activePump?.projectDir === context.projectDir

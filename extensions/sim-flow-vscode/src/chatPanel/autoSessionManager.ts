@@ -28,6 +28,14 @@ export interface ManagedAutoSessionState {
    */
   currentPrompt: string | null;
   currentPlaceholder: string | null;
+  /**
+   * Followup quick-actions the orchestrator emitted alongside the
+   * most recent `request-user-input`. Each entry's `action` is the
+   * literal string we ship back as a `UserMessage` when the user
+   * clicks the chip. Cleared on UserMessage send and on new
+   * sub-session open.
+   */
+  pendingFollowups: Array<{ label: string; action: string }>;
   stopRequested: boolean;
   drivePromise: Promise<void> | null;
   assistantId: string | null;
@@ -150,6 +158,7 @@ export class AutoSessionManager implements vscode.Disposable {
       awaitingInput: false,
       currentPrompt: null,
       currentPlaceholder: null,
+      pendingFollowups: [],
       stopRequested: false,
       drivePromise: null,
       assistantId: null,
@@ -188,9 +197,36 @@ export class AutoSessionManager implements vscode.Disposable {
     // refill these fields with fresh values.
     session.currentPrompt = null;
     session.currentPlaceholder = null;
+    // Followups belonged to the prior parked state. Once the user
+    // has spoken, even via a chip click that produced this prompt,
+    // the chips no longer apply -- the orchestrator will re-emit
+    // them if the next park needs them.
+    session.pendingFollowups = [];
     await this.persistRecord(session);
     session.pump.sendUserMessage(prompt);
     this.startDrive(session, delegate);
+  }
+
+  /**
+   * Append a Followup the orchestrator emitted. Multiple Followups
+   * typically cluster around a single `request-user-input`, so the
+   * pending list is ordered by arrival. Idempotent on duplicates
+   * (same label + action pair) so a retry doesn't double up.
+   */
+  appendFollowup(
+    session: ManagedAutoSessionState,
+    followup: { label: string; action: string },
+  ): void {
+    if (!this.isActive(session)) {
+      return;
+    }
+    const duplicate = session.pendingFollowups.some(
+      (existing) => existing.label === followup.label && existing.action === followup.action,
+    );
+    if (duplicate) {
+      return;
+    }
+    session.pendingFollowups = [...session.pendingFollowups, followup];
   }
 
   /**
@@ -298,6 +334,7 @@ export class AutoSessionManager implements vscode.Disposable {
       awaitingInput: record.awaitingInput,
       currentPrompt: null,
       currentPlaceholder: null,
+      pendingFollowups: [],
       stopRequested: false,
       drivePromise: null,
       assistantId: null,

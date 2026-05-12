@@ -58,6 +58,18 @@ type SocketPumpBusEvent =
       type: "request-user-input";
       prompt: string | null;
       placeholder: string | null;
+    }
+  | {
+      // Orchestrator suggested an actionable quick-reply. `label`
+      // is the button text; `action` is the literal string the
+      // host should ship as a `UserMessage` when the user clicks.
+      // Typically emitted in clusters just before a
+      // `request-user-input` (the orchestrator emits one per
+      // action, then parks). The chat panel accumulates these
+      // until a UserMessage ships or a new sub-session opens.
+      type: "followup";
+      label: string;
+      action: string;
     };
 
 export interface SocketSessionPumpOptions {
@@ -466,6 +478,23 @@ export class SocketSessionPump implements LiveSessionTransport {
   }
 
   /**
+   * Subscribe to `Followup` events. Each event carries a label
+   * (button text) and an action string (the literal message the
+   * host should ship back as a `UserMessage` when the user clicks).
+   * Listeners typically collect these into a pending list and
+   * render them as clickable chips next to the composer.
+   */
+  onFollowup(listener: (msg: { label: string; action: string }) => void): () => void {
+    const wrapped = (msg: SocketPumpBusEvent) => {
+      if (msg.type === "followup") {
+        listener({ label: msg.label, action: msg.action });
+      }
+    };
+    this.bus.on("msg", wrapped);
+    return () => this.bus.off("msg", wrapped);
+  }
+
+  /**
    * Manual-mode host commands. Each one fires-and-forgets — the
    * orchestrator emits `Diagnostic` if the command is rejected (auto
    * mode owns step execution, sub-session in flight, etc.) and that
@@ -727,7 +756,14 @@ export class SocketSessionPump implements LiveSessionTransport {
         name: "sim-flow-vscode",
         version: "0.2.0",
       } as HostInfo,
-      capabilities: ["text", "markdown", "user-input", "llm-request", "tool-notifications"],
+      capabilities: [
+        "text",
+        "markdown",
+        "user-input",
+        "llm-request",
+        "tool-notifications",
+        "followups",
+      ],
     });
   }
 
@@ -904,9 +940,17 @@ export class SocketSessionPump implements LiveSessionTransport {
         );
         break;
       case "followup":
+        // Still surface the suggestion in the transcript for any
+        // text-only renderer (the chat panel will additionally
+        // surface a clickable chip via the bus event below).
         this.currentRenderer?.markdown(
           `\n_Suggested next: ${event.label} (\`${event.action}\`)._\n`,
         );
+        this.bus.emit("msg", {
+          type: "followup",
+          label: event.label,
+          action: event.action,
+        } as SocketPumpBusEvent);
         break;
       case "diagnostic":
         this.renderDiagnostic(event.level, event.message);

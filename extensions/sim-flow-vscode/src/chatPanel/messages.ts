@@ -49,6 +49,15 @@ export interface ChatPanelState {
    */
   currentPlaceholder: string | null;
   /**
+   * Followup quick-actions the orchestrator emitted near the most
+   * recent `request-user-input`. The label is the button text; the
+   * action is the literal string we ship back as a `UserMessage`
+   * when the user clicks (e.g. `/retry`, `/end-session`). Cleared
+   * when the user sends a message (whether from the textarea or by
+   * clicking a chip) and when the next sub-session opens.
+   */
+  pendingFollowups: Array<{ label: string; action: string }>;
+  /**
    * True when the active session is a read-only viewer attached to
    * a `--watch-socket` tap. The composer is disabled, the Stop
    * button is hidden, and the streaming indicator says "VIEWING"
@@ -96,5 +105,6 @@ export type WebviewMessage =
   | { type: "ready" }
   | { type: "refresh" }
   | { type: "send-prompt"; prompt: string }
+  | { type: "followup-selected"; action: string; label: string }
   | { type: "clear-transcript" }
   | { type: "stop-conversation" };
