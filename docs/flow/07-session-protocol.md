@@ -89,37 +89,57 @@ from the schema.
 
 ### Orchestrator -> Host
 
-| Event                | Purpose                                                                                                                       |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ----------- | ----------------------------- | ---------- | -------- |
-| `HelloAck`           | Handshake reply; carries the step descriptor.                                                                                 |
-| `AssistantText`      | A chunk of text from the LLM to render. `text: string`, `final: bool`.                                                        |
-| `RequestUserInput`   | Pause and wait for the user's reply. Optional `prompt`, `placeholder` hints.                                                  |
-| `RequestLlmResponse` | Ask the host to run an LLM call. `requestId`, `messages`, `tools`, `backend`, plus optional adaptation override/debug fields. |
-| `ArtifactWritten`    | A project file was just written by the orchestrator. `path`, `bytes`.                                                         |
-| `ToolInvoked`        | Notification only; the orchestrator already executed the tool. `name`, `args`, `status`, `durationMs`.                        |
-| `PhaseChanged`       | Code-step loop transition. `phase: "author"                                                                                   | "build"     | "test"                        | "coverage" | "done"`. |
-| `BuildOutput`        | Build / test runner output. `command`, `stdoutTail`, `stderrTail`, `exitCode`.                                                |
-| `GateResult`         | Gate evaluation result. `step`, `clean: bool`, `failures: [...]`.                                                             |
-| `StateAdvanced`      | The orchestrator advanced `current_step`. `from`, `to`.                                                                       |
-| `Followup`           | Suggested next action for the host to render as a button. `label`, `action`.                                                  |
-| `Diagnostic`         | Non-fatal diagnostic for the host to display (e.g. truncated context warning).                                                |
-| `SessionEnd`         | Session finished. `reason: "completed"                                                                                        | "cancelled" | "error"`, optional `message`. |
+| Event | Purpose |
+| --- | --- |
+| `HelloAck` | Handshake reply; carries the step descriptor. |
+| `AssistantText` | A chunk of text from the LLM to render. `text: string`, `final: bool`. |
+| `RequestUserInput` | Pause and wait for the user's reply. Optional `prompt` (banner / question text) and `placeholder` (textarea hint) so the host can tell the user what is being asked. |
+| `RequestLlmResponse` | Ask the host to run an LLM call. `requestId`, `messages`, `tools`, `backend`, plus optional adaptation override / debug fields. |
+| `ArtifactWritten` | A project file was just written by the orchestrator. `path`, `bytes`. |
+| `ToolInvoked` | Notification only; the orchestrator already executed the tool. `name`, `args`, `status`, `durationMs`. |
+| `PhaseChanged` | Code-step loop transition. `phase` is one of `author`, `build`, `test`, `coverage`, `done`. |
+| `BuildOutput` | Build / test runner output. `command`, `stdoutTail`, `stderrTail`, `exitCode`. Hosts that surface failures should render the tails on non-zero exits. |
+| `GateResult` | Gate evaluation result. `step`, `clean: bool`, `failures: [...]`. |
+| `StateAdvanced` | The orchestrator advanced `current_step`. `from`, `to`. |
+| `StepModeChanged` | Step-mode toggled. `mode` is `auto` or `manual`. Hosts mirror this on their toggle UI so the orchestrator's automatic flips (cap-exceeded drop to manual, etc.) stay visible. |
+| `SubSessionStarted` | A new work / critique sub-session opened. `step`, `kind`. Hosts use this to bracket per-sub-session UI state (disable per-step buttons while busy). |
+| `SubSessionEnded` | The current sub-session closed. `step`, `kind`, `outcome`. Pairs with `SubSessionStarted`. |
+| `Followup` | Suggested next action for the host to render as a button. `label`, `action`. Hosts that declared the `followups` capability ship the action back via `UserMessage` on click. |
+| `Diagnostic` | Non-fatal diagnostic for the host to display (e.g. truncated context warning). |
+| `SessionEnd` | Session finished. `reason` is one of `completed`, `cancelled`, `error`, `protocol-error`, `protocol-mismatch`, `runaway-guard`. Optional `message`. |
 
 ### Host -> Orchestrator
 
-| Event              | Purpose                                                          |
-| ------------------ | ---------------------------------------------------------------- |
-| `Hello`            | Handshake.                                                       |
-| `UserMessage`      | The user's reply to a `RequestUserInput`.                        |
-| `LlmChunk`         | Streaming LLM response chunk. `requestId`, `text`, `toolCalls?`. |
-| `LlmEnd`           | LLM response finished. `requestId`, `stopReason`.                |
-| `LlmError`         | LLM dispatch failed. `requestId`, `kind`, `message`.             |
-| `FollowupSelected` | User clicked a `Followup` button. `action`.                      |
-| `Cancel`           | User cancelled the session.                                      |
+| Event | Purpose |
+| --- | --- |
+| `Hello` | Handshake. |
+| `UserMessage` | The user's reply to a `RequestUserInput`, OR a freeform message used as a typed equivalent of clicking a `Followup` chip. Also accepted as an idle-mode Q&A turn between sub-sessions (orchestrator dispatches a side-conversation LLM turn). |
+| `LlmChunk` | Streaming LLM response chunk. `requestId`, `text`. |
+| `LlmEnd` | LLM response finished. `requestId`, `stopReason`, optional `toolCalls`. Hosts that support native function-calling should populate `toolCalls` so the orchestrator's native dispatch path fires; an empty array makes the orchestrator fall back to fenced-block extraction from the assistant text. |
+| `LlmError` | LLM dispatch failed. `requestId`, `kind`, `message`. |
+| `RunStep` | Manual-mode command: run a sub-session. `step`, `kind` is `work` or `critique`. |
+| `RunCritique` | Manual-mode command: explicit alias for `RunStep { kind: "critique" }`. |
+| `RunGate` | Manual-mode command: re-evaluate the step's gate without re-running work / critique. `step`. |
+| `Advance` | Manual-mode command: gate-check and advance `current_step`. `step`. On refused advance, the orchestrator emits `RequestUserInput`. |
+| `Reset` | Manual-mode command: wipe a step's artifacts so the user can re-run it cleanly. `step`. |
+| `SetStepMode` | Toggle between `auto` and `manual` step mode. |
+| `Shutdown` | Tear the orchestrator down. Cancels any in-flight sub-session. |
+| `Cancel` | User cancelled the session. |
 
-`Hello` capabilities and `Followup` are optional - hosts that don't
-declare those capabilities will not receive `Followup` events and
-do not need to send `FollowupSelected`.
+**Capability gating.** `Hello.capabilities` declares what the host
+can do. The orchestrator routes events accordingly:
+
+- `"followups"` — host receives `Followup` events and ships actions
+  back via `UserMessage`. Hosts without it still see the suggestion
+  in `AssistantText` markdown.
+- `"user-input"` — host accepts `RequestUserInput`. Without it the
+  orchestrator surfaces a `Diagnostic` and ends the session.
+- `"llm-request"` — host dispatches `RequestLlmResponse` and
+  streams back `LlmChunk` / `LlmEnd`. Required for any sub-session.
+- `"tool-notifications"` — host accepts `ToolInvoked` /
+  `ArtifactWritten` events.
+- `"markdown"` — host accepts markdown formatting in
+  `AssistantText`. Plain-text hosts opt out.
 
 ## Lifecycle
 

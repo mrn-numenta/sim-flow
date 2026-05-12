@@ -102,20 +102,60 @@ The extension consists of:
      Other LLM backends are accessed via sim-flow's own `CliAgent` /
      HTTP layer; the extension does not duplicate them.
 
-## Chat Participant: `@sim-flow` (renderer mode)
+## Primary surface: chat-panel + dashboard webviews
 
-The participant's handler is a thin pump:
+The `@sim-flow` chat participant still ships (slash commands stay
+useful for one-shot probes -- `/status`, `/runs`), but **most**
+user interaction now happens through two webviews driven by a live
+JSONL pump (`src/session/socketPump.ts`):
+
+1. **Chat-panel webview** (`src/chatPanel/`) — multi-turn transcript
+   and composer. Renders `AssistantText`, `ToolInvoked`,
+   `ArtifactWritten`, `Diagnostic`, `BuildOutput` (with `stdout_tail`
+   and `stderr_tail` on non-zero exit), `GateResult`,
+   `StateAdvanced`, and `Followup` quick-action chips.
+   `RequestUserInput`'s `prompt` + `placeholder` fields render as
+   a banner above the textarea so the user knows what's being
+   asked. `LlmEnd.tool_calls` flows back structurally when the
+   backend emits native tool calls (the fenced fallback parser
+   stays as a safety net).
+2. **Dashboard webview** (`src/webview/`) — per-step rail with
+   action buttons. Button clicks dispatch `HostEvent::RunStep`,
+   `RunCritique`, `RunGate`, `Advance`, `Reset`, `Shutdown` over
+   the **live JSONL socket** -- not as fresh `sim-flow` CLI
+   invocations. The pump tracks sub-session brackets
+   (`SubSessionStarted` / `SubSessionEnded`) and gates the buttons
+   on `inSubSession`; `StepModeChanged` keeps the manual/auto
+   toggle in sync when the orchestrator flips mode for its own
+   reasons (cap-exceeded drop to manual, etc.).
+
+The legacy CLI-spawn path lives on as a fallback for
+chat-participant slash commands and the "Attach to Running
+Watcher" picker, but it's no longer the primary surface.
 
 ```text
-@sim-flow /<command>  -->  spawn `sim-flow <subcommand> [args] --jsonl`
-                       <-- AssistantText / ArtifactWritten / ToolInvoked / ...
-                       <-- RequestLlmResponse           --> dispatch via vscode.lm
-                       <-- LlmChunk / LlmEnd            --
-                       <-- RequestUserInput             --> wait for next chat msg
-                       <-- SessionEnd                   --> chat session closes
+Dashboard click "Run Step DM2c"
+   -> SocketSessionPump.runStep("DM2c", "work")
+   -> { event: "run-step", step: "DM2c", kind: "work" }   --> orchestrator
+   <-- SubSessionStarted / RequestLlmResponse / LlmChunk / LlmEnd / ToolInvoked / ArtifactWritten / ...
+   <-- SubSessionEnded -> dashboard buttons re-enable
+   <-- Followup { label: "Retry", action: "/retry" }      -> chat panel renders chip
+   <-- RequestUserInput { prompt: "...", placeholder: "..." }
+                                                          -> chat panel banner above composer
+   ... user types or clicks chip ...
+   -> { event: "user-message", text: "..." }              --> orchestrator
 ```
 
-Slash commands are now thin wrappers over `sim-flow` CLI commands:
+The fresh-critique invariant, gate refusal logic, instruction
+loading, message assembly, milestone-walk scoping, walk vs step
+gate evaluation, and DM0-interactive ask-questions flow all happen
+in `sim-flow`. The extension sees only protocol events; it cannot
+accidentally violate session invariants by editing TS code.
+
+## Slash command compatibility (legacy CLI mode)
+
+For diagnostic / scripted use, `@sim-flow` chat participant slash
+commands still spawn fresh CLI subprocesses:
 
 ```text
 @sim-flow /status          -> sim-flow status --json (rendered as a table)
@@ -130,25 +170,6 @@ Slash commands are now thin wrappers over `sim-flow` CLI commands:
 
 `--project <path>` continues to be accepted on every command and is
 forwarded as a CLI flag.
-
-The fresh-critique invariant, gate refusal logic, instruction
-loading, and message assembly all happen in `sim-flow`. The extension
-sees only protocol events; it cannot accidentally violate session
-invariants by editing TS code.
-
-## Webview: Flow Dashboard
-
-Unchanged in shape from earlier phases, but now strictly
-read-from-CLI:
-
-- **Step rail** with gate diamonds (rendered from `status --json`).
-- **Per-step panel** with action buttons (Run Step / Critique /
-  Reset / Open Critique). Buttons dispatch the corresponding
-  `sim-flow` CLI invocation; they do not embed orchestration logic.
-- **Experiments / Baselines / Sweeps tabs** read from
-  `experiments.db` directly via `better-sqlite3` (the schema is
-  stable; bypassing the CLI here is acceptable since it is purely
-  read-only).
 
 ## Terminal Integration
 
