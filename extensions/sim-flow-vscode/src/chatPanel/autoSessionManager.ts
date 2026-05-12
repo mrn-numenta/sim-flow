@@ -18,6 +18,16 @@ export interface ManagedAutoSessionState {
   projectDir: string;
   pump: LiveSessionTransport;
   awaitingInput: boolean;
+  /**
+   * Prompt + placeholder from the most recent `request-user-input`
+   * event. Populated by the socket pump's `onRequestUserInput`
+   * subscription and consumed by the chat panel host when building
+   * `ChatPanelState.currentPrompt` / `currentPlaceholder`. Cleared
+   * when the next sub-session opens (the user moved on) or a
+   * `UserMessage` ships (we're no longer waiting).
+   */
+  currentPrompt: string | null;
+  currentPlaceholder: string | null;
   stopRequested: boolean;
   drivePromise: Promise<void> | null;
   assistantId: string | null;
@@ -138,6 +148,8 @@ export class AutoSessionManager implements vscode.Disposable {
       projectDir: options.projectDir,
       pump: options.pump,
       awaitingInput: false,
+      currentPrompt: null,
+      currentPlaceholder: null,
       stopRequested: false,
       drivePromise: null,
       assistantId: null,
@@ -171,9 +183,33 @@ export class AutoSessionManager implements vscode.Disposable {
       return;
     }
     session.awaitingInput = false;
+    // Clear the parked-prompt context the moment the user replies.
+    // The orchestrator's next `request-user-input` (if any) will
+    // refill these fields with fresh values.
+    session.currentPrompt = null;
+    session.currentPlaceholder = null;
     await this.persistRecord(session);
     session.pump.sendUserMessage(prompt);
     this.startDrive(session, delegate);
+  }
+
+  /**
+   * Record the prompt / placeholder text the orchestrator embedded
+   * in its most recent `request-user-input` event so the chat panel
+   * can render it above the composer. Either field may be null when
+   * the orchestrator parks without an explicit question (the panel
+   * falls back to its generic "Waiting on user" notice).
+   */
+  setPendingPrompt(
+    session: ManagedAutoSessionState,
+    prompt: string | null,
+    placeholder: string | null,
+  ): void {
+    if (!this.isActive(session)) {
+      return;
+    }
+    session.currentPrompt = prompt;
+    session.currentPlaceholder = placeholder;
   }
 
   /**
@@ -260,6 +296,8 @@ export class AutoSessionManager implements vscode.Disposable {
       projectDir: record.projectDir,
       pump,
       awaitingInput: record.awaitingInput,
+      currentPrompt: null,
+      currentPlaceholder: null,
       stopRequested: false,
       drivePromise: null,
       assistantId: null,

@@ -108,7 +108,7 @@ export type Event =
  * Mirror of `client::SessionKind` exposed in the protocol. Kept independent of the internal type so the wire format stays stable even if the internal representation changes.
  */
 export type SessionKindOut = "work" | "critique";
-export type LlmRole = "system" | "user" | "assistant" | "tool";
+export type LlmRole = ("system" | "user" | "assistant") | "tool";
 export type DiagnosticLevel = "info" | "warning" | "error";
 /**
  * Terminal state of a `SessionEnd` event. Closed-set enum so hosts can route on it deterministically (e.g. only re-enable Connect after `Completed`/`Cancelled`/`Error` but treat `RunawayGuard` as a hard abort that requires user attention). Serialized in kebab-case to match the existing wire strings.
@@ -159,11 +159,11 @@ export interface LlmMessage {
   content: string;
   role: LlmRole;
   /**
-   * On role=tool messages: the call id this message is replying to.
+   * On `role = Tool` messages: the wire-side call id this message is replying to. Pairs with `LlmToolCall.id` from a prior `LlmEnd` so the model can match tool results to the calls that produced them. `None` on any other role. Backends without a tool-result wire shape (CLI agents, plain chat-completions without tool-use) flatten Tool-role messages into User-role text in their converter.
    */
   tool_call_id?: string | null;
   /**
-   * On role=assistant messages: the tool calls this turn emitted.
+   * On `role = Assistant` messages: the tool calls this turn emitted (echoed back on subsequent requests so the model sees its own prior calls in history). `None` when the turn produced no native tool calls or when the backend doesn't support them.
    */
   tool_calls?: LlmToolCall[];
 }
@@ -182,6 +182,14 @@ export interface LlmAttachment {
   source?: string | null;
 }
 /**
+ * A single tool call the model emitted in a native-tool-use turn. Returned on `HostEvent::LlmEnd.tool_calls`. `arguments_json` is the raw JSON-encoded argument blob the model emitted -- the orchestrator parses it into a `serde_json::Value` at dispatch time so a malformed payload surfaces a clear diagnostic rather than a cryptic serde error mid-pipeline.
+ */
+export interface LlmToolCall {
+  arguments_json: string;
+  id?: string | null;
+  name: string;
+}
+/**
  * Tool catalog descriptor for a single advertised tool. Phase 9 M3 fills the `args_schema` with real JSON Schema for arg shapes.
  */
 export interface LlmTool {
@@ -193,15 +201,6 @@ export interface LlmTool {
   };
   description: string;
   name: string;
-}
-/**
- * Native tool call returned by the LLM. `arguments_json` is the raw
- * JSON-encoded argument blob the model emitted.
- */
-export interface LlmToolCall {
-  id?: string | null;
-  name: string;
-  arguments_json: string;
 }
 export interface GateFailureOut {
   description: string;
@@ -233,14 +232,9 @@ export type HostEvent =
       request_id: string;
       stop_reason?: string | null;
       /**
-       * Native tool calls the model emitted (when the backend
-       * supports native tool-use). Empty for fence-mode dispatches.
+       * Native tool calls the model emitted (when the backend supports native tool-use AND the orchestrator advertised a tool catalog on the matching `RequestLlmResponse`). Empty for fence-mode dispatches and for backends that don't support native tool calls. `#[serde(default)]` keeps the wire shape backward compatible with hosts that haven't been updated.
        */
-      tool_calls?: Array<{
-        id?: string | null;
-        name: string;
-        arguments_json: string;
-      }>;
+      tool_calls?: LlmToolCall[];
     }
   | {
       event: "llm-error";
@@ -287,4 +281,12 @@ export type HostEvent =
 export interface HostInfo {
   name: string;
   version: string;
+}
+/**
+ * A single tool call the model emitted in a native-tool-use turn. Returned on `HostEvent::LlmEnd.tool_calls`. `arguments_json` is the raw JSON-encoded argument blob the model emitted -- the orchestrator parses it into a `serde_json::Value` at dispatch time so a malformed payload surfaces a clear diagnostic rather than a cryptic serde error mid-pipeline.
+ */
+export interface LlmToolCall {
+  arguments_json: string;
+  id?: string | null;
+  name: string;
 }

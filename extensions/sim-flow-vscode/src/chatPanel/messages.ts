@@ -30,6 +30,25 @@ export interface ChatPanelState {
    */
   awaitingUserInput: boolean;
   /**
+   * Free-form prompt the orchestrator most recently attached to
+   * its `request-user-input` event, if any. When the agent is
+   * parked waiting for human guidance (e.g. DM0 asking a spec
+   * clarification question, a refused-advance asking the operator
+   * to inspect diagnostics, an `LlmError` offering `/retry` vs
+   * `/end-session`) the orchestrator embeds the *what to do next*
+   * text in this field. Surfaced verbatim as a banner above the
+   * composer so the user knows what's being asked. Cleared when
+   * the next sub-session opens or a `UserMessage` ships.
+   */
+  currentPrompt: string | null;
+  /**
+   * Placeholder hint the orchestrator suggested for the composer
+   * textarea (paired with `currentPrompt`). Renders inside the
+   * `<textarea>` while empty so the user sees the expected reply
+   * shape without having to read the longer prompt above it.
+   */
+  currentPlaceholder: string | null;
+  /**
    * True when the active session is a read-only viewer attached to
    * a `--watch-socket` tap. The composer is disabled, the Stop
    * button is hidden, and the streaming indicator says "VIEWING"

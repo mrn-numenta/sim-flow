@@ -105,6 +105,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
    * the bracket flips back to busy.
    */
   private subSessionListenerDispose: (() => void) | null = null;
+  /**
+   * Subscription to the active pump's `onRequestUserInput`. When the
+   * orchestrator parks a sub-session asking for human guidance, this
+   * carries the prompt + placeholder text to the chat panel so it
+   * can render the question above the composer. Without this the
+   * user only sees "Waiting on user to select the next step" with
+   * no indication of *what* the orchestrator is actually asking.
+   */
+  private requestUserInputListenerDispose: (() => void) | null = null;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -139,6 +148,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     // listener doesn't outlive its session.
     this.autoSessions.onActiveSessionChanged((session) => {
       this.attachSubSessionListener(session);
+      this.attachRequestUserInputListener(session);
       // A newly attached/replaced session changes the panel's anchor
       // immediately; refresh so OFFLINE flips to VIEWING/STREAMING
       // without waiting for the next pump event. We intentionally do
@@ -150,6 +160,31 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         void this.refresh();
       }
     });
+  }
+
+  private attachRequestUserInputListener(
+    session: ManagedAutoSessionState | undefined,
+  ): void {
+    if (this.requestUserInputListenerDispose) {
+      this.requestUserInputListenerDispose();
+      this.requestUserInputListenerDispose = null;
+    }
+    if (!session || typeof session.pump.onRequestUserInput !== "function") {
+      return;
+    }
+    this.requestUserInputListenerDispose = session.pump.onRequestUserInput(
+      ({ prompt, placeholder }) => {
+        const current = this.activePump;
+        if (!current) {
+          return;
+        }
+        this.autoSessions.setPendingPrompt(current, prompt, placeholder);
+        // Repaint so the banner appears above the composer the moment
+        // the orchestrator parks -- otherwise the user sees the
+        // generic notice for one tick before the prompt lands.
+        void this.refresh();
+      },
+    );
   }
 
   private attachSubSessionListener(
@@ -181,9 +216,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         // Fresh sub-session: any tool / artifact context from the
         // prior session is stale. Clear before posting state so
         // the indicator doesn't carry "Tool: read_file" from the
-        // last critique into the new work session.
+        // last critique into the new work session. Same for the
+        // parked-prompt context -- if a new sub-session is starting,
+        // the orchestrator's earlier "what should I do?" question
+        // has been superseded.
         current.currentTool = null;
         current.currentArtifact = null;
+        current.currentPrompt = null;
+        current.currentPlaceholder = null;
         if (!current.awaitingInput) {
           // Drive is already running (e.g. the session never
           // parked); the cleared fields will surface on the next
@@ -215,6 +255,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (this.subSessionListenerDispose) {
       this.subSessionListenerDispose();
       this.subSessionListenerDispose = null;
+    }
+    if (this.requestUserInputListenerDispose) {
+      this.requestUserInputListenerDispose();
+      this.requestUserInputListenerDispose = null;
     }
     for (const d of this.disposables) {
       d.dispose();
@@ -1076,6 +1120,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       transcript: filterPresentationEntries(conversation.transcript),
       isStreaming,
       awaitingUserInput: awaitingPumpInput,
+      currentPrompt:
+        this.activePump?.projectDir === context.projectDir
+          ? (this.activePump.currentPrompt ?? null)
+          : null,
+      currentPlaceholder:
+        this.activePump?.projectDir === context.projectDir
+          ? (this.activePump.currentPlaceholder ?? null)
+          : null,
       isViewer,
       sessionStep:
         this.activePump?.projectDir === context.projectDir

@@ -177,6 +177,24 @@ body {
   line-height: 1.35;
 }
 
+/* Orchestrator-supplied prompt text from `request-user-input`. Sits
+ * directly below `.hero-notice` so the user reads the boilerplate
+ * "waiting for reply" line and then the actual question. Slightly
+ * heavier (foreground color, padding, left border) so it's the
+ * visual anchor when the panel is parked. */
+.hero-prompt {
+  margin-top: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--chat-fg);
+  background: color-mix(in srgb, var(--chat-fg) 6%, transparent);
+  border-left: 3px solid var(--chat-accent, var(--chat-fg));
+  border-radius: 2px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .transcript {
   min-height: 0;
   overflow-y: auto;

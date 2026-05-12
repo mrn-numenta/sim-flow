@@ -46,6 +46,18 @@ type SocketPumpBusEvent =
       step: string;
       clean: boolean;
       failures: { description: string; reason: string }[];
+    }
+  | {
+      // Orchestrator parked the sub-session and is asking for human
+      // guidance. The `prompt` field is the text to show above the
+      // composer (the question itself, or operator instructions
+      // like "/retry or /end-session"). `placeholder` hints what
+      // shape of reply is expected and goes inside the textarea.
+      // Both are optional in the wire format; if absent, the chat
+      // panel falls back to its generic "awaiting input" notice.
+      type: "request-user-input";
+      prompt: string | null;
+      placeholder: string | null;
     };
 
 export interface SocketSessionPumpOptions {
@@ -434,6 +446,26 @@ export class SocketSessionPump implements LiveSessionTransport {
   }
 
   /**
+   * Subscribe to `request-user-input` payloads. Fires when the
+   * orchestrator parks the sub-session asking for human guidance,
+   * with the prompt + placeholder text it embedded in the event.
+   * Either field can be null when the orchestrator didn't include
+   * one. Chat panels render the prompt as a banner above the
+   * composer; the dashboard can use it to drive contextual help.
+   */
+  onRequestUserInput(
+    listener: (msg: { prompt: string | null; placeholder: string | null }) => void,
+  ): () => void {
+    const wrapped = (msg: SocketPumpBusEvent) => {
+      if (msg.type === "request-user-input") {
+        listener({ prompt: msg.prompt, placeholder: msg.placeholder });
+      }
+    };
+    this.bus.on("msg", wrapped);
+    return () => this.bus.off("msg", wrapped);
+  }
+
+  /**
    * Manual-mode host commands. Each one fires-and-forgets — the
    * orchestrator emits `Diagnostic` if the command is rejected (auto
    * mode owns step execution, sub-session in flight, etc.) and that
@@ -796,6 +828,16 @@ export class SocketSessionPump implements LiveSessionTransport {
         }
         break;
       case "request-user-input":
+        // Surface prompt + placeholder to subscribers before the
+        // settle so the chat panel can paint the banner BEFORE
+        // flipping into the awaiting-input state. Both fields are
+        // optional in the wire format; the chat panel renders the
+        // generic "Waiting on user" notice when prompt is null.
+        this.bus.emit("msg", {
+          type: "request-user-input",
+          prompt: event.prompt ?? null,
+          placeholder: event.placeholder ?? null,
+        } as SocketPumpBusEvent);
         this.bus.emit("msg", {
           type: "settled",
           result: { status: "awaiting-input" },

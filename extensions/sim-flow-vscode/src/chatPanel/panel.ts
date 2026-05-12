@@ -247,6 +247,21 @@ function header(state: ChatPanelState): HTMLElement {
   if (state.notice.trim().length > 0) {
     root.appendChild(el("div", { class: "hero-notice" }, state.notice));
   }
+  // Orchestrator-supplied prompt (carried by `request-user-input`).
+  // Renders BELOW the generic notice so the user sees both:
+  // - notice: "sim-flow is waiting for your next reply"
+  // - prompt: the actual question or instruction
+  // Wrapped in a dedicated `.hero-prompt` block so styling can
+  // distinguish the orchestrator's literal text from our boilerplate.
+  if (state.currentPrompt && state.currentPrompt.trim().length > 0) {
+    root.appendChild(
+      el(
+        "div",
+        { class: "hero-prompt", role: "status", "aria-live": "polite" },
+        state.currentPrompt,
+      ),
+    );
+  }
   return root;
 }
 
@@ -388,13 +403,19 @@ function composer(state: ChatPanelState): HTMLElement {
 
   const area = document.createElement("textarea");
   area.className = "composer-input";
+  // Orchestrator-supplied placeholder (paired with currentPrompt)
+  // wins over our generic ones when present -- the orchestrator
+  // knows what shape of reply it expects (e.g. "/retry,
+  // /end-session, or a course-correction message").
   area.placeholder = state.isViewer
     ? "Read-only viewer — input disabled. Detach to reclaim the chat."
-    : state.supportsPromptEntry
-      ? "Ask a question about the current project, request a code change, or continue the conversation here."
-      : interruptedSession
-        ? "This restored flow session is no longer live."
-        : "This backend runs in a terminal, not in the panel chat.";
+    : state.currentPlaceholder && state.currentPlaceholder.trim().length > 0
+      ? state.currentPlaceholder
+      : state.supportsPromptEntry
+        ? "Ask a question about the current project, request a code change, or continue the conversation here."
+        : interruptedSession
+          ? "This restored flow session is no longer live."
+          : "This backend runs in a terminal, not in the panel chat.";
   area.value = ui.draft;
   area.disabled = state.isViewer || !state.supportsPromptEntry || state.isStreaming;
   area.addEventListener("input", () => {

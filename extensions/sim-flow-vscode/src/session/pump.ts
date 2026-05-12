@@ -161,6 +161,18 @@ export interface LiveSessionTransport {
   readonly inSubSession?: boolean;
   onSubSessionChanged?(listener: (inSubSession: boolean) => void): () => void;
   /**
+   * Subscribe to `request-user-input` events. Notifies with the
+   * prompt + placeholder text the orchestrator embedded in the
+   * event so the host can render a banner above its composer.
+   * Either field can be null when the orchestrator parks without
+   * an explicit question. Only the socket pump implements this;
+   * the stdio pump leaves it undefined and the caller falls back
+   * to a generic awaiting-input notice.
+   */
+  onRequestUserInput?(
+    listener: (msg: { prompt: string | null; placeholder: string | null }) => void,
+  ): () => void;
+  /**
    * True when this pump is attached as a read-only observer to a
    * `--watch-socket` tap. Dashboard / chat panel use this to
    * disable command surfaces (Run Step / Run Critique / Send /
