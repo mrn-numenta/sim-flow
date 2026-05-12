@@ -50,6 +50,7 @@ import type {
   StepDescriptorOut,
   StepMode,
 } from "./protocol-types";
+import { renderBuildOutput } from "./buildOutput";
 import { DebugLog } from "./debug-log";
 import { removePidRecord, writePidRecord } from "./processRegistry";
 import { type LlmServerEntry, resolveLlmSource } from "../webview/messages";
@@ -524,9 +525,7 @@ export class SessionPump {
         this.currentRenderer?.markdown(`\n**Phase:** \`${event.phase}\`\n`);
         break;
       case "build-output":
-        this.currentRenderer?.markdown(
-          `\n**\`${event.command}\`** exited with status \`${event.exit_code}\`.\n`,
-        );
+        this.currentRenderer?.markdown(renderBuildOutput(event));
         break;
       case "gate-result":
         if (event.clean) {

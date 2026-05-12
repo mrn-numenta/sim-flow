@@ -35,6 +35,7 @@ import type {
   StepDescriptorOut,
   StepMode,
 } from "./protocol-types";
+import { renderBuildOutput } from "./buildOutput";
 import { type LlmServerEntry, resolveLlmSource } from "../webview/messages";
 
 type SocketPumpBusEvent =
@@ -905,9 +906,7 @@ export class SocketSessionPump implements LiveSessionTransport {
         this.currentRenderer?.markdown(`\n**Phase:** \`${event.phase}\`\n`);
         break;
       case "build-output":
-        this.currentRenderer?.markdown(
-          `\n**\`${event.command}\`** exited with status \`${event.exit_code}\`.\n`,
-        );
+        this.currentRenderer?.markdown(renderBuildOutput(event));
         break;
       case "gate-result":
         if (event.clean) {
