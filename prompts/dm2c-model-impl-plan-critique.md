@@ -31,9 +31,7 @@ follow-up questions, things downstream can work around -- with
 `UNRESOLVED:`. The orchestrator fails the DM2c gate on
 both `BLOCKER:` and `UNRESOLVED:` lines.
 
-Record findings in the critique JSON (see "Output" below for the
-schema). `kind: "blocker"` and `kind: "unresolved"` both block the gate; `"resolved"` is
-historical / retry-mode.
+{{ critique_kinds }}
 
 This critique reviews the OUTLINE, not the per-milestone task
 lists -- those are DM2cd's responsibility. Resist reviewing

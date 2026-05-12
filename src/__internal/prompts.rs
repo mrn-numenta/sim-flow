@@ -634,6 +634,8 @@ mod tests {
             .expect("third-party-reviewer fragment must exist");
         let critique_schema_body = load_template(foundation_root, "critique-json-schema")
             .expect("critique-json-schema fragment must exist");
+        let critique_kinds = load_template(foundation_root, "critique-kinds")
+            .expect("critique-kinds fragment must exist");
 
         let project_dir = PathBuf::new();
         let mut tested = 0;
@@ -676,6 +678,7 @@ mod tests {
                     third_party_reviewer.clone(),
                 );
                 c.insert("critique_json_schema".into(), critique_schema.clone());
+                c.insert("critique_kinds".into(), critique_kinds.clone());
                 c
             };
             for intro in [&fenced, &native] {

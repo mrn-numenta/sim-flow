@@ -39,9 +39,7 @@ available (Phase 4 not landed), emit
 `BLOCKER: experiment tracking unavailable (Phase 4 pending)`
 and stop.
 
-Record findings in the critique JSON (see "Output" below for the
-schema). `kind: "blocker"` and `kind: "unresolved"` both block the gate; `"resolved"` is
-historical / retry-mode.
+{{ critique_kinds }}
 
 1. **Plan completion**. Is every task in the
    `perf-milestone-NN-*.md` files either `[x]` or documented as

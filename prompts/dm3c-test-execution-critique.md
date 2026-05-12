@@ -43,12 +43,7 @@ regress earlier milestones.
 
 ## Evaluation
 
-Record findings in the critique JSON (see "Output" below for the
-schema). Use `kind: "blocker"` for gate-blocking issues (DM4
-cannot proceed until fixed), `"unresolved"` for open follow-ups
-that also prevent advance, `"resolved"` for historical / retry-mode acknowledgements.
-The orchestrator fails the DM3c gate on both `"blocker"` and
-`"unresolved"` findings.
+{{ critique_kinds }}
 
 1. **Milestone completeness**. Identify the just-completed
    milestone. Is every row in that file `- [x]` or `- [-]` with

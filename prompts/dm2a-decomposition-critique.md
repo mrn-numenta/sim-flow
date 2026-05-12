@@ -11,9 +11,7 @@ critique file.
 
 ## Evaluation
 
-Record findings in the critique JSON (see "Output" below for the
-schema). `kind: "blocker"` and `kind: "unresolved"` both block the gate; `"resolved"` is
-historical / retry-mode.
+{{ critique_kinds }}
 
 1. Is every function described in `docs/spec.md` represented as an operation
    in `docs/analysis/decomposition.md`?

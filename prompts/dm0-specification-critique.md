@@ -38,10 +38,8 @@ Judge the spec (whichever layout) by this standard:
   deferrable, or unlikely to materially change the model.
 
 For each question below, record a finding in the critique JSON.
-Use `kind: "blocker"` for gate-blocking issues, `"unresolved"`
-for open follow-ups that also block the gate until resolved, `"resolved"` for informational
-acknowledgements (ignored by the gate). See "Output" below for
-the schema.
+
+{{ critique_kinds }}
 
 1. Does the spec declare a clock frequency? (regex `\d+\s*(MHz|GHz)`
    in `docs/spec.md` OR any `docs/spec/*.md` section) -- REQUIRED.

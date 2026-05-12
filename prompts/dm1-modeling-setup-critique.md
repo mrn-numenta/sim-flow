@@ -12,10 +12,7 @@ evaluate them and write the critique file.
 
 ## Evaluation
 
-Record findings in the critique JSON. Use `kind: "blocker"` for
-gate-blocking issues, `"unresolved"` for open follow-ups that
-also block the gate until resolved, `"resolved"` for informational acknowledgements (ignored by the
-gate). See "Output" below for the schema.
+{{ critique_kinds }}
 
 1. Does every target in `docs/targets.md` trace back to a specific line or
    section of `docs/spec.md`?

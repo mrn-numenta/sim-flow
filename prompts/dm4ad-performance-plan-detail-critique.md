@@ -25,12 +25,7 @@ Read on demand:
 
 ## Evaluation
 
-Prefix gate-blocking issues with `BLOCKER:`. Prefix nits with
-`UNRESOLVED:`. The gate fails on both `BLOCKER:` and `UNRESOLVED:` lines.
-
-Record findings in the critique JSON (see "Output" below for the
-schema). `kind: "blocker"` and `kind: "unresolved"` both block the gate; `"resolved"` is
-historical / retry-mode.
+{{ critique_kinds }}
 
 This critique reviews ONE milestone's task list.
 

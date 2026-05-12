@@ -1938,6 +1938,20 @@ pub fn build_initial_messages(
         "third_party_reviewer_note".into(),
         prompts::load_template(&opts.foundation_root, "third-party-reviewer")?,
     );
+    // `{{ critique_kinds }}` — the canonical guidance every
+    // critique prompt uses to introduce the `blocker` /
+    // `unresolved` / `resolved` semantics. Centralised so that
+    // future model-observed variants (`warning`, `issue`, ...)
+    // can be ruled out in one place instead of touching every
+    // per-step critique prompt. Bound unconditionally — work
+    // prompts that never reference `{{ critique_kinds }}` simply
+    // ignore the context entry, and the strict-undefined
+    // renderer would error if a critique prompt forgot to splice
+    // it in.
+    template_context.insert(
+        "critique_kinds".into(),
+        prompts::load_template(&opts.foundation_root, "critique-kinds")?,
+    );
     let instruction_body = prompts::load_for_project_with_context(
         &opts.foundation_root,
         &opts.project_dir,
