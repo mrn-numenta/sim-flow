@@ -32,6 +32,7 @@ pub fn register(reg: &mut StepRegistry) {
                 path: PathBuf::from(format!("docs/critiques/{id}-critique.md")),
                 description: format!("{id} critique has no blockers"),
             }],
+            walk_gate_checks: vec![],
             // DSF artifact paths, tool catalogs, and phase pipelines
             // are filled in by Phase 6 alongside the real gate
             // checks. Empty for now so `describe` returns

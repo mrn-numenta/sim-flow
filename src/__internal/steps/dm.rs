@@ -170,6 +170,7 @@ fn dm0() -> StepDescriptor {
             ),
             critique_clean("DM0"),
         ],
+        walk_gate_checks: vec![],
         // Both layouts listed so a Reset to DM0 (or any downstream
         // reset that cascades through DM0) clears either form.
         work_artifacts: &["docs/spec.md", "docs/spec/"],
@@ -208,6 +209,7 @@ fn dm1() -> StepDescriptor {
             ),
             critique_clean("DM1"),
         ],
+        walk_gate_checks: vec![],
         work_artifacts: &["docs/targets.md", "docs/testbench.md"],
         predecessor_inputs: &["docs/spec.md", "docs/spec/"],
         work_write_paths: &["docs/"],
@@ -240,6 +242,7 @@ fn dm2a() -> StepDescriptor {
             ),
             critique_clean("DM2a"),
         ],
+        walk_gate_checks: vec![],
         work_artifacts: &[
             "docs/analysis/decomposition.md",
             "docs/analysis/data-movement.md",
@@ -271,6 +274,7 @@ fn dm2b() -> StepDescriptor {
             ),
             critique_clean("DM2b"),
         ],
+        walk_gate_checks: vec![],
         work_artifacts: &["docs/analysis/pipeline-mapping.md"],
         predecessor_inputs: &[
             "docs/spec.md",
@@ -315,6 +319,7 @@ fn dm2c() -> StepDescriptor {
             ),
             critique_clean("DM2c"),
         ],
+        walk_gate_checks: vec![],
         work_artifacts: &["docs/impl-plan/"],
         predecessor_inputs: &[
             "docs/spec.md",
@@ -353,6 +358,7 @@ fn dm2cd() -> StepDescriptor {
             ),
             critique_clean("DM2cd"),
         ],
+        walk_gate_checks: vec![],
         work_artifacts: &["docs/impl-plan/"],
         predecessor_inputs: &[
             "docs/spec.md",
@@ -457,6 +463,34 @@ fn dm2d() -> StepDescriptor {
             ),
             critique_clean("DM2d"),
         ],
+        // Per-milestone gate: the cheap quality checks that should
+        // hold after every milestone lands. Reserves the expensive
+        // integration checks (`cargo test --test elaboration`, the
+        // ConnectivityPlan / HasLogic / dump_topology / Top struct
+        // greps, `milestones_all_implemented`) for the step gate
+        // above -- those only become satisfiable once the last
+        // milestone closes, and running them per-walk-turn just
+        // burns cargo time.
+        walk_gate_checks: vec![
+            file_exists("Cargo.toml", "Cargo.toml exists"),
+            file_matches(
+                "Cargo.toml",
+                "foundation-framework",
+                "Cargo.toml depends on foundation-framework",
+            ),
+            shell(
+                "cargo",
+                &["fmt", "--all"],
+                "cargo fmt --all succeeds (auto-formats)",
+            ),
+            shell(
+                "cargo",
+                &["clippy", "--all-targets", "--quiet", "--", "-D", "warnings"],
+                "cargo clippy --all-targets clean (warnings denied)",
+            ),
+            shell("cargo", &["build", "--quiet"], "cargo build succeeds"),
+            critique_clean("DM2d"),
+        ],
         work_artifacts: &["src/", "tests/", "Cargo.toml"],
         predecessor_inputs: &[
             "docs/spec.md",
@@ -550,6 +584,7 @@ fn dm3a() -> StepDescriptor {
             ),
             critique_clean("DM3a"),
         ],
+        walk_gate_checks: vec![],
         work_artifacts: &["docs/test-plan/"],
         predecessor_inputs: &[
             "docs/spec.md",
@@ -599,6 +634,7 @@ fn dm3ad() -> StepDescriptor {
             ),
             critique_clean("DM3ad"),
         ],
+        walk_gate_checks: vec![],
         work_artifacts: &["docs/test-plan/"],
         predecessor_inputs: &[
             "docs/spec.md",
@@ -664,6 +700,25 @@ fn dm3b() -> StepDescriptor {
                 "tb-milestone-",
                 "every docs/test-plan/tb-milestone-NN-*.md row resolved",
             ),
+            critique_clean("DM3b"),
+        ],
+        // Per-milestone gate: cheap quality checks. Reserves the
+        // cross-module `grep -r 'SimEnv|Sequencer|Driver|Monitor|Scoreboard'`
+        // check + `milestones_all_resolved` for the step gate -- those
+        // only become satisfiable once the testbench's component
+        // milestones all land.
+        walk_gate_checks: vec![
+            shell(
+                "cargo",
+                &["fmt", "--all"],
+                "cargo fmt --all succeeds (auto-formats)",
+            ),
+            shell(
+                "cargo",
+                &["clippy", "--all-targets", "--quiet", "--", "-D", "warnings"],
+                "cargo clippy --all-targets clean (warnings denied)",
+            ),
+            shell("cargo", &["build", "--quiet"], "cargo build succeeds"),
             critique_clean("DM3b"),
         ],
         work_artifacts: &["tests/"],
@@ -739,6 +794,24 @@ fn dm3c() -> StepDescriptor {
             ),
             critique_clean("DM3c"),
         ],
+        // Per-milestone gate: cheap quality checks. Reserves the
+        // expensive `cargo test --quiet` (full suite) +
+        // `milestones_all_implemented` + `file_exists test-plan.md`
+        // for the step gate -- the full suite only becomes
+        // satisfiable once every test milestone lands its cases.
+        walk_gate_checks: vec![
+            shell(
+                "cargo",
+                &["fmt", "--all"],
+                "cargo fmt --all succeeds (auto-formats)",
+            ),
+            shell(
+                "cargo",
+                &["clippy", "--all-targets", "--quiet", "--", "-D", "warnings"],
+                "cargo clippy --all-targets clean (warnings denied)",
+            ),
+            critique_clean("DM3c"),
+        ],
         work_artifacts: &["tests/"],
         predecessor_inputs: &["docs/testbench.md", "docs/test-plan/", "tests/", "src/"],
         // `docs/test-plan/` included so the agent can flip
@@ -795,6 +868,7 @@ fn dm4a() -> StepDescriptor {
             ),
             critique_clean("DM4a"),
         ],
+        walk_gate_checks: vec![],
         work_artifacts: &["docs/perf-plan/"],
         predecessor_inputs: &[
             "docs/spec.md",
@@ -832,6 +906,7 @@ fn dm4ad() -> StepDescriptor {
             ),
             critique_clean("DM4ad"),
         ],
+        walk_gate_checks: vec![],
         work_artifacts: &["docs/perf-plan/"],
         predecessor_inputs: &[
             "docs/spec.md",
@@ -909,6 +984,22 @@ fn dm4b() -> StepDescriptor {
                 "docs/perf-plan/",
                 "perf-milestone-",
                 "every docs/perf-plan/perf-milestone-NN-*.md row implemented (no deferrals at gate exit)",
+            ),
+            critique_clean("DM4b"),
+        ],
+        // Per-milestone gate: cheap quality checks. Reserves
+        // `ExperimentsRecorded`, the `docs/analysis/` report checks,
+        // and `milestones_all_implemented` for the step gate.
+        walk_gate_checks: vec![
+            shell(
+                "cargo",
+                &["fmt", "--all"],
+                "cargo fmt --all succeeds (auto-formats)",
+            ),
+            shell(
+                "cargo",
+                &["clippy", "--all-targets", "--quiet", "--", "-D", "warnings"],
+                "cargo clippy --all-targets clean (warnings denied)",
             ),
             critique_clean("DM4b"),
         ],

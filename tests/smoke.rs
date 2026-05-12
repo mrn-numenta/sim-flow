@@ -67,6 +67,7 @@ fn smoke_step() -> StepDescriptor {
                 description: "critique clean".into(),
             },
         ],
+        walk_gate_checks: vec![],
         work_artifacts: &["artifact.md"],
         predecessor_inputs: &[],
         work_write_paths: &["artifact.md"],

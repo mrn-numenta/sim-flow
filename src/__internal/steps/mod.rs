@@ -33,7 +33,24 @@ pub struct StepDescriptor {
     pub prerequisite: Option<&'static str>,
     pub instruction_slug: &'static str,
     pub per_candidate: bool,
+    /// Comprehensive step gate evaluated at advance time. For
+    /// non-milestone-walk steps the wind-down decision uses this
+    /// too; milestone-walk steps that set `walk_gate_checks` use
+    /// THAT instead during the walk and reserve this list for the
+    /// final step-advance evaluation.
     pub gate_checks: Vec<GateCheck>,
+    /// Per-milestone gate evaluated during the walk's wind-down
+    /// decisions (and surfaced in the no-artifact pump's failure
+    /// feedback). Empty means "use `gate_checks`" -- the previous
+    /// behavior. Code-walking steps (DM2d, DM3b, DM3c, DM4b)
+    /// override this with the cheap quality checks (`cargo fmt`,
+    /// `clippy`, `build`, etc.) and reserve the expensive integration
+    /// checks (`cargo test --test elaboration`, the cross-module
+    /// `grep -r Symbol src` checks, `milestones_all_implemented`)
+    /// for `gate_checks` so they only run at advance time. Until
+    /// the last milestone lands, those checks would necessarily fail
+    /// and rerunning to address them is wasted compute.
+    pub walk_gate_checks: Vec<GateCheck>,
     /// Project-relative paths the work session is expected to
     /// produce or update. Used by `sim-flow describe` so hosts can
     /// tell the LLM exactly where to write artifacts. Directories
@@ -725,6 +742,7 @@ mod write_path_tests {
             instruction_slug: "dm3b-testbench-impl",
             per_candidate: false,
             gate_checks: Vec::new(),
+            walk_gate_checks: Vec::new(),
             work_artifacts: &["tests/"],
             predecessor_inputs: &[],
             work_write_paths: &["tests/"],
@@ -825,6 +843,7 @@ mod write_path_tests {
             instruction_slug: "dm2a-decomposition",
             per_candidate: false,
             gate_checks: Vec::new(),
+            walk_gate_checks: Vec::new(),
             work_artifacts: &[],
             predecessor_inputs: &[],
             work_write_paths: &[],

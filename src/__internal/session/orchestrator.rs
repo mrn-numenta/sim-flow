@@ -1205,7 +1205,16 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         &opts.project_dir,
                         &step,
                     );
-                    let report = evaluate_structural_gate(&opts.project_dir, &step)?;
+                    // walk_scope=true: during a milestone walk, only
+                    // check the cheap per-milestone gate (when the
+                    // step defines one). Falls back to the full step
+                    // gate for non-walking steps -- same behavior as
+                    // before this split.
+                    let report = evaluate_structural_gate(
+                        &opts.project_dir,
+                        &step,
+                        /*walk_scope=*/ true,
+                    )?;
                     if report.is_clean() {
                         host.write(&Event::SessionEnd {
                             reason: SessionEndReason::Completed,
@@ -1294,7 +1303,13 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     work_retry_has_prior_blockers,
                     session_persisted_writes,
                 );
-                let report = evaluate_structural_gate(&opts.project_dir, &step)?;
+                // walk_scope=true: see the analogous call above. The
+                // failures captured below for the no-artifact pump
+                // also come from the walk gate, so the agent only
+                // sees actionable per-milestone failures (not the
+                // deferred integration checks).
+                let report =
+                    evaluate_structural_gate(&opts.project_dir, &step, /*walk_scope=*/ true)?;
                 if can_wind_down_clean && report.is_clean() {
                     host.write(&Event::SessionEnd {
                         reason: SessionEndReason::Completed,
@@ -2212,9 +2227,30 @@ pub fn build_initial_messages(
 /// Used by auto-mode work sessions to decide whether the structural
 /// part of the gate is clean -- the critique-clean part can only
 /// pass after the separate critique session runs.
-fn evaluate_structural_gate(project_dir: &Path, step: &StepDescriptor) -> Result<GateReport> {
-    let filtered: Vec<GateCheck> = step
-        .gate_checks
+///
+/// `walk_scope` controls which check list is used. During a
+/// milestone walk the wind-down decision only needs to know whether
+/// the agent's *current piece of work* meets the quality bar -- the
+/// expensive integration checks (`cargo test --test elaboration`,
+/// the cross-module symbol greps, `milestones_all_implemented`)
+/// can't possibly pass until the LAST milestone lands, so running
+/// them on every no-artifact turn just burns cargo time and surfaces
+/// confusing failures to the agent. When `walk_scope = true` AND
+/// the step defines a non-empty `walk_gate_checks`, evaluate THAT
+/// list instead. Otherwise fall back to the full `gate_checks`,
+/// preserving existing behavior for non-walking steps and for steps
+/// that haven't opted into the split.
+fn evaluate_structural_gate(
+    project_dir: &Path,
+    step: &StepDescriptor,
+    walk_scope: bool,
+) -> Result<GateReport> {
+    let source = if walk_scope && !step.walk_gate_checks.is_empty() {
+        &step.walk_gate_checks
+    } else {
+        &step.gate_checks
+    };
+    let filtered: Vec<GateCheck> = source
         .iter()
         .filter(|c| !matches!(c, GateCheck::CritiqueClean { .. }))
         .cloned()
