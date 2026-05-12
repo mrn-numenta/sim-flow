@@ -1482,15 +1482,33 @@ fn build_tool_notice(
     framework_root: Option<&Path>,
     framework_docs_root: Option<&Path>,
     write_paths: &[String],
+    native_mode: bool,
 ) -> String {
-    let mut out = String::from("Tool catalog (orchestrator-mediated):\n\n");
-    for t in dispatcher {
-        out.push_str(&format!("- `{}` - {}\n", t.name(), t.description()));
+    let mut out = String::new();
+    // In native mode the API also receives the tool catalog via the
+    // `tools` request field, so re-describing each tool here is
+    // duplication that wastes attention budget. Drop the listing
+    // and the fenced-syntax tutorial below; just keep the
+    // orchestrator-specific info (write scope, library / framework
+    // roots) that ISN'T conveyed elsewhere.
+    if !native_mode {
+        out.push_str("Tool catalog (orchestrator-mediated):\n\n");
+        for t in dispatcher {
+            out.push_str(&format!("- `{}` - {}\n", t.name(), t.description()));
+        }
     }
+    let reject_clause = if native_mode {
+        "Paths outside this list are rejected by `write_file` and `edit_file`. If you have a strong reason to land work elsewhere, surface it in your reply rather than retrying with a different out-of-scope path."
+    } else {
+        "Paths outside this list are rejected by `write_file`, `edit_file`, AND the fenced ` ```<path> ` artifact-write convention. If you have a strong reason to land work elsewhere, surface it in your reply rather than retrying with a different out-of-scope path."
+    };
+    let disabled_clause = if native_mode {
+        "Writes are disabled in this session. `write_file` and `edit_file` will reject any path. Use the read-only tools to inspect state and report findings as text."
+    } else {
+        "Writes are disabled in this session. `write_file`, `edit_file`, and the fenced artifact-write convention will all reject any path. Use the read-only tools to inspect state and report findings as text."
+    };
     if write_paths.is_empty() {
-        out.push_str(
-            "\nWrites are disabled in this session. `write_file`, `edit_file`, and the fenced artifact-write convention will all reject any path. Use the read-only tools to inspect state and report findings as text.\n",
-        );
+        out.push_str(&format!("\n{disabled_clause}\n"));
     } else {
         out.push_str(
             "\nWrite scope (per step + kind): the orchestrator only persists writes that match one of these project-relative prefixes (entries ending in `/` match any path under that directory; others must match exactly):\n",
@@ -1498,9 +1516,7 @@ fn build_tool_notice(
         for p in write_paths {
             out.push_str(&format!("- `{p}`\n"));
         }
-        out.push_str(
-            "Paths outside this list are rejected by `write_file`, `edit_file`, AND the fenced ` ```<path> ` artifact-write convention. If you have a strong reason to land work elsewhere, surface it in your reply rather than retrying with a different out-of-scope path.\n",
-        );
+        out.push_str(&format!("{reject_clause}\n"));
     }
     if let Some(root) = library_root {
         out.push_str(&format!(
@@ -1524,9 +1540,25 @@ fn build_tool_notice(
             root.display()
         ));
     }
-    out.push_str(
-        "\nNative tool-use is preferred; clients without it can emit a fenced block whose info-string is `tool:<name>` and whose body is the argument payload. Examples:\n\n```tool:read_file\nsrc/lib.rs\n```\n\n```tool:list_dir\nfw:\n```\n\n```tool:read_file\nfw:api/toc.md\n```\n\n```tool:read_file\nfw:api/pages/foundation_framework/prelude/index.md\n```\n\n```tool:read_file\nfw:src/prelude.rs\n```\n\n```tool:search\n{\"pattern\":\"ConnectivityPlan\",\"path\":\"fw:api/pages\"}\n```\n\nThe `edit_file` tool's fenced-block body is a JSON object (its three args -- `path`, `old_string`, `new_string` -- can be multi-line, so a JSON body is the only unambiguous form):\n\n```tool:edit_file\n{\"path\": \"spec.md\", \"old_string\": \"## Pipelining\", \"new_string\": \"## Pipelining and Hierarchy\"}\n```\n\n## Choosing between edit_file and the artifact-write convention\n\nPrefer `edit_file` for SMALL, TARGETED CHANGES against a file already on disk: rename a header, fix a typo, change a single value, add or delete a paragraph. `old_string` must appear EXACTLY ONCE in the current file -- include enough surrounding context to make the substring unique, and read the file first if you don't already have its current text in this turn. Use the artifact-write convention (full-file fenced block whose info-string is the path) only when creating a new file or when the change touches most of the file.\n\nThe orchestrator runs the tool, emits a `ToolInvoked` event for the host, and feeds the tool's output back as the next user message.",
-    );
+    // Fenced-style tool-use tutorial. Only relevant when the model
+    // is going to emit ` ```tool:<name> ` blocks rather than native
+    // function calls. In native mode the API's `tools` parameter
+    // already describes the catalog with proper JSON schemas, so
+    // this entire tutorial is dead weight (and the example fences
+    // can actively confuse a model that's been told NOT to emit
+    // fences in the orchestrator-native-tools convention).
+    if !native_mode {
+        out.push_str(
+            "\nNative tool-use is preferred; clients without it can emit a fenced block whose info-string is `tool:<name>` and whose body is the argument payload. Examples:\n\n```tool:read_file\nsrc/lib.rs\n```\n\n```tool:list_dir\nfw:\n```\n\n```tool:read_file\nfw:api/toc.md\n```\n\n```tool:read_file\nfw:api/pages/foundation_framework/prelude/index.md\n```\n\n```tool:read_file\nfw:src/prelude.rs\n```\n\n```tool:search\n{\"pattern\":\"ConnectivityPlan\",\"path\":\"fw:api/pages\"}\n```\n\nThe `edit_file` tool's fenced-block body is a JSON object (its three args -- `path`, `old_string`, `new_string` -- can be multi-line, so a JSON body is the only unambiguous form):\n\n```tool:edit_file\n{\"path\": \"spec.md\", \"old_string\": \"## Pipelining\", \"new_string\": \"## Pipelining and Hierarchy\"}\n```\n\n## Choosing between edit_file and the artifact-write convention\n\nPrefer `edit_file` for SMALL, TARGETED CHANGES against a file already on disk: rename a header, fix a typo, change a single value, add or delete a paragraph. `old_string` must appear EXACTLY ONCE in the current file -- include enough surrounding context to make the substring unique, and read the file first if you don't already have its current text in this turn. Use the artifact-write convention (full-file fenced block whose info-string is the path) only when creating a new file or when the change touches most of the file.\n\nThe orchestrator runs the tool, emits a `ToolInvoked` event for the host, and feeds the tool's output back as the next user message.",
+        );
+    } else {
+        // Native mode: a tight one-liner reminding the model when
+        // edit_file is preferred over write_file, since the API's
+        // tool descriptions don't convey that nuance.
+        out.push_str(
+            "\nPrefer `edit_file` for SMALL, TARGETED CHANGES against a file already on disk (rename a header, fix a typo, change a single value). `old_string` must appear EXACTLY ONCE in the current file -- include enough surrounding context to make the substring unique, and call `read_file` first if you don't already have its current text in this turn. Use `write_file` for new files or when the change touches most of the file.",
+        );
+    }
     out
 }
 
@@ -2029,6 +2061,7 @@ pub fn build_initial_messages(
                 framework_root.as_deref(),
                 framework_docs_root.as_deref(),
                 &write_paths,
+                orchestrator_native_tools_mode,
             ),
             attachments: Vec::new(),
             tool_call_id: None,
@@ -2080,7 +2113,12 @@ pub fn build_initial_messages(
             });
         }
     }
-    let opening = initial_user_prompt(step.id, opts.kind, &expected_output_paths(step, opts.kind));
+    let opening = initial_user_prompt(
+        step.id,
+        opts.kind,
+        &expected_output_paths(step, opts.kind),
+        orchestrator_native_tools_mode,
+    );
     messages.push(LlmMessage {
         role: LlmRole::User,
         content: opening,
@@ -2238,8 +2276,23 @@ fn expected_output_paths(step: &StepDescriptor, kind: SessionKind) -> Vec<String
     }
 }
 
-fn initial_user_prompt(step_id: &str, kind: SessionKind, paths: &[String]) -> String {
+fn initial_user_prompt(
+    step_id: &str,
+    kind: SessionKind,
+    paths: &[String],
+    native_mode: bool,
+) -> String {
     let mut out = String::new();
+    let critique_emit_clause = if native_mode {
+        "Call `write_file` for the critique JSON file as specified by the instructions."
+    } else {
+        "The artifact-write block for the critique file as specified by the instructions."
+    };
+    let work_emit_clause = if native_mode {
+        "Once you've read what you need, call `write_file` for the artifact file(s) -- or `edit_file` for targeted fixes -- as soon as you have enough content to save."
+    } else {
+        "Once you've read what you need, emit the artifact file(s) using the artifact-write convention -- or `edit_file` for targeted fixes -- as soon as you have enough content to save."
+    };
     match kind {
         SessionKind::Work => {
             out.push_str(&format!(
@@ -2248,7 +2301,7 @@ fn initial_user_prompt(step_id: &str, kind: SessionKind, paths: &[String]) -> St
                  2. Either:\n\
                     a. A bulleted list of what is still missing relative to the instructions / gate checks, followed by ONE concrete question for me about the most important missing item; OR\n\
                     b. The single line `All required content appears present - run /advance to gate-check.` if every item the instructions require is already covered.\n\n\
-                 Do not return an empty response. Do not wait for further prompting. Once you've read what you need, emit the artifact file(s) using the artifact-write convention -- or `edit_file` for targeted fixes -- as soon as you have enough content to save.",
+                 Do not return an empty response. Do not wait for further prompting. {work_emit_clause}",
             ));
         }
         SessionKind::Critique => {
@@ -2256,15 +2309,21 @@ fn initial_user_prompt(step_id: &str, kind: SessionKind, paths: &[String]) -> St
                 "Begin the {step_id} critique now. The TOC above lists this step's predecessor inputs and target artifacts (path + size only); fetch them with `read_file` before critiquing -- the content is NOT inlined. Your VERY FIRST RESPONSE must contain all three of:\n\n\
                  1. The `read_file` tool calls you need to inspect each target artifact and any predecessor input you'll cite; OR, once you've already read what you need this turn, a one-sentence summary of what the step's artifacts cover.\n\
                  2. A bulleted list of concrete issues you would flag relative to the step instructions and gate checks.\n\
-                 3. The artifact-write block for the critique file as specified by the instructions.\n\n\
+                 3. {critique_emit_clause}\n\n\
                  Do not wait for further prompting; read what you need then emit the critique.",
             ));
         }
     }
     if !paths.is_empty() {
-        out.push_str(
-            "\n\nWrite these files using the artifact-write convention (fenced block with the path as the info-string):\n\n",
-        );
+        if native_mode {
+            out.push_str(
+                "\n\nWrite these files by calling `write_file` (the `path` argument is the project-relative path; the `content` argument is the full file body):\n\n",
+            );
+        } else {
+            out.push_str(
+                "\n\nWrite these files using the artifact-write convention (fenced block with the path as the info-string):\n\n",
+            );
+        }
         for p in paths {
             out.push_str(&format!("- `{p}`\n"));
         }
