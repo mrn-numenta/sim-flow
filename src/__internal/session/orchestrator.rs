@@ -567,7 +567,18 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
 
         // Empty-response handling: detect zero-content responses,
         // surface a notice, retry once with a nudge before giving up.
-        if !llm_failed && assistant_text.trim().is_empty() {
+        //
+        // Critical caveat for native-tool-call mode: a turn that
+        // returns native tool_calls but no text content is the
+        // CORRECT shape (the model called tools instead of speaking).
+        // Treating it as "empty" and re-prompting "Your response was
+        // empty" confused the model after every successful tool turn
+        // -- Phase D K=3 measurement saw `empty-response` median=16
+        // events per trial, all of them paired with non-empty
+        // tool_calls. Skip the empty handling when this turn produced
+        // any native tool calls; the dispatch loop below will run
+        // them and feed back the Tool-role results as normal.
+        if !llm_failed && assistant_text.trim().is_empty() && native_tool_calls.is_empty() {
             if empty_response_retries < MAX_EMPTY_RETRIES {
                 host.write(&Event::Diagnostic {
                     level: DiagnosticLevel::Warning,
@@ -600,7 +611,12 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             empty_response_retries = 0;
         }
 
-        if llm_failed || assistant_text.trim().is_empty() {
+        // Skip post-processing only when there was nothing actionable
+        // -- LLM failed OR (empty text AND no native tool calls).
+        // A turn with native tool_calls but empty text is the normal
+        // tool-call-only shape; we MUST run post-processing so the
+        // dispatcher invokes them and pushes the results back.
+        if llm_failed || (assistant_text.trim().is_empty() && native_tool_calls.is_empty()) {
             // Skip post-processing on this turn; ask user for input.
         } else {
             // Echo the assistant's native tool_calls back into history
