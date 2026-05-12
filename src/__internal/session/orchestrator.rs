@@ -1306,8 +1306,26 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 // `- [x]` rows AND no `- [ ]` rows. If yes, the
                 // agent finished its scoped slice; end the
                 // session.
+                // Mirror the structural-gate-clean branch's gating:
+                // allow wind-down when there are no prior critique
+                // blockers OR when this session has persisted writes.
+                // Previously this branch hard-required
+                // `session_persisted_writes`, which trapped resumed
+                // sessions: if a prior run already finished the
+                // current milestone and the resumed Work session has
+                // nothing left to write, the agent honestly emits a
+                // "done; run /advance" reply, the wind-down doesn't
+                // fire, and max_auto_iters trips even though the
+                // milestone genuinely is complete on disk. The inner
+                // `milestone_done` check (a touched-milestone exists
+                // that's different from the next pending one) is the
+                // real safety: it only fires when at least one
+                // milestone file in this walk has all `- [x]` rows.
                 if let Some(walk) = step.milestone_walk
-                    && session_persisted_writes
+                    && can_auto_wind_down_clean_work_session(
+                        work_retry_has_prior_blockers,
+                        session_persisted_writes,
+                    )
                 {
                     let current = crate::__internal::steps::find_current_milestone(
                         &opts.project_dir,
