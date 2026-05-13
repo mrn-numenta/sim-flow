@@ -2327,10 +2327,12 @@ fn tool_args_summary(call: &tools::ParsedToolCall) -> String {
         );
     }
     let line = call.body.lines().next().unwrap_or("").trim();
-    if line.len() > 80 {
-        format!("{}...", &line[..80])
+    let mut iter = line.chars();
+    let head: String = iter.by_ref().take(80).collect();
+    if iter.next().is_some() {
+        format!("{head}...")
     } else {
-        line.to_string()
+        head
     }
 }
 
@@ -4668,5 +4670,24 @@ Hope that helps."#;
         let text = r#"{"x": "a } b", "y": 1}"#;
         let end = super::scan_balanced_json(text.as_bytes(), 0).expect("balanced");
         assert_eq!(end, text.len());
+    }
+
+    #[test]
+    fn tool_args_summary_truncates_on_char_boundary() {
+        // Regression: byte-index slicing panicked when the cut point
+        // fell inside a multi-byte UTF-8 character. A DM4b critique
+        // search whose pattern contained a literal emoji crashed the
+        // orchestrator at the 80-byte cut. Truncation must count
+        // chars, not bytes.
+        // 3 ASCII bytes + 4-byte emojis: byte 80 lands inside emoji 20
+        // (bytes 79..83), which is precisely the kind of cut that
+        // crashed the byte-slice version.
+        let body = format!("aaa{}bbbb", "\u{1F600}".repeat(100));
+        let call = tools::ParsedToolCall {
+            name: "search".into(),
+            body,
+        };
+        let summary = super::tool_args_summary(&call);
+        assert!(summary.ends_with("..."), "should truncate: {summary}");
     }
 }

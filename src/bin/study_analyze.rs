@@ -614,10 +614,12 @@ fn extract_step(msg: &str) -> Option<String> {
 
 fn trim_snippet(s: &str) -> String {
     let one_line = s.replace(['\n', '\r'], " ");
-    if one_line.len() <= 280 {
-        one_line
+    let mut iter = one_line.chars();
+    let head: String = iter.by_ref().take(280).collect();
+    if iter.next().is_some() {
+        format!("{head}...")
     } else {
-        format!("{}...", &one_line[..280])
+        one_line
     }
 }
 

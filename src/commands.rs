@@ -1767,10 +1767,14 @@ fn bugs_cmd(project: &Path, action: &BugsAction) -> sim_flow::Result<()> {
                 "ID", "STEP", "CATEGORY", "STATUS"
             );
             for rec in filtered {
-                let issue = if rec.issue.len() > 72 {
-                    format!("{}...", &rec.issue[..69])
-                } else {
-                    rec.issue.clone()
+                let issue = {
+                    let mut iter = rec.issue.chars();
+                    let head: String = iter.by_ref().take(69).collect();
+                    if iter.next().is_some() {
+                        format!("{head}...")
+                    } else {
+                        rec.issue.clone()
+                    }
                 };
                 println!(
                     "{:<8} {:<6} {:<9} {:<10} {}",
