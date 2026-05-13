@@ -8,7 +8,7 @@ Direct Modeling Flow. Prerequisite: DM3b gate passed.
 Implement and run every test enumerated across DM3a's
 `docs/test-plan/test-milestone-NN-<name>.md` files using the
 UVM-lite testbench DM3b landed. Then measure coverage with
-`cargo-tarpaulin` and meet the threshold `coverage.md`
+`cargo-llvm-cov` and meet the threshold `coverage.md`
 specified.
 
 DM3c is milestone-driven: walk each
@@ -78,12 +78,19 @@ Do NOT chain milestones.
 4. **Coverage milestone**. The final test-execution milestone
    (typically `test-milestone-05-coverage.md`) walks
    `coverage.md`'s run command:
-   - Install if missing: `cargo install cargo-tarpaulin`
-     (one-time per environment).
-   - Run the command from `coverage.md` (typically
-     `cargo tarpaulin --out Html --out Lcov --output-dir
-     target/coverage` plus the `--exclude-files` flags).
-   - Read the line-coverage percentage from the output.
+   - Install if missing: `cargo install cargo-llvm-cov --locked`
+     (one-time per environment). `cargo llvm-cov` also requires
+     the `llvm-tools-preview` rustup component; run
+     `rustup component add llvm-tools-preview` if missing.
+   - Run the command from `coverage.md`. The standard sequence:
+     `cargo llvm-cov clean --workspace` (clears stale profraw),
+     `cargo llvm-cov --workspace --no-report` (runs instrumented
+     tests once), then
+     `cargo llvm-cov report --html --output-dir target/coverage`
+     (HTML at `target/coverage/html/index.html`) and
+     `cargo llvm-cov report --lcov --output-path target/coverage/lcov.info`
+     (LCOV for percentage parsing).
+   - Read the line-coverage percentage from the LCOV file.
    - If at or above `coverage.md`'s declared threshold, record
      the measured percentage and report path in
      `docs/test-plan/test-plan.md`'s `## Coverage` section
@@ -220,7 +227,7 @@ Final output, after all milestones are complete and the final
 critique has passed:
 
 - `cargo test` passes (every implemented test).
-- `cargo tarpaulin` reports line coverage at or above
+- `cargo llvm-cov` reports line coverage at or above
   `coverage.md`'s threshold.
 - Every row in every `test-milestone-NN-*.md` is `- [x]` or
   `- [-]` with a `defer reason:`.

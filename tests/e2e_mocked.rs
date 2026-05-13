@@ -762,7 +762,7 @@ fn pre_write_full_artifacts(project: &Path) {
         ),
         (
             "docs/test-plan/coverage.md",
-            "# Coverage\n\nMeasured with cargo-tarpaulin; target 80%.\n",
+            "# Coverage\n\nMeasured with cargo-llvm-cov; target 80%.\n",
         ),
         (
             "docs/perf-plan/perf-plan.md",

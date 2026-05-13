@@ -634,7 +634,7 @@ covering:
    then read only the specific `fw:api/pages/...` files you need.
    Use `fw:src/...` only as a secondary source for exact signatures.
 3. Test enumeration across Smoke, Edge, Stress, and Random categories.
-4. Coverage strategy using `cargo-tarpaulin`.
+4. Coverage strategy using `cargo-llvm-cov`.
 5. Traceability from tests back to spec requirements, targets, and
    decomposition operations.
 
@@ -747,7 +747,7 @@ Read the step instructions provided. Read docs/plan/test-plan.md.
    it rather than silently redesigning it here.
 3. Run tests, fix design or test bugs as needed, and mark completed rows
    in docs/plan/test-plan.md.
-4. Measure coverage with the plan's `cargo-tarpaulin` strategy and meet
+4. Measure coverage with the plan's `cargo-llvm-cov` strategy and meet
    the declared threshold.
 5. If coverage is below threshold, add tests or document concrete
    exclusions in the plan.

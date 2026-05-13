@@ -576,7 +576,7 @@ fn dm2d() -> StepDescriptor {
 /// / targets / decomposition); two parallel milestone sequences
 /// (`tb-milestone-NN-*.md` for DM3b's testbench-impl slices and
 /// `test-milestone-NN-*.md` for DM3c's test-execution slices); and
-/// `coverage.md` for the `cargo-tarpaulin` strategy. No test code
+/// `coverage.md` for the `cargo-llvm-cov` strategy. No test code
 /// is written here; that's DM3b (scaffolding) and DM3c (test
 /// cases). The milestone structure mirrors `docs/impl-plan/` and
 /// `docs/perf-plan/` so DM3b/DM3c walk small reviewable chunks
@@ -623,8 +623,8 @@ fn dm3a() -> StepDescriptor {
             ),
             file_matches(
                 "docs/test-plan/coverage.md",
-                r"(?i)tarpaulin",
-                "docs/test-plan/coverage.md describes coverage via cargo-tarpaulin",
+                r"(?i)llvm-cov",
+                "docs/test-plan/coverage.md describes coverage via cargo-llvm-cov",
             ),
             critique_clean("DM3a"),
         ],
@@ -798,7 +798,7 @@ fn dm3b() -> StepDescriptor {
 /// DM3c (Test Execution and Coverage) — implements every test in
 /// the plan's smoke / edge / stress / random categories using
 /// DM3b's testbench, runs the full suite, then runs
-/// `cargo-tarpaulin` to verify the coverage threshold the plan
+/// `cargo-llvm-cov` to verify the coverage threshold the plan
 /// declared.
 fn dm3c() -> StepDescriptor {
     StepDescriptor {
@@ -828,9 +828,9 @@ fn dm3c() -> StepDescriptor {
                 "docs/test-plan/test-plan.md still present",
             ),
             // Coverage threshold is validated by the critique (the
-            // AI inspects the cargo-tarpaulin report referenced from
+            // AI inspects the cargo-llvm-cov report referenced from
             // the plan and flags sub-threshold runs). A structural
-            // gate that runs tarpaulin from this process would
+            // gate that runs llvm-cov from this process would
             // double the test time; rely on the agent reporting the
             // measured percentage in the plan's `## Coverage`
             // section.

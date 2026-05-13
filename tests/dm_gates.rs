@@ -219,7 +219,7 @@ fn dm2b_gate_accepts_pipeline_mapping() {
 /// `docs/test-plan/`. Index names UVM-lite components and traces
 /// back to spec.md / targets.md; at least one tb-milestone and one
 /// test-milestone file exist with `- [ ]` checklist rows;
-/// coverage.md names cargo-tarpaulin.
+/// coverage.md names cargo-llvm-cov.
 fn write_minimal_test_plan(project: &Path) {
     // DM3a now writes only the OUTLINE: index + coverage strategy
     // + per-milestone STUBS with `<!-- detail-pending -->`
@@ -247,7 +247,7 @@ fn write_minimal_test_plan(project: &Path) {
     );
     write(
         &project.join("docs/test-plan/coverage.md"),
-        "# Coverage\n\nRun `cargo tarpaulin --out Html`; threshold 90%.\n",
+        "# Coverage\n\nRun `cargo llvm-cov --html`; threshold 90%.\n",
     );
 }
 
@@ -300,9 +300,9 @@ fn dm3a_gate_rejects_plan_missing_tb_milestone_files() {
 }
 
 #[test]
-fn dm3a_gate_rejects_plan_without_tarpaulin_strategy() {
+fn dm3a_gate_rejects_plan_without_llvm_cov_strategy() {
     let (_tmp, project) = new_project();
-    // coverage.md exists but doesn't name `tarpaulin`. The gate
+    // coverage.md exists but doesn't name `llvm-cov`. The gate
     // enforces the chosen tool.
     write_minimal_test_plan(&project);
     write(
@@ -312,7 +312,7 @@ fn dm3a_gate_rejects_plan_without_tarpaulin_strategy() {
     clean_critique(&project, "DM3a");
     let report = evaluate(&project, "DM3a");
     assert!(!report.is_clean());
-    assert_fails_with(&report, "tarpaulin");
+    assert_fails_with(&report, "llvm-cov");
 }
 
 fn stage_experiments_db(project: &Path) {

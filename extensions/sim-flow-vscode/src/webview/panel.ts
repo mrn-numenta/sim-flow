@@ -525,7 +525,7 @@ function renderSettingsTab(): Node[] {
       el(
         "p",
         { class: "muted" },
-        "DM3c gates a flow on `cargo tarpaulin`. Threshold is the minimum required line-coverage percentage. Level controls whether every reported module must hit the bar (`module`) or only the project-wide total (`total`). Stored in `.sim-flow/config.toml::coverage` and round-trippable from the CLI via `sim-flow coverage show / set`.",
+        "DM3c gates a flow on `cargo llvm-cov`. Threshold is the minimum required line-coverage percentage. Level controls whether every reported module must hit the bar (`module`) or only the project-wide total (`total`). Stored in `.sim-flow/config.toml::coverage` and round-trippable from the CLI via `sim-flow coverage show / set`.",
       ),
       el("div", { class: "settings-row" }, renderCoverageThreshold(), renderCoverageLevel()),
     ),

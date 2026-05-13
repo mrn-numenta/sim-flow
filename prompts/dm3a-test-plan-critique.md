@@ -85,7 +85,7 @@ themselves.
    - One milestone file never mixes categories. Mixing =
      `BLOCKER:`.
 6. **Coverage strategy** (`coverage.md`):
-   - Names `cargo-tarpaulin` as the tool.
+   - Names `cargo-llvm-cov` as the tool.
    - States a numeric line-coverage threshold (90% expected;
      other values need prose justification).
    - Has Exclusions / Run Command / Report Output sections.

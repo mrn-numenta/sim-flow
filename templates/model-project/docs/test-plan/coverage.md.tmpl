@@ -2,8 +2,10 @@
 
 ## Tool
 
-- **cargo-tarpaulin** -- install once with
-  `cargo install cargo-tarpaulin`.
+- **cargo-llvm-cov** -- install once with
+  `cargo install cargo-llvm-cov --locked`. Also requires the
+  `llvm-tools-preview` rustup component
+  (`rustup component add llvm-tools-preview`).
 
 ## Threshold
 
@@ -16,7 +18,9 @@
 
 List files / modules excluded from coverage measurement, with a
 prose rationale per entry. Exclusions land in the
-`--exclude-files` flags of the run command below.
+`--ignore-filename-regex` flag of the run command below
+(cargo-llvm-cov accepts a single regex; combine entries with
+alternation).
 
 - `src/main.rs` -- `<reason: CLI harness, no model logic>`
 - `src/sim.rs` -- `<reason: simulation wrapper, delegates to
@@ -26,9 +30,18 @@ prose rationale per entry. Exclusions land in the
 ## Run Command
 
 ```bash
-cargo tarpaulin --out Html --out Lcov --output-dir target/coverage \
-  --exclude-files "src/main.rs" --exclude-files "src/sim.rs" \
-  --exclude-files "src/lib.rs"
+# Clears stale profraw + previous report state.
+cargo llvm-cov clean --workspace
+
+# Run the full test suite under coverage instrumentation. Uses a
+# separate target dir by default so the non-coverage build stays
+# clean (no "stale binary" issues across runs).
+cargo llvm-cov --workspace --no-report \
+  --ignore-filename-regex '(main|sim|lib)\.rs$'
+
+# Emit HTML + LCOV from the same recorded profile data.
+cargo llvm-cov report --html --output-dir target/coverage
+cargo llvm-cov report --lcov --output-path target/coverage/lcov.info
 ```
 
 ## Report Output
@@ -37,7 +50,7 @@ DM3c writes the machine-readable coverage artifact to:
 
 - **LCOV report**: `target/coverage/lcov.info` -- the
   threshold-comparison input the coverage gate consumes.
-- **HTML report**: `target/coverage/tarpaulin-report.html` --
+- **HTML report**: `target/coverage/html/index.html` --
   human-readable dashboard for inspecting uncovered lines.
 
 DM3c records the measured line-coverage percentage and the report

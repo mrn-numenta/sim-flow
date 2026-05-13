@@ -100,7 +100,7 @@ Reference material (read on demand):
    - **Random** -> `test-milestone-04-random*.md` -- constraint-
      randomized stimulus with seeded test names.
    - **Coverage** -> `test-milestone-05-coverage.md` -- runs
-     `cargo-tarpaulin`, records measurement, addresses gaps.
+     `cargo-llvm-cov`, records measurement, addresses gaps.
 
    **Order is fixed**: smoke (01) -> edge (02) -> stress (03) ->
    random (04) -> coverage (05). DM3c walks them in
@@ -132,15 +132,22 @@ Reference material (read on demand):
    verbatim into the live file with `write_file`, then editing
    the live file to fill in placeholders. Required content:
 
-   - **Tool**: `cargo-tarpaulin`.
+   - **Tool**: `cargo-llvm-cov`.
    - **Threshold**: minimum **90% line coverage** on
      `src/model/` (or a different target with explicit
      justification in prose).
    - **Exclusions**: list any files / modules to exclude with a
      one-sentence prose reason per entry.
-   - **Run Command**: typically `cargo tarpaulin --out Html
-     --out Lcov --output-dir target/coverage` plus relevant
-     `--exclude-files` flags. CLOSED triple-backtick code fence.
+   - **Run Command**: typically a three-step sequence:
+     `cargo llvm-cov clean --workspace` (clears stale profraw),
+     `cargo llvm-cov --workspace --no-report` (runs tests under
+     coverage instrumentation), then
+     `cargo llvm-cov report --html --output-dir target/coverage`
+     and
+     `cargo llvm-cov report --lcov --output-path target/coverage/lcov.info`
+     to emit reports. CLOSED triple-backtick code fence.
+     `cargo llvm-cov` uses a separate target dir so the
+     non-coverage build state stays clean.
    - **Report Output**: specific file path
      (`target/coverage/lcov.info`).
 
@@ -213,7 +220,7 @@ Gate-significant rules:
   Scoreboard AND references `spec.md` or `targets.md`.
 - At least one `tb-milestone-NN-*.md` and one
   `test-milestone-NN-*.md` file exists.
-- `coverage.md` mentions `tarpaulin`.
+- `coverage.md` mentions `llvm-cov`.
 - Every stub contains the literal `<!-- detail-pending -->`
   marker (DM3ad's gate keys on it).
 

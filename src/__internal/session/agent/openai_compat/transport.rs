@@ -873,14 +873,14 @@ mod tests {
         // commit the partial bytes; the orchestrator's LlmError
         // path engages instead.
         let c = choice(
-            Some("# Coverage\n\n```bash\ncargo tarpaulin"),
+            Some("# Coverage\n\n```bash\ncargo llvm-cov"),
             None,
             Some("length"),
         );
         let err = decode_choice(Some(c), &GEMMA4_MODEL_FAMILY).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("truncated at max_tokens"), "got: {msg}");
-        assert!(msg.contains("cargo tarpaulin"), "tail should appear: {msg}");
+        assert!(msg.contains("cargo llvm-cov"), "tail should appear: {msg}");
     }
 
     #[test]

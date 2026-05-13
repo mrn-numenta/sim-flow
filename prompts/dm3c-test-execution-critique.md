@@ -69,7 +69,7 @@ regress earlier milestones.
    foo_seed_42` and reproduce deterministically.
 
 5. **Coverage threshold** (coverage milestone only). Is
-   `cargo-tarpaulin` line coverage at or above `coverage.md`'s
+   `cargo-llvm-cov` line coverage at or above `coverage.md`'s
    declared threshold (default 90%)? Is the measured percentage
    written into `test-plan.md`'s `## Coverage` section?
 

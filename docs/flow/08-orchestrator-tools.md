@@ -51,7 +51,7 @@ advances to the corresponding phase.
 |-------------------|----------------------------------------|-----------------------------------|
 | `cargo check`     | start of `build` phase                 | feed errors to agent, retry       |
 | `cargo test`      | start of `test` phase                  | feed test output, retry           |
-| `cargo tarpaulin` | start of `coverage` phase (optional)   | inject report as next-phase input |
+| `cargo llvm-cov`  | start of `coverage` phase (optional)   | inject report as next-phase input |
 | Gate evaluation   | after final phase                      | refuse advance, emit `GateResult` |
 | `mark_passed`     | when gate evaluates clean              | emit `StateAdvanced`              |
 
@@ -204,10 +204,9 @@ extension of the protocol, not a quiet behavior change.
 
 ## Coverage Tooling
 
-`cargo tarpaulin` is the working assumption for line coverage. The
-exact tool can be configured per step in the step descriptor;
-`cargo llvm-cov` is an acceptable alternative. Coverage is
-optional in v1 and can be skipped per project.
+`cargo llvm-cov` is the working assumption for line coverage. The
+exact tool can be configured per step in the step descriptor.
+Coverage is optional in v1 and can be skipped per project.
 
 ## Risks
 

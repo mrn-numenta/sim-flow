@@ -38,7 +38,7 @@ pub struct Config {
     /// Coverage acceptance criteria for DM3c. The CLI subcommand
     /// `sim-flow coverage` and the dashboard's Settings tab both
     /// read / write this section. The DM3c critique enforces it
-    /// against the live `cargo tarpaulin` report.
+    /// against the live `cargo llvm-cov` report.
     #[serde(default)]
     pub coverage: CoverageSettings,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

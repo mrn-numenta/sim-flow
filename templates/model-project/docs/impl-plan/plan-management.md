@@ -22,7 +22,7 @@ There are three sibling plan directories, one per planning step:
     (a smoke batch, an edge batch, a stress batch, a random
     batch, the coverage measurement). DM3c walks these in order
     and stops for the paired critique after each.
-  - `coverage.md` -- coverage-tooling strategy (cargo-tarpaulin
+  - `coverage.md` -- coverage-tooling strategy (cargo-llvm-cov
     threshold, exclusions, run command, report path).
 - `docs/perf-plan/` (DM4a) -- performance-analysis plan for DM4b.
   - `perf-plan.md` -- index + brief overview.
