@@ -29,6 +29,17 @@ export interface FactoryOptions {
   lmstudioBaseUrl?: string;
   /** Generic OpenAI-compat base URL override (vllm / openai-compat / user-defined servers). */
   baseUrl?: string;
+  /**
+   * Abort the SSE stream after this many milliseconds of silence
+   * from the model server. Forwarded to openai-compat-family
+   * backends (lmstudio / vllm / openai-compat / `server:<name>`
+   * resolved to those kinds). The default in
+   * `OpenAiCompatibleBackend` (30 s) is right for local LM Studio
+   * with small prompts; large prefill loads (vLLM at 27B+ with
+   * full DM-step system stacks) routinely exceed that and need a
+   * higher ceiling.
+   */
+  streamIdleTimeoutMs?: number;
 }
 
 export function createBackend(options: FactoryOptions): LlmBackend {
@@ -64,6 +75,7 @@ export function createBackend(options: FactoryOptions): LlmBackend {
         runtimeProfileId: options.runtimeProfileId,
         secrets: options.secrets,
         baseUrl: options.baseUrl ?? options.lmstudioBaseUrl,
+        streamIdleTimeoutMs: options.streamIdleTimeoutMs,
       });
     case "vllm":
       // vLLM speaks OpenAI-compat at `:8000/v1` by default. Reuse
@@ -79,6 +91,7 @@ export function createBackend(options: FactoryOptions): LlmBackend {
         runtimeProfileId: options.runtimeProfileId,
         secrets: options.secrets,
         baseUrl: options.baseUrl ?? "http://localhost:8000/v1",
+        streamIdleTimeoutMs: options.streamIdleTimeoutMs,
       });
     case "openai-compat":
       // Generic openai-compat fallback. Defaults to LM Studio's
@@ -91,6 +104,7 @@ export function createBackend(options: FactoryOptions): LlmBackend {
         runtimeProfileId: options.runtimeProfileId,
         secrets: options.secrets,
         baseUrl: options.baseUrl ?? options.lmstudioBaseUrl ?? "http://localhost:1234/v1",
+        streamIdleTimeoutMs: options.streamIdleTimeoutMs,
       });
     case "anthropic":
     case "claude-cli":

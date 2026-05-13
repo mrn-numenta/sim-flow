@@ -405,6 +405,7 @@
     "test:e2e-live": "SIM_FLOW_E2E_LIVE=1 vitest run src/e2eAutoLive.test.ts src/e2eManualLive.test.ts",
     "test:e2e-live:auto": "SIM_FLOW_E2E_LIVE=1 vitest run src/e2eAutoLive.test.ts",
     "test:e2e-live:manual": "SIM_FLOW_E2E_LIVE=1 vitest run src/e2eManualLive.test.ts",
+    "test:e2e-mock": "vitest run src/e2eAutoMock.test.ts",
     "package": "node scripts/package-dev.mjs",
     "reload": "node scripts/reload.mjs",
     "vscode:prepublish": "npm run compile",

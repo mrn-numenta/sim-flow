@@ -367,6 +367,16 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
     // unchanged so the agent isn't penalized for thinking.
     const MAX_CONSECUTIVE_TOOL_ERROR_TURNS: u32 = 5;
     let mut consecutive_tool_error_turns: u32 = 0;
+    // Project-relative paths the user explicitly approved for
+    // `delete_file` even though they sit outside the step's
+    // `write_paths` allowlist. Populated by the scope-override
+    // RequestUserInput flow below (interactive mode only --
+    // `opts.auto` runs keep the silent-refuse behavior the user
+    // explicitly chose). One-shot per path: a path stays approved
+    // for the rest of the session so the very next delete_file
+    // call from the agent can succeed, but a fresh out-of-scope
+    // path triggers a new prompt.
+    let mut approved_deletes: Vec<String> = Vec::new();
 
     // 5c. Turn loop.
     let mut turn_index: u32 = 0;
@@ -814,6 +824,35 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     continue;
                 }
             }
+            // Critique session, no artifacts this turn, no tool calls,
+            // text on the wire, and the canonical critique JSON IS
+            // already on disk: the agent finished writing the critique
+            // in a prior turn and is now emitting a prose summary. End
+            // the session so the auto driver moves on to gate
+            // evaluation; otherwise we fall through to the auto pump /
+            // RequestUserInput tail (`effective_artifacts_empty`
+            // returns false for critique+text+no-tools by design,
+            // which keeps the wind-down branch closed), and an auto
+            // run parks waiting for a user reply that will never come.
+            // The matching comment at the top of the salvage block
+            // ("the file exists and the session should end normally")
+            // describes the intent; this is the missing exit.
+            if opts.auto
+                && opts.kind == SessionKind::Critique
+                && artifacts.is_empty()
+                && pre_check_tool_calls.is_empty()
+                && !assistant_text.trim().is_empty()
+                && critique_already_on_disk
+            {
+                host.write(&Event::SessionEnd {
+                    reason: SessionEndReason::Completed,
+                    message: Some(format!(
+                        "auto: {} critique already on disk; ending after prose-summary turn",
+                        step.id
+                    )),
+                })?;
+                return Ok(());
+            }
             // Track artifact-write failures so we can feed them back
             // as a User turn below. Without this, a rejected write
             // surfaces as a host-side `Diagnostic` only; the agent's
@@ -964,7 +1003,8 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         framework_docs_root.as_deref(),
                     )
                     .with_write_paths(&write_paths)
-                    .with_milestone_body(milestone_body.as_deref());
+                    .with_milestone_body(milestone_body.as_deref())
+                    .with_approved_deletes(&approved_deletes);
                     let outcome = invoke_tool(&dispatcher, &ctx, call);
                     let status = if outcome.ok { "ok" } else { "error" };
                     if outcome.ok {
@@ -1060,6 +1100,119 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         tool_call_id: None,
                         tool_calls: Vec::new(),
                     });
+                }
+
+                // delete_file scope-override prompt. The tool returns
+                // a stable `DELETE_SCOPE_VIOLATION_MARKER` prefix on
+                // its err display whenever the requested path falls
+                // outside the step's write allowlist AND the user has
+                // not already approved that path this session. In
+                // interactive mode we ask the user to confirm the
+                // override; on a positive reply we add the path(s)
+                // to `approved_deletes` so the agent's next attempt
+                // succeeds without code changes.
+                //
+                // Auto mode keeps the silent-refuse behavior per the
+                // explicit design decision -- unattended runs must not
+                // pause for tool approvals (there's no operator there
+                // to answer).
+                if !opts.auto {
+                    let scope_violations: Vec<String> = per_call_displays
+                        .iter()
+                        .filter_map(|d| {
+                            d.lines().find_map(|line| {
+                                line.strip_prefix(tools::DELETE_SCOPE_VIOLATION_MARKER)
+                                    .map(|p| p.trim().to_string())
+                            })
+                        })
+                        // De-duplicate: a single turn could in
+                        // principle issue the same out-of-scope path
+                        // twice; one prompt covers both.
+                        .fold(Vec::<String>::new(), |mut acc, p| {
+                            if !p.is_empty() && !acc.contains(&p) {
+                                acc.push(p);
+                            }
+                            acc
+                        });
+                    if !scope_violations.is_empty() {
+                        let listed = scope_violations
+                            .iter()
+                            .map(|p| format!("`{p}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let prompt = format!(
+                            "The agent attempted `delete_file` for path(s) outside this step's write \
+                             allowlist: {listed}. Allowlist for {}.{:?}: {}.\n\n\
+                             Approve the override and remove the file(s)?\n\
+                             - Reply `yes` (or `y`/`approve`) to grant a one-shot override for the listed path(s).\n\
+                             - Reply `no` (or anything else) to refuse; the agent will see your reply verbatim and proceed without deleting.",
+                            step.id,
+                            opts.kind,
+                            if write_paths.is_empty() {
+                                "(none)".to_string()
+                            } else {
+                                write_paths.join(", ")
+                            },
+                        );
+                        host.write(&Event::RequestUserInput {
+                            prompt: Some(prompt),
+                            placeholder: Some("yes / no, or course-correction text".into()),
+                        })?;
+                        match host.read()? {
+                            Some(HostEvent::UserMessage { text }) => {
+                                let trimmed = text.trim().to_ascii_lowercase();
+                                let approved = matches!(
+                                    trimmed.as_str(),
+                                    "y" | "yes" | "approve" | "ok" | "okay"
+                                );
+                                if approved {
+                                    for p in &scope_violations {
+                                        if !approved_deletes.iter().any(|q| q == p) {
+                                            approved_deletes.push(p.clone());
+                                        }
+                                    }
+                                    host.write(&Event::Diagnostic {
+                                        level: DiagnosticLevel::Info,
+                                        message: format!(
+                                            "scope override granted for {} path(s): {listed}. \
+                                             The agent's next delete_file call for the listed path(s) will proceed.",
+                                            scope_violations.len()
+                                        ),
+                                    })?;
+                                }
+                                // Push the user's reply into the
+                                // conversation so the model sees it
+                                // verbatim. On "yes" this nudges the
+                                // model to retry delete_file (the
+                                // approved_deletes side-channel is
+                                // already populated). On "no" the
+                                // model sees the refusal and can
+                                // course-correct.
+                                messages.push(LlmMessage {
+                                    role: LlmRole::User,
+                                    content: text,
+                                    attachments: Vec::new(),
+                                    tool_call_id: None,
+                                    tool_calls: Vec::new(),
+                                });
+                            }
+                            Some(HostEvent::Cancel) | None => {
+                                host.write(&Event::SessionEnd {
+                                    reason: SessionEndReason::Cancelled,
+                                    message: None,
+                                })?;
+                                return Ok(());
+                            }
+                            Some(other) => {
+                                host.write(&Event::Diagnostic {
+                                    level: DiagnosticLevel::Warning,
+                                    message: format!(
+                                        "unexpected host event during delete_file scope-override prompt: {other:?}; treating as no-approve"
+                                    ),
+                                })?;
+                            }
+                        }
+                    }
                 }
 
                 // No-progress tracker. Strictly-decreasing failure
@@ -1784,6 +1937,19 @@ fn tool_args_from_body(name: &str, body: &str) -> std::result::Result<serde_json
              Prefer native tool-use when the backend supports it."
                 .into(),
         ),
+        "delete_file" => {
+            // Single-arg tool: accept either the bare path on the
+            // first non-empty line, or a JSON `{ "path": "..." }`
+            // body (already handled by `parse_json_tool_block`).
+            let path = body
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .map(|l| l.trim().to_string());
+            match path {
+                Some(p) if !p.is_empty() => Ok(serde_json::json!({ "path": p })),
+                _ => Err("delete_file: empty body; expected a single relative path".into()),
+            }
+        }
         "write_file" => {
             // Permissive fallback: treat the fenced body as
             // "path on the first non-empty line, content as the
@@ -1973,11 +2139,8 @@ pub fn build_initial_messages(
     // PTY/CLI flag); the per-step prompt directive must match the
     // session-wide convention or the model gets contradictory
     // instructions.
-    let orchestrator_native_tools_mode = !opts.agent_has_native_fs_tools
-        && matches!(
-            std::env::var("SIM_FLOW_TOOL_MODE").ok().as_deref(),
-            Some("native") | Some("native-tool-calls")
-        );
+    let orchestrator_native_tools_mode =
+        !opts.agent_has_native_fs_tools && resolve_native_tool_mode();
     let output_intro_fragment = if opts.agent_has_native_fs_tools {
         // PTY/CLI agents have their OWN tool catalog (Write, Edit,
         // Read). Today they share the fenced-mode preamble because
@@ -2851,7 +3014,35 @@ fn retry_gate_finding_blocks(project_dir: &Path, step_id: &str) -> Vec<String> {
 }
 
 fn tool_call_persists_output(tool_name: &str) -> bool {
-    matches!(tool_name, "write_file" | "edit_file")
+    matches!(tool_name, "write_file" | "edit_file" | "delete_file")
+}
+
+/// Resolve whether the orchestrator should advertise + dispatch its
+/// native tool catalog. The historical default was fenced-mode (the
+/// model emits ` ```tool:write_file ` fenced blocks and the
+/// orchestrator parses them); native mode required opt-in via
+/// `SIM_FLOW_TOOL_MODE=native`. Production runs have used native
+/// almost exclusively (fenced mode burns turns on parsing-grade
+/// near-misses with weaker open models), so the default flipped:
+///
+/// - **default / `native` / `native-tool-calls`**: native dispatch.
+/// - **`fenced` / `fenced-blocks` / `off`**: fall back to fenced mode.
+/// - **anything else**: native dispatch (unknown tokens default to
+///   the new safe behavior; an explicit `fenced` is needed to opt
+///   out).
+///
+/// One place to keep the gate so the host-side dispatch decision
+/// (see `TerminalHost::request_llm_response`) and the prompt-template
+/// fragment selection (see `build_initial_messages`) agree.
+pub(crate) fn resolve_native_tool_mode() -> bool {
+    let raw = std::env::var("SIM_FLOW_TOOL_MODE").ok();
+    let Some(value) = raw.as_deref() else {
+        return true;
+    };
+    !matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "fenced" | "fenced-blocks" | "off" | "0" | "false"
+    )
 }
 
 fn can_auto_wind_down_clean_work_session(

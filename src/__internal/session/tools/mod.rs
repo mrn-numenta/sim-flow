@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{Error, Result};
 
+mod delete_file;
 mod edit_file;
 mod list_dir;
 mod read_file;
@@ -26,6 +27,7 @@ mod run_cargo;
 mod search;
 mod write_file;
 
+pub use delete_file::DeleteFileTool;
 pub use edit_file::EditFileTool;
 pub use list_dir::ListDirTool;
 pub use read_file::ReadFileTool;
@@ -71,6 +73,14 @@ pub struct ToolContext<'a> {
     /// outside milestone-walk steps. Empty string is fine (no
     /// hints; no redirect).
     pub current_milestone_body: Option<&'a str>,
+    /// Project-relative paths the user explicitly approved for
+    /// `delete_file` even though they fall outside `write_paths`.
+    /// Populated by the orchestrator after a `RequestUserInput`
+    /// scope-override prompt in interactive mode; consumed by
+    /// `DeleteFileTool::invoke`. Empty in auto mode (per the
+    /// design decision that auto runs do NOT pause for tool
+    /// approvals).
+    pub approved_deletes: &'a [String],
 }
 
 impl<'a> ToolContext<'a> {
@@ -87,6 +97,7 @@ impl<'a> ToolContext<'a> {
             framework_docs_root,
             write_paths: &[],
             current_milestone_body: None,
+            approved_deletes: &[],
         }
     }
 
@@ -99,7 +110,22 @@ impl<'a> ToolContext<'a> {
         self.current_milestone_body = body;
         self
     }
+
+    pub fn with_approved_deletes(mut self, approved: &'a [String]) -> Self {
+        self.approved_deletes = approved;
+        self
+    }
 }
+
+/// Distinctive marker the orchestrator scans for after a tool
+/// dispatch to detect "delete_file refused because the path is
+/// outside this step's write allowlist." Surfaced as a stable
+/// prefix on the tool's err display so a future refactor (e.g.
+/// returning structured violation data instead of a string) doesn't
+/// silently break the orchestrator's RequestUserInput trigger.
+/// Public so the orchestrator and tests can match on it; the
+/// suffix after the marker is the offending path.
+pub const DELETE_SCOPE_VIOLATION_MARKER: &str = "delete_file: scope-violation:";
 
 /// Common shape every tool implements. The orchestrator dispatches
 /// by name; a tool's `args` is a JSON object whose schema each impl
@@ -219,6 +245,7 @@ pub fn build_dispatcher(names: &[&'static str]) -> Vec<Box<dyn Tool>> {
             "list_dir" => out.push(Box::new(ListDirTool)),
             "write_file" => out.push(Box::new(WriteFileTool)),
             "edit_file" => out.push(Box::new(EditFileTool)),
+            "delete_file" => out.push(Box::new(DeleteFileTool)),
             "search" => out.push(Box::new(SearchTool)),
             "run_cargo" => out.push(Box::new(RunCargoTool)),
             _ => {} // unknown tool name; skip

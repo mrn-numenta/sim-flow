@@ -22,6 +22,7 @@ pub const UNIVERSAL_TOOLS: &[&str] = &[
     "list_dir",
     "write_file",
     "edit_file",
+    "delete_file",
     "search",
     "run_cargo",
 ];

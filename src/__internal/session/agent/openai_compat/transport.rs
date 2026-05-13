@@ -70,6 +70,19 @@ pub struct OpenAiCompatibleRequest<'a> {
     /// Read from the `SIM_FLOW_DISABLE_THINKING` env var (any
     /// truthy value: `1`, `true`, `yes`). Default `false`.
     pub disable_thinking: bool,
+    /// Soft upper bound on the number of tokens the model is asked
+    /// to spend on its reasoning preamble. Forwarded to the server
+    /// via `chat_template_kwargs.thinking_budget` so model families
+    /// whose chat template understands the kwarg (qwen3.6, similar
+    /// open-reasoning models) self-truncate when the budget is hit;
+    /// templates that don't understand it ignore it silently.
+    ///
+    /// Read from the `SIM_FLOW_THINKING_BUDGET` env var (positive
+    /// integer). `None` lets the model decide -- typical for short
+    /// turns where reasoning legitimately fits in the response cap;
+    /// set when long reasoning chains start consuming the
+    /// `max_tokens` budget before the model emits a tool call.
+    pub thinking_budget: Option<u32>,
     /// Per-knob overrides for the sampling parameters the family
     /// would otherwise pull from its `non_thinking_sampling`
     /// default. Sourced from env vars (`SIM_FLOW_TEMPERATURE`,
@@ -128,6 +141,7 @@ impl<'a> OpenAiCompatibleRequest<'a> {
             .ok()
             .and_then(|s| s.parse::<u32>().ok());
         let disable_thinking = truthy_env("SIM_FLOW_DISABLE_THINKING");
+        let thinking_budget = uint_env("SIM_FLOW_THINKING_BUDGET");
         // Response-body cap. 64 KB was too tight for verbose
         // models -- qwen3.6's milestone-04 response with embedded
         // Rust code legitimately exceeded that and the JSON parser
@@ -152,6 +166,7 @@ impl<'a> OpenAiCompatibleRequest<'a> {
             max_tokens,
             seed,
             disable_thinking,
+            thinking_budget,
             temperature_override: float_env("SIM_FLOW_TEMPERATURE"),
             top_p_override: float_env("SIM_FLOW_TOP_P"),
             top_k_override: uint_env("SIM_FLOW_TOP_K"),
@@ -233,9 +248,17 @@ struct ChatRequestBody<'a> {
     tool_choice: Option<&'static str>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 struct ChatTemplateKwargs {
-    enable_thinking: bool,
+    /// Set when the caller wants the model's chat template to skip
+    /// the `<think>...</think>` preamble entirely.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enable_thinking: Option<bool>,
+    /// Token budget for the reasoning preamble, when the template
+    /// understands it. The serializer omits the field when `None`
+    /// so requests without a budget keep the historical wire body.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking_budget: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -351,13 +374,27 @@ pub fn dispatch_chat_with_tools(req: OpenAiCompatibleRequest<'_>) -> Result<Chat
     let model_family = resolve_model_family(req.model_family_id, Some(req.model));
     let prepared_messages = prepare_messages_for_openai_compat(req.messages, model_family);
     // Only thread the thinking-control kwarg through to servers
-    // for families that have a thinking section to disable. For
-    // generic / non-thinking models the kwarg is meaningless and
+    // for families that have a thinking section to manage. For
+    // generic / non-thinking models the kwargs are meaningless and
     // some servers reject unknown template kwargs.
-    let chat_template_kwargs = if req.disable_thinking && model_family.supports_thinking_controls {
-        Some(ChatTemplateKwargs {
-            enable_thinking: false,
-        })
+    let chat_template_kwargs = if model_family.supports_thinking_controls {
+        let mut kwargs = ChatTemplateKwargs::default();
+        if req.disable_thinking {
+            kwargs.enable_thinking = Some(false);
+        }
+        // When thinking is enabled (the default) and the caller
+        // supplied a budget, pass it through so the model self-
+        // truncates instead of blowing past `max_tokens` while
+        // mid-think. Skipped when thinking is disabled -- a budget
+        // for a section the template skips is contradictory.
+        if !req.disable_thinking && req.thinking_budget.is_some() {
+            kwargs.thinking_budget = req.thinking_budget;
+        }
+        if kwargs.enable_thinking.is_some() || kwargs.thinking_budget.is_some() {
+            Some(kwargs)
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -627,11 +664,26 @@ mod tests {
         // doesn't silently rename / move the field.
         let mut body = empty_body("qwen3.6", 64);
         body.chat_template_kwargs = Some(ChatTemplateKwargs {
-            enable_thinking: false,
+            enable_thinking: Some(false),
+            thinking_budget: None,
         });
         let json = serde_json::to_string(&body).unwrap();
         assert!(
             json.contains("\"chat_template_kwargs\":{\"enable_thinking\":false}"),
+            "json: {json}",
+        );
+    }
+
+    #[test]
+    fn request_body_includes_thinking_budget_when_set() {
+        let mut body = empty_body("qwen3.6", 64);
+        body.chat_template_kwargs = Some(ChatTemplateKwargs {
+            enable_thinking: None,
+            thinking_budget: Some(2048),
+        });
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(
+            json.contains("\"chat_template_kwargs\":{\"thinking_budget\":2048}"),
             "json: {json}",
         );
     }

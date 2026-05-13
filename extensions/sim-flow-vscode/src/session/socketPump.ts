@@ -222,10 +222,17 @@ export class SocketSessionPump implements LiveSessionTransport {
         ...baseEnv,
         SIM_FOUNDATION_DEBUG: llm.debugTokens,
       };
+      // Test/diagnostic hook: when `SIM_FLOW_PUMP_CAPTURE_STDERR` is
+      // set in the parent env, pipe the child's stderr into the
+      // current process so test failures can surface the
+      // orchestrator's exit reason. Production uses `ignore` to
+      // avoid leaking the orchestrator's tracing output into the
+      // user's terminal.
+      const captureStderr = baseEnv.SIM_FLOW_PUMP_CAPTURE_STDERR === "1";
       const child = spawn(options.launch.binary, options.launch.args, {
         cwd: options.launch.cwd,
         env,
-        stdio: ["ignore", "ignore", "ignore"],
+        stdio: ["ignore", "ignore", captureStderr ? "inherit" : "ignore"],
       });
       this.child = child;
       this.debugLog.logProcessSpawn(options.launch.binary, options.launch.args, child.pid);
@@ -1134,6 +1141,7 @@ export class SocketSessionPump implements LiveSessionTransport {
         // is undefined and the factory falls back to its
         // conventional defaults.
         baseUrl: live.serverBaseUrl ?? undefined,
+        streamIdleTimeoutMs: this.llm.streamIdleTimeoutMs,
         session: undefined,
       });
     } catch (err) {

@@ -380,15 +380,15 @@ where
                 }
                 self.stderr.flush().map_err(write_err)?;
                 // Native-mode dispatch when the orchestrator advertises
-                // a tool catalog AND the operator opted in via
-                // `SIM_FLOW_TOOL_MODE=native`. Otherwise the existing
-                // fence-mode `dispatch` path stands and tool_calls is
-                // returned empty. The env-var gate keeps the wire body
-                // and behavior byte-identical to pre-migration runs.
-                let native_mode = matches!(
-                    std::env::var("SIM_FLOW_TOOL_MODE").ok().as_deref(),
-                    Some("native") | Some("native-tool-calls")
-                );
+                // a tool catalog. `SIM_FLOW_TOOL_MODE` selects native
+                // (default) vs fenced; see
+                // `orchestrator::resolve_native_tool_mode` for the
+                // gate. Production runs have used native almost
+                // exclusively since the migration; flipping the
+                // default here matches reality and stops every
+                // wrapper script from having to remember the env var.
+                let native_mode =
+                    crate::__internal::session::orchestrator::resolve_native_tool_mode();
                 if matches!(
                     std::env::var("SIM_FLOW_DEBUG_TOOLS").ok().as_deref(),
                     Some("1")

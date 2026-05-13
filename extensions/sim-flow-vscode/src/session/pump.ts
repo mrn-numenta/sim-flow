@@ -97,6 +97,15 @@ export interface PumpLlmConfig {
    */
   debugTokens: string;
   debugAdaptation?: boolean;
+  /**
+   * Abort SSE streams after this many ms of silence. Forwarded to
+   * openai-compat-family backends only (lmstudio / vllm /
+   * openai-compat / `server:<name>` resolved to those kinds). The
+   * production default lives in `OpenAiCompatibleBackend` (30 s);
+   * tests and slow-prefill setups (large remote vLLM with full
+   * DM-step system stacks) override here.
+   */
+  streamIdleTimeoutMs?: number;
 }
 
 /** Snapshot of state every chat turn finishes with. */
