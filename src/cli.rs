@@ -86,6 +86,12 @@ pub(crate) enum Command {
         #[arg(long)]
         force: bool,
     },
+    /// Inspect the project's bug log
+    /// (`<project>/.sim-flow/bug-log.jsonl`).
+    Bugs {
+        #[command(subcommand)]
+        action: BugsAction,
+    },
     /// Show or set configuration.
     Config {
         #[command(subcommand)]
@@ -618,6 +624,33 @@ pub(crate) enum PromptsAction {
 }
 
 #[derive(Debug, Subcommand)]
+pub(crate) enum BugsAction {
+    /// List bugs in `.sim-flow/bug-log.jsonl`. Default shows all
+    /// statuses; filter with `--open` or `--resolved`.
+    List {
+        /// Only show open bugs.
+        #[arg(long, conflicts_with_all = ["resolved"])]
+        open: bool,
+        /// Only show resolved bugs (status = "resolved" or
+        /// "manual"). Equivalent to "not open."
+        #[arg(long)]
+        resolved: bool,
+        /// Filter by step id (e.g. `--step DM3c`).
+        #[arg(long)]
+        step: Option<String>,
+        /// Filter by category (`framework | test | impl | perf |
+        /// tooling | other`).
+        #[arg(long)]
+        category: Option<String>,
+    },
+    /// Show one bug's full event trail.
+    Show {
+        /// Bug id (e.g. `bug-001`).
+        id: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 pub(crate) enum CoverageAction {
     /// Print the current threshold and level. Use `--json` for
     /// machine-readable output (the dashboard reads this).
@@ -838,6 +871,48 @@ mod tests {
         match cli.command {
             Command::ConvertSv { force } => assert!(force, "--force must propagate"),
             other => panic!("expected Command::ConvertSv, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bugs_list_parses_with_filters() {
+        let cli = parse(&[
+            "sim-flow",
+            "bugs",
+            "list",
+            "--open",
+            "--step",
+            "DM3c",
+            "--category",
+            "framework",
+        ]);
+        match cli.command {
+            Command::Bugs {
+                action:
+                    BugsAction::List {
+                        open,
+                        resolved,
+                        step,
+                        category,
+                    },
+            } => {
+                assert!(open);
+                assert!(!resolved);
+                assert_eq!(step.as_deref(), Some("DM3c"));
+                assert_eq!(category.as_deref(), Some("framework"));
+            }
+            other => panic!("expected Command::Bugs(List), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bugs_show_requires_id() {
+        let cli = parse(&["sim-flow", "bugs", "show", "bug-001"]);
+        match cli.command {
+            Command::Bugs {
+                action: BugsAction::Show { id },
+            } => assert_eq!(id, "bug-001"),
+            other => panic!("expected Command::Bugs(Show), got {other:?}"),
         }
     }
 

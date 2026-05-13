@@ -9,7 +9,7 @@ use sim_flow::__internal::state::{Flow, State};
 use sim_flow::__internal::steps::registry_for;
 
 use crate::cli::{
-    BaselineAction, Cli, Command, ConfigAction, CoverageAction, KeysAction, NewKind,
+    BaselineAction, BugsAction, Cli, Command, ConfigAction, CoverageAction, KeysAction, NewKind,
     PromptResetScope, PromptScopeArg, PromptsAction, SessionMode, WatchersAction,
 };
 
@@ -46,6 +46,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
         ),
         Command::Reset { step } => reset(&project_dir, step),
         Command::ConvertSv { force } => convert_sv(&project_dir, *force),
+        Command::Bugs { action } => bugs_cmd(&project_dir, action),
         Command::Config { action } => config_cmd(&project_dir, action),
         Command::New { kind } => new_cmd(cli, &project_dir, kind),
         Command::Runs {
@@ -1724,6 +1725,117 @@ fn convert_sv(project: &Path, force: bool) -> sim_flow::Result<()> {
     );
     println!("Next: `sim-flow auto` to drive SV0 → SV0d → SV1 → SV2 → SV3.");
     Ok(())
+}
+
+/// `sim-flow bugs list / show` dispatcher.
+fn bugs_cmd(project: &Path, action: &BugsAction) -> sim_flow::Result<()> {
+    use sim_flow::__internal::bug_log;
+    match action {
+        BugsAction::List {
+            open,
+            resolved,
+            step,
+            category,
+        } => {
+            let records = bug_log::load_all(project);
+            let filtered: Vec<&bug_log::BugRecord> = records
+                .iter()
+                .filter(|r| {
+                    let status_match = if *open {
+                        r.status == "open"
+                    } else if *resolved {
+                        r.status != "open"
+                    } else {
+                        true
+                    };
+                    let step_match = step.as_deref().map(|s| r.step == s).unwrap_or(true);
+                    let cat_match = category.as_deref().map(|c| r.category == c).unwrap_or(true);
+                    status_match && step_match && cat_match
+                })
+                .collect();
+            if filtered.is_empty() {
+                println!(
+                    "(no bugs match the filter; bug-log.jsonl has {} total entries)",
+                    records.len()
+                );
+                return Ok(());
+            }
+            // Plain text table. Columns sized to common content;
+            // `issue` truncates at 72 chars.
+            println!(
+                "{:<8} {:<6} {:<9} {:<10} ISSUE",
+                "ID", "STEP", "CATEGORY", "STATUS"
+            );
+            for rec in filtered {
+                let issue = if rec.issue.len() > 72 {
+                    format!("{}...", &rec.issue[..69])
+                } else {
+                    rec.issue.clone()
+                };
+                println!(
+                    "{:<8} {:<6} {:<9} {:<10} {}",
+                    rec.id, rec.step, rec.category, rec.status, issue
+                );
+            }
+            Ok(())
+        }
+        BugsAction::Show { id } => {
+            let records = bug_log::load_all(project);
+            let Some(rec) = records.iter().find(|r| r.id == *id) else {
+                return Err(sim_flow::Error::State(format!(
+                    "bugs show: no bug with id `{id}` in `.sim-flow/bug-log.jsonl`"
+                )));
+            };
+            println!("ID:         {}", rec.id);
+            println!("Step:       {}", rec.step);
+            if let Some(m) = &rec.milestone {
+                println!("Milestone:  {m}");
+            }
+            println!("Category:   {}", rec.category);
+            println!("Status:     {}", rec.status);
+            println!("Opened:     {}", rec.opened_at);
+            if let Some(c) = &rec.closed_at {
+                println!("Closed:     {c}");
+            }
+            println!();
+            println!("Issue:");
+            println!("  {}", rec.issue);
+            if !rec.events.is_empty() {
+                println!();
+                println!("Events ({}):", rec.events.len());
+                for ev in &rec.events {
+                    let body = match ev.kind.as_str() {
+                        "hypothesis" | "fix_attempt" => ev
+                            .rationale
+                            .as_deref()
+                            .unwrap_or("<no rationale>")
+                            .to_string(),
+                        "expectation_nudge" => {
+                            ev.message.as_deref().unwrap_or("<no message>").to_string()
+                        }
+                        _ => ev
+                            .rationale
+                            .as_deref()
+                            .or(ev.message.as_deref())
+                            .unwrap_or("<no body>")
+                            .to_string(),
+                    };
+                    let outcome_suffix = ev
+                        .outcome
+                        .as_deref()
+                        .map(|o| format!(" [{o}]"))
+                        .unwrap_or_default();
+                    println!("  [{}] {}{}: {}", ev.ts, ev.kind, outcome_suffix, body);
+                }
+            }
+            if let Some(r) = &rec.resolution {
+                println!();
+                println!("Resolution:");
+                println!("  {r}");
+            }
+            Ok(())
+        }
+    }
 }
 
 fn reset(project: &Path, step_id: &str) -> sim_flow::Result<()> {
