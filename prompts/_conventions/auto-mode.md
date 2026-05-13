@@ -36,13 +36,26 @@ need to say goodbye.
 
 If a `<step>-critique.md` file is inlined below (a previous critique
 pass found issues), your job on THIS iteration is to address the
-BLOCKER findings. For every `BLOCKER:` line, either: (a) fix the
+**both** `BLOCKER:` and `UNRESOLVED:` findings. Both block step
+advancement -- the gate refuses to clear, and the auto loop's
+no-progress detector fires when the count of (Blocker +
+Unresolved) findings doesn't strictly decrease across retries.
+`UNRESOLVED:` means "previously flagged and STILL outstanding"; it
+is not informational, it is a carry-over finding the prior critique
+expects you to clear.
+
+For every `BLOCKER:` or `UNRESOLVED:` line, either: (a) fix the
 underlying gap in the artifact (prefer `edit_file` for targeted
 fixes; full re-emit only when the change touches most of the file),
 or (b) when a fix requires a decision the user did not provide,
-decide using your judgement and document it in `## Auto-decisions`.
-`UNRESOLVED:` lines are informational notes from the prior critic --
-you may address them if cheap, but they do NOT block advancement and
-you should not loop on them. Do NOT emit a fresh artifact that has
-the same BLOCKER gaps as the prior one -- that burns iteration
-budget without making progress.
+decide using your judgement and document it in `## Auto-decisions`,
+or (c) when the finding cannot be addressed in this artifact (e.g.
+it's a fundamental spec conflict with `targets.md`), update the
+upstream artifact so the conflict goes away -- and surface the
+update in `## Auto-decisions`. Do NOT emit a fresh artifact that
+leaves the same Blocker / Unresolved findings unaddressed -- that's
+what trips `max_critique_no_progress_iters`.
+
+`RESOLVED:` lines are confirmations from the prior critic that
+earlier flagged findings have been fixed; no action required on your
+side.

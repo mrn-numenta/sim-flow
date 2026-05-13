@@ -109,6 +109,14 @@ impl Finding {
         }
     }
 
+    /// True iff this finding should BLOCK step advancement and
+    /// count toward the auto-loop's no-progress / retry caps.
+    /// Both `Blocker` and `Unresolved` qualify -- the critic's
+    /// distinction is severity / origin (Blocker = new issue,
+    /// Unresolved = previously-flagged issue still present), not
+    /// gate semantics. The gate (`gate.rs::CritiqueClean`) and the
+    /// auto loop's no-progress detector must agree on this set or
+    /// the agent advances past unaddressed findings.
     pub fn is_blocking(&self) -> bool {
         matches!(self, Finding::Unresolved(_) | Finding::Blocker(_))
     }
@@ -402,6 +410,9 @@ mod tests {
         }"#;
         let c = Critique::from_json(body).unwrap();
         assert_eq!(c.findings.len(), 2);
+        // Both Blocker and Unresolved are blocking; Unresolved is
+        // a previously-flagged finding still outstanding, treated
+        // with the same gate semantics as a fresh Blocker.
         assert!(c.findings[0].is_blocking());
         assert!(c.findings[1].is_blocking());
         assert!(c.has_blocking());

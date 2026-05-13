@@ -71,6 +71,13 @@ struct Args {
     /// `http://localhost:11434/v1` for Ollama). Lets us point at any
     /// vLLM / TGI / llama.cpp server that speaks the same wire format.
     base_url: Option<String>,
+    /// Optional per-kind LLM override for critique sub-sessions.
+    /// Mirrors the `--critique-llm-*` flags on `sim-flow auto`.
+    /// Unset fields fall back to the work-side stack
+    /// (`--backend` / `--model` / `--base-url`).
+    critique_backend: Option<Backend>,
+    critique_model: Option<String>,
+    critique_base_url: Option<String>,
     max_auto_iters: u32,
     max_critique_iters: u32,
     max_critique_no_progress_iters: u32,
@@ -122,6 +129,9 @@ impl Args {
         let mut backend_str: Option<String> = None;
         let mut model: Option<String> = None;
         let mut base_url: Option<String> = None;
+        let mut critique_backend_str: Option<String> = None;
+        let mut critique_model: Option<String> = None;
+        let mut critique_base_url: Option<String> = None;
         let mut max_auto_iters = 6u32;
         let mut max_critique_iters = 10u32;
         let mut max_critique_no_progress_iters = 3u32;
@@ -141,6 +151,9 @@ impl Args {
                 "--backend" => backend_str = iter.next(),
                 "--model" => model = iter.next(),
                 "--base-url" => base_url = iter.next(),
+                "--critique-backend" => critique_backend_str = iter.next(),
+                "--critique-model" => critique_model = iter.next(),
+                "--critique-base-url" => critique_base_url = iter.next(),
                 "--max-auto-iters" => {
                     max_auto_iters = iter
                         .next()
@@ -221,6 +234,16 @@ impl Args {
             Some(other) => return Err(format!("unknown backend: {other}")),
             None => return Err("--backend is required".to_string()),
         };
+        let critique_backend = match critique_backend_str.as_deref() {
+            Some("openai-compat") | Some("openai_compat") | Some("openai") => {
+                Some(Backend::OpenAiCompat)
+            }
+            Some("ollama") => Some(Backend::Ollama),
+            Some("claude") | Some("claude-cli") => Some(Backend::Claude),
+            Some("anthropic") | Some("anthropic-api") => Some(Backend::Anthropic),
+            Some(other) => return Err(format!("unknown critique-backend: {other}")),
+            None => None,
+        };
         let watch_socket = if watch_disabled {
             None
         } else {
@@ -236,6 +259,9 @@ impl Args {
             backend,
             model,
             base_url,
+            critique_backend,
+            critique_model,
+            critique_base_url,
             max_auto_iters,
             max_critique_iters,
             max_critique_no_progress_iters,
@@ -304,6 +330,12 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         Backend::Claude => "claude",
         Backend::Anthropic => "anthropic",
     };
+    let critique_backend_label = args.critique_backend.map(|b| match b {
+        Backend::OpenAiCompat => "openai-compat",
+        Backend::Ollama => "ollama",
+        Backend::Claude => "claude",
+        Backend::Anthropic => "anthropic",
+    });
     println!(
         "e2e_auto: project_dir       = {}",
         args.project_dir.display()
@@ -483,13 +515,16 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         llm_runtime_profile_id: None,
         llm_debug_adaptation: false,
         llm_base_url: args.base_url.clone(),
-        // e2e_auto doesn't yet expose per-kind LLM flags; leave the
-        // critique stack defaulted to the work-side config.
-        critique_llm_backend: None,
-        critique_llm_model: None,
+        // Per-kind LLM override: `--critique-backend` + companions
+        // route critique sub-sessions to a different stack while
+        // work-side stays on `--backend`. Unset fields fall back
+        // per-field to the work-side value via
+        // `resolve_llm_for_kind` inside the orchestrator.
+        critique_llm_backend: critique_backend_label.map(String::from),
+        critique_llm_model: args.critique_model.clone(),
         critique_llm_model_family_id: None,
         critique_llm_runtime_profile_id: None,
-        critique_llm_base_url: None,
+        critique_llm_base_url: args.critique_base_url.clone(),
         max_auto_iters: args.max_auto_iters,
         max_critique_iters: args.max_critique_iters,
         max_critique_no_progress_iters: args.max_critique_no_progress_iters,
