@@ -58,6 +58,14 @@ pub enum Event {
         runtime_profile_id: Option<String>,
         #[serde(default)]
         debug_adaptation: bool,
+        /// Session kind for this dispatch. Hosts that want to route
+        /// per-kind (e.g. work to vLLM, critique to Anthropic) read
+        /// this and pick a backend / model accordingly; hosts that
+        /// don't care can ignore it. Defaulted to `Work` for
+        /// backwards-compatibility with hosts written before the
+        /// field existed.
+        #[serde(default = "default_session_kind_out")]
+        kind: SessionKindOut,
         messages: Vec<LlmMessage>,
         /// Tool catalog for backends that support native tool-use.
         /// Empty in M2; populated in M3.
@@ -307,6 +315,13 @@ pub enum SessionKindOut {
     /// exits Q&A by clicking a step command (RunStep / RunCritique /
     /// Advance / Reset / Shutdown).
     Qa,
+}
+
+/// Serde default for `RequestLlmResponse.kind`. Hosts written before
+/// the field existed deserialize without the tag; treat them as
+/// work-side dispatch so the per-kind routing override is a no-op.
+fn default_session_kind_out() -> SessionKindOut {
+    SessionKindOut::Work
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

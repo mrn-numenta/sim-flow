@@ -447,6 +447,7 @@ mod tests {
                 model_family_id: Some("qwen3_6".into()),
                 runtime_profile_id: Some("openai_compat_generic".into()),
                 debug_adaptation: true,
+                kind: crate::session::protocol::SessionKindOut::Work,
                 messages: vec![LlmMessage {
                     role: LlmRole::System,
                     content: "x".repeat(32 * 1024),

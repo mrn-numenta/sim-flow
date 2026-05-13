@@ -84,6 +84,11 @@ fn auto_opts(project: &Path, mode: StepMode) -> AutoOptions {
         llm_runtime_profile_id: None,
         llm_debug_adaptation: false,
         llm_base_url: None,
+        critique_llm_backend: None,
+        critique_llm_model: None,
+        critique_llm_model_family_id: None,
+        critique_llm_runtime_profile_id: None,
+        critique_llm_base_url: None,
         max_auto_iters: 4,
         max_critique_iters: 2,
         // The mocked walk pre-writes clean critiques; the

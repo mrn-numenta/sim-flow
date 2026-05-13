@@ -16,6 +16,7 @@ use crate::client::SessionKind;
 use crate::config::Config;
 use crate::gate::{self, GateCheck, GateReport};
 use crate::prompts;
+use crate::session::auto::session_kind_to_protocol;
 use crate::session::host::Host;
 use crate::session::protocol::{
     DiagnosticLevel, Event, HostEvent, LlmMessage, LlmRole, LlmTool, PROTOCOL_VERSION,
@@ -442,6 +443,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             model_family_id: opts.llm_model_family_id.clone(),
             runtime_profile_id: opts.llm_runtime_profile_id.clone(),
             debug_adaptation: opts.llm_debug_adaptation,
+            kind: session_kind_to_protocol(opts.kind),
             messages: messages.clone(),
             tools: llm_tools.clone(),
         })?;

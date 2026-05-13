@@ -200,6 +200,41 @@ pub(crate) enum Command {
         /// hosted-API endpoints) and the `*-cli` backends.
         #[arg(long)]
         llm_base_url: Option<String>,
+        /// Optional per-kind LLM override for *critique* sessions.
+        /// When set, critique sub-sessions use this backend (and
+        /// its companion `--critique-llm-*` flags) instead of the
+        /// work-side `--llm-backend`. Typical pattern: run work on
+        /// a fast / cheap local model (e.g. `--llm-backend vllm
+        /// --llm-base-url http://localhost:8012/v1`) and route
+        /// critique to a stronger hosted model
+        /// (`--critique-llm-backend anthropic
+        /// --critique-llm-model claude-3-5-sonnet-latest`) so
+        /// reviews catch issues the work-side model misses without
+        /// paying the hosted-model cost on every turn. Each
+        /// `--critique-llm-*` flag is independent: unset fields
+        /// fall back to the matching work-side value, so you can
+        /// override just the backend and keep the model, or just
+        /// the base URL, etc.
+        #[arg(long)]
+        critique_llm_backend: Option<String>,
+        /// Model id for critique sessions. Falls back to
+        /// `--llm-model` when unset. See `--critique-llm-backend`.
+        #[arg(long)]
+        critique_llm_model: Option<String>,
+        /// Model-family override for critique sessions. Falls back
+        /// to `--llm-model-family` when unset.
+        #[arg(long)]
+        critique_llm_model_family: Option<String>,
+        /// Runtime-profile override for critique sessions. Falls
+        /// back to `--llm-runtime-profile` when unset.
+        #[arg(long)]
+        critique_llm_runtime_profile: Option<String>,
+        /// Base URL override for critique sessions. Falls back to
+        /// `--llm-base-url` when unset. Honored only when the
+        /// critique backend is a local-server family
+        /// (`ollama` / `lmstudio` / `vllm` / `openai-compat`).
+        #[arg(long)]
+        critique_llm_base_url: Option<String>,
         /// Per-session structural-gate iteration cap. The
         /// orchestrator's auto mode fires this when a Work session
         /// has produced no artifact for this many consecutive turns

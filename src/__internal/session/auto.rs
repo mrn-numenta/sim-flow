@@ -93,6 +93,23 @@ pub struct AutoOptions {
     /// and consumed by the agent constructors. `None` means
     /// "use the backend's conventional default".
     pub llm_base_url: Option<String>,
+    /// Optional separate LLM stack for critique sessions. When any
+    /// of these fields are `Some`, critique sub-sessions use the
+    /// override instead of the work-side stack (`llm_backend` etc.
+    /// above); fields left `None` here individually fall back to
+    /// the work-side value of the same name. Typical use case:
+    /// run work on a fast / cheap local model (e.g. vLLM serving a
+    /// 27B open model) and route critique to a stronger
+    /// hosted model (e.g. `--critique-llm-backend anthropic
+    /// --critique-llm-model claude-3-5-sonnet-latest`) so reviews
+    /// catch issues the work-side model misses without paying the
+    /// hosted-model cost on every turn. The `kind` axis is the only
+    /// routing key today; per-step routing isn't modeled.
+    pub critique_llm_backend: Option<String>,
+    pub critique_llm_model: Option<String>,
+    pub critique_llm_model_family_id: Option<String>,
+    pub critique_llm_runtime_profile_id: Option<String>,
+    pub critique_llm_base_url: Option<String>,
     /// Per-session structural-gate iteration cap (forwarded to the
     /// orchestrator's auto mode).
     pub max_auto_iters: u32,
@@ -900,18 +917,20 @@ fn run_subsession<H: Host>(
         step: step_id.to_string(),
         kind: kind_out,
     })?;
+    // Route the LLM stack per session kind. See `resolve_llm_for_kind`.
+    let llm = resolve_llm_for_kind(opts, kind);
     let session_opts = OrchestratorOptions {
         project_dir: opts.project_dir.clone(),
         foundation_root: opts.foundation_root.clone(),
         step_id: step_id.to_string(),
         kind,
         candidate: None,
-        llm_backend: opts.llm_backend.clone(),
-        llm_model: opts.llm_model.clone(),
-        llm_model_family_id: opts.llm_model_family_id.clone(),
-        llm_runtime_profile_id: opts.llm_runtime_profile_id.clone(),
+        llm_backend: llm.backend,
+        llm_model: llm.model,
+        llm_model_family_id: llm.model_family_id,
+        llm_runtime_profile_id: llm.runtime_profile_id,
         llm_debug_adaptation: opts.llm_debug_adaptation,
-        llm_base_url: opts.llm_base_url.clone(),
+        llm_base_url: llm.base_url,
         auto,
         max_auto_iters: opts.max_auto_iters,
         max_llm_requests: opts.max_llm_requests,
@@ -942,10 +961,69 @@ fn run_subsession<H: Host>(
     result
 }
 
-fn session_kind_to_protocol(kind: crate::client::SessionKind) -> SessionKindOut {
+pub(crate) fn session_kind_to_protocol(kind: crate::client::SessionKind) -> SessionKindOut {
     match kind {
         crate::client::SessionKind::Work => SessionKindOut::Work,
         crate::client::SessionKind::Critique => SessionKindOut::Critique,
+    }
+}
+
+/// Effective LLM stack for one sub-session, resolved from
+/// `AutoOptions` against the session `kind`.
+///
+/// Routing:
+///   - `SessionKind::Work` -> the primary `llm_*` fields, unchanged.
+///   - `SessionKind::Critique` -> each `critique_llm_*` field when
+///     set, with per-field fallback to the matching `llm_*` field
+///     when unset. `critique_llm_backend` falls back unconditionally
+///     (it's the routing key); the rest fall back via `or_else`.
+///
+/// Q&A and other future kinds always use the work-side stack today;
+/// add a dedicated knob if/when it becomes worth modeling.
+pub(crate) struct ResolvedLlmConfig {
+    pub backend: String,
+    pub model: Option<String>,
+    pub model_family_id: Option<String>,
+    pub runtime_profile_id: Option<String>,
+    pub base_url: Option<String>,
+}
+
+pub(crate) fn resolve_llm_for_kind(
+    opts: &AutoOptions,
+    kind: crate::client::SessionKind,
+) -> ResolvedLlmConfig {
+    let is_critique = matches!(kind, crate::client::SessionKind::Critique);
+    if is_critique {
+        ResolvedLlmConfig {
+            backend: opts
+                .critique_llm_backend
+                .clone()
+                .unwrap_or_else(|| opts.llm_backend.clone()),
+            model: opts
+                .critique_llm_model
+                .clone()
+                .or_else(|| opts.llm_model.clone()),
+            model_family_id: opts
+                .critique_llm_model_family_id
+                .clone()
+                .or_else(|| opts.llm_model_family_id.clone()),
+            runtime_profile_id: opts
+                .critique_llm_runtime_profile_id
+                .clone()
+                .or_else(|| opts.llm_runtime_profile_id.clone()),
+            base_url: opts
+                .critique_llm_base_url
+                .clone()
+                .or_else(|| opts.llm_base_url.clone()),
+        }
+    } else {
+        ResolvedLlmConfig {
+            backend: opts.llm_backend.clone(),
+            model: opts.llm_model.clone(),
+            model_family_id: opts.llm_model_family_id.clone(),
+            runtime_profile_id: opts.llm_runtime_profile_id.clone(),
+            base_url: opts.llm_base_url.clone(),
+        }
     }
 }
 
@@ -1708,6 +1786,11 @@ fn run_manual_qa_turn<H: Host>(
         debug_adaptation: opts.llm_debug_adaptation,
         model_family_id: opts.llm_model_family_id.clone(),
         runtime_profile_id: opts.llm_runtime_profile_id.clone(),
+        // Q&A is a third session kind alongside Work / Critique. The
+        // per-kind LLM routing override doesn't currently model Q&A
+        // separately (it'd be a fourth flag set); Q&A always uses
+        // the work-side LLM stack.
+        kind: SessionKindOut::Qa,
     })?;
 
     // Collect the assistant turn. Hosts stream `LlmChunk` and finish
@@ -2376,6 +2459,105 @@ impl<H: Host> Host for AutoHost<'_, H> {
 mod tests {
     use super::*;
     use crate::session::host::TestHost;
+
+    fn options_with_llm(backend: &str, model: Option<&str>, base_url: Option<&str>) -> AutoOptions {
+        AutoOptions {
+            project_dir: std::path::PathBuf::new(),
+            foundation_root: std::path::PathBuf::new(),
+            llm_backend: backend.into(),
+            llm_model: model.map(String::from),
+            llm_model_family_id: None,
+            llm_runtime_profile_id: None,
+            llm_debug_adaptation: false,
+            llm_base_url: base_url.map(String::from),
+            critique_llm_backend: None,
+            critique_llm_model: None,
+            critique_llm_model_family_id: None,
+            critique_llm_runtime_profile_id: None,
+            critique_llm_base_url: None,
+            max_auto_iters: 1,
+            max_critique_iters: 1,
+            max_critique_no_progress_iters: 0,
+            dm0_interactive: false,
+            max_llm_requests: 50,
+            max_identical_responses: 0,
+            step_mode: crate::session::protocol::StepMode::Auto,
+            no_preamble: true,
+        }
+    }
+
+    #[test]
+    fn resolve_llm_for_kind_work_returns_primary_stack() {
+        let opts = options_with_llm("vllm", Some("qwen3.6"), Some("http://localhost:8012/v1"));
+        let resolved = resolve_llm_for_kind(&opts, crate::client::SessionKind::Work);
+        assert_eq!(resolved.backend, "vllm");
+        assert_eq!(resolved.model.as_deref(), Some("qwen3.6"));
+        assert_eq!(
+            resolved.base_url.as_deref(),
+            Some("http://localhost:8012/v1")
+        );
+    }
+
+    #[test]
+    fn resolve_llm_for_kind_critique_falls_back_to_primary_when_no_override() {
+        // No critique override set -> critique uses the work stack
+        // exactly. Behavior matches every pre-feature run, so adding
+        // the per-kind routing doesn't change anyone's existing
+        // dispatches unless they opt in.
+        let opts = options_with_llm("vllm", Some("qwen3.6"), Some("http://localhost:8012/v1"));
+        let resolved = resolve_llm_for_kind(&opts, crate::client::SessionKind::Critique);
+        assert_eq!(resolved.backend, "vllm");
+        assert_eq!(resolved.model.as_deref(), Some("qwen3.6"));
+        assert_eq!(
+            resolved.base_url.as_deref(),
+            Some("http://localhost:8012/v1")
+        );
+    }
+
+    #[test]
+    fn resolve_llm_for_kind_critique_uses_full_override() {
+        // The canonical use case: work on vLLM, critique on
+        // Anthropic. Every critique knob is set and the work-side
+        // stack is unaffected.
+        let mut opts = options_with_llm("vllm", Some("qwen3.6"), Some("http://localhost:8012/v1"));
+        opts.critique_llm_backend = Some("anthropic".into());
+        opts.critique_llm_model = Some("claude-3-5-sonnet-latest".into());
+        opts.critique_llm_model_family_id = Some("claude_messages".into());
+        opts.critique_llm_runtime_profile_id = Some("anthropic_messages".into());
+        opts.critique_llm_base_url = Some("https://api.anthropic.com".into());
+
+        let work = resolve_llm_for_kind(&opts, crate::client::SessionKind::Work);
+        assert_eq!(work.backend, "vllm");
+        assert_eq!(work.model.as_deref(), Some("qwen3.6"));
+
+        let crit = resolve_llm_for_kind(&opts, crate::client::SessionKind::Critique);
+        assert_eq!(crit.backend, "anthropic");
+        assert_eq!(crit.model.as_deref(), Some("claude-3-5-sonnet-latest"));
+        assert_eq!(crit.model_family_id.as_deref(), Some("claude_messages"));
+        assert_eq!(
+            crit.runtime_profile_id.as_deref(),
+            Some("anthropic_messages")
+        );
+        assert_eq!(crit.base_url.as_deref(), Some("https://api.anthropic.com"));
+    }
+
+    #[test]
+    fn resolve_llm_for_kind_critique_partial_override_inherits_per_field() {
+        // Override JUST the backend; everything else falls back to
+        // the work-side stack. This is what the user actually wants
+        // when they swap backends but keep the model id meaningful
+        // (e.g. an Anthropic backend that knows how to resolve a
+        // model string they typed on the work side).
+        let mut opts = options_with_llm("vllm", Some("qwen3.6"), Some("http://localhost:8012/v1"));
+        opts.critique_llm_backend = Some("anthropic".into());
+        // model / base_url left unset
+
+        let crit = resolve_llm_for_kind(&opts, crate::client::SessionKind::Critique);
+        assert_eq!(crit.backend, "anthropic");
+        // Inherits the work-side knobs verbatim.
+        assert_eq!(crit.model.as_deref(), Some("qwen3.6"));
+        assert_eq!(crit.base_url.as_deref(), Some("http://localhost:8012/v1"));
+    }
 
     #[test]
     fn read_gate_findings_handles_numbered_bold_markdown() {

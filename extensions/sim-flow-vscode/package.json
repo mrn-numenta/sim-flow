@@ -293,6 +293,26 @@
           "default": "",
           "description": "Optional explicit runtime capability profile override. Leave empty to use the selected source's default runtime contract (`openai_compat_generic`, `anthropic_messages`, `vscode_language_model`, ...)."
         },
+        "sim-flow.llm.critique.source": {
+          "type": "string",
+          "default": "",
+          "description": "Optional separate LLM source for critique sub-sessions only. When set, the extension routes critique LLM dispatches here while work sessions continue to use `sim-flow.llm.source`. Typical use: run work on a fast local model (e.g. `lmstudio` / `vllm`) and route critique to a stronger hosted model (`anthropic`) so reviews catch issues the work-side model misses. Empty string falls back to `sim-flow.llm.source` (single-backend behavior)."
+        },
+        "sim-flow.llm.critique.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model identifier for critique dispatches. Falls back to `sim-flow.llm.model` when empty. See `sim-flow.llm.critique.source`."
+        },
+        "sim-flow.llm.critique.modelFamily": {
+          "type": "string",
+          "default": "",
+          "description": "Optional model-family override for critique dispatches. Falls back to `sim-flow.llm.modelFamily` when empty."
+        },
+        "sim-flow.llm.critique.runtimeProfile": {
+          "type": "string",
+          "default": "",
+          "description": "Optional runtime-profile override for critique dispatches. Falls back to `sim-flow.llm.runtimeProfile` when empty."
+        },
         "sim-flow.llm.ollama.baseUrl": {
           "type": "string",
           "default": "http://localhost:11434/v1",

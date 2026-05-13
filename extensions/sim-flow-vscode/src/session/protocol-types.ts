@@ -30,6 +30,10 @@ export type Event =
       backend: string;
       debug_adaptation?: boolean;
       event: "request-llm-response";
+      /**
+       * Session kind for this dispatch. Hosts that want to route per-kind (e.g. work to vLLM, critique to Anthropic) read this and pick a backend / model accordingly; hosts that don't care can ignore it. Defaulted to `Work` for backwards-compatibility with hosts written before the field existed.
+       */
+      kind?: SessionKindOut & string;
       messages: LlmMessage[];
       model?: string | null;
       model_family_id?: string | null;

@@ -483,6 +483,13 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         llm_runtime_profile_id: None,
         llm_debug_adaptation: false,
         llm_base_url: args.base_url.clone(),
+        // e2e_auto doesn't yet expose per-kind LLM flags; leave the
+        // critique stack defaulted to the work-side config.
+        critique_llm_backend: None,
+        critique_llm_model: None,
+        critique_llm_model_family_id: None,
+        critique_llm_runtime_profile_id: None,
+        critique_llm_base_url: None,
         max_auto_iters: args.max_auto_iters,
         max_critique_iters: args.max_critique_iters,
         max_critique_no_progress_iters: args.max_critique_no_progress_iters,

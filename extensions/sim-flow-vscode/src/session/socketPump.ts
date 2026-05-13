@@ -1034,7 +1034,7 @@ export class SocketSessionPump implements LiveSessionTransport {
     this.currentRenderer?.markdown(`\n${tag}: ${message}\n`);
   }
 
-  private readLiveLlmConfig(): {
+  private readLiveLlmConfig(kind: SessionKindOut | undefined): {
     source: LlmSource;
     rawSource: string;
     model?: string;
@@ -1054,12 +1054,37 @@ export class SocketSessionPump implements LiveSessionTransport {
     debugAdaptation: boolean;
   } {
     const config = vscode.workspace.getConfiguration("sim-flow");
-    const rawSource = (config.get<string>("llm.source") ?? this.llm.source) as string;
-    const model = (config.get<string>("llm.model") ?? "").trim() || this.llm.model;
+    // Per-kind routing: when `kind === "critique"` AND
+    // `sim-flow.llm.critique.source` is non-empty, every "primary"
+    // field below reads from the `llm.critique.*` namespace with
+    // per-field fallback to the matching `llm.*` value. Anything
+    // else (work, qa, or critique without an override) uses the
+    // plain `llm.*` settings. Mirrors `resolve_llm_for_kind` in
+    // the Rust orchestrator (auto.rs); the two layers route
+    // independently from the same SessionKindOut tag carried on
+    // the `request-llm-response` event.
+    const useCritiqueOverride =
+      kind === "critique"
+      && (config.get<string>("llm.critique.source") ?? "").trim().length > 0;
+    const pickStr = (critiqueKey: string, workKey: string, fallback?: string): string => {
+      if (useCritiqueOverride) {
+        const v = (config.get<string>(critiqueKey) ?? "").trim();
+        if (v.length > 0) return v;
+      }
+      return (config.get<string>(workKey) ?? "").trim() || fallback || "";
+    };
+    const rawSource = useCritiqueOverride
+      ? ((config.get<string>("llm.critique.source") ?? "").trim() || this.llm.source)
+      : (config.get<string>("llm.source") ?? this.llm.source);
+    const model =
+      pickStr("llm.critique.model", "llm.model", this.llm.model)
+      || undefined;
     const modelFamilyId =
-      (config.get<string>("llm.modelFamily") ?? "").trim() || this.llm.modelFamilyId;
+      pickStr("llm.critique.modelFamily", "llm.modelFamily", this.llm.modelFamilyId)
+      || undefined;
     const runtimeProfileId =
-      (config.get<string>("llm.runtimeProfile") ?? "").trim() || this.llm.runtimeProfileId;
+      pickStr("llm.critique.runtimeProfile", "llm.runtimeProfile", this.llm.runtimeProfileId)
+      || undefined;
     const ollamaBaseUrl =
       (config.get<string>("llm.ollama.baseUrl") ?? "").trim() || this.llm.ollamaBaseUrl;
     const lmstudioBaseUrl =
@@ -1104,7 +1129,16 @@ export class SocketSessionPump implements LiveSessionTransport {
   private async dispatchLlm(
     event: ProtocolEvent & { event: "request-llm-response" },
   ): Promise<void> {
-    const live = this.readLiveLlmConfig();
+    // The orchestrator (Rust side) sets `kind` to the session kind
+    // this dispatch belongs to (work / critique / qa). The pump
+    // routes per kind here: when the user has configured
+    // `sim-flow.llm.critique.source`, critique dispatches go to
+    // that backend while work / qa dispatches continue to use
+    // `sim-flow.llm.source`. Older orchestrator builds that
+    // predate the `kind` field on `RequestLlmResponse` deserialize
+    // with the serde default (`work`) -- that path keeps
+    // single-backend behavior, no per-kind override is applied.
+    const live = this.readLiveLlmConfig(event.kind);
     if (live.serverBaseUrl === null) {
       // `llm.source = "server:<name>"` but no matching entry in
       // `llm.servers`. Tell the user what's wrong rather than
