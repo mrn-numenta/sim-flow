@@ -502,6 +502,26 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         final_chunk: true,
                     })?;
                     let turn_wall_ms = turn_started.elapsed().as_millis() as u64;
+                    // Native tool calls are part of the model's
+                    // completion, not separate plumbing -- their
+                    // serialized JSON is what the server actually
+                    // generated this turn. A `write_file`-only turn
+                    // has `assistant_text.len() == 0` but emitted
+                    // potentially thousands of bytes of
+                    // `arguments_json`; counting only the text
+                    // under-reports completion size by orders of
+                    // magnitude for tool-heavy turns. Include the
+                    // tool call payload (name + arguments + id) so
+                    // tokens_out matches the model's actual output.
+                    let tool_calls_bytes: u64 = native_tool_calls
+                        .iter()
+                        .map(|c| {
+                            (c.id.as_deref().map(str::len).unwrap_or(0)
+                                + c.name.len()
+                                + c.arguments_json.len()) as u64
+                        })
+                        .sum();
+                    let completion_bytes = assistant_text.len() as u64 + tool_calls_bytes;
                     tracing::info!(
                         target: "sim_flow::metrics",
                         event = "turn_end",
@@ -510,6 +530,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         request_id = %request_id,
                         turn_index,
                         assistant_bytes = assistant_text.len(),
+                        tool_calls_bytes,
                         wall_ms = turn_wall_ms,
                     );
                     llm_metrics.record(
@@ -524,7 +545,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                             turn_wall_ms,
                             llm_stop_reason.as_deref(),
                             prompt_bytes,
-                            assistant_text.len() as u64,
+                            completion_bytes,
                         ),
                     );
                     break;
@@ -542,6 +563,11 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     llm_error_kind = Some(kind);
                     llm_error_message = Some(message);
                     let turn_wall_ms = turn_started.elapsed().as_millis() as u64;
+                    // On the error path no tool calls were received
+                    // (LlmError supersedes LlmEnd in the wire
+                    // contract); whatever streamed assistant_text
+                    // came back is the partial completion, count
+                    // only that.
                     llm_metrics.record(
                         &crate::session::llm_metrics::LlmMetricsRecord::from_byte_estimate(
                             unix_seconds_now(),
@@ -560,6 +586,28 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     break;
                 }
                 Some(HostEvent::Cancel) => {
+                    // Mid-turn cancellation: record what we know
+                    // (wall time spent + any partial completion
+                    // bytes streamed) before bailing. The partial
+                    // tokens have already been generated server-
+                    // side, so they're billable; the metrics row
+                    // captures that for cost analysis.
+                    let turn_wall_ms = turn_started.elapsed().as_millis() as u64;
+                    llm_metrics.record(
+                        &crate::session::llm_metrics::LlmMetricsRecord::from_byte_estimate(
+                            unix_seconds_now(),
+                            step.id,
+                            session_kind_to_protocol(opts.kind),
+                            &opts.llm_backend,
+                            opts.llm_model.as_deref(),
+                            &request_id,
+                            turn_index,
+                            turn_wall_ms,
+                            Some("cancelled"),
+                            prompt_bytes,
+                            assistant_text.len() as u64,
+                        ),
+                    );
                     host.write(&Event::SessionEnd {
                         reason: SessionEndReason::Cancelled,
                         message: None,
