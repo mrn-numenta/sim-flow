@@ -493,10 +493,12 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     request_id: rid,
                     tool_calls: native_calls,
                     stop_reason,
+                    usage,
                     ..
                 }) if rid == request_id => {
                     native_tool_calls = native_calls;
                     let llm_stop_reason = stop_reason;
+                    let llm_usage = usage;
                     host.write(&Event::AssistantText {
                         text: String::new(),
                         final_chunk: true,
@@ -533,8 +535,8 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         tool_calls_bytes,
                         wall_ms = turn_wall_ms,
                     );
-                    llm_metrics.record(
-                        &crate::session::llm_metrics::LlmMetricsRecord::from_byte_estimate(
+                    let mut metric =
+                        crate::session::llm_metrics::LlmMetricsRecord::from_byte_estimate(
                             unix_seconds_now(),
                             step.id,
                             session_kind_to_protocol(opts.kind),
@@ -546,8 +548,12 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                             llm_stop_reason.as_deref(),
                             prompt_bytes,
                             completion_bytes,
-                        ),
-                    );
+                        );
+                    if let Some(u) = &llm_usage {
+                        metric = metric
+                            .with_exact_usage(u.prompt_tokens.into(), u.completion_tokens.into());
+                    }
+                    llm_metrics.record(&metric);
                     break;
                 }
                 Some(HostEvent::LlmError {

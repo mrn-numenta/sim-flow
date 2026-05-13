@@ -235,6 +235,11 @@ fn auto_opts(project: &std::path::Path, mode: StepMode) -> AutoOptions {
         critique_llm_model_family_id: None,
         critique_llm_runtime_profile_id: None,
         critique_llm_base_url: None,
+        qa_llm_backend: None,
+        qa_llm_model: None,
+        qa_llm_model_family_id: None,
+        qa_llm_runtime_profile_id: None,
+        qa_llm_base_url: None,
         max_auto_iters: 2,
         max_critique_iters: 1,
         max_critique_no_progress_iters: 0,
@@ -286,6 +291,7 @@ fn tool_call_only_turn_does_not_trigger_empty_response_retry() {
             name: "list_dir".into(),
             arguments_json: r#"{"path":"docs"}"#.into(),
         }],
+        usage: None,
     });
     // The DM0 work session will iterate (no artifact landed yet)
     // and emit another RequestLlmResponse. We give it the same
@@ -304,6 +310,7 @@ fn tool_call_only_turn_does_not_trigger_empty_response_retry() {
                 name: "list_dir".into(),
                 arguments_json: r#"{"path":"docs"}"#.into(),
             }],
+            usage: None,
         });
     }
     host.enqueue(HostEvent::Shutdown);
@@ -365,6 +372,7 @@ fn truly_empty_response_still_triggers_diagnostic() {
         request_id: "lr-1".into(),
         stop_reason: Some("stop".into()),
         tool_calls: Vec::new(),
+        usage: None,
     });
     host.enqueue(HostEvent::Shutdown);
 

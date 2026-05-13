@@ -823,6 +823,26 @@
             ],
             "type": "object"
           },
+          "LlmUsage": {
+            "description": "Optional exact token usage attached to `LlmEnd`. Mirrors the OpenAI `usage` object's two essential fields; hosts whose backend reports `total_tokens` separately can compute it from the two. Hosts that don't have these numbers omit the entire `usage` field on `LlmEnd`. When present, the orchestrator's `llm-metrics.jsonl` writer prefers these over the byte-estimated `tokens_in/out` and sets `tokens_exact: true` on the row.",
+            "properties": {
+              "completion_tokens": {
+                "format": "uint32",
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              "prompt_tokens": {
+                "format": "uint32",
+                "minimum": 0.0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "completion_tokens",
+              "prompt_tokens"
+            ],
+            "type": "object"
+          },
           "SessionKindOut": {
             "description": "Mirror of `client::SessionKind` exposed in the protocol. Kept independent of the internal type so the wire format stays stable even if the internal representation changes.",
             "oneOf": [
@@ -962,6 +982,17 @@
                   "$ref": "#/definitions/LlmToolCall"
                 },
                 "type": "array"
+              },
+              "usage": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/LlmUsage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Optional exact token usage reported by the model server. Populated by hosts whose backend surfaces a `usage` payload (in-process `TerminalHost` agents that ran `dispatch_chat` against an openai-compat server; extension dispatchers that capture the SSE `usage` chunk). Omitted by hosts that don't know -- the orchestrator's `llm-metrics.jsonl` falls back to a byte-based estimate in that case (`tokens_exact: false` on the metrics row). `#[serde(default)]` keeps older hosts wire-compatible."
               }
             },
             "required": [

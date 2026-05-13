@@ -184,6 +184,18 @@ pub enum HostEvent {
         /// that haven't been updated.
         #[serde(default)]
         tool_calls: Vec<LlmToolCall>,
+        /// Optional exact token usage reported by the model server.
+        /// Populated by hosts whose backend surfaces a `usage`
+        /// payload (in-process `TerminalHost` agents that ran
+        /// `dispatch_chat` against an openai-compat server;
+        /// extension dispatchers that capture the SSE `usage`
+        /// chunk). Omitted by hosts that don't know -- the
+        /// orchestrator's `llm-metrics.jsonl` falls back to a
+        /// byte-based estimate in that case (`tokens_exact: false`
+        /// on the metrics row). `#[serde(default)]` keeps older
+        /// hosts wire-compatible.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<LlmUsage>,
     },
     /// LLM dispatch failed.
     LlmError {
@@ -430,6 +442,20 @@ pub struct LlmToolCall {
     pub id: Option<String>,
     pub name: String,
     pub arguments_json: String,
+}
+
+/// Optional exact token usage attached to `LlmEnd`. Mirrors the
+/// OpenAI `usage` object's two essential fields; hosts whose
+/// backend reports `total_tokens` separately can compute it from
+/// the two. Hosts that don't have these numbers omit the entire
+/// `usage` field on `LlmEnd`. When present, the orchestrator's
+/// `llm-metrics.jsonl` writer prefers these over the
+/// byte-estimated `tokens_in/out` and sets `tokens_exact: true`
+/// on the row.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LlmUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
 }
 
 /// Step descriptor sent in `HelloAck`. Same data as `sim-flow

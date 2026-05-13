@@ -142,6 +142,20 @@ export interface LlmStreamChunk {
    * undefined means "no native tool calls on this chunk."
    */
   toolCalls?: StreamToolCall[];
+  /**
+   * Exact token counts reported by the model server. Populated by
+   * backends whose SSE stream surfaces a `usage` payload (typically
+   * the final SSE chunk when the request was sent with
+   * `stream_options.include_usage: true` on OpenAI-compat servers).
+   * The pump aggregates the last non-null `usage` from the stream
+   * and ships it on `LlmEnd.usage`; the orchestrator overrides
+   * its byte-based token estimate in `llm-metrics.jsonl` with
+   * these values and flips `tokens_exact: true` on the row.
+   */
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+  };
 }
 
 export interface StreamToolCall {

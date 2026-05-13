@@ -239,6 +239,10 @@ export type HostEvent =
        * Native tool calls the model emitted (when the backend supports native tool-use AND the orchestrator advertised a tool catalog on the matching `RequestLlmResponse`). Empty for fence-mode dispatches and for backends that don't support native tool calls. `#[serde(default)]` keeps the wire shape backward compatible with hosts that haven't been updated.
        */
       tool_calls?: LlmToolCall[];
+      /**
+       * Optional exact token usage reported by the model server. Populated by hosts whose backend surfaces a `usage` payload (in-process `TerminalHost` agents that ran `dispatch_chat` against an openai-compat server; extension dispatchers that capture the SSE `usage` chunk). Omitted by hosts that don't know -- the orchestrator's `llm-metrics.jsonl` falls back to a byte-based estimate in that case (`tokens_exact: false` on the metrics row). `#[serde(default)]` keeps older hosts wire-compatible.
+       */
+      usage?: LlmUsage | null;
     }
   | {
       event: "llm-error";
@@ -293,4 +297,11 @@ export interface LlmToolCall {
   arguments_json: string;
   id?: string | null;
   name: string;
+}
+/**
+ * Optional exact token usage attached to `LlmEnd`. Mirrors the OpenAI `usage` object's two essential fields; hosts whose backend reports `total_tokens` separately can compute it from the two. Hosts that don't have these numbers omit the entire `usage` field on `LlmEnd`. When present, the orchestrator's `llm-metrics.jsonl` writer prefers these over the byte-estimated `tokens_in/out` and sets `tokens_exact: true` on the row.
+ */
+export interface LlmUsage {
+  completion_tokens: number;
+  prompt_tokens: number;
 }

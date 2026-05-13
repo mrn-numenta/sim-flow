@@ -1151,6 +1151,11 @@ fn auto_opts(
         critique_llm_model_family_id: None,
         critique_llm_runtime_profile_id: None,
         critique_llm_base_url: None,
+        qa_llm_backend: None,
+        qa_llm_model: None,
+        qa_llm_model_family_id: None,
+        qa_llm_runtime_profile_id: None,
+        qa_llm_base_url: None,
         max_auto_iters: 3,
         max_critique_iters: 2,
         // Tests that drive the critique-iter cap explicitly rely

@@ -154,6 +154,9 @@ impl TestHost {
             request_id,
             stop_reason: Some("stop".into()),
             tool_calls: Vec::new(),
+            // TestHost is used in unit tests; exact usage isn't
+            // material to the protocol assertions there.
+            usage: None,
         });
         self
     }
@@ -450,10 +453,27 @@ where
                                 arguments_json: c.arguments_json,
                             })
                             .collect();
+                        // Pass exact token counts through to the
+                        // orchestrator's metrics emit point. `metrics`
+                        // here is the agent-returned `LlmCallMetrics`
+                        // whose `tokens_in/out` come from the model
+                        // server's `usage` payload (when available).
+                        // Both `None` means the server didn't report
+                        // usage on this turn -- emit `None` so the
+                        // metrics writer falls back to the byte
+                        // estimate.
+                        let llm_usage = match (metrics.tokens_in, metrics.tokens_out) {
+                            (Some(p), Some(c)) => Some(crate::session::protocol::LlmUsage {
+                                prompt_tokens: p,
+                                completion_tokens: c,
+                            }),
+                            _ => None,
+                        };
                         self.pending.push_back(HostEvent::LlmEnd {
                             request_id: request_id.clone(),
                             stop_reason: Some("stop".into()),
                             tool_calls: llm_tool_calls,
+                            usage: llm_usage,
                         });
                     }
                     Err(err) => {

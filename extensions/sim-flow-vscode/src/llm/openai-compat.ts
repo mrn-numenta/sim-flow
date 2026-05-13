@@ -153,10 +153,19 @@ export class OpenAiCompatibleBackend implements LlmBackend {
       messages: OpenAiMessage[];
       tools?: OpenAiTool[];
       stream: boolean;
+      stream_options?: { include_usage: boolean };
     } = {
       model,
       messages: transformMessagesForOpenAi(familyInput.messages, modelFamily),
       stream: true,
+      // Ask the server to emit a final SSE chunk whose `usage` block
+      // carries the exact prompt/completion token counts. vLLM,
+      // OpenAI's API, and most openai-compat servers honour this;
+      // servers that don't recognise the option ignore it. The pump
+      // forwards the resulting `usage` to `LlmEnd.usage` so
+      // `llm-metrics.jsonl` rows carry exact numbers
+      // (`tokens_exact: true`) instead of the byte/4 estimate.
+      stream_options: { include_usage: true },
     };
     if (tools && tools.length > 0) {
       body.tools = tools.map(toOpenAiTool);
@@ -286,6 +295,17 @@ export class OpenAiCompatibleBackend implements LlmBackend {
             continue;
           }
           const delta = readDelta(parsed);
+          // Exact-token `usage` block. With
+          // `stream_options.include_usage: true` set in the request,
+          // openai-compat servers emit a final SSE chunk whose
+          // `usage` object carries the prompt/completion token
+          // counts. Hand it through to the pump so it lands on
+          // `LlmEnd.usage`; the orchestrator's metrics writer
+          // promotes the row to `tokens_exact: true` when present.
+          const usage = readUsage(parsed);
+          if (usage) {
+            yield { text: "", usage };
+          }
           if (delta?.reasoning && delta.reasoning.length > 0) {
             yield { text: delta.reasoning, kind: "reasoning" };
           }
@@ -732,6 +752,35 @@ interface SseDelta {
 interface SseToolCallFragment {
   index?: number;
   function?: { name?: string; arguments?: string };
+}
+
+/**
+ * Pull the `usage` object off a streamed openai-compat SSE chunk
+ * if present. The final chunk (with `stream_options.include_usage`
+ * set on the request) carries `usage: { prompt_tokens,
+ * completion_tokens, total_tokens }` on most servers; vLLM also
+ * emits the same shape. Earlier chunks carry `usage: null` or omit
+ * the field entirely -- both return `undefined` here. We coerce
+ * non-number values to `undefined` so a malformed payload doesn't
+ * yield NaN tokens.
+ */
+function readUsage(
+  parsed: unknown,
+): { promptTokens: number; completionTokens: number } | undefined {
+  if (!parsed || typeof parsed !== "object") {
+    return undefined;
+  }
+  const u = (parsed as { usage?: unknown }).usage;
+  if (!u || typeof u !== "object") {
+    return undefined;
+  }
+  const obj = u as Record<string, unknown>;
+  const p = obj.prompt_tokens;
+  const c = obj.completion_tokens;
+  if (typeof p !== "number" || typeof c !== "number") {
+    return undefined;
+  }
+  return { promptTokens: p, completionTokens: c };
 }
 
 function readDelta(parsed: unknown): SseDelta | undefined {

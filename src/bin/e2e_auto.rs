@@ -525,6 +525,16 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         critique_llm_model_family_id: None,
         critique_llm_runtime_profile_id: None,
         critique_llm_base_url: args.critique_base_url.clone(),
+        // e2e_auto doesn't surface per-kind Q&A flags today
+        // (idle-state Q&A only fires in interactive manual
+        // sessions, which e2e_auto doesn't drive). Leave them
+        // unset; the orchestrator falls back to the work-side
+        // stack.
+        qa_llm_backend: None,
+        qa_llm_model: None,
+        qa_llm_model_family_id: None,
+        qa_llm_runtime_profile_id: None,
+        qa_llm_base_url: None,
         max_auto_iters: args.max_auto_iters,
         max_critique_iters: args.max_critique_iters,
         max_critique_no_progress_iters: args.max_critique_no_progress_iters,

@@ -941,6 +941,10 @@ fn handle_event(
                             request_id,
                             stop_reason: Some(stop_reason.into()),
                             tool_calls,
+                            // e2e_manual is a test driver; the
+                            // exact-token metric isn't material to
+                            // its assertions.
+                            usage: None,
                         },
                         capture,
                     )?;

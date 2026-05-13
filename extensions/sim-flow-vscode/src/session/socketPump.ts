@@ -1054,37 +1054,43 @@ export class SocketSessionPump implements LiveSessionTransport {
     debugAdaptation: boolean;
   } {
     const config = vscode.workspace.getConfiguration("sim-flow");
-    // Per-kind routing: when `kind === "critique"` AND
+    // Per-kind routing: pick the override namespace (if any) based
+    // on the event's `kind`. When `kind === "critique"` AND
     // `sim-flow.llm.critique.source` is non-empty, every "primary"
     // field below reads from the `llm.critique.*` namespace with
-    // per-field fallback to the matching `llm.*` value. Anything
-    // else (work, qa, or critique without an override) uses the
-    // plain `llm.*` settings. Mirrors `resolve_llm_for_kind` in
-    // the Rust orchestrator (auto.rs); the two layers route
-    // independently from the same SessionKindOut tag carried on
-    // the `request-llm-response` event.
-    const useCritiqueOverride =
-      kind === "critique"
-      && (config.get<string>("llm.critique.source") ?? "").trim().length > 0;
-    const pickStr = (critiqueKey: string, workKey: string, fallback?: string): string => {
-      if (useCritiqueOverride) {
-        const v = (config.get<string>(critiqueKey) ?? "").trim();
+    // per-field fallback to the matching `llm.*` value. Same for
+    // `kind === "qa"` reading `llm.qa.*`. `kind === "work"` (and
+    // older orchestrators that don't emit `kind` at all -- serde
+    // default is `work`) uses the plain `llm.*` settings.
+    // Mirrors `resolve_llm_for_kind` / `resolve_llm_for_qa` in the
+    // Rust orchestrator; the two layers route independently from
+    // the same SessionKindOut tag on the wire.
+    const overrideNamespace =
+      kind === "critique" && (config.get<string>("llm.critique.source") ?? "").trim().length > 0
+        ? "critique"
+        : kind === "qa" && (config.get<string>("llm.qa.source") ?? "").trim().length > 0
+          ? "qa"
+          : null;
+    const overrideKey = (suffix: string): string =>
+      overrideNamespace === null
+        ? `llm.${suffix}` // unreachable when overrideNamespace is null; caller guards
+        : `llm.${overrideNamespace}.${suffix}`;
+    const pickStr = (workKey: string, suffix: string, fallback?: string): string => {
+      if (overrideNamespace !== null) {
+        const v = (config.get<string>(overrideKey(suffix)) ?? "").trim();
         if (v.length > 0) return v;
       }
       return (config.get<string>(workKey) ?? "").trim() || fallback || "";
     };
-    const rawSource = useCritiqueOverride
-      ? ((config.get<string>("llm.critique.source") ?? "").trim() || this.llm.source)
-      : (config.get<string>("llm.source") ?? this.llm.source);
-    const model =
-      pickStr("llm.critique.model", "llm.model", this.llm.model)
-      || undefined;
+    const rawSource =
+      overrideNamespace !== null
+        ? ((config.get<string>(overrideKey("source")) ?? "").trim() || this.llm.source)
+        : (config.get<string>("llm.source") ?? this.llm.source);
+    const model = pickStr("llm.model", "model", this.llm.model) || undefined;
     const modelFamilyId =
-      pickStr("llm.critique.modelFamily", "llm.modelFamily", this.llm.modelFamilyId)
-      || undefined;
+      pickStr("llm.modelFamily", "modelFamily", this.llm.modelFamilyId) || undefined;
     const runtimeProfileId =
-      pickStr("llm.critique.runtimeProfile", "llm.runtimeProfile", this.llm.runtimeProfileId)
-      || undefined;
+      pickStr("llm.runtimeProfile", "runtimeProfile", this.llm.runtimeProfileId) || undefined;
     const ollamaBaseUrl =
       (config.get<string>("llm.ollama.baseUrl") ?? "").trim() || this.llm.ollamaBaseUrl;
     const lmstudioBaseUrl =
@@ -1244,6 +1250,16 @@ export class SocketSessionPump implements LiveSessionTransport {
       // are passed through structurally and shipped in `LlmEnd`.
       const nativeToolCalls: import("../session/protocol-types").LlmToolCall[] = [];
       let nextSyntheticToolCallId = 0;
+      // Last non-null `usage` payload the backend yielded this
+      // turn. openai-compat servers (vLLM, OpenAI's own API)
+      // emit `usage` on the FINAL SSE chunk when
+      // `stream_options.include_usage: true` is set on the
+      // request; we overwrite on every yield so a future
+      // multi-usage stream still ships the latest. `undefined`
+      // when the backend doesn't surface usage at all -- the
+      // orchestrator's metrics writer then falls back to its
+      // byte/4 estimate.
+      let usage: import("../llm/types").LlmStreamChunk["usage"] | undefined;
       const absorbToolCalls = (chunk: { toolCalls?: import("../llm/types").StreamToolCall[] }) => {
         if (!chunk.toolCalls || chunk.toolCalls.length === 0) {
           return;
@@ -1256,8 +1272,14 @@ export class SocketSessionPump implements LiveSessionTransport {
           });
         }
       };
+      const absorbUsage = (chunk: { usage?: import("../llm/types").LlmStreamChunk["usage"] }) => {
+        if (chunk.usage) {
+          usage = chunk.usage;
+        }
+      };
       for await (const rawChunk of backend.stream(messages, cancelSource.token, tools)) {
         absorbToolCalls(rawChunk);
+        absorbUsage(rawChunk);
         for (const chunk of responseNormalizer.normalizeChunk(rawChunk)) {
           if (chunk.text.length === 0) {
             continue;
@@ -1318,6 +1340,16 @@ export class SocketSessionPump implements LiveSessionTransport {
         // back to fenced-block extraction from the assistant text.
         stop_reason: nativeToolCalls.length > 0 ? "tool_calls" : "stop",
         tool_calls: nativeToolCalls,
+        // Pass through the server's exact-token usage when the
+        // backend yielded one this turn. The orchestrator's metric
+        // writer promotes the row to `tokens_exact: true` when
+        // this field is present.
+        usage: usage
+          ? {
+              prompt_tokens: usage.promptTokens,
+              completion_tokens: usage.completionTokens,
+            }
+          : undefined,
       });
     } catch (err) {
       closeReasoning();

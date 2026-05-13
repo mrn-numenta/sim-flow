@@ -313,6 +313,26 @@
           "default": "",
           "description": "Optional runtime-profile override for critique dispatches. Falls back to `sim-flow.llm.runtimeProfile` when empty."
         },
+        "sim-flow.llm.qa.source": {
+          "type": "string",
+          "default": "",
+          "description": "Optional separate LLM source for idle-state Q&A turns (the side-conversation that fires when you type a message while a sub-session is parked). When set, conversational Q&A is routed here while work + critique stay on their own backends. Empty string falls back to `sim-flow.llm.source`."
+        },
+        "sim-flow.llm.qa.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model identifier for Q&A dispatches. Falls back to `sim-flow.llm.model` when empty."
+        },
+        "sim-flow.llm.qa.modelFamily": {
+          "type": "string",
+          "default": "",
+          "description": "Optional model-family override for Q&A dispatches. Falls back to `sim-flow.llm.modelFamily` when empty."
+        },
+        "sim-flow.llm.qa.runtimeProfile": {
+          "type": "string",
+          "default": "",
+          "description": "Optional runtime-profile override for Q&A dispatches. Falls back to `sim-flow.llm.runtimeProfile` when empty."
+        },
         "sim-flow.llm.ollama.baseUrl": {
           "type": "string",
           "default": "http://localhost:11434/v1",

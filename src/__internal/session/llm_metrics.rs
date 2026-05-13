@@ -101,8 +101,9 @@ pub struct LlmMetricsRecord {
 
 impl LlmMetricsRecord {
     /// Byte-estimated record. Use when the host doesn't know exact
-    /// token counts (the JSONL / socket transport doesn't carry
-    /// model `usage` today).
+    /// token counts (the JSONL / socket transport carries no
+    /// `usage` payload). For backends that DO know exact counts,
+    /// prefer the `with_exact_usage` chainer below.
     #[allow(clippy::too_many_arguments)]
     pub fn from_byte_estimate(
         started_unix: u64,
@@ -133,6 +134,22 @@ impl LlmMetricsRecord {
             tokens_out: (completion_bytes as f64 / BYTES_PER_TOKEN_EST).round() as u64,
             tokens_exact: false,
         }
+    }
+
+    /// Override the byte-based token estimate with exact counts
+    /// from the model server's `usage` payload. Called when the
+    /// host attached `LlmEnd.usage`. `prompt_bytes` /
+    /// `completion_bytes` are kept on the row because they're
+    /// useful for spotting tokenizer pathologies (e.g. a 50k-byte
+    /// prompt that costs 200k tokens points at a bad
+    /// `chat_template_kwargs.enable_thinking` config or a
+    /// rendering bug); the `tokens_*` fields become the
+    /// authoritative cost number with `tokens_exact: true`.
+    pub fn with_exact_usage(mut self, prompt_tokens: u64, completion_tokens: u64) -> Self {
+        self.tokens_in = prompt_tokens;
+        self.tokens_out = completion_tokens;
+        self.tokens_exact = true;
+        self
     }
 }
 

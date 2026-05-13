@@ -25,6 +25,13 @@ pub(crate) struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+// `Auto` is genuinely large (clap collapses every flag into the
+// variant struct); the boxing rewrite suggested by clippy would
+// hurt readability without changing runtime behavior in any
+// measurable way for this CLI's call frequency. Suppress here so
+// the new --qa-llm-* / --critique-llm-* flags don't trip the
+// inherited `-D warnings`.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Command {
     /// Initialize `.sim-flow/` state and config in the project directory.
     Init {
@@ -235,6 +242,24 @@ pub(crate) enum Command {
         /// (`ollama` / `lmstudio` / `vllm` / `openai-compat`).
         #[arg(long)]
         critique_llm_base_url: Option<String>,
+        /// Optional per-kind LLM override for *idle-state Q&A*
+        /// turns -- the side-conversation that fires when the user
+        /// types a `UserMessage` while manual mode is parked
+        /// between sub-sessions. Mirrors `--critique-llm-*`:
+        /// unset fields fall back per-field to `--llm-*`. Use case:
+        /// route conversational Q&A to a cheaper / chattier model
+        /// (e.g. `--qa-llm-backend openai --qa-llm-model gpt-4o-mini`)
+        /// while work + critique stay on the heavyweight default.
+        #[arg(long)]
+        qa_llm_backend: Option<String>,
+        #[arg(long)]
+        qa_llm_model: Option<String>,
+        #[arg(long)]
+        qa_llm_model_family: Option<String>,
+        #[arg(long)]
+        qa_llm_runtime_profile: Option<String>,
+        #[arg(long)]
+        qa_llm_base_url: Option<String>,
         /// Per-session structural-gate iteration cap. The
         /// orchestrator's auto mode fires this when a Work session
         /// has produced no artifact for this many consecutive turns
@@ -907,6 +932,123 @@ mod tests {
                 assert_eq!(session_mode, SessionMode::PerStep);
                 assert_eq!(step_mode, StepMode::Auto);
                 assert!(no_preamble);
+            }
+            other => panic!("expected Command::Auto, got {other:?}"),
+        }
+    }
+
+    // ---------- Auto subcommand: --critique-llm-* plumbing ----------
+
+    #[test]
+    fn auto_default_omits_all_critique_llm_flags() {
+        // Default `sim-flow auto` keeps the critique stack
+        // implicit (everything falls back to the work-side
+        // `--llm-*` knobs in the orchestrator's
+        // `resolve_llm_for_kind`).
+        let cli = parse(&["sim-flow", "auto"]);
+        match cli.command {
+            Command::Auto {
+                critique_llm_backend,
+                critique_llm_model,
+                critique_llm_model_family,
+                critique_llm_runtime_profile,
+                critique_llm_base_url,
+                ..
+            } => {
+                assert_eq!(critique_llm_backend, None);
+                assert_eq!(critique_llm_model, None);
+                assert_eq!(critique_llm_model_family, None);
+                assert_eq!(critique_llm_runtime_profile, None);
+                assert_eq!(critique_llm_base_url, None);
+            }
+            other => panic!("expected Command::Auto, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn auto_accepts_critique_llm_backend_flag() {
+        // The canonical use case: vLLM for work, Anthropic for
+        // critique. Every flag should land in its own field; we
+        // assert each one individually so a renamed destination
+        // surfaces the regression.
+        let cli = parse(&[
+            "sim-flow",
+            "auto",
+            "--llm-backend",
+            "vllm",
+            "--llm-model",
+            "qwen3.6",
+            "--critique-llm-backend",
+            "anthropic",
+            "--critique-llm-model",
+            "claude-3-5-sonnet-latest",
+            "--critique-llm-model-family",
+            "claude_messages",
+            "--critique-llm-runtime-profile",
+            "anthropic_messages",
+            "--critique-llm-base-url",
+            "https://api.anthropic.com",
+        ]);
+        match cli.command {
+            Command::Auto {
+                llm_backend,
+                llm_model,
+                critique_llm_backend,
+                critique_llm_model,
+                critique_llm_model_family,
+                critique_llm_runtime_profile,
+                critique_llm_base_url,
+                ..
+            } => {
+                assert_eq!(llm_backend, "vllm");
+                assert_eq!(llm_model.as_deref(), Some("qwen3.6"));
+                assert_eq!(critique_llm_backend.as_deref(), Some("anthropic"));
+                assert_eq!(
+                    critique_llm_model.as_deref(),
+                    Some("claude-3-5-sonnet-latest")
+                );
+                assert_eq!(
+                    critique_llm_model_family.as_deref(),
+                    Some("claude_messages")
+                );
+                assert_eq!(
+                    critique_llm_runtime_profile.as_deref(),
+                    Some("anthropic_messages")
+                );
+                assert_eq!(
+                    critique_llm_base_url.as_deref(),
+                    Some("https://api.anthropic.com")
+                );
+            }
+            other => panic!("expected Command::Auto, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn auto_partial_critique_override_parses_without_complaint() {
+        // The CLI doesn't validate that critique flags are
+        // self-consistent (e.g. model set but backend unset).
+        // The orchestrator emits a Diagnostic at session start
+        // when it spots a partial override (see auto.rs); this
+        // test pins down that the CLI itself stays permissive
+        // -- the warning is informational, not a parse error.
+        let cli = parse(&[
+            "sim-flow",
+            "auto",
+            "--critique-llm-model",
+            "claude-3-5-sonnet-latest",
+        ]);
+        match cli.command {
+            Command::Auto {
+                critique_llm_backend,
+                critique_llm_model,
+                ..
+            } => {
+                assert_eq!(critique_llm_backend, None);
+                assert_eq!(
+                    critique_llm_model.as_deref(),
+                    Some("claude-3-5-sonnet-latest")
+                );
             }
             other => panic!("expected Command::Auto, got {other:?}"),
         }

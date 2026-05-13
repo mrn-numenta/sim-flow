@@ -110,6 +110,18 @@ pub struct AutoOptions {
     pub critique_llm_model_family_id: Option<String>,
     pub critique_llm_runtime_profile_id: Option<String>,
     pub critique_llm_base_url: Option<String>,
+    /// Optional separate LLM stack for idle-state Q&A turns
+    /// (`SessionKindOut::Qa` -- triggered by a `UserMessage`
+    /// while manual mode is parked between sub-sessions). Each
+    /// field falls back per-field to the work-side `llm_*` stack
+    /// when unset, mirroring the critique override semantics. Q&A
+    /// turns are conversational; users may want them to go to a
+    /// chattier / cheaper model than work and critique do.
+    pub qa_llm_backend: Option<String>,
+    pub qa_llm_model: Option<String>,
+    pub qa_llm_model_family_id: Option<String>,
+    pub qa_llm_runtime_profile_id: Option<String>,
+    pub qa_llm_base_url: Option<String>,
     /// Per-session structural-gate iteration cap (forwarded to the
     /// orchestrator's auto mode).
     pub max_auto_iters: u32,
@@ -182,6 +194,49 @@ pub fn run_auto<H: Host>(opts: AutoOptions, host: &mut H) -> Result<()> {
     auto_host.write(&Event::StepModeChanged {
         mode: opts.step_mode,
     })?;
+
+    // 2a. Sanity-check the per-kind LLM routing: a `critique_llm_*`
+    //     field set WITHOUT a matching `critique_llm_backend` keeps
+    //     the backend on the work-side stack but swaps the model /
+    //     base_url. That can silently send (say)
+    //     `claude-3-5-sonnet-latest` to a vLLM server that doesn't
+    //     know the name. Emit a Diagnostic so the operator sees
+    //     what the orchestrator is actually going to dispatch.
+    if opts.critique_llm_backend.is_none() {
+        let partials: Vec<&str> = [
+            ("critique_llm_model", opts.critique_llm_model.is_some()),
+            (
+                "critique_llm_model_family_id",
+                opts.critique_llm_model_family_id.is_some(),
+            ),
+            (
+                "critique_llm_runtime_profile_id",
+                opts.critique_llm_runtime_profile_id.is_some(),
+            ),
+            (
+                "critique_llm_base_url",
+                opts.critique_llm_base_url.is_some(),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(name, set)| if set { Some(name) } else { None })
+        .collect();
+        if !partials.is_empty() {
+            let msg = format!(
+                "critique-llm override is partial: {} set but `critique_llm_backend` is not. \
+                 Critique sub-sessions will use the work-side backend (`{}`) with the \
+                 overridden field(s) -- if your intent was to route critique to a \
+                 different backend, also set --critique-llm-backend.",
+                partials.join(", "),
+                opts.llm_backend
+            );
+            warn!("{msg}");
+            auto_host.write(&Event::Diagnostic {
+                level: DiagnosticLevel::Warning,
+                message: msg,
+            })?;
+        }
+    }
 
     // Idle-state Q&A history. Each `UserMessage` received while
     // manual mode is parked between sub-sessions appends to this
@@ -1027,6 +1082,34 @@ pub(crate) fn resolve_llm_for_kind(
     }
 }
 
+/// Per-field-fallback resolver for the idle-state Q&A LLM stack.
+/// Mirrors `resolve_llm_for_kind` for the Critique kind but reads
+/// the `qa_llm_*` fields off `AutoOptions`. Used by the Q&A turn
+/// emit point in `run_manual_qa_turn` -- Q&A doesn't go through
+/// `run_subsession` (it's not a sub-session in the structural
+/// sense), so the resolver runs separately at the dispatch point.
+pub(crate) fn resolve_llm_for_qa(opts: &AutoOptions) -> ResolvedLlmConfig {
+    ResolvedLlmConfig {
+        backend: opts
+            .qa_llm_backend
+            .clone()
+            .unwrap_or_else(|| opts.llm_backend.clone()),
+        model: opts.qa_llm_model.clone().or_else(|| opts.llm_model.clone()),
+        model_family_id: opts
+            .qa_llm_model_family_id
+            .clone()
+            .or_else(|| opts.llm_model_family_id.clone()),
+        runtime_profile_id: opts
+            .qa_llm_runtime_profile_id
+            .clone()
+            .or_else(|| opts.llm_runtime_profile_id.clone()),
+        base_url: opts
+            .qa_llm_base_url
+            .clone()
+            .or_else(|| opts.llm_base_url.clone()),
+    }
+}
+
 /// Outcome of `try_advance_classified`. Distinguishes "gate clean,
 /// advanced" from "gate dirty only because more milestones are
 /// pending in a milestone-walk step (loop back to Work)" from "gate
@@ -1774,6 +1857,12 @@ fn run_manual_qa_turn<H: Host>(
     messages.extend(qa_history.iter().cloned());
 
     let request_id = format!("qa-{}", qa_history.len());
+    // Q&A LLM stack: per-field fallback to the work-side `llm_*`
+    // when `qa_llm_*` is unset (see `resolve_llm_for_qa`). The
+    // override lets users route conversational Q&A turns to a
+    // chattier / cheaper backend without changing work / critique
+    // routing.
+    let llm = resolve_llm_for_qa(opts);
     auto_host.write(&Event::RequestLlmResponse {
         request_id: request_id.clone(),
         messages,
@@ -1781,15 +1870,11 @@ fn run_manual_qa_turn<H: Host>(
         // catalog for now so a host that gates on `tools.len() > 0`
         // for native mode falls back to fenced / text-only dispatch.
         tools: Vec::new(),
-        backend: opts.llm_backend.to_string(),
-        model: opts.llm_model.clone(),
+        backend: llm.backend,
+        model: llm.model,
         debug_adaptation: opts.llm_debug_adaptation,
-        model_family_id: opts.llm_model_family_id.clone(),
-        runtime_profile_id: opts.llm_runtime_profile_id.clone(),
-        // Q&A is a third session kind alongside Work / Critique. The
-        // per-kind LLM routing override doesn't currently model Q&A
-        // separately (it'd be a fourth flag set); Q&A always uses
-        // the work-side LLM stack.
+        model_family_id: llm.model_family_id,
+        runtime_profile_id: llm.runtime_profile_id,
         kind: SessionKindOut::Qa,
     })?;
 
@@ -2475,6 +2560,11 @@ mod tests {
             critique_llm_model_family_id: None,
             critique_llm_runtime_profile_id: None,
             critique_llm_base_url: None,
+            qa_llm_backend: None,
+            qa_llm_model: None,
+            qa_llm_model_family_id: None,
+            qa_llm_runtime_profile_id: None,
+            qa_llm_base_url: None,
             max_auto_iters: 1,
             max_critique_iters: 1,
             max_critique_no_progress_iters: 0,
