@@ -1270,6 +1270,29 @@ fn try_advance<H: Host>(project_dir: &Path, step_id: &str, host: &mut AutoHost<H
         state.current_step = next_step.to_string();
     }
     state.save(&dot)?;
+
+    // Auto-resolve open bugs filed under this step. The gate just
+    // passed; whatever bugs the agent was tracking for it are
+    // presumed fixed (the resolution narrative says so explicitly
+    // so the operator can spot false closures by scanning the log).
+    // Bugs filed under DIFFERENT steps stay open -- a DM3c-era bug
+    // doesn't get auto-closed when DM4ad passes.
+    let bugs = crate::__internal::bug_log::load_all(project_dir);
+    for bug in bugs
+        .iter()
+        .filter(|b| b.status == "open" && b.step == step.id)
+    {
+        let _ = crate::__internal::bug_log::resolve(
+            project_dir,
+            &bug.id,
+            &format!(
+                "auto-resolved: {} gate passed (bug presumed fixed by the work that cleared the gate)",
+                step.id
+            ),
+            None,
+        );
+    }
+
     host.write(&Event::StateAdvanced {
         from: step.id.into(),
         to: next.map(String::from),
