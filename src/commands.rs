@@ -45,6 +45,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             *json,
         ),
         Command::Reset { step } => reset(&project_dir, step),
+        Command::ConvertSv { force } => convert_sv(&project_dir, *force),
         Command::Config { action } => config_cmd(&project_dir, action),
         Command::New { kind } => new_cmd(cli, &project_dir, kind),
         Command::Runs {
@@ -695,14 +696,21 @@ fn auto_cmd(
     no_preamble: bool,
 ) -> sim_flow::Result<()> {
     let foundation = foundation_root::resolve(cli.foundation_root.as_deref())?;
-    // Tooling preflight: DM3c shells out to `cargo tarpaulin` from
+    // Tooling preflight: DM3c shells out to `cargo llvm-cov` from
     // inside the agent's work session. If the binary isn't on PATH,
-    // the agent gets a "no such command: tarpaulin" error mid-run
+    // the agent gets a "no such command: llvm-cov" error mid-run
     // and burns LLM budget retrying. Install once at startup so the
     // tool is ready by the time the flow reaches DM3c. Failures
-    // are non-fatal -- DS / DM0..DM3b don't touch tarpaulin and a
+    // are non-fatal -- DS / DM0..DM3b don't touch llvm-cov and a
     // network outage shouldn't block them.
-    ensure_tarpaulin_available();
+    ensure_llvm_cov_available();
+    // SV3 (SystemVerilog Convert, Build + Validate) shells out to
+    // `verilator --binary`. Probe early so a missing install surfaces
+    // a copy-pasteable platform-appropriate `brew install verilator`
+    // / `apt-get install verilator` hint before the agent burns
+    // turns. We deliberately do NOT auto-install -- platform-specific
+    // package managers vary and the user should pick.
+    probe_verilator_and_warn();
     // Pre-DM0 ingestion hook: ensures `.sim-flow/source-spec*` is up
     // to date before the first session's system stack is built. The
     // helper resolves a spec from (1) the CLI `--spec` arg, or (2)
@@ -841,34 +849,57 @@ fn auto_cmd(
 /// Idempotency: when the resolved spec already has a corresponding
 /// `.sim-flow/source-spec.<ext>` whose mtime is at least the source's,
 /// ingestion is skipped to avoid re-paginating large source specs.
-/// Ensure `cargo tarpaulin` is on PATH; install it (via `cargo
-/// install cargo-tarpaulin --locked`) if not. The agent runs
-/// `cargo tarpaulin` during DM3c (Test Execution and Coverage);
+/// Probe `verilator --version` and emit a copy-pasteable install
+/// hint when missing. Used by the SV-Convert flow's SV3 step.
+/// Pure probe -- no auto-install -- because verilator package
+/// names diverge across platforms (`brew install verilator` on
+/// macOS, `apt-get install verilator` on debian-likes, etc.) and
+/// picking wrong would surprise the user. Surfaces a warning to
+/// stderr so a fresh project setup catches the gap before SV3 runs.
+fn probe_verilator_and_warn() {
+    use sim_flow::__internal::preflight::{
+        VerilatorStatus, probe_verilator, verilator_install_hint,
+    };
+
+    match probe_verilator() {
+        VerilatorStatus::Installed { version } => {
+            eprintln!("sim-flow: verilator OK ({version}).");
+        }
+        VerilatorStatus::NotFound => {
+            eprintln!(
+                "sim-flow: verilator not on PATH; the SV-Convert flow's SV3 step needs it. Install with: {}",
+                verilator_install_hint(),
+            );
+        }
+    }
+}
+
+/// Ensure `cargo llvm-cov` is on PATH; install it (via `cargo
+/// install cargo-llvm-cov --locked`) if not. The agent runs
+/// `cargo llvm-cov` during DM3c (Test Execution and Coverage);
 /// pre-installing here means we don't waste an LLM turn on a
 /// "command not found" error and a retry. Failures are non-fatal
-/// -- not every flow uses tarpaulin (DS doesn't), and a transient
+/// -- not every flow uses llvm-cov (DS doesn't), and a transient
 /// network outage shouldn't block flows that don't need it. We
 /// log a warning either way so the user can spot the problem if
 /// DM3c does come around.
-fn ensure_tarpaulin_available() {
-    use sim_flow::__internal::preflight::{
-        SystemRunner, TarpaulinStatus, ensure_tarpaulin_installed,
-    };
+fn ensure_llvm_cov_available() {
+    use sim_flow::__internal::preflight::{LlvmCovStatus, SystemRunner, ensure_llvm_cov_installed};
 
     let mut runner = SystemRunner;
-    match ensure_tarpaulin_installed(&mut runner, |line| eprintln!("{line}")) {
-        Ok(TarpaulinStatus::AlreadyInstalled { version }) => {
+    match ensure_llvm_cov_installed(&mut runner, |line| eprintln!("{line}")) {
+        Ok(LlvmCovStatus::AlreadyInstalled { version }) => {
             // First-line slice is enough; some installs print
             // multi-line metadata that we don't need to spam.
             let first = version.lines().next().unwrap_or(version.as_str());
-            eprintln!("sim-flow: cargo-tarpaulin OK ({first}).");
+            eprintln!("sim-flow: cargo-llvm-cov OK ({first}).");
         }
-        Ok(TarpaulinStatus::JustInstalled) => {
-            eprintln!("sim-flow: cargo-tarpaulin installed.");
+        Ok(LlvmCovStatus::JustInstalled) => {
+            eprintln!("sim-flow: cargo-llvm-cov installed.");
         }
         Err(reason) => {
             eprintln!(
-                "sim-flow: cargo-tarpaulin install failed ({reason}); DM3c will surface a `command not found` error if/when it runs. Install manually with `cargo install cargo-tarpaulin --locked` to recover.",
+                "sim-flow: cargo-llvm-cov install failed ({reason}); DM3c will surface a `command not found` error if/when it runs. Install manually with `cargo install cargo-llvm-cov --locked` to recover.",
             );
         }
     }
@@ -1186,6 +1217,7 @@ fn init(project: &Path, flow: Flow) -> sim_flow::Result<()> {
     let initial_step = match flow {
         Flow::DirectModeling => "DM0",
         Flow::DesignStudy => "DS0",
+        Flow::SystemVerilogConvert => "SV0",
     };
     let state = State::new(flow, initial_step);
     state.save(&dot)?;
@@ -1648,6 +1680,50 @@ fn current_iso8601() -> String {
         Ok(d) => format!("{}", d.as_secs()),
         Err(_) => "0".to_string(),
     }
+}
+
+/// Flip the project from DirectModeling into SystemVerilogConvert.
+/// Archives the DMF gate history under `state.archived_gates["dm"]`
+/// (visible via `sim-flow status`) and parks `current_step` at SV0.
+/// After this, `sim-flow auto` drives SV0 → SV0d → SV1 → SV2 → SV3.
+///
+/// Refuses to flip unless DM4b has passed (the SV-Convert prereq);
+/// `--force` bypasses the check for tests / advanced workflows. The
+/// flip is in-place destructive on gate flags (archived, not lost),
+/// so the precondition is the safety net.
+fn convert_sv(project: &Path, force: bool) -> sim_flow::Result<()> {
+    let dot = dot_dir(project);
+    let mut state = State::load(&dot)?;
+    match state.flow {
+        Flow::SystemVerilogConvert => {
+            println!(
+                "convert-sv: project is already in the systemverilog-convert flow (current_step = {}). Nothing to do.",
+                state.current_step,
+            );
+            return Ok(());
+        }
+        Flow::DirectModeling => {}
+        Flow::DesignStudy => {
+            if !force {
+                return Err(sim_flow::Error::State(
+                    "convert-sv: project is in the design-study flow; finish DM (or pass `--force`) before flipping to systemverilog-convert"
+                        .into(),
+                ));
+            }
+        }
+    }
+    if !force && state.gates.get("DM4b").map(|g| !g.passed).unwrap_or(true) {
+        return Err(sim_flow::Error::State(
+            "convert-sv: DM4b has not passed; finish the DirectModeling flow before flipping to systemverilog-convert, or pass `--force` to override".into(),
+        ));
+    }
+    state.flip_to_sv_convert("SV0");
+    state.save(&dot)?;
+    println!(
+        "convert-sv: flipped to systemverilog-convert; current_step = SV0. DM gate history archived under state.archived_gates[\"dm\"]."
+    );
+    println!("Next: `sim-flow auto` to drive SV0 → SV0d → SV1 → SV2 → SV3.");
+    Ok(())
 }
 
 fn reset(project: &Path, step_id: &str) -> sim_flow::Result<()> {

@@ -15,6 +15,12 @@ pub const STATE_FILE: &str = "state.toml";
 pub enum Flow {
     DirectModeling,
     DesignStudy,
+    /// SystemVerilog conversion. Translates a DirectModeling-completed
+    /// project's Rust model + UVM-lite testbench into synthesizable
+    /// SystemVerilog RTL + a UVM testbench, with milestone-walked
+    /// per-module emission and a verilator-driven validation gate.
+    /// Opted-in by switching the flow after DM4b passes.
+    SystemVerilogConvert,
 }
 
 impl Flow {
@@ -22,6 +28,7 @@ impl Flow {
         match self {
             Flow::DirectModeling => "direct-modeling",
             Flow::DesignStudy => "design-study",
+            Flow::SystemVerilogConvert => "systemverilog-convert",
         }
     }
 }
@@ -162,6 +169,22 @@ impl State {
         self.flow = Flow::DirectModeling;
         self.current_step = dm0_step.to_string();
     }
+
+    /// In-place flip from Direct Modeling Flow to SystemVerilog
+    /// Convert. Preserves DMF gate history under `archived_gates` so
+    /// `sim-flow status` / audit tools can still see that DM4b
+    /// passed (the SV-Convert prerequisite). Resets `current_step` to
+    /// SV0. A no-op when the project isn't currently in DMF, so
+    /// double-calls don't clobber an in-progress SV-Convert run.
+    pub fn flip_to_sv_convert(&mut self, sv0_step: &str) {
+        if self.flow != Flow::DirectModeling {
+            return;
+        }
+        let prior = std::mem::take(&mut self.gates);
+        self.archived_gates.insert("dm".to_string(), prior);
+        self.flow = Flow::SystemVerilogConvert;
+        self.current_step = sv0_step.to_string();
+    }
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -253,5 +276,37 @@ mod tests {
         let archived = state.archived_gates.get("ds").unwrap();
         assert!(archived.get("DS0").map(|g| g.passed).unwrap_or(false));
         assert!(archived.get("DS9").map(|g| g.passed).unwrap_or(false));
+    }
+
+    #[test]
+    fn flip_to_sv_convert_archives_dm_history() {
+        let mut state = State::new(Flow::DirectModeling, "DM4b");
+        state.mark_passed("DM0", "t");
+        state.mark_passed("DM2d", "t");
+        state.mark_passed("DM4b", "t");
+        state.flip_to_sv_convert("SV0");
+        assert_eq!(state.flow, Flow::SystemVerilogConvert);
+        assert_eq!(state.current_step, "SV0");
+        assert!(state.gates.is_empty());
+        let archived = state.archived_gates.get("dm").unwrap();
+        assert!(archived.get("DM0").map(|g| g.passed).unwrap_or(false));
+        assert!(archived.get("DM4b").map(|g| g.passed).unwrap_or(false));
+    }
+
+    #[test]
+    fn flip_to_sv_convert_is_no_op_when_not_in_dmf() {
+        // Already SV-Convert: double-call must not clobber state.
+        let mut state = State::new(Flow::SystemVerilogConvert, "SV1");
+        state.mark_passed("SV0", "t");
+        state.flip_to_sv_convert("SV0");
+        assert_eq!(state.flow, Flow::SystemVerilogConvert);
+        assert_eq!(state.current_step, "SV1");
+        assert!(state.is_passed("SV0"));
+
+        // Design study: should reject (no flip).
+        let mut state = State::new(Flow::DesignStudy, "DS5");
+        state.flip_to_sv_convert("SV0");
+        assert_eq!(state.flow, Flow::DesignStudy);
+        assert_eq!(state.current_step, "DS5");
     }
 }

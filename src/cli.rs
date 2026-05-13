@@ -70,6 +70,22 @@ pub(crate) enum Command {
         /// Step id to reset.
         step: String,
     },
+    /// Flip a DirectModeling-completed project into the
+    /// SystemVerilog Convert flow. Archives the DM gate history
+    /// (visible via `sim-flow status` after the flip) and parks
+    /// `current_step` at `SV0`. After this, `sim-flow auto`
+    /// drives SV0 -> SV0d -> SV1 -> SV2 -> SV3, emitting RTL +
+    /// UVM under `generated/`. Requires DM4b to have passed; the
+    /// command refuses to flip otherwise so half-finished
+    /// projects don't lose DM-side context.
+    ConvertSv {
+        /// Skip the DM4b-passed precondition. Useful in tests
+        /// and for projects that intentionally skip a DM step;
+        /// the flip is destructive (archives DM gates) so we
+        /// keep the safety check on by default.
+        #[arg(long)]
+        force: bool,
+    },
     /// Show or set configuration.
     Config {
         #[command(subcommand)]
@@ -432,7 +448,7 @@ pub(crate) enum Command {
     },
     /// Inspect or update DM3c coverage acceptance criteria stored
     /// in `.sim-flow/config.toml::coverage`. The DM3c critique
-    /// enforces these against the live `cargo tarpaulin` report.
+    /// enforces these against the live `cargo llvm-cov` report.
     Coverage {
         #[command(subcommand)]
         action: CoverageAction,
@@ -720,6 +736,7 @@ pub(crate) enum ConfigAction {
 pub(crate) enum FlowArg {
     DirectModeling,
     DesignStudy,
+    SystemverilogConvert,
 }
 
 /// Step-axis mode. Orthogonal to `SessionMode` (transport / agent
@@ -762,6 +779,7 @@ impl From<FlowArg> for Flow {
         match value {
             FlowArg::DirectModeling => Flow::DirectModeling,
             FlowArg::DesignStudy => Flow::DesignStudy,
+            FlowArg::SystemverilogConvert => Flow::SystemVerilogConvert,
         }
     }
 }
@@ -799,6 +817,40 @@ mod tests {
             Flow::from(FlowArg::DesignStudy),
             Flow::DesignStudy
         ));
+        assert!(matches!(
+            Flow::from(FlowArg::SystemverilogConvert),
+            Flow::SystemVerilogConvert
+        ));
+    }
+
+    #[test]
+    fn convert_sv_parses_without_force() {
+        let cli = parse(&["sim-flow", "convert-sv"]);
+        match cli.command {
+            Command::ConvertSv { force } => assert!(!force, "default --force should be false"),
+            other => panic!("expected Command::ConvertSv, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn convert_sv_parses_with_force() {
+        let cli = parse(&["sim-flow", "convert-sv", "--force"]);
+        match cli.command {
+            Command::ConvertSv { force } => assert!(force, "--force must propagate"),
+            other => panic!("expected Command::ConvertSv, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn init_accepts_systemverilog_convert_flow() {
+        let cli = parse(&["sim-flow", "init", "--flow", "systemverilog-convert"]);
+        match cli.command {
+            Command::Init { flow } => {
+                let f: Flow = flow.into();
+                assert!(matches!(f, Flow::SystemVerilogConvert));
+            }
+            other => panic!("expected Command::Init, got {other:?}"),
+        }
     }
 
     // ---------- Auto subcommand: --llm-base-url plumbing ----------
