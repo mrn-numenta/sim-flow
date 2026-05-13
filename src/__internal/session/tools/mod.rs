@@ -26,6 +26,7 @@ mod edit_file;
 mod list_dir;
 mod log_bug;
 mod read_file;
+mod record_run;
 mod resolve_bug;
 mod run_cargo;
 mod search;
@@ -38,6 +39,7 @@ pub use edit_file::EditFileTool;
 pub use list_dir::ListDirTool;
 pub use log_bug::LogBugTool;
 pub use read_file::ReadFileTool;
+pub use record_run::RecordRunTool;
 pub use resolve_bug::ResolveBugTool;
 pub use run_cargo::RunCargoTool;
 pub use search::SearchTool;
@@ -366,6 +368,7 @@ pub fn build_dispatcher(names: &[&'static str]) -> Vec<Box<dyn Tool>> {
             "declare_hypothesis" => out.push(Box::new(DeclareHypothesisTool)),
             "log_bug" => out.push(Box::new(LogBugTool)),
             "resolve_bug" => out.push(Box::new(ResolveBugTool)),
+            "record_run" => out.push(Box::new(RecordRunTool)),
             _ => {} // unknown tool name; skip
         }
     }

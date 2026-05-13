@@ -20,10 +20,12 @@ impl Tool for RunCargoTool {
         "run_cargo"
     }
     fn description(&self) -> &'static str {
-        "Run a cargo subcommand (`fmt`, `fmt-check`, `build`, `check`, `test`, or `clippy`) in \
-         the project directory and return the truncated stdout / stderr plus the exit code. Use \
-         this whenever you need actual compiler / test / lint output -- do NOT guess at build \
-         errors from source files."
+        "Run a cargo subcommand (`fmt`, `fmt-check`, `build`, `check`, `test`, `clippy`, or `run`) \
+         in the project directory and return the truncated stdout / stderr plus the exit code. \
+         Use this whenever you need actual compiler / test / lint / runtime output -- do NOT \
+         guess at build errors from source files. For `run` you can pass `binary_args` to forward \
+         flags to the project binary (e.g. `--run-id baseline-1k-burst`). After a successful `run`, \
+         call `record_run` to log the run into `.sim-flow/experiments.db`."
     }
     fn args_schema(&self) -> serde_json::Value {
         json!({
@@ -32,13 +34,21 @@ impl Tool for RunCargoTool {
             "properties": {
                 "command": {
                     "type": "string",
-                    "enum": ["fmt", "fmt-check", "build", "check", "test", "clippy"],
+                    "enum": ["fmt", "fmt-check", "build", "check", "test", "clippy", "run"],
                     "description": "Which cargo subcommand to run. `fmt` formats every Rust file \
-                                   in place (idempotent; safe to run repeatedly); `fmt-check` \
-                                   reports a non-zero exit if any file is mis-formatted without \
-                                   modifying it. `check` is the cheapest way to get type errors; \
-                                   `build` produces a binary; `test` compiles + runs tests; \
-                                   `clippy` adds lints."
+                                   in place (idempotent); `fmt-check` reports a non-zero exit if \
+                                   any file is mis-formatted without modifying it. `check` is the \
+                                   cheapest way to get type errors; `build` produces a binary; \
+                                   `test` compiles + runs tests; `clippy` adds lints; `run` \
+                                   invokes the project's main binary (use `binary_args` to pass \
+                                   --run-id and other flags through `--`)."
+                },
+                "binary_args": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Arguments to forward to the project binary after `--` (only \
+                                    used when command = `run`). Example: \
+                                    [\"--run-id\", \"baseline-1k-burst\"]."
                 }
             }
         })
@@ -49,6 +59,20 @@ impl Tool for RunCargoTool {
             Some(s) => s,
             None => return Ok(ToolResult::err("run_cargo: missing `command` arg")),
         };
+        let binary_args: Vec<String> = args
+            .get("binary_args")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if command != "run" && !binary_args.is_empty() {
+            return Ok(ToolResult::err(format!(
+                "run_cargo: `binary_args` only applies to command = `run`; got command = `{command}`"
+            )));
+        }
         let outcome = match command {
             "fmt" => runners::cargo_fmt(ctx.project_dir, /*check_only=*/ false),
             "fmt-check" => runners::cargo_fmt(ctx.project_dir, /*check_only=*/ true),
@@ -56,9 +80,10 @@ impl Tool for RunCargoTool {
             "build" => spawn_one(ctx.project_dir, "build"),
             "test" => runners::cargo_test(ctx.project_dir, None),
             "clippy" => runners::cargo_clippy(ctx.project_dir),
+            "run" => spawn_run(ctx.project_dir, &binary_args),
             other => {
                 return Ok(ToolResult::err(format!(
-                    "run_cargo: unsupported command `{other}`; allowed: fmt, fmt-check, build, check, test, clippy"
+                    "run_cargo: unsupported command `{other}`; allowed: fmt, fmt-check, build, check, test, clippy, run"
                 )));
             }
         };
@@ -166,6 +191,42 @@ fn spawn_one(project: &std::path::Path, sub: &str) -> Result<runners::RunnerOutp
     let exit_code = output.status.code().unwrap_or(-1);
     Ok(runners::RunnerOutput {
         command: format!("cargo {sub} --quiet"),
+        stdout_tail: tail(&stdout, 4_000),
+        stderr_tail: tail(&stderr, 8_000),
+        exit_code,
+    })
+}
+
+/// Spawn `cargo run --quiet -- <binary_args...>` in the project
+/// directory. Captures stdout / stderr tails the same way the other
+/// runners do. The binary's `--run-id <id>` (when present) is what
+/// downstream `record_run` keys on; this runner does NOT parse it
+/// out -- recording is the agent's explicit step (call `record_run`
+/// after the run succeeds).
+fn spawn_run(project: &std::path::Path, binary_args: &[String]) -> Result<runners::RunnerOutput> {
+    use std::process::Command;
+    let mut command = Command::new("cargo");
+    command.arg("run").arg("--quiet").current_dir(project);
+    if !binary_args.is_empty() {
+        command.arg("--");
+        for arg in binary_args {
+            command.arg(arg);
+        }
+    }
+    let output = command.output().map_err(|err| crate::Error::Io {
+        path: project.to_path_buf(),
+        source: err,
+    })?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let exit_code = output.status.code().unwrap_or(-1);
+    let suffix = if binary_args.is_empty() {
+        String::new()
+    } else {
+        format!(" -- {}", binary_args.join(" "))
+    };
+    Ok(runners::RunnerOutput {
+        command: format!("cargo run --quiet{suffix}"),
         stdout_tail: tail(&stdout, 4_000),
         stderr_tail: tail(&stderr, 8_000),
         exit_code,

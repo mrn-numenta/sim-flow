@@ -1,11 +1,15 @@
 # DM4b - Performance Analysis (work session)
 
 You are executing step DM4b (Performance Analysis) of the Direct
-Modeling Flow. Prerequisite: DM4a gate passed. DM4b depends on
-experiment tracking (Phase 4). If the tracking infrastructure is
-not yet available, surface
-`BLOCKER: experiment tracking unavailable` in the critique and
-stop.
+Modeling Flow. Prerequisite: DM4a gate passed.
+
+Every run you reference in a perf report MUST be recorded in
+`.sim-flow/experiments.db`. Use `run_cargo({command: "run",
+binary_args: ["--run-id", "<id>"]})` to invoke the project's main
+binary, then `record_run({description: "<id>", workload: "...",
+candidate: "...", study: "..."})` to log the run into the
+experiments index. The index is created on first call; you don't
+need to bootstrap it.
 
 ## Goal
 
@@ -57,12 +61,19 @@ Reference material (read on demand):
      starting the next milestone. Do NOT chain milestones
      automatically. The critique is the primary milestone gate;
      user review may happen around it.
-3. **Run-record discipline**. Every `cargo run -- --run-id <id>`
-   invocation should use a run-id that matches the scheme
-   declared in `perf-plan.md` (typically `baseline-<workload>`
-   or `sweep-<param>-<value>`). The orchestrator records each
-   run into `.sim-flow/experiments.db`; check that the row is
-   present before flipping the task to `[x]`.
+3. **Run-record discipline**. Each measurement is TWO tool calls:
+
+   ```text
+   run_cargo({command: "run", binary_args: ["--run-id", "<id>"]})
+   record_run({description: "<id>", workload: "...", candidate: "...", study: "..."})
+   ```
+
+   The first invokes the project binary with the run-id; the
+   second logs the run into `.sim-flow/experiments.db`. Run-ids
+   should match the scheme declared in `perf-plan.md` (typically
+   `baseline-<workload>` or `sweep-<param>-<value>`). After both
+   calls succeed, flip the task to `[x]`. The critique verifies
+   every cited run-id has a matching `experiments.db` row.
 4. **Sweep discipline**. Use `sim-flow sweep <sweep.toml>` for
    parameter sweeps. The sweep TOML should reference the run-id
    pattern from the plan. Don't roll your own loops over single

@@ -34,10 +34,15 @@ new work did not regress earlier milestones.
 Prefix gate-blocking issues with `BLOCKER:` (the flow cannot
 finish until fixed). Prefix informational notes with
 `UNRESOLVED:`. The orchestrator fails the DM4b gate on both `BLOCKER:`
-and `UNRESOLVED:` lines. If experiment tracking infrastructure is not yet
-available (Phase 4 not landed), emit
-`BLOCKER: experiment tracking unavailable (Phase 4 pending)`
-and stop.
+and `UNRESOLVED:` lines.
+
+Experiment tracking is in place: the `record_run` agent tool
+writes to `.sim-flow/experiments.db` (the database is created on
+first call). Don't emit a "Phase 4 pending" blocker; if the
+database is missing or empty, the agent skipped its
+`record_run` discipline -- emit `BLOCKER: run-id <id> not in
+experiments.db; agent must call record_run after each cargo run`
+naming the specific cited run-ids that don't appear.
 
 {{ critique_kinds }}
 

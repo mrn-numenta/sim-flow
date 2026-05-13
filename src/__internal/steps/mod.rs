@@ -30,6 +30,7 @@ pub const UNIVERSAL_TOOLS: &[&str] = &[
     "declare_hypothesis",
     "log_bug",
     "resolve_bug",
+    "record_run",
 ];
 
 #[derive(Debug, Clone)]
