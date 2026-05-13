@@ -374,6 +374,33 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
     let mut last_test_failure_count: Option<usize> = None;
     let mut no_progress_iters: u32 = 0;
 
+    // Pre-session manifest snapshot: paths the step has already
+    // touched in prior work sessions / iterations. Used by the
+    // no-progress classifier to distinguish a fix attempt
+    // (modifies a path that's already step-owned) from a data
+    // collection turn (only creates net-new paths -- e.g. a
+    // diagnostic test file -- or only reads). A turn that
+    // doesn't touch anything previously-owned gets a free pass on
+    // the no-progress counter; the agent is investigating, not
+    // failing to fix. The investigation-only streak is bounded
+    // separately so the agent can't loop on diagnostics forever.
+    let pre_session_manifest: std::collections::HashSet<std::path::PathBuf> =
+        crate::manifest::step_paths(&opts.project_dir, step.id);
+    // Target failing test set: the names of tests that were
+    // failing the FIRST time `run_cargo test` reported failures
+    // this session. Subsequent runs are scored against this
+    // target -- the count alone hides "fixed A, broke B" 1-for-1
+    // swaps, so we track names and check: (a) does the target
+    // intersect-with-current shrink (progress)? (b) is there a
+    // new failing test that's NOT in target (regression)?
+    let mut target_failing_set: Option<std::collections::HashSet<String>> = None;
+    // Investigation-only streak: turns that ran a validation
+    // (`run_cargo test`) without modifying any pre-session-known
+    // path. Capped separately so a model can't avoid the bail by
+    // staying in pure data-collection mode forever.
+    let mut investigation_only_iters: u32 = 0;
+    const MAX_INVESTIGATION_ONLY_TURNS: u32 = 5;
+
     // Tool-error-streak guard. Catches a failure mode the
     // identical-response check misses: the model keeps emitting
     // *slightly different* tool calls (different prose, different
@@ -966,6 +993,15 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 })?;
                 return Ok(());
             }
+            // Per-turn touched-paths set, populated from BOTH the
+            // artifact-extract path below AND the tool-call dispatch
+            // further down. Used by the no-progress classifier to
+            // tell a fix attempt (modified an existing path from the
+            // step's manifest snapshot) from a data-collection turn
+            // (only added new files / only read). Declared here so
+            // it's in scope across both write surfaces.
+            let mut this_turn_touched_paths: std::collections::HashSet<std::path::PathBuf> =
+                std::collections::HashSet::new();
             // Track artifact-write failures so we can feed them back
             // as a User turn below. Without this, a rejected write
             // surfaces as a host-side `Diagnostic` only; the agent's
@@ -982,6 +1018,12 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 match write_artifact(&opts.project_dir, &write_paths, art) {
                     Ok(bytes) => {
                         artifact_write_successes += 1;
+                        crate::manifest::record_write(
+                            &opts.project_dir,
+                            step.id,
+                            &art.relative_path,
+                        );
+                        this_turn_touched_paths.insert(opts.project_dir.join(&art.relative_path));
                         host.write(&Event::ArtifactWritten {
                             path: art.relative_path.clone(),
                             bytes,
@@ -1093,6 +1135,13 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 // the agent re-runs after a fix) collapse to the
                 // most recent measurement.
                 let mut this_turn_test_count: Option<usize> = None;
+                // Parallel to `this_turn_test_count`: the set of
+                // failing test names from the LAST `run_cargo test`
+                // this turn. Drives the no-progress classifier's
+                // "did the target failing set shrink?" check; a raw
+                // count alone hides the "fixed A, broke B" 1-for-1
+                // swap (count constant, but set changed).
+                let mut this_turn_test_failures: Option<Vec<String>> = None;
                 let mut tool_successes: u32 = 0;
                 let mut tool_failures: u32 = 0;
                 let mut this_turn_persisted_write: bool = false;
@@ -1117,7 +1166,8 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     )
                     .with_write_paths(&write_paths)
                     .with_milestone_body(milestone_body.as_deref())
-                    .with_approved_deletes(&approved_deletes);
+                    .with_approved_deletes(&approved_deletes)
+                    .with_step_id(step.id);
                     let outcome = invoke_tool(&dispatcher, &ctx, call);
                     let status = if outcome.ok { "ok" } else { "error" };
                     if outcome.ok {
@@ -1137,6 +1187,12 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     per_call_displays.push(outcome.display.clone());
                     if let Some(c) = outcome.test_failure_count {
                         this_turn_test_count = Some(c);
+                    }
+                    if let Some(names) = &outcome.test_failures {
+                        this_turn_test_failures = Some(names.clone());
+                    }
+                    for rel in &outcome.touched_paths {
+                        this_turn_touched_paths.insert(opts.project_dir.join(rel));
                     }
                     for att in outcome.attachments {
                         tool_attachments.push(crate::session::protocol::LlmAttachment {
@@ -1328,42 +1384,110 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     }
                 }
 
-                // No-progress tracker. Strictly-decreasing failure
-                // count = real progress; reset to 0. Same / higher
-                // count = stuck; increment. No measurement this
-                // turn (no run_cargo test call) leaves the state
-                // untouched.
+                // No-progress tracker. Two complementary signals
+                // decide whether this turn counts toward the bail:
+                //
+                //   1. **Touched pre-existing paths**: did the agent
+                //      modify a path that's already in the step's
+                //      manifest snapshot (i.e. a path the step has
+                //      already created in this or a prior session)?
+                //      A turn that only writes net-new files
+                //      (e.g. `tests/diag_timing.rs` -- a probe) or
+                //      only reads is a DATA COLLECTION turn; we
+                //      give it a free pass on the no-progress
+                //      counter so the agent has space to
+                //      investigate before committing to a fix.
+                //
+                //   2. **Target failing-set delta**: did the *names*
+                //      of the failing tests improve relative to the
+                //      session's target set? A strictly-shrinking
+                //      `target ∩ current` is progress (we fixed a
+                //      target test). New failures NOT in target are
+                //      regressions and disqualify a progress reset.
+                //      This is strictly better than count-only: it
+                //      distinguishes "fixed A, broke B" (count
+                //      constant, but the set changed = no progress)
+                //      from genuine fixes.
+                //
+                // Combined rule:
+                //   fix attempt   + target shrank   -> reset counter (+ rebase target)
+                //   fix attempt   + no shrink       -> increment counter
+                //   data collection (no validation, or no touch of
+                //     existing path)                -> free pass, but track
+                //                                      investigation_only_iters
                 if let Some(cur) = this_turn_test_count {
-                    let made_progress = matches!(last_test_failure_count, Some(prev) if cur < prev);
-                    if made_progress {
-                        no_progress_iters = 0;
-                    } else {
-                        no_progress_iters += 1;
+                    let current_failing: std::collections::HashSet<String> =
+                        this_turn_test_failures
+                            .clone()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .collect();
+                    if target_failing_set.is_none() {
+                        target_failing_set = Some(current_failing.clone());
+                    }
+                    let target = target_failing_set.as_ref().expect("set above");
+                    let touched_existing =
+                        !this_turn_touched_paths.is_disjoint(&pre_session_manifest);
+                    match classify_progress(target, &current_failing, touched_existing) {
+                        ProgressClass::Progress => {
+                            no_progress_iters = 0;
+                            investigation_only_iters = 0;
+                            target_failing_set = Some(current_failing.clone());
+                        }
+                        ProgressClass::FixAttemptNoProgress => {
+                            no_progress_iters += 1;
+                            // Reset the investigation counter -- this
+                            // wasn't pure investigation, the agent
+                            // did attempt a fix.
+                            investigation_only_iters = 0;
+                        }
+                        ProgressClass::Investigation => {
+                            // Data collection turn: ran tests but
+                            // didn't touch anything that was already
+                            // step-owned. Free pass on
+                            // no_progress_iters; the investigation
+                            // cap catches runaway diagnostics.
+                            investigation_only_iters += 1;
+                        }
                     }
                     last_test_failure_count = Some(cur);
                 }
 
                 // Bail if we've burned `max_auto_iters` consecutive
-                // turns with no test-failure improvement. The
-                // diagnostic embeds `max_auto_iters` so the
-                // AutoHost wrapper's existing substring matcher
+                // FIX ATTEMPTS with no target-set improvement, OR if
+                // the agent has spent `MAX_INVESTIGATION_ONLY_TURNS`
+                // turns running diagnostics without committing to a
+                // fix. Either diagnostic embeds `max_auto_iters` so
+                // the AutoHost wrapper's existing substring matcher
                 // cancels the in-flight sub-session and the auto
-                // driver flips to manual mode -- no separate
-                // signal-path to keep in sync.
-                if opts.auto
-                    && this_turn_test_count.is_some()
-                    && no_progress_iters >= opts.max_auto_iters
-                {
+                // driver flips to manual mode -- no separate signal-
+                // path to keep in sync.
+                let hit_fix_cap =
+                    this_turn_test_count.is_some() && no_progress_iters >= opts.max_auto_iters;
+                let hit_investigation_cap =
+                    investigation_only_iters >= MAX_INVESTIGATION_ONLY_TURNS;
+                if opts.auto && (hit_fix_cap || hit_investigation_cap) {
                     let cur = last_test_failure_count.unwrap_or(0);
+                    let message = if hit_fix_cap {
+                        format!(
+                            "auto: {} hit no-progress cap (max_auto_iters={}): {} consecutive fix-attempt turns \
+                             with the target failing-test set not shrinking (current: {} test(s) failing). \
+                             The agent is iterating on existing artifacts without measurable improvement; \
+                             switching to interactive.",
+                            step.id, opts.max_auto_iters, no_progress_iters, cur,
+                        )
+                    } else {
+                        format!(
+                            "auto: {} hit investigation-only cap (max_auto_iters={}): {} consecutive turns \
+                             ran `cargo test` without modifying any pre-existing step artifact (only new files / reads). \
+                             The agent appears stuck in data collection; switching to interactive so a human can \
+                             commit to a fix direction.",
+                            step.id, opts.max_auto_iters, investigation_only_iters,
+                        )
+                    };
                     host.write(&Event::Diagnostic {
                         level: DiagnosticLevel::Error,
-                        message: format!(
-                            "auto: {} hit no-progress cap (max_auto_iters={}): {} consecutive \
-                             cargo-test runs with the failure count not strictly decreasing \
-                             (current: {} test(s) failing). The agent is iterating without \
-                             measurable improvement; switching to interactive.",
-                            step.id, opts.max_auto_iters, no_progress_iters, cur,
-                        ),
+                        message,
                     })?;
                     // Fall through (no `continue`) so the auto-iter
                     // / RequestUserInput tail of the loop runs.
@@ -2117,6 +2241,27 @@ fn write_file_help(reason: &str) -> String {
 }
 
 fn tool_args_summary(call: &tools::ParsedToolCall) -> String {
+    // edit_file is special-cased: the default 80-char first-line
+    // truncation hides `old_string` and `new_string` entirely
+    // (JSON serialization order varies, and either field can be
+    // multiline). Without seeing both strings, a "successful" edit
+    // that doesn't actually fix the offending content is invisible
+    // in the host stream. Render path + old + new with generous
+    // per-field caps so loop debugging doesn't require re-running
+    // with extra instrumentation.
+    if call.name == "edit_file"
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(&call.body)
+    {
+        let path = v.get("path").and_then(|x| x.as_str()).unwrap_or("?");
+        let old = v.get("old_string").and_then(|x| x.as_str()).unwrap_or("");
+        let new_s = v.get("new_string").and_then(|x| x.as_str()).unwrap_or("");
+        return format!(
+            "path={} old={} new={}",
+            tools::preview_one_line(path, 120),
+            tools::preview_one_line(old, 240),
+            tools::preview_one_line(new_s, 240),
+        );
+    }
     let line = call.body.lines().next().unwrap_or("").trim();
     if line.len() > 80 {
         format!("{}...", &line[..80])
@@ -3561,6 +3706,157 @@ fn normalize_for_loop_detection(text: &str) -> String {
         out.push(ch);
     }
     out
+}
+
+/// Per-turn progress classification used by the auto-iter no-progress
+/// cap. Pure function on the inputs the orchestrator loop has at hand:
+/// the session's target failing-test set, the latest failing set, and
+/// whether the turn touched any path the step has already touched
+/// in a prior session / earlier turn (the step's pre-session manifest).
+///
+/// Decision table:
+/// - `target ∩ current` shrank AND no regression -> `Progress`
+/// - the turn touched an existing path           -> `FixAttemptNoProgress`
+/// - otherwise                                   -> `Investigation`
+///
+/// "Regression" means the current failing set contains a test that
+/// wasn't in `target` -- a new failure introduced by the turn. With a
+/// regression we don't claim progress even if some target tests
+/// individually started passing; net behavior on the workspace got
+/// worse.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum ProgressClass {
+    /// Target failing set strictly shrank and no new failures
+    /// appeared outside the target. The orchestrator resets
+    /// `no_progress_iters` and rebases `target_failing_set` to the
+    /// new (smaller) set.
+    Progress,
+    /// Turn modified a path the step already owned, but the target
+    /// failing set didn't shrink (or a regression was introduced).
+    /// Counts toward `no_progress_iters`.
+    FixAttemptNoProgress,
+    /// Turn only created new files / only read / didn't touch any
+    /// existing path. Counts toward `investigation_only_iters`
+    /// (capped separately so the agent can't loop on diagnostics
+    /// forever).
+    Investigation,
+}
+
+pub(super) fn classify_progress(
+    target: &std::collections::HashSet<String>,
+    current: &std::collections::HashSet<String>,
+    touched_existing: bool,
+) -> ProgressClass {
+    let still_failing_target = target.intersection(current).count();
+    let target_shrank = still_failing_target < target.len();
+    let regressed = current.difference(target).count() > 0;
+    if target_shrank && !regressed {
+        ProgressClass::Progress
+    } else if touched_existing {
+        ProgressClass::FixAttemptNoProgress
+    } else {
+        ProgressClass::Investigation
+    }
+}
+
+#[cfg(test)]
+mod progress_class_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn set(items: &[&str]) -> HashSet<String> {
+        items.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn shrunk_target_no_regression_is_progress() {
+        let target = set(&["a", "b", "c"]);
+        let current = set(&["a", "b"]); // c got fixed
+        assert_eq!(
+            classify_progress(&target, &current, true),
+            ProgressClass::Progress
+        );
+        // touched_existing irrelevant when target shrinks cleanly.
+        assert_eq!(
+            classify_progress(&target, &current, false),
+            ProgressClass::Progress
+        );
+    }
+
+    #[test]
+    fn target_shrank_with_regression_is_fix_attempt() {
+        // Fixed `c` but introduced `d`. Net not better -> the agent
+        // has work to do; counts as fix attempt with no progress.
+        let target = set(&["a", "b", "c"]);
+        let current = set(&["a", "b", "d"]);
+        assert_eq!(
+            classify_progress(&target, &current, true),
+            ProgressClass::FixAttemptNoProgress
+        );
+    }
+
+    #[test]
+    fn unchanged_target_with_touch_is_fix_attempt() {
+        let target = set(&["a", "b"]);
+        let current = set(&["a", "b"]);
+        assert_eq!(
+            classify_progress(&target, &current, true),
+            ProgressClass::FixAttemptNoProgress
+        );
+    }
+
+    #[test]
+    fn unchanged_target_without_touch_is_investigation() {
+        // Agent ran cargo test but didn't edit any existing
+        // artifact this turn: data collection.
+        let target = set(&["a", "b"]);
+        let current = set(&["a", "b"]);
+        assert_eq!(
+            classify_progress(&target, &current, false),
+            ProgressClass::Investigation
+        );
+    }
+
+    #[test]
+    fn added_diagnostic_failures_without_touch_is_investigation() {
+        // Agent added a new test that fails (a probe). target still
+        // intact, no fix attempt -> investigation.
+        let target = set(&["a", "b"]);
+        let current = set(&["a", "b", "diag_probe"]);
+        assert_eq!(
+            classify_progress(&target, &current, false),
+            ProgressClass::Investigation
+        );
+    }
+
+    #[test]
+    fn added_diagnostic_failures_with_touch_counts_as_fix_attempt() {
+        // Adding diag PLUS editing an existing artifact -> the agent
+        // did try a fix; the touch dominates. Conservative: this
+        // increments the fix-attempt counter so a model that opens
+        // an existing file but adds diag-only failures (net worse)
+        // is still bounded.
+        let target = set(&["a", "b"]);
+        let current = set(&["a", "b", "diag_probe"]);
+        assert_eq!(
+            classify_progress(&target, &current, true),
+            ProgressClass::FixAttemptNoProgress
+        );
+    }
+
+    #[test]
+    fn empty_target_means_first_sample_is_a_pass_through() {
+        // First test run of the session: target = current. Both
+        // sets equal, target didn't shrink. With no touch this is
+        // investigation; with touch it'd be a fix attempt -- both
+        // are fine, the loop sets target on this very iteration.
+        let target = set(&["a"]);
+        let current = set(&["a"]);
+        assert_eq!(
+            classify_progress(&target, &current, false),
+            ProgressClass::Investigation
+        );
+    }
 }
 
 // ---------------------------------------------------------------------

@@ -2011,21 +2011,37 @@ pub fn clear_step_collateral_forward(
 ) -> (Vec<PathBuf>, Vec<(PathBuf, String)>) {
     use std::collections::HashSet;
 
-    // Build the upstream-protected set: every work_artifact +
-    // critique file from steps[0..idx]. Both forms of the critique
-    // (canonical `<step>-critique.json` and the orchestrator-rendered
-    // `<step>-critique.md` view) are protected so an exact-equality
-    // delete of either form on a downstream pass doesn't sweep the
-    // upstream sibling that lives in the same directory.
-    // Trailing-slash directory markers are normalized off so we can
-    // do exact-equality matches against `Path::join(rel)`.
+    // FILE-granular upstream-protected set. Sources, in order:
+    //
+    //   1. Each upstream step's manifest
+    //      (`.sim-flow/manifests/<step>.txt`) -- the authoritative
+    //      list of files that step's run wrote. With a manifest, we
+    //      can preserve shared-directory files exactly: tests/
+    //      contains both DM2d's smoke tests (upstream) and DM3b's
+    //      testbench/ scaffolding (downstream-of-DM3a) -- resetting
+    //      DM3a should clean tests/testbench/ but keep tests/
+    //      contents DM2d wrote. The manifest captures that.
+    //   2. Each upstream step's critique JSON + rendered .md so the
+    //      downstream cascade doesn't sweep them on the way past
+    //      `docs/critiques/`.
+    //   3. Fallback when (1) is empty: protect the upstream's
+    //      `work_artifacts` declarations wholesale. This is the old
+    //      pre-manifest behavior and remains useful for projects
+    //      that ran before the manifest mechanism existed -- their
+    //      manifests are empty so we fall back to the coarser dir-
+    //      level protection.
     let mut protected: HashSet<PathBuf> = HashSet::new();
     for upstream in &order[..idx] {
         let Some(step) = registry.get(upstream) else {
             continue;
         };
-        for art in step.work_artifacts {
-            protected.insert(project_dir.join(art.trim_end_matches('/')));
+        let manifest = crate::__internal::manifest::step_paths(project_dir, step.id);
+        if manifest.is_empty() {
+            for art in step.work_artifacts {
+                protected.insert(project_dir.join(art.trim_end_matches('/')));
+            }
+        } else {
+            protected.extend(manifest);
         }
         protected.insert(project_dir.join(format!("docs/critiques/{}-critique.json", step.id)));
         protected.insert(project_dir.join(format!("docs/critiques/{}-critique.md", step.id)));
@@ -2037,6 +2053,37 @@ pub fn clear_step_collateral_forward(
         let Some(step) = registry.get(downstream) else {
             continue;
         };
+        // Pass 1: manifest-driven deletion. Every file this step's
+        // run wrote is a candidate. Files that an upstream step also
+        // wrote (and thus appear in `protected`) survive --
+        // `delete_with_upstream_protection` short-circuits on
+        // `protected.contains(&path)`.
+        let manifest = crate::__internal::manifest::step_paths(project_dir, step.id);
+        for abs in &manifest {
+            let Ok(rel) = abs.strip_prefix(project_dir) else {
+                continue;
+            };
+            let rel_str = rel.to_string_lossy().to_string();
+            if rel_str.is_empty() {
+                continue;
+            }
+            delete_with_upstream_protection(
+                project_dir,
+                &rel_str,
+                &protected,
+                &mut deleted,
+                &mut failures,
+            );
+        }
+        // Clear the manifest now that we've consumed it. A
+        // resurrected manifest (from a later run that re-enters this
+        // step) will be rebuilt as the step runs again.
+        crate::__internal::manifest::clear(project_dir, step.id);
+        // Pass 2: work_artifacts walk. Catches anything the manifest
+        // didn't capture: in-flight writes from a step that hadn't
+        // gate-passed before the reset (still useful), and the
+        // historical-fallback case where the step ran before the
+        // manifest mechanism existed.
         for art in step.work_artifacts {
             delete_with_upstream_protection(
                 project_dir,
@@ -3348,5 +3395,89 @@ not a finding
             project.join("docs/spec.md").exists(),
             "docs/spec.md is DM0's; reset to DM3a must NOT touch it"
         );
+    }
+
+    /// Manifest-driven reset: when each step has recorded what it
+    /// wrote, the shared-directory case (`tests/` claimed by both
+    /// upstream DM2d and downstream DM3b/c) is cleaned at file
+    /// granularity. DM2d's `tests/elaboration.rs` survives; DM3b's
+    /// `tests/testbench/mod.rs` is swept. Without this the run that
+    /// re-enters DM3b inherits stale scaffolding from the failed
+    /// prior run, and the agent has to detect and reconcile it
+    /// before making progress.
+    #[test]
+    fn clear_step_collateral_forward_uses_manifests_for_shared_dirs() {
+        use crate::__internal::manifest;
+        use crate::__internal::steps::registry_for;
+        use crate::state::Flow;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path();
+        std::fs::create_dir_all(project.join("tests/testbench")).unwrap();
+        std::fs::create_dir_all(project.join("tests/edge")).unwrap();
+        // Files DM2d (upstream) wrote.
+        std::fs::write(project.join("tests/elaboration.rs"), "// dm2d\n").unwrap();
+        std::fs::write(project.join("tests/skeleton_test.rs"), "// dm2d\n").unwrap();
+        // Files DM3b (downstream of DM3a) wrote.
+        std::fs::write(project.join("tests/testbench/mod.rs"), "// dm3b\n").unwrap();
+        std::fs::write(project.join("tests/testbench/sequences.rs"), "// dm3b\n").unwrap();
+        std::fs::write(project.join("tests/testbench.rs"), "// dm3b\n").unwrap();
+        // Files DM3c (downstream of DM3a) wrote.
+        std::fs::write(project.join("tests/edge.rs"), "// dm3c\n").unwrap();
+        std::fs::write(project.join("tests/edge/all_zeros.rs"), "// dm3c\n").unwrap();
+
+        // Record the manifests as the real run would have.
+        manifest::record_write(project, "DM2d", "tests/elaboration.rs");
+        manifest::record_write(project, "DM2d", "tests/skeleton_test.rs");
+        manifest::record_write(project, "DM3b", "tests/testbench/mod.rs");
+        manifest::record_write(project, "DM3b", "tests/testbench/sequences.rs");
+        manifest::record_write(project, "DM3b", "tests/testbench.rs");
+        manifest::record_write(project, "DM3c", "tests/edge.rs");
+        manifest::record_write(project, "DM3c", "tests/edge/all_zeros.rs");
+
+        let registry = registry_for(Flow::DirectModeling);
+        let order: Vec<&'static str> = registry.order_for(Flow::DirectModeling);
+        let idx = order.iter().position(|s| *s == "DM3a").unwrap();
+        let (_deleted, failures) = clear_step_collateral_forward(project, idx, &order, &registry);
+        assert!(failures.is_empty(), "got failures: {failures:?}");
+
+        // Upstream (DM2d) files survive at file granularity.
+        assert!(
+            project.join("tests/elaboration.rs").exists(),
+            "DM2d's elaboration.rs is in its manifest -> protected"
+        );
+        assert!(
+            project.join("tests/skeleton_test.rs").exists(),
+            "DM2d's skeleton_test.rs is in its manifest -> protected"
+        );
+        // Downstream (DM3b / DM3c) files in the shared dir are now
+        // swept -- this is the new behavior the manifest enables.
+        assert!(
+            !project.join("tests/testbench/mod.rs").exists(),
+            "DM3b's testbench/mod.rs must be deleted on reset to DM3a"
+        );
+        assert!(
+            !project.join("tests/testbench/sequences.rs").exists(),
+            "DM3b's testbench/sequences.rs must be deleted on reset to DM3a"
+        );
+        assert!(
+            !project.join("tests/testbench.rs").exists(),
+            "DM3b's testbench.rs must be deleted on reset to DM3a"
+        );
+        assert!(
+            !project.join("tests/edge.rs").exists(),
+            "DM3c's edge.rs must be deleted on reset to DM3a"
+        );
+        assert!(
+            !project.join("tests/edge/all_zeros.rs").exists(),
+            "DM3c's edge/all_zeros.rs must be deleted on reset to DM3a"
+        );
+
+        // Manifests for the cleaned steps are also gone so a follow-
+        // up reset doesn't try to re-delete non-existent files.
+        assert!(manifest::step_paths(project, "DM3b").is_empty());
+        assert!(manifest::step_paths(project, "DM3c").is_empty());
+        // Upstream manifest preserved.
+        assert!(!manifest::step_paths(project, "DM2d").is_empty());
     }
 }

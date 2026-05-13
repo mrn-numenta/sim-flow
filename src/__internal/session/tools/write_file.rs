@@ -171,12 +171,15 @@ impl Tool for WriteFileTool {
                         "write_file: critique JSON written to `{path}` but markdown render failed: {err}"
                     )));
                 }
+                if let Some(step_id) = ctx.step_id {
+                    crate::manifest::record_write(ctx.project_dir, step_id, &path);
+                }
                 let mut msg = format!("[write_file `{path}`] {} bytes", content.len());
                 if let Some(note) = redirect_note {
                     msg.push_str("\n\n");
                     msg.push_str(&note);
                 }
-                Ok(ToolResult::ok(msg))
+                Ok(ToolResult::ok(msg).with_touched_path(&path))
             }
             Err(err) => Ok(ToolResult::err(format!(
                 "write_file: cannot write `{path}`: {err}"

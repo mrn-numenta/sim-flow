@@ -8,6 +8,7 @@ pub mod foundation_root;
 pub mod gate;
 pub mod git_commit;
 pub mod keys;
+pub mod manifest;
 pub mod new_project;
 pub mod preflight;
 pub mod prompts;

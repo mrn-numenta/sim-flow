@@ -81,6 +81,14 @@ pub struct ToolContext<'a> {
     /// design decision that auto runs do NOT pause for tool
     /// approvals).
     pub approved_deletes: &'a [String],
+    /// Step id of the flow step that's currently running. Mutating
+    /// tools (`write_file`, `edit_file`, `delete_file`) append the
+    /// path they touched to this step's manifest so a later
+    /// `sim-flow reset` can clean exactly the files the step
+    /// produced. `None` in synthetic contexts (unit tests, the
+    /// dashboard's spec-ingest probe) -- those don't need
+    /// manifests because they don't gate-advance.
+    pub step_id: Option<&'a str>,
 }
 
 impl<'a> ToolContext<'a> {
@@ -98,6 +106,7 @@ impl<'a> ToolContext<'a> {
             write_paths: &[],
             current_milestone_body: None,
             approved_deletes: &[],
+            step_id: None,
         }
     }
 
@@ -115,6 +124,11 @@ impl<'a> ToolContext<'a> {
         self.approved_deletes = approved;
         self
     }
+
+    pub fn with_step_id(mut self, step_id: &'a str) -> Self {
+        self.step_id = Some(step_id);
+        self
+    }
 }
 
 /// Distinctive marker the orchestrator scans for after a tool
@@ -126,6 +140,37 @@ impl<'a> ToolContext<'a> {
 /// Public so the orchestrator and tests can match on it; the
 /// suffix after the marker is the offending path.
 pub const DELETE_SCOPE_VIOLATION_MARKER: &str = "delete_file: scope-violation:";
+
+/// Render a single-line preview of `s` for human-readable tool-arg
+/// display. Escapes newlines/tabs/quotes/backslashes the way debug
+/// formatting would, then caps the visible char count at `max_chars`
+/// and wraps the result in double quotes so empty strings show as `""`
+/// and the boundary is unambiguous. Counts characters (not bytes) so a
+/// UTF-8 boundary is never split.
+pub fn preview_one_line(s: &str, max_chars: usize) -> String {
+    let mut escaped = String::with_capacity(s.len().min(max_chars * 2 + 8));
+    let mut truncated = false;
+    for (chars, c) in s.chars().enumerate() {
+        if chars >= max_chars {
+            truncated = true;
+            break;
+        }
+        match c {
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            c if (c as u32) < 0x20 => escaped.push_str(&format!("\\x{:02x}", c as u32)),
+            c => escaped.push(c),
+        }
+    }
+    if truncated {
+        format!("\"{escaped}...\"")
+    } else {
+        format!("\"{escaped}\"")
+    }
+}
 
 /// Common shape every tool implements. The orchestrator dispatches
 /// by name; a tool's `args` is a JSON object whose schema each impl
@@ -165,6 +210,23 @@ pub struct ToolResult {
     /// that fixes one of N test failures per turn isn't bailed out
     /// by the per-session cap when it's still making progress.
     pub test_failure_count: Option<usize>,
+    /// Names of the failing tests reported by `run_cargo` when the
+    /// command was `test`. Parallel to `test_failure_count` (same
+    /// `None` semantics). Used by the auto-iter loop's
+    /// fix-vs-investigation classifier: regression detection
+    /// (current ⊄ target) and progress detection (target.intersection
+    /// shrank) both key on the names, not the raw count, so the
+    /// "fixed A, broke B" 1-for-1 case doesn't look identical to
+    /// "made no progress."
+    pub test_failures: Option<Vec<String>>,
+    /// Project-relative paths this tool mutated (created, edited, or
+    /// deleted). Populated by `write_file`, `edit_file`,
+    /// `delete_file`, and the orchestrator's artifact-extract path.
+    /// Empty for read-only tools. The auto-iter loop intersects this
+    /// against the step's manifest snapshot to classify a turn as
+    /// "modifies existing artifacts" (fix attempt) vs. "only adds new
+    /// files / reads" (data collection / diagnostic).
+    pub touched_paths: Vec<String>,
 }
 
 /// Internal-only; never serialized over the JSONL protocol. The
@@ -184,6 +246,8 @@ impl ToolResult {
             display: display.into(),
             attachments: Vec::new(),
             test_failure_count: None,
+            test_failures: None,
+            touched_paths: Vec::new(),
         }
     }
     pub fn err(display: impl Into<String>) -> Self {
@@ -192,6 +256,8 @@ impl ToolResult {
             display: display.into(),
             attachments: Vec::new(),
             test_failure_count: None,
+            test_failures: None,
+            touched_paths: Vec::new(),
         }
     }
     pub fn ok_with_attachment(
@@ -209,10 +275,20 @@ impl ToolResult {
                 source_path: source_path.into(),
             }],
             test_failure_count: None,
+            test_failures: None,
+            touched_paths: Vec::new(),
         }
     }
     pub fn with_test_failure_count(mut self, count: usize) -> Self {
         self.test_failure_count = Some(count);
+        self
+    }
+    pub fn with_test_failures(mut self, names: Vec<String>) -> Self {
+        self.test_failures = Some(names);
+        self
+    }
+    pub fn with_touched_path(mut self, path: impl Into<String>) -> Self {
+        self.touched_paths.push(path.into());
         self
     }
 }

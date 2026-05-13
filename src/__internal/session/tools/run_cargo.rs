@@ -144,7 +144,9 @@ impl Tool for RunCargoTool {
             // auto-iter loop can detect progress.
             let mut result = ToolResult::err(display);
             if let Some(s) = test_summary {
-                result = result.with_test_failure_count(s.failure_count);
+                result = result
+                    .with_test_failure_count(s.failure_count)
+                    .with_test_failures(s.failing_tests);
             }
             Ok(result)
         }

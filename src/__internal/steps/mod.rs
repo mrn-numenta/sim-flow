@@ -7,6 +7,7 @@
 
 pub mod dm;
 pub mod ds;
+pub mod sv;
 
 use crate::gate::GateCheck;
 use crate::state::Flow;
@@ -384,6 +385,20 @@ pub fn tick_resolved_milestone_tasks(
     let Some(walk) = step.milestone_walk else {
         return 0;
     };
+    // Planning-detail walks (DM2cd / DM3ad / DM4ad,
+    // `placeholder_marker = Some`) walk milestone STUBS and write
+    // task lists describing what DM2d / DM3b / DM3c / DM4b will
+    // later build. At the planning stage, "the named artifact
+    // exists on disk" does NOT mean the task is done -- the task
+    // is naming what WILL be produced, not what already is. Flip
+    // here would silently mark planning tasks as completed, and
+    // the critique would then re-flag the mismatch and loop until
+    // the no-progress streak guard fires. Execution walks
+    // (`placeholder_marker = None`) keep the auto-tick behavior --
+    // there the rule "artifact exists -> task done" is correct.
+    if walk.placeholder_marker.is_some() {
+        return 0;
+    }
     let CurrentMilestone::File(rel) = find_current_milestone(project_dir, &walk, true) else {
         return 0;
     };
@@ -519,6 +534,7 @@ pub fn registry_for(flow: Flow) -> StepRegistry {
     match flow {
         Flow::DirectModeling => dm::register(&mut reg),
         Flow::DesignStudy => ds::register(&mut reg),
+        Flow::SystemVerilogConvert => sv::register(&mut reg),
     }
     reg
 }
@@ -832,6 +848,58 @@ mod write_path_tests {
         let step = dm3b_step_with_walk();
         let flipped = tick_resolved_milestone_tasks(tmp.path(), &step);
         assert_eq!(flipped, 1);
+    }
+
+    #[test]
+    fn auto_tick_skips_planning_detail_walks() {
+        // Planning-detail steps (placeholder_marker = Some) walk
+        // milestone stubs and write task lists that describe what
+        // EXECUTION steps will later build. The agent emits all
+        // rows as `- [ ]` at this stage. The orchestrator must not
+        // auto-tick them just because a row's first backtick token
+        // happens to be an existing file path -- doing so would
+        // silently mark planning tasks as completed and the next
+        // critique would re-flag the mismatch in a perpetual loop.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("docs/test-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        // The "resolved" path: this file exists and would be the
+        // first backtick token on the task row. For an EXECUTION
+        // walk this is exactly the trigger that flips the row.
+        std::fs::write(tmp.path().join("docs/test-plan/test-plan.md"), "# index\n").unwrap();
+        write_milestone(
+            &dir,
+            "test-milestone-05-coverage.md",
+            "- [ ] Update `docs/test-plan/test-plan.md`'s `## Coverage` section\n",
+        );
+        let step = StepDescriptor {
+            id: "DM3ad",
+            flow: Flow::DirectModeling,
+            prerequisite: None,
+            instruction_slug: "dm3ad-test-plan-detail",
+            per_candidate: false,
+            gate_checks: Vec::new(),
+            walk_gate_checks: Vec::new(),
+            work_artifacts: &[],
+            predecessor_inputs: &[],
+            work_write_paths: &[],
+            work_phases: &["chat"],
+            critique_phases: &["chat"],
+            milestone_walk: Some(MilestoneWalkConfig {
+                dir: "docs/test-plan/",
+                file_prefixes: &["test-milestone-"],
+                index_file: "docs/test-plan/test-plan.md",
+                placeholder_marker: Some("<!-- detail-pending"),
+                forbid_deferred: false,
+            }),
+        };
+        let flipped = tick_resolved_milestone_tasks(tmp.path(), &step);
+        assert_eq!(flipped, 0, "planning-detail walks must not auto-tick rows");
+        let body = std::fs::read_to_string(dir.join("test-milestone-05-coverage.md")).unwrap();
+        assert!(
+            body.contains("- [ ]"),
+            "row must remain unchecked at planning stage; got:\n{body}"
+        );
     }
 
     #[test]

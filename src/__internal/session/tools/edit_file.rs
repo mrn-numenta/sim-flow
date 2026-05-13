@@ -21,7 +21,7 @@
 
 use serde_json::json;
 
-use super::{Tool, ToolContext, ToolResult, resolve_safe_path};
+use super::{Tool, ToolContext, ToolResult, preview_one_line, resolve_safe_path};
 use crate::Result;
 use crate::steps::is_path_allowed_for_writes;
 
@@ -122,13 +122,40 @@ impl Tool for EditFileTool {
                 "edit_file: cannot write `{path}`: {err}"
             )));
         }
+        // Post-write read-back. Confirms the on-disk content matches
+        // what we asked `replacen` to produce. Catches the rare case
+        // where a concurrent writer (or a filesystem oddity) clobbers
+        // our change between `write` and the next tool call. Also
+        // forces the caller to face the actual diff: the success
+        // message echoes `old -> new` so a model that emitted a
+        // `new_string` accidentally still containing the offending
+        // bit can see why its "successful" edit didn't fix the
+        // critique finding.
+        let on_disk = match std::fs::read_to_string(&abs) {
+            Ok(s) => s,
+            Err(err) => {
+                return Ok(ToolResult::err(format!(
+                    "edit_file: post-write read-back failed for `{path}`: {err}"
+                )));
+            }
+        };
+        if on_disk != updated {
+            return Ok(ToolResult::err(format!(
+                "edit_file: post-write verification failed for `{path}`: on-disk content does not match the expected replacement (possible concurrent write). Re-read the file and try again."
+            )));
+        }
+        if let Some(step_id) = ctx.step_id {
+            crate::manifest::record_write(ctx.project_dir, step_id, &path);
+        }
         let (start_line, end_line) = changed_line_range(&body, &old_string);
+        let old_lines = old_string.matches('\n').count() + 1;
         let new_lines = new_string.matches('\n').count() + 1;
         Ok(ToolResult::ok(format!(
-            "[edit_file `{path}`] replaced 1 occurrence at line {start_line}-{end_line} ({} -> {} line(s)).",
-            old_string.matches('\n').count() + 1,
-            new_lines,
-        )))
+            "[edit_file `{path}`] replaced 1 occurrence at line {start_line}-{end_line} ({old_lines} -> {new_lines} line(s)).\n  old: {}\n  new: {}",
+            preview_one_line(&old_string, 240),
+            preview_one_line(&new_string, 240),
+        ))
+        .with_touched_path(&path))
     }
 }
 
@@ -175,6 +202,25 @@ mod tests {
         let body = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
         assert_eq!(body, "HOWDY world\nbye world\n");
         assert!(result.display.contains("line 1-1"));
+        assert!(
+            result.display.contains("old: \"hello\""),
+            "missing old preview in: {}",
+            result.display
+        );
+        assert!(
+            result.display.contains("new: \"HOWDY\""),
+            "missing new preview in: {}",
+            result.display
+        );
+        // edit_file must record the path it touched so the
+        // orchestrator's no-progress classifier can recognize the
+        // turn as a fix attempt (vs a read / new-file diagnostic).
+        assert_eq!(
+            result.touched_paths,
+            vec!["note.md"],
+            "expected touched_paths = [note.md], got {:?}",
+            result.touched_paths,
+        );
     }
 
     #[test]

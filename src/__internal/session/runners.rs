@@ -76,9 +76,16 @@ pub fn cargo_clippy(project: &Path) -> Result<RunnerOutput> {
 /// is the number of distinct `panicked at` headers parsed out of
 /// stdout (one per failing test); `display` is the formatted summary
 /// the orchestrator threads back into the next User turn.
+/// `failing_tests` is the (uniqued, ordered-by-first-seen) list of
+/// failing test names so the orchestrator's no-progress detector
+/// can track which tests are still failing across iterations --
+/// distinguishing "agent fixed test A but introduced regression B"
+/// from "agent made no progress at all" (both would have an
+/// identical raw count when the swap is 1-for-1).
 #[derive(Debug, Clone)]
 pub struct CargoTestSummary {
     pub failure_count: usize,
+    pub failing_tests: Vec<String>,
     pub display: String,
 }
 
@@ -147,8 +154,21 @@ pub fn summarize_cargo_test_failures(stdout: &str, stderr: &str) -> Option<Cargo
         out.push_str(trimmed_stderr);
         out.push('\n');
     }
+    // Dedup test names in first-seen order so the orchestrator gets
+    // a stable, comparable set. The grouping loop above already
+    // deduplicates by (location, message) but a single test name can
+    // appear under more than one grouping if the body is non-empty
+    // and varies; collapse to unique names here.
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut failing_tests: Vec<String> = Vec::new();
+    for p in &panics {
+        if seen.insert(p.test.as_str()) {
+            failing_tests.push(p.test.clone());
+        }
+    }
     Some(CargoTestSummary {
         failure_count,
+        failing_tests,
         display: out,
     })
 }
@@ -789,6 +809,36 @@ test result: FAILED. 1 passed; 2 failed; 0 ignored
     fn summarize_returns_none_when_no_failures() {
         let stdout = "running 3 tests\n\ntest result: ok. 3 passed; 0 failed; 0 ignored\n";
         assert!(summarize_cargo_test_failures(stdout, "").is_none());
+    }
+
+    #[test]
+    fn summarize_exposes_failing_test_names_deduped() {
+        // Three failing tests across two locations -- the summary's
+        // `failing_tests` field should list all three (one entry per
+        // unique test name) in first-seen order so the orchestrator
+        // can intersect / diff with a prior target set.
+        let stdout = "\
+thread 'alpha' panicked at tests/stress.rs:10:5:
+assertion `left == right` failed
+  left: 0
+ right: 1
+
+thread 'beta' panicked at tests/stress.rs:20:5:
+assertion `left == right` failed
+  left: 2
+ right: 3
+
+thread 'gamma' panicked at tests/stress.rs:10:5:
+assertion `left == right` failed
+  left: 0
+ right: 1
+
+test result: FAILED. 2 passed; 3 failed; 0 ignored
+";
+        let summary = summarize_cargo_test_failures(stdout, "")
+            .expect("summary should be produced for failures");
+        assert_eq!(summary.failure_count, 3);
+        assert_eq!(summary.failing_tests, vec!["alpha", "beta", "gamma"]);
     }
 
     #[test]

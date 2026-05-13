@@ -117,7 +117,19 @@ impl Tool for DeleteFileTool {
             }
         }
         match std::fs::remove_file(&abs) {
-            Ok(()) => Ok(ToolResult::ok(format!("[delete_file `{path}`] removed"))),
+            Ok(()) => {
+                // Record the delete so a reset that cascades through
+                // this step knows to also revisit the path -- e.g.
+                // the agent created `src/old.rs` mid-step and then
+                // deleted it; the reset cascade should not be
+                // surprised by the now-missing path. record_write
+                // is idempotent on absent files.
+                if let Some(step_id) = ctx.step_id {
+                    crate::manifest::record_write(ctx.project_dir, step_id, &path);
+                }
+                Ok(ToolResult::ok(format!("[delete_file `{path}`] removed"))
+                    .with_touched_path(&path))
+            }
             Err(err) => Ok(ToolResult::err(format!(
                 "delete_file: cannot remove `{path}`: {err}"
             ))),
