@@ -26,6 +26,7 @@ pub const UNIVERSAL_TOOLS: &[&str] = &[
     "delete_file",
     "search",
     "run_cargo",
+    "declare_fix",
 ];
 
 #[derive(Debug, Clone)]

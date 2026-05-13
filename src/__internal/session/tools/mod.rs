@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{Error, Result};
 
+mod declare_fix;
 mod delete_file;
 mod edit_file;
 mod list_dir;
@@ -27,6 +28,7 @@ mod run_cargo;
 mod search;
 mod write_file;
 
+pub use declare_fix::DeclareFixTool;
 pub use delete_file::DeleteFileTool;
 pub use edit_file::EditFileTool;
 pub use list_dir::ListDirTool;
@@ -227,6 +229,15 @@ pub struct ToolResult {
     /// "modifies existing artifacts" (fix attempt) vs. "only adds new
     /// files / reads" (data collection / diagnostic).
     pub touched_paths: Vec<String>,
+    /// `true` when this tool call is the agent's explicit commit to
+    /// "the next `cargo test` is a fix attempt." Only `declare_fix`
+    /// sets it. The orchestrator treats the next test run as a fix
+    /// attempt regardless of file-op state, increments
+    /// `declared_fixes_count`, and resets the investigation counter.
+    /// Composes with file-op heuristic: a turn that also touched a
+    /// pre-session path is still a fix attempt (one classification,
+    /// two counters in parallel).
+    pub declared_fix: bool,
 }
 
 /// Internal-only; never serialized over the JSONL protocol. The
@@ -248,6 +259,7 @@ impl ToolResult {
             test_failure_count: None,
             test_failures: None,
             touched_paths: Vec::new(),
+            declared_fix: false,
         }
     }
     pub fn err(display: impl Into<String>) -> Self {
@@ -258,6 +270,7 @@ impl ToolResult {
             test_failure_count: None,
             test_failures: None,
             touched_paths: Vec::new(),
+            declared_fix: false,
         }
     }
     pub fn ok_with_attachment(
@@ -277,6 +290,7 @@ impl ToolResult {
             test_failure_count: None,
             test_failures: None,
             touched_paths: Vec::new(),
+            declared_fix: false,
         }
     }
     pub fn with_test_failure_count(mut self, count: usize) -> Self {
@@ -289,6 +303,10 @@ impl ToolResult {
     }
     pub fn with_touched_path(mut self, path: impl Into<String>) -> Self {
         self.touched_paths.push(path.into());
+        self
+    }
+    pub fn with_declared_fix(mut self) -> Self {
+        self.declared_fix = true;
         self
     }
 }
@@ -324,6 +342,7 @@ pub fn build_dispatcher(names: &[&'static str]) -> Vec<Box<dyn Tool>> {
             "delete_file" => out.push(Box::new(DeleteFileTool)),
             "search" => out.push(Box::new(SearchTool)),
             "run_cargo" => out.push(Box::new(RunCargoTool)),
+            "declare_fix" => out.push(Box::new(DeclareFixTool)),
             _ => {} // unknown tool name; skip
         }
     }

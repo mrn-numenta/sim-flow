@@ -59,3 +59,55 @@ what trips `max_critique_no_progress_iters`.
 `RESOLVED:` lines are confirmations from the prior critic that
 earlier flagged findings have been fixed; no action required on your
 side.
+
+## Investigation vs fix attempts (`declare_fix`)
+
+The auto driver classifies every `run_cargo test` turn as either an
+**investigation** (you're measuring / probing) or a **fix attempt**
+(you committed to a specific change). Investigation turns are
+cheap; fix attempts are bounded. Both have separate caps:
+
+- **Investigation budget** (default 10 turns since the last fix
+  attempt): you may run `cargo test`, read framework docs, write
+  new diagnostic test files (e.g. `tests/<area>/diag_*.rs`) freely.
+  This phase is for understanding the failure.
+- **Fix-attempt budget**: every time the target failing-test set
+  doesn't strictly shrink AND you (a) edited a pre-existing
+  step-owned artifact, OR (b) called `declare_fix`, the auto loop
+  counts it. Capped by `max_auto_iters` for heuristic touches and
+  by a separate declared-fix cap (default 8) for `declare_fix`
+  calls.
+
+**When to call `declare_fix`**: right before you run `cargo test`
+that you EXPECT to pass. Pass a one-line `rationale` summarising the
+change you just made. The orchestrator scores the next test run as
+a fix attempt regardless of whether the file-op heuristic saw it.
+
+```text
+declare_fix({"rationale": "raised injector rate to 1/cycle to match Foundation's tick contract"})
+run_cargo({"command": "test"})
+```
+
+**Why bother**:
+
+- If your fix lives in a NEW file (e.g. you refactored a helper
+  under `tests/testbench/<new_file>.rs`), the file-op heuristic
+  will not classify it as a fix attempt -- it'll look like
+  investigation and the test turn won't get credit. `declare_fix`
+  fixes that.
+- If you've finished a clear investigation phase and want to
+  commit, `declare_fix` resets the investigation counter so you
+  earn another full budget for the NEXT investigation phase if
+  the fix doesn't pan out.
+
+**Do NOT** call `declare_fix` for:
+
+- Pure measurement / probing (just running `cargo test` to see
+  state) -- that's investigation.
+- Adding a diagnostic test file -- that's investigation.
+- Stylistic / typo fixes unrelated to the failing tests.
+
+If you call `declare_fix` 8 times without progress, the auto driver
+bails so the operator can decide whether to raise the budget,
+inject more framework context, or commit a fix manually. Use the
+budget thoughtfully.

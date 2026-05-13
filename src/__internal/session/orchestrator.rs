@@ -405,7 +405,21 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
     // since the last test, OR this turn.)
     let mut touched_existing_since_last_test: bool = false;
     let mut investigation_only_iters: u32 = 0;
-    const MAX_INVESTIGATION_ONLY_TURNS: u32 = 5;
+    // Initial investigation budget. Bumped from 5 to 10 so the
+    // agent has reasonable room to read framework docs / probe
+    // behavior before declaring a fix; `declare_fix` resets this
+    // counter so each declared attempt earns a fresh budget.
+    const MAX_INVESTIGATION_ONLY_TURNS: u32 = 10;
+    // Sticky flag set by the `declare_fix` tool. Reset (consumed)
+    // when the next `cargo test` runs and the classifier scores
+    // the turn. The agent's commit point: "the next test run is
+    // my intentional fix attempt, score it accordingly even if
+    // the file-op heuristic missed."
+    let mut declared_fix_pending: bool = false;
+    // Total `declare_fix` calls this session. Capped separately so
+    // an agent that keeps declaring without progress still bails.
+    let mut declared_fixes_count: u32 = 0;
+    const MAX_DECLARED_FIXES: u32 = 8;
 
     // Tool-error-streak guard. Catches a failure mode the
     // identical-response check misses: the model keeps emitting
@@ -1200,6 +1214,10 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     for rel in &outcome.touched_paths {
                         this_turn_touched_paths.insert(opts.project_dir.join(rel));
                     }
+                    if outcome.declared_fix {
+                        declared_fix_pending = true;
+                        declared_fixes_count = declared_fixes_count.saturating_add(1);
+                    }
                     for att in outcome.attachments {
                         tool_attachments.push(crate::session::protocol::LlmAttachment {
                             mime: att.mime,
@@ -1447,6 +1465,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         target,
                         &current_failing,
                         touched_existing_since_last_test,
+                        declared_fix_pending,
                     ) {
                         ProgressClass::Progress => {
                             no_progress_iters = 0;
@@ -1470,12 +1489,13 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         }
                     }
                     last_test_failure_count = Some(cur);
-                    // Reset the sticky flag now that the classifier
-                    // consumed it. Future turns start fresh: their
-                    // touches must accumulate before the NEXT test
-                    // run for the next classification to register
-                    // as a fix attempt.
+                    // Reset the sticky flags now that the classifier
+                    // consumed them. Future turns start fresh: their
+                    // touches / declare_fix must accumulate before
+                    // the NEXT test run for the next classification
+                    // to register as a fix attempt.
                     touched_existing_since_last_test = false;
+                    declared_fix_pending = false;
                 }
 
                 // Bail if we've burned `max_auto_iters` consecutive
@@ -1491,7 +1511,8 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     this_turn_test_count.is_some() && no_progress_iters >= opts.max_auto_iters;
                 let hit_investigation_cap =
                     investigation_only_iters >= MAX_INVESTIGATION_ONLY_TURNS;
-                if opts.auto && (hit_fix_cap || hit_investigation_cap) {
+                let hit_declared_cap = declared_fixes_count >= MAX_DECLARED_FIXES;
+                if opts.auto && (hit_fix_cap || hit_investigation_cap || hit_declared_cap) {
                     let cur = last_test_failure_count.unwrap_or(0);
                     let message = if hit_fix_cap {
                         format!(
@@ -1501,12 +1522,22 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                              switching to interactive.",
                             step.id, opts.max_auto_iters, no_progress_iters, cur,
                         )
+                    } else if hit_declared_cap {
+                        format!(
+                            "auto: {} hit declared-fix cap (max_auto_iters={}): the agent has called \
+                             `declare_fix` {} times this session without the target failing-test set \
+                             shrinking (current: {} test(s) failing). The agent is committing to fixes \
+                             that don't pan out; switching to interactive so the operator can decide whether \
+                             to raise the budget, inject framework context, or commit a fix manually.",
+                            step.id, opts.max_auto_iters, declared_fixes_count, cur,
+                        )
                     } else {
                         format!(
                             "auto: {} hit investigation-only cap (max_auto_iters={}): {} consecutive turns \
-                             ran `cargo test` without modifying any pre-existing step artifact (only new files / reads). \
-                             The agent appears stuck in data collection; switching to interactive so a human can \
-                             commit to a fix direction.",
+                             ran `cargo test` without modifying any pre-existing step artifact and without \
+                             calling `declare_fix`. The agent appears stuck in data collection; switching to \
+                             interactive so a human can commit to a fix direction. (If the agent has a real \
+                             fix in a new file, teach it to call `declare_fix` before the test run.)",
                             step.id, opts.max_auto_iters, investigation_only_iters,
                         )
                     };
@@ -3771,13 +3802,14 @@ pub(super) fn classify_progress(
     target: &std::collections::HashSet<String>,
     current: &std::collections::HashSet<String>,
     touched_existing: bool,
+    declared: bool,
 ) -> ProgressClass {
     let still_failing_target = target.intersection(current).count();
     let target_shrank = still_failing_target < target.len();
     let regressed = current.difference(target).count() > 0;
     if target_shrank && !regressed {
         ProgressClass::Progress
-    } else if touched_existing {
+    } else if touched_existing || declared {
         ProgressClass::FixAttemptNoProgress
     } else {
         ProgressClass::Investigation
@@ -3798,12 +3830,17 @@ mod progress_class_tests {
         let target = set(&["a", "b", "c"]);
         let current = set(&["a", "b"]); // c got fixed
         assert_eq!(
-            classify_progress(&target, &current, true),
+            classify_progress(&target, &current, true, false),
             ProgressClass::Progress
         );
         // touched_existing irrelevant when target shrinks cleanly.
         assert_eq!(
-            classify_progress(&target, &current, false),
+            classify_progress(&target, &current, false, false),
+            ProgressClass::Progress
+        );
+        // declared doesn't override Progress either.
+        assert_eq!(
+            classify_progress(&target, &current, false, true),
             ProgressClass::Progress
         );
     }
@@ -3815,7 +3852,7 @@ mod progress_class_tests {
         let target = set(&["a", "b", "c"]);
         let current = set(&["a", "b", "d"]);
         assert_eq!(
-            classify_progress(&target, &current, true),
+            classify_progress(&target, &current, true, false),
             ProgressClass::FixAttemptNoProgress
         );
     }
@@ -3825,7 +3862,7 @@ mod progress_class_tests {
         let target = set(&["a", "b"]);
         let current = set(&["a", "b"]);
         assert_eq!(
-            classify_progress(&target, &current, true),
+            classify_progress(&target, &current, true, false),
             ProgressClass::FixAttemptNoProgress
         );
     }
@@ -3837,7 +3874,7 @@ mod progress_class_tests {
         let target = set(&["a", "b"]);
         let current = set(&["a", "b"]);
         assert_eq!(
-            classify_progress(&target, &current, false),
+            classify_progress(&target, &current, false, false),
             ProgressClass::Investigation
         );
     }
@@ -3849,7 +3886,7 @@ mod progress_class_tests {
         let target = set(&["a", "b"]);
         let current = set(&["a", "b", "diag_probe"]);
         assert_eq!(
-            classify_progress(&target, &current, false),
+            classify_progress(&target, &current, false, false),
             ProgressClass::Investigation
         );
     }
@@ -3864,7 +3901,7 @@ mod progress_class_tests {
         let target = set(&["a", "b"]);
         let current = set(&["a", "b", "diag_probe"]);
         assert_eq!(
-            classify_progress(&target, &current, true),
+            classify_progress(&target, &current, true, false),
             ProgressClass::FixAttemptNoProgress
         );
     }
@@ -3878,8 +3915,32 @@ mod progress_class_tests {
         let target = set(&["a"]);
         let current = set(&["a"]);
         assert_eq!(
-            classify_progress(&target, &current, false),
+            classify_progress(&target, &current, false, false),
             ProgressClass::Investigation
+        );
+    }
+
+    #[test]
+    fn declared_fix_promotes_no_touch_turn_to_fix_attempt() {
+        // Agent declared but didn't edit existing -- still a fix
+        // attempt (agent's commit is the signal).
+        let target = set(&["a", "b"]);
+        let current = set(&["a", "b"]);
+        assert_eq!(
+            classify_progress(&target, &current, false, true),
+            ProgressClass::FixAttemptNoProgress
+        );
+    }
+
+    #[test]
+    fn declared_fix_and_touch_compose_as_fix_attempt() {
+        // Both signals say "fix attempt" -- classification stays
+        // FixAttempt (single classification, counters are parallel).
+        let target = set(&["a", "b"]);
+        let current = set(&["a", "b"]);
+        assert_eq!(
+            classify_progress(&target, &current, true, true),
+            ProgressClass::FixAttemptNoProgress
         );
     }
 }
