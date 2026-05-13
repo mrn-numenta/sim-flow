@@ -394,10 +394,16 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
     // intersect-with-current shrink (progress)? (b) is there a
     // new failing test that's NOT in target (regression)?
     let mut target_failing_set: Option<std::collections::HashSet<String>> = None;
-    // Investigation-only streak: turns that ran a validation
-    // (`run_cargo test`) without modifying any pre-session-known
-    // path. Capped separately so a model can't avoid the bail by
-    // staying in pure data-collection mode forever.
+    // Investigation-only streak: cargo-test runs since the LAST
+    // fix attempt where the agent didn't modify any pre-session-
+    // known path SINCE THE PREVIOUS TEST. (Many agents -- vLLM
+    // openai-compat with `qwen3.6` is the observed case -- emit one
+    // tool call per LLM response, so an edit and a follow-up
+    // `cargo test` land in separate turns. Per-turn check alone
+    // misclassifies the test-only turn as investigation; we need
+    // to remember whether a touch happened in EITHER a prior turn
+    // since the last test, OR this turn.)
+    let mut touched_existing_since_last_test: bool = false;
     let mut investigation_only_iters: u32 = 0;
     const MAX_INVESTIGATION_ONLY_TURNS: u32 = 5;
 
@@ -1415,6 +1421,17 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 //   data collection (no validation, or no touch of
                 //     existing path)                -> free pass, but track
                 //                                      investigation_only_iters
+                // Update the "touched an existing path since last
+                // test" flag from this turn's writes BEFORE we
+                // classify. The flag is sticky across turns until
+                // the next cargo-test fires (where the classifier
+                // consumes and clears it). Without this stickiness,
+                // a transport that emits edits and tests in
+                // separate turns would always look like
+                // investigation on the test turn.
+                if !this_turn_touched_paths.is_disjoint(&pre_session_manifest) {
+                    touched_existing_since_last_test = true;
+                }
                 if let Some(cur) = this_turn_test_count {
                     let current_failing: std::collections::HashSet<String> =
                         this_turn_test_failures
@@ -1426,9 +1443,11 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         target_failing_set = Some(current_failing.clone());
                     }
                     let target = target_failing_set.as_ref().expect("set above");
-                    let touched_existing =
-                        !this_turn_touched_paths.is_disjoint(&pre_session_manifest);
-                    match classify_progress(target, &current_failing, touched_existing) {
+                    match classify_progress(
+                        target,
+                        &current_failing,
+                        touched_existing_since_last_test,
+                    ) {
                         ProgressClass::Progress => {
                             no_progress_iters = 0;
                             investigation_only_iters = 0;
@@ -1451,6 +1470,12 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         }
                     }
                     last_test_failure_count = Some(cur);
+                    // Reset the sticky flag now that the classifier
+                    // consumed it. Future turns start fresh: their
+                    // touches must accumulate before the NEXT test
+                    // run for the next classification to register
+                    // as a fix attempt.
+                    touched_existing_since_last_test = false;
                 }
 
                 // Bail if we've burned `max_auto_iters` consecutive
