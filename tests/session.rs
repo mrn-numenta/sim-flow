@@ -99,8 +99,35 @@ fn handshake_emits_hello_ack_and_phase_changed() {
             // because there's no critique body and DM0 has no
             // milestone walk, so volatile is empty.
             assert!(messages.len() == 4 || messages.len() == 5);
-            assert!(messages[0].content.contains("Artifact-write convention"));
-            assert!(messages[1].content.contains("Tool catalog"));
+            // `SIM_FLOW_TOOL_MODE` defaults to `native` now, which
+            // loads `_conventions/orchestrator-native-tools.md`
+            // ("Artifact persistence"). The legacy fenced-mode
+            // convention header ("Artifact-write convention" --
+            // shipped in `_conventions/fenced-blocks.md`) still
+            // fires when an explicit `SIM_FLOW_TOOL_MODE=fenced` is
+            // set. Accept either header so the test pins the
+            // "conventions intro is present in messages[0]"
+            // invariant without re-asserting the default mode here.
+            assert!(
+                messages[0].content.contains("Artifact persistence")
+                    || messages[0].content.contains("Artifact-write convention"),
+                "expected the conventions intro in messages[0]; got: {}",
+                &messages[0].content.lines().next().unwrap_or("(empty)")
+            );
+            // messages[1] is the tool-notice system message. Native
+            // mode (the new default) drops the "Tool catalog"
+            // listing because the catalog goes over the wire as the
+            // structured `tools` field; only the orchestrator-only
+            // info (write scope, lib/framework roots) survives.
+            // Fenced mode keeps the legacy "Tool catalog" listing.
+            // Either way the notice always carries the write-scope
+            // line, so assert on that.
+            assert!(
+                messages[1].content.contains("Tool catalog")
+                    || messages[1].content.contains("Write scope"),
+                "expected the tool notice in messages[1]; got first line: {}",
+                &messages[1].content.lines().next().unwrap_or("(empty)")
+            );
             let opening_idx = messages.len() - 1;
             let inputs_idx = opening_idx - 1;
             assert!(messages[inputs_idx].content.contains("docs/spec.md"));
