@@ -20,19 +20,25 @@ use std::path::{Path, PathBuf};
 use crate::{Error, Result};
 
 mod declare_fix;
+mod declare_hypothesis;
 mod delete_file;
 mod edit_file;
 mod list_dir;
+mod log_bug;
 mod read_file;
+mod resolve_bug;
 mod run_cargo;
 mod search;
 mod write_file;
 
 pub use declare_fix::DeclareFixTool;
+pub use declare_hypothesis::DeclareHypothesisTool;
 pub use delete_file::DeleteFileTool;
 pub use edit_file::EditFileTool;
 pub use list_dir::ListDirTool;
+pub use log_bug::LogBugTool;
 pub use read_file::ReadFileTool;
+pub use resolve_bug::ResolveBugTool;
 pub use run_cargo::RunCargoTool;
 pub use search::SearchTool;
 pub use write_file::WriteFileTool;
@@ -75,6 +81,14 @@ pub struct ToolContext<'a> {
     /// outside milestone-walk steps. Empty string is fine (no
     /// hints; no redirect).
     pub current_milestone_body: Option<&'a str>,
+    /// Project-relative path of the current milestone file when the
+    /// orchestrator has scoped the sub-session to one (e.g.
+    /// `docs/test-plan/test-milestone-03-stress.md`). Used by
+    /// `log_bug` to record which specific milestone surfaced the
+    /// bug -- valuable when mining the log later ("which milestone
+    /// types fail most often?"). `None` outside milestone-walk
+    /// steps. Parallel to `current_milestone_body`.
+    pub current_milestone_path: Option<&'a str>,
     /// Project-relative paths the user explicitly approved for
     /// `delete_file` even though they fall outside `write_paths`.
     /// Populated by the orchestrator after a `RequestUserInput`
@@ -107,6 +121,7 @@ impl<'a> ToolContext<'a> {
             framework_docs_root,
             write_paths: &[],
             current_milestone_body: None,
+            current_milestone_path: None,
             approved_deletes: &[],
             step_id: None,
         }
@@ -119,6 +134,11 @@ impl<'a> ToolContext<'a> {
 
     pub fn with_milestone_body(mut self, body: Option<&'a str>) -> Self {
         self.current_milestone_body = body;
+        self
+    }
+
+    pub fn with_milestone_path(mut self, path: Option<&'a str>) -> Self {
+        self.current_milestone_path = path;
         self
     }
 
@@ -343,6 +363,9 @@ pub fn build_dispatcher(names: &[&'static str]) -> Vec<Box<dyn Tool>> {
             "search" => out.push(Box::new(SearchTool)),
             "run_cargo" => out.push(Box::new(RunCargoTool)),
             "declare_fix" => out.push(Box::new(DeclareFixTool)),
+            "declare_hypothesis" => out.push(Box::new(DeclareHypothesisTool)),
+            "log_bug" => out.push(Box::new(LogBugTool)),
+            "resolve_bug" => out.push(Box::new(ResolveBugTool)),
             _ => {} // unknown tool name; skip
         }
     }

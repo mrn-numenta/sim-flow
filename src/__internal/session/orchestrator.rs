@@ -1178,6 +1178,13 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     let milestone_body = current_milestone_path
                         .as_deref()
                         .and_then(|p| std::fs::read_to_string(p).ok());
+                    // Project-relative form of the milestone path,
+                    // for `log_bug` to record which milestone
+                    // surfaced the bug.
+                    let milestone_rel: Option<String> = current_milestone_path
+                        .as_deref()
+                        .and_then(|p| p.strip_prefix(&opts.project_dir).ok())
+                        .map(|p| p.display().to_string());
                     let ctx = tools::ToolContext::new(
                         &opts.project_dir,
                         library_root.as_deref(),
@@ -1186,6 +1193,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     )
                     .with_write_paths(&write_paths)
                     .with_milestone_body(milestone_body.as_deref())
+                    .with_milestone_path(milestone_rel.as_deref())
                     .with_approved_deletes(&approved_deletes)
                     .with_step_id(step.id);
                     let outcome = invoke_tool(&dispatcher, &ctx, call);

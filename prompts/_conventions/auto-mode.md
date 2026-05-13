@@ -111,3 +111,53 @@ If you call `declare_fix` 8 times without progress, the auto driver
 bails so the operator can decide whether to raise the budget,
 inject more framework context, or commit a fix manually. Use the
 budget thoughtfully.
+
+## Bug log
+
+Every project carries a persistent bug log at
+`<project>/.sim-flow/bug-log.jsonl`. Use it to record distinct
+failure modes you encounter so the operator can mine the history
+later. Applies to ANY step with a failing-test or critique loop:
+DM2d unit-test failures, DM3c stress / edge / coverage failures,
+DM4b perf-target misses, SV3 verilator failures, plus critique
+BLOCKERs that re-occur.
+
+**When to open a bug** (`log_bug({"issue": ..., "category": ...})`):
+
+- The same test(s) fail across two or more critique cycles.
+- A critique flagged a structural BLOCKER you can't resolve in one
+  pass.
+- Cargo / framework / external tooling refuses to run as expected.
+- You spot a Foundation behavior the docs don't predict.
+
+ONE bug per distinct issue (not one per turn). Categories:
+`framework` | `test` | `impl` | `perf` | `tooling` | `other`. The
+orchestrator auto-fills the step id and current milestone path.
+
+**While investigating**: call
+`declare_hypothesis({"rationale": "<one-line guess>"})` whenever
+you form a new theory about the root cause. These are pure
+logging -- no effect on the no-progress classifier. They build the
+trail of what you considered.
+
+**When committing to a fix**: call
+`declare_fix({"rationale": "<one-line summary of the change>"})`
+right before the `cargo test` you expect to pass. This signals the
+classifier (counts as a fix attempt, resets investigation
+budget) AND appends a `fix_attempt` event to the current open bug.
+
+**When fixed**: after the failing tests pass, call
+`resolve_bug({"resolution": "<1-3 sentences: root cause + what you
+changed>"})`. Marks the bug `status: resolved`; the entry stays
+in the log as a permanent record.
+
+**Implicit targeting**: `declare_hypothesis` / `declare_fix` /
+`resolve_bug` all target the most-recently-opened OPEN bug (LIFO).
+If you have multiple bugs open and need to log against an older
+one, resolve / re-open the stack to surface the right one.
+
+If you never call `log_bug`, the tools still work in their
+non-bug-log modes (e.g. `declare_fix` still signals the
+classifier; it just doesn't append to a bug entry). But the
+operator strongly prefers a bug entry for every distinct failure
+you investigate -- the value is in the historical record.

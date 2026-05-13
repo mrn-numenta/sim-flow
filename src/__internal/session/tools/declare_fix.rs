@@ -55,7 +55,7 @@ impl Tool for DeclareFixTool {
         })
     }
 
-    fn invoke(&self, _ctx: &ToolContext, args: &serde_json::Value) -> Result<ToolResult> {
+    fn invoke(&self, ctx: &ToolContext, args: &serde_json::Value) -> Result<ToolResult> {
         let rationale = match args.get("rationale").and_then(|v| v.as_str()) {
             Some(s) if !s.trim().is_empty() => s.trim().to_string(),
             _ => {
@@ -64,8 +64,39 @@ impl Tool for DeclareFixTool {
                 ));
             }
         };
-        Ok(ToolResult::ok(format!("[declare_fix] {rationale}")).with_declared_fix())
+        // Best-effort: if there's an open bug entry, append the
+        // fix_attempt to its event trail. Silent no-op when the
+        // agent didn't call `log_bug` first -- declare_fix's
+        // primary purpose (classifier signal) still works.
+        let records = crate::bug_log::load_all(ctx.project_dir);
+        let target_id = records
+            .iter()
+            .rev()
+            .find(|r| r.status == "open")
+            .map(|r| r.id.clone());
+        let display = if let Some(id) = &target_id {
+            let event = crate::bug_log::BugEvent {
+                ts: now_ts(),
+                kind: "fix_attempt".to_string(),
+                rationale: Some(rationale.clone()),
+                outcome: Some("pending".to_string()),
+                message: None,
+            };
+            let _ = crate::bug_log::append_event(ctx.project_dir, id, event);
+            format!("[declare_fix -> {id}] {rationale}")
+        } else {
+            format!("[declare_fix] {rationale}")
+        };
+        Ok(ToolResult::ok(display).with_declared_fix())
     }
+}
+
+fn now_ts() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs().to_string())
+        .unwrap_or_else(|_| "0".to_string())
 }
 
 #[cfg(test)]
