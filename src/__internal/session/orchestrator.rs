@@ -30,6 +30,18 @@ use crate::{Error, Result};
 
 const FRAMEWORK_DOCS_ROOT_ENV: &str = "SIM_FLOW_FRAMEWORK_DOCS_ROOT";
 
+/// Wall-clock epoch seconds, defaulting to 0 if the system clock is
+/// misbehaving. Used for the `started_unix` column on every LLM
+/// metrics row -- a row with a 0 timestamp is uglier than crashing
+/// the session, so we swallow the error and let downstream
+/// consumers notice the bogus value.
+fn unix_seconds_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// One-strike-warning prefix injected into the next user message
 /// the orchestrator builds when the runaway-loop detector sees
 /// `cap - 1` structurally-identical responses in a row. The next
@@ -162,6 +174,12 @@ pub fn run_session<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result<(
 }
 
 fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result<()> {
+    // Structured per-turn LLM metrics. Lives next to the debug log
+    // (`.sim-flow/logs/llm-metrics.jsonl`); created lazily on the
+    // first record so a session that never reaches an LLM dispatch
+    // leaves no empty file.
+    let llm_metrics = crate::session::llm_metrics::LlmMetricsLog::for_project(&opts.project_dir);
+
     // 1. Load state + step descriptor.
     let dot = opts.project_dir.join(".sim-flow");
     let state = State::load(&dot)?;
@@ -436,6 +454,12 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
         // round-trip including chunk streaming and protocol
         // serialization, which can differ from the host-side view.
         let turn_started = std::time::Instant::now();
+        // Measured BEFORE the request goes out so a host or transport
+        // failure can't bias the count. Sum of content bytes across
+        // every message in the prompt; matches what the model
+        // server's tokenizer sees byte-wise. Attachments and the
+        // small JSON envelope per message are not counted.
+        let prompt_bytes: u64 = messages.iter().map(|m| m.content.len() as u64).sum();
         host.write(&Event::RequestLlmResponse {
             request_id: request_id.clone(),
             backend: opts.llm_backend.clone(),
@@ -468,9 +492,11 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 Some(HostEvent::LlmEnd {
                     request_id: rid,
                     tool_calls: native_calls,
+                    stop_reason,
                     ..
                 }) if rid == request_id => {
                     native_tool_calls = native_calls;
+                    let llm_stop_reason = stop_reason;
                     host.write(&Event::AssistantText {
                         text: String::new(),
                         final_chunk: true,
@@ -486,6 +512,21 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         assistant_bytes = assistant_text.len(),
                         wall_ms = turn_wall_ms,
                     );
+                    llm_metrics.record(
+                        &crate::session::llm_metrics::LlmMetricsRecord::from_byte_estimate(
+                            unix_seconds_now(),
+                            step.id,
+                            session_kind_to_protocol(opts.kind),
+                            &opts.llm_backend,
+                            opts.llm_model.as_deref(),
+                            &request_id,
+                            turn_index,
+                            turn_wall_ms,
+                            llm_stop_reason.as_deref(),
+                            prompt_bytes,
+                            assistant_text.len() as u64,
+                        ),
+                    );
                     break;
                 }
                 Some(HostEvent::LlmError {
@@ -500,6 +541,22 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     llm_failed = true;
                     llm_error_kind = Some(kind);
                     llm_error_message = Some(message);
+                    let turn_wall_ms = turn_started.elapsed().as_millis() as u64;
+                    llm_metrics.record(
+                        &crate::session::llm_metrics::LlmMetricsRecord::from_byte_estimate(
+                            unix_seconds_now(),
+                            step.id,
+                            session_kind_to_protocol(opts.kind),
+                            &opts.llm_backend,
+                            opts.llm_model.as_deref(),
+                            &request_id,
+                            turn_index,
+                            turn_wall_ms,
+                            Some("error"),
+                            prompt_bytes,
+                            assistant_text.len() as u64,
+                        ),
+                    );
                     break;
                 }
                 Some(HostEvent::Cancel) => {

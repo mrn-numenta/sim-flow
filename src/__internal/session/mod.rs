@@ -16,6 +16,7 @@ pub mod control_socket;
 pub mod debug_log;
 pub mod event_tap;
 pub mod host;
+pub mod llm_metrics;
 pub mod orchestrator;
 pub mod pdfium_loader;
 pub mod protocol;

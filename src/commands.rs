@@ -184,7 +184,203 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
         ),
         Command::Keys { action } => keys_cmd(action),
         Command::Watchers { action } => watchers_cmd(action),
+        Command::Metrics { group_by, json } => metrics_cmd(&project_dir, *group_by, *json),
     }
+}
+
+fn metrics_cmd(
+    project_dir: &Path,
+    group_by: crate::cli::MetricsGroupBy,
+    json: bool,
+) -> sim_flow::Result<()> {
+    use sim_flow::__internal::session::llm_metrics::LlmMetricsRecord;
+    use std::collections::BTreeMap;
+    use std::io::{BufRead, BufReader};
+
+    let path = project_dir
+        .join(".sim-flow")
+        .join("logs")
+        .join("llm-metrics.jsonl");
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!(
+                "sim-flow metrics: no metrics yet at {}\n  run an `sim-flow auto` first; the orchestrator appends one row per LLM round-trip.",
+                path.display()
+            );
+            return Ok(());
+        }
+        Err(err) => {
+            return Err(sim_flow::Error::State(format!(
+                "failed to open {}: {err}",
+                path.display()
+            )));
+        }
+    };
+
+    let mut rows: Vec<LlmMetricsRecord> = Vec::new();
+    let mut skipped = 0u64;
+    for (idx, line) in BufReader::new(file).lines().enumerate() {
+        let Ok(line) = line else {
+            skipped += 1;
+            continue;
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<LlmMetricsRecord>(trimmed) {
+            Ok(rec) => rows.push(rec),
+            Err(err) => {
+                eprintln!(
+                    "sim-flow metrics: skipping malformed row {} ({err}); first 80 chars: {}",
+                    idx + 1,
+                    &trimmed.chars().take(80).collect::<String>(),
+                );
+                skipped += 1;
+            }
+        }
+    }
+    if skipped > 0 {
+        eprintln!("sim-flow metrics: dropped {skipped} malformed row(s).");
+    }
+    if rows.is_empty() {
+        println!("(no llm-metrics rows yet)");
+        return Ok(());
+    }
+
+    if matches!(group_by, crate::cli::MetricsGroupBy::Raw) {
+        for rec in &rows {
+            println!("{}", serde_json::to_string(rec).unwrap_or_default());
+        }
+        return Ok(());
+    }
+
+    // Aggregate by the chosen axis. The aggregator is tiny on
+    // purpose -- a single per-row pass and a BTreeMap keyed on the
+    // group field. Adding more dimensions later means another key
+    // tuple, not a query language.
+    struct Agg {
+        count: u64,
+        wall_ms_total: u64,
+        wall_ms_samples: Vec<u64>,
+        tokens_in_total: u64,
+        tokens_out_total: u64,
+        prompt_bytes_total: u64,
+        completion_bytes_total: u64,
+        errors: u64,
+    }
+    impl Agg {
+        fn new() -> Self {
+            Self {
+                count: 0,
+                wall_ms_total: 0,
+                wall_ms_samples: Vec::new(),
+                tokens_in_total: 0,
+                tokens_out_total: 0,
+                prompt_bytes_total: 0,
+                completion_bytes_total: 0,
+                errors: 0,
+            }
+        }
+        fn fold(&mut self, rec: &LlmMetricsRecord) {
+            self.count += 1;
+            self.wall_ms_total += rec.wall_ms;
+            self.wall_ms_samples.push(rec.wall_ms);
+            self.tokens_in_total += rec.tokens_in;
+            self.tokens_out_total += rec.tokens_out;
+            self.prompt_bytes_total += rec.prompt_bytes;
+            self.completion_bytes_total += rec.completion_bytes;
+            if rec.finish_reason.as_deref().is_some_and(|r| r == "error") {
+                self.errors += 1;
+            }
+        }
+        fn percentile(samples: &mut [u64], pct: f64) -> u64 {
+            if samples.is_empty() {
+                return 0;
+            }
+            samples.sort_unstable();
+            let n = samples.len();
+            // Nearest-rank, 1-indexed: ceil(pct * n) - 1
+            let rank = ((pct * n as f64).ceil() as usize).clamp(1, n) - 1;
+            samples[rank]
+        }
+    }
+
+    let mut buckets: BTreeMap<String, Agg> = BTreeMap::new();
+    for rec in &rows {
+        let key = match group_by {
+            crate::cli::MetricsGroupBy::Step => rec.step.clone(),
+            crate::cli::MetricsGroupBy::Kind => format!("{:?}", rec.kind).to_lowercase(),
+            crate::cli::MetricsGroupBy::Backend => rec.backend.clone(),
+            crate::cli::MetricsGroupBy::Model => {
+                rec.model.clone().unwrap_or_else(|| "(default)".to_string())
+            }
+            crate::cli::MetricsGroupBy::Raw => unreachable!("handled above"),
+        };
+        buckets.entry(key).or_insert_with(Agg::new).fold(rec);
+    }
+
+    if json {
+        let rows_json: Vec<_> = buckets
+            .iter_mut()
+            .map(|(key, agg)| {
+                let mut samples = agg.wall_ms_samples.clone();
+                serde_json::json!({
+                    "group": key,
+                    "count": agg.count,
+                    "errors": agg.errors,
+                    "wall_ms_total": agg.wall_ms_total,
+                    "wall_ms_p50": Agg::percentile(&mut samples, 0.50),
+                    "wall_ms_p95": Agg::percentile(&mut samples, 0.95),
+                    "tokens_in_total": agg.tokens_in_total,
+                    "tokens_out_total": agg.tokens_out_total,
+                    "prompt_bytes_total": agg.prompt_bytes_total,
+                    "completion_bytes_total": agg.completion_bytes_total,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&rows_json)
+                .map_err(|e| sim_flow::Error::State(format!("metrics json: {e}")))?
+        );
+        return Ok(());
+    }
+
+    // Human table. Columns are derived (e.g. avg ms = total / count)
+    // because the row data is cheap to compute and easier to read at
+    // a glance than three separate breakdown lines.
+    let label = match group_by {
+        crate::cli::MetricsGroupBy::Step => "STEP",
+        crate::cli::MetricsGroupBy::Kind => "KIND",
+        crate::cli::MetricsGroupBy::Backend => "BACKEND",
+        crate::cli::MetricsGroupBy::Model => "MODEL",
+        crate::cli::MetricsGroupBy::Raw => unreachable!(),
+    };
+    println!(
+        "{:<16} {:>6} {:>7} {:>9} {:>9} {:>11} {:>11}",
+        label, "TURNS", "ERRORS", "WALL_S", "AVG_S", "TOK_IN", "TOK_OUT",
+    );
+    println!("{}", "-".repeat(76));
+    for (key, agg) in buckets {
+        let avg_s = if agg.count == 0 {
+            0.0
+        } else {
+            agg.wall_ms_total as f64 / agg.count as f64 / 1000.0
+        };
+        println!(
+            "{:<16} {:>6} {:>7} {:>9.1} {:>9.2} {:>11} {:>11}",
+            truncate_field(&key, 16),
+            agg.count,
+            agg.errors,
+            agg.wall_ms_total as f64 / 1000.0,
+            avg_s,
+            agg.tokens_in_total,
+            agg.tokens_out_total,
+        );
+    }
+    Ok(())
 }
 
 fn watchers_cmd(action: &WatchersAction) -> sim_flow::Result<()> {

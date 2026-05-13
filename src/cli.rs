@@ -455,6 +455,39 @@ pub(crate) enum Command {
         #[command(subcommand)]
         action: WatchersAction,
     },
+    /// Inspect structured LLM-dispatch metrics for this project.
+    /// Reads `.sim-flow/logs/llm-metrics.jsonl` -- one row per
+    /// `RequestLlmResponse` round-trip emitted by `run_session` --
+    /// and renders aggregates by step / kind / backend / model.
+    /// Each row carries wall-time, prompt/completion bytes, and a
+    /// byte-based token estimate; use this when you want to know
+    /// where time and tokens went without parsing the raw JSONL.
+    Metrics {
+        /// Aggregation axis. `step` (default) groups by step
+        /// (DM0 / DM1 / ...). `kind` groups by work / critique /
+        /// qa. `backend` groups by the backend label. `model`
+        /// groups by model id. `raw` prints every row verbatim
+        /// in JSON (handy for piping into jq).
+        #[arg(long, value_enum, default_value_t = MetricsGroupBy::Step)]
+        group_by: MetricsGroupBy,
+        /// Emit machine-readable JSON instead of a human table.
+        /// `raw` always emits JSON regardless of this flag.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+}
+
+/// Aggregation axis for `sim-flow metrics`. Mirrors a small set of
+/// canonical roll-up dimensions; pivoting on additional axes (e.g.
+/// `step+kind`) is a future enhancement.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub(crate) enum MetricsGroupBy {
+    Step,
+    Kind,
+    Backend,
+    Model,
+    /// No aggregation: emit each row verbatim. Always JSON.
+    Raw,
 }
 
 #[derive(Debug, Subcommand)]
