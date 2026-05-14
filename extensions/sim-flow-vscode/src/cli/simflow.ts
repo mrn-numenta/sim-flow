@@ -79,6 +79,29 @@ export class SimFlowCli {
     return this.execJson(["plan-progress", "--all"]);
   }
 
+  /**
+   * Enumerate every step's critique. Orchestrator-mediated so the
+   * extension doesn't reach into docs/critiques directly. JSON
+   * shape mirrors the `CritiqueFile` interface in
+   * src/state/types.ts (camelCase via `#[serde(rename_all)]` on
+   * the Rust side).
+   */
+  async critiques(): Promise<import("../state/types").CritiqueFile[]> {
+    return this.execJson<import("../state/types").CritiqueFile[]>(["critiques"]);
+  }
+
+  /**
+   * Read one step's critique by step id. Returns `null` when neither
+   * the JSON nor the markdown form is on disk for that step.
+   */
+  async critiqueForStep(step: string): Promise<import("../state/types").CritiqueFile | null> {
+    return this.execJson<import("../state/types").CritiqueFile | null>([
+      "critiques",
+      "--step",
+      step,
+    ]);
+  }
+
   async runs(filter: RunFilter = {}): Promise<RunRow[]> {
     const args: string[] = ["runs", "--json"];
     if (filter.workload) {

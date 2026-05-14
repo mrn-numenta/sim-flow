@@ -199,6 +199,16 @@ pub(crate) enum Command {
         #[arg(long)]
         all: bool,
     },
+    /// List recorded critiques. JSON-only output for UI surfaces.
+    /// Without `--step`, returns every step's critique in stable
+    /// order. The orchestrator owns the JSON+markdown parsing; the
+    /// extension consumes the structured shape.
+    Critiques {
+        /// One step id (e.g. `DM3a`). Returns a single entry or
+        /// `null` if neither the JSON nor markdown form is on disk.
+        #[arg(long)]
+        step: Option<String>,
+    },
     /// Validate the gate for a step and, if clean, mark it passed and
     /// advance `current_step` to the next step in the flow.
     ///

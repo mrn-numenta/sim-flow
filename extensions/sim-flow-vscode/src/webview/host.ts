@@ -7,8 +7,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 
 import type { SimFlowCli } from "../cli/simflow";
-import type { CritiqueFile } from "../state/critiques";
-import { listCritiqueFiles } from "../state/critiques";
+import type { CritiqueFile } from "../state/types";
 import type { FlowState } from "../state/types";
 import type { PlanProgress } from "../state/types";
 import { createStateWatcher, type SimFlowStateWatcher } from "../state/watcher";
@@ -1011,7 +1010,7 @@ export class DashboardHost {
   private async buildState(): Promise<DashboardState> {
     const [flow, critiques, runs, baselines] = await Promise.all([
       this.loadFlowState(),
-      listCritiqueFilesSafe(this.options.projectDir),
+      this.loadCritiques(),
       this.loadRuns(),
       this.loadBaselines(),
     ]);
@@ -1202,6 +1201,19 @@ export class DashboardHost {
       return;
     }
     await this.refresh();
+  }
+
+  private async loadCritiques(): Promise<CritiqueFile[]> {
+    // MVP architecture: critique enumeration goes through
+    // `sim-flow critiques --json`. The orchestrator owns the
+    // JSON+markdown parsing so any UI surface consumes the same
+    // structured shape. Empty array on CLI failure keeps the rest
+    // of the dashboard rendering.
+    try {
+      return await this.options.cli.critiques();
+    } catch {
+      return [];
+    }
   }
 
   private async loadPlanProgress(currentStep: string): Promise<PlanProgress> {
@@ -1605,13 +1617,6 @@ export class DashboardHost {
   }
 }
 
-async function listCritiqueFilesSafe(projectDir: string): Promise<CritiqueFile[]> {
-  try {
-    return await listCritiqueFiles(projectDir);
-  } catch {
-    return [];
-  }
-}
 
 /**
  * Build the "Simulate and iterate" appendix that's tacked onto the

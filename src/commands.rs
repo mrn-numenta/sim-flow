@@ -91,6 +91,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             current_step,
             all,
         } => plan_progress_cmd(&project_dir, *kind, current_step.as_deref(), *all),
+        Command::Critiques { step } => critiques_cmd(&project_dir, step.as_deref()),
         Command::Advance {
             step,
             candidate,
@@ -2213,6 +2214,25 @@ fn plan_progress_cmd(
     let json = serde_json::to_string_pretty(&report)
         .map_err(|err| sim_flow::Error::Config(format!("serialize plan progress: {err}")))?;
     println!("{json}");
+    Ok(())
+}
+
+fn critiques_cmd(project: &Path, step: Option<&str>) -> sim_flow::Result<()> {
+    use sim_flow::__internal::critique;
+    match step {
+        Some(step_id) => {
+            let entry = critique::read_critique_entry(project, step_id)?;
+            let json = serde_json::to_string_pretty(&entry)
+                .map_err(|err| sim_flow::Error::Config(format!("serialize critique: {err}")))?;
+            println!("{json}");
+        }
+        None => {
+            let entries = critique::list_critique_entries(project)?;
+            let json = serde_json::to_string_pretty(&entries)
+                .map_err(|err| sim_flow::Error::Config(format!("serialize critiques: {err}")))?;
+            println!("{json}");
+        }
+    }
     Ok(())
 }
 

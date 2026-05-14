@@ -104,9 +104,6 @@ vi.mock("vscode", () => ({
   },
 }));
 
-vi.mock("../state/critiques", () => ({
-  listCritiqueFiles: async () => [],
-}));
 
 vi.mock("../state/experiments", () => ({
   openExperiments: () => null,
