@@ -461,10 +461,23 @@ fn dm2d() -> StepDescriptor {
                 &["test", "--quiet", "--test", "elaboration"],
                 "elaboration smoke test passes",
             ),
+            // Connectivity style: the prompt instructs inline
+            // `HasInstances::instances()` + `connect()` (using
+            // `InstanceBuilder` / `NetBuilder`), not the
+            // `ConnectivityPlanBuilder` recipe path. Match the
+            // trait impl directly so either an `impl HasInstances
+            // for Top` block (the typical hand-rolled form) or a
+            // derive macro that emits one satisfies the gate.
             shell(
                 "grep",
-                &["-r", "--include=*.rs", "-q", "ConnectivityPlan", "src"],
-                "src/ references ConnectivityPlan",
+                &[
+                    "-rE",
+                    "--include=*.rs",
+                    "-q",
+                    "impl[[:space:]]+HasInstances",
+                    "src",
+                ],
+                "src/ implements HasInstances (parent module's connectivity)",
             ),
             shell(
                 "grep",
@@ -508,7 +521,7 @@ fn dm2d() -> StepDescriptor {
         // Per-milestone gate: the cheap quality checks that should
         // hold after every milestone lands. Reserves the expensive
         // integration checks (`cargo test --test elaboration`, the
-        // ConnectivityPlan / HasLogic / dump_topology / Top struct
+        // HasInstances / HasLogic / dump_topology / Top struct
         // greps, `milestones_all_implemented`) for the step gate
         // above -- those only become satisfiable once the last
         // milestone closes, and running them per-walk-turn just

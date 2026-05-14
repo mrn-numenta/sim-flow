@@ -124,10 +124,15 @@ strictly.
 4. **Payload types**: create Rust structs in `src/model/` derived
    from `data-movement.md`. Payload types live alongside the
    modules that produce and consume them.
-5. **Connectivity**: build a `ConnectivityPlan` that wires every
-   pipeline stage. Name modules after operations from
-   `decomposition.md` so future readers can trace
-   spec -> decomposition -> code.
+5. **Connectivity**: wire every pipeline stage by implementing
+   `HasInstances` on the parent module — register children via
+   `InstanceBuilder::instance(name, child)` inside `instances()`,
+   and bind their ports inside `connect()` using `NetBuilder`
+   (`bind_input_named` / `bind_output_named` / `connect_named`).
+   Name modules after operations from `decomposition.md` so future
+   readers can trace spec -> decomposition -> code. Do **not** use
+   the `ConnectivityPlanBuilder` recipe path; the inline
+   `HasInstances` + `connect()` style is what the gate expects.
 6. **Modules**: implement each module using the Foundation
    `Module`, `HasLogic`, and `HasInstances` traits. Every module
    must respect framework invariants and the structure established by
@@ -155,10 +160,17 @@ strictly.
 8. **Tests**: write **only** unit tests and smoke tests at this
    step. Exhaustive verification (directed sequences, coverage
    targets, randomized stimulus, scoreboards) belongs to **DM3** --
-   do not pre-empt that scope here. Cover:
-   - **Smoke**: elaboration (topology builds without error), basic
-     data flow through the pipeline, backpressure propagation,
-     idle cycles produce no spurious outputs.
+   do not pre-empt that scope here.
+   The smoke tests **must live in `tests/elaboration.rs`** —
+   that's the file the gate runs via `cargo test --test elaboration`.
+   Other test files (e.g. `tests/units.rs`) are allowed alongside
+   it for per-module unit tests, but the elaboration smoke set
+   has to be in `tests/elaboration.rs` specifically; renaming it
+   breaks the gate. Cover:
+   - **Smoke** (in `tests/elaboration.rs`): elaboration (topology
+     builds without error), basic data flow through the pipeline,
+     backpressure propagation, idle cycles produce no spurious
+     outputs.
    - **Unit** (small, focused): per-module correctness of the
      `evaluate()` core for a couple of representative inputs --
      enough to catch obvious wiring / payload-type mistakes while
