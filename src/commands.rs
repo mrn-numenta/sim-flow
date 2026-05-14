@@ -84,6 +84,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
         Command::Baseline { action } => baseline_cmd(&project_dir, action),
         Command::Sweep { file } => sweep_cmd(&project_dir, file),
         Command::SweepResults { parent } => sweep_results_cmd(&project_dir, parent),
+        Command::PerfRun { file } => perf_run_cmd(&project_dir, file.as_deref()),
         Command::Advance {
             step,
             candidate,
@@ -2118,6 +2119,42 @@ fn sweep_results_cmd(project: &Path, parent: &str) -> sim_flow::Result<()> {
             child.run_id,
             child.sweep_value.as_deref().unwrap_or("-"),
             child.metrics_summary.as_deref().unwrap_or("{}"),
+        );
+    }
+    Ok(())
+}
+
+fn perf_run_cmd(project: &Path, file: Option<&Path>) -> sim_flow::Result<()> {
+    use sim_flow::__internal::tracking::{perf_plan, perf_run, variants};
+
+    let plan_path = match file {
+        Some(p) => p.to_path_buf(),
+        None => project.join(perf_plan::DEFAULT_PLAN_PATH),
+    };
+    let plan = perf_plan::load(&plan_path)?;
+    let variants_manifest = variants::load_project(project)?;
+    // Cross-validate the plan against the manifest if one exists.
+    if let Some(ref manifest) = variants_manifest {
+        plan.validate(Some(manifest))
+            .map_err(|err| sim_flow::Error::Config(format!("{}: {err}", plan_path.display())))?;
+    }
+    let results = perf_run::run(project, &plan, variants_manifest.as_ref())?;
+    println!(
+        "perf-run complete: {} studies, {} total runs{}",
+        results.studies.len(),
+        results.total_runs,
+        if results.budget_reached {
+            format!(" (budget cap {} reached)", plan.plan.budget_runs)
+        } else {
+            String::new()
+        }
+    );
+    for study in &results.studies {
+        println!(
+            "  [{}] parent={} cells={}",
+            study.study_name,
+            study.parent_run_id,
+            study.cells.len()
         );
     }
     Ok(())

@@ -158,6 +158,16 @@ pub(crate) enum Command {
         /// Parent run id from `sim-flow runs --sweep`.
         parent: String,
     },
+    /// Execute a declarative perf-plan (TOML). The plan declares
+    /// studies (type1 / type2 / type3) and the executor walks each,
+    /// invoking the project binary per cell and recording every run
+    /// into `.sim-flow/experiments.db`.
+    PerfRun {
+        /// Path to the plan.toml. Defaults to
+        /// `<project>/docs/perf-plan/plan.toml` if omitted.
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
     /// Validate the gate for a step and, if clean, mark it passed and
     /// advance `current_step` to the next step in the flow.
     ///

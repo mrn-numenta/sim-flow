@@ -9,6 +9,7 @@ pub mod git_state;
 pub mod index;
 pub mod metrics;
 pub mod perf_plan;
+pub mod perf_run;
 pub mod run_recording;
 pub mod sweep;
 pub mod variants;
