@@ -55,10 +55,37 @@ pub struct VariantManifest {
 /// Approved scalar values for one parameter. `default` MUST appear
 /// in `values`; validation rejects manifests where it doesn't so a
 /// stale default is caught at load time, not mid-sweep.
+///
+/// `rendering` is an optional per-parameter axis-rendering hint.
+/// Numeric parameters don't usually need it -- their natural order
+/// drives the axis. Enum-valued parameters (`["write_through",
+/// "write_back", "write_around"]`) carry no numeric order, so chart
+/// libraries can't pick a display sequence or color scheme without
+/// a convention. `rendering.labels` and `rendering.colors` align
+/// with `values` index-by-index.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ParameterVariant {
     pub values: Vec<toml::Value>,
     pub default: toml::Value,
+    #[serde(default)]
+    pub rendering: Option<AxisRendering>,
+}
+
+/// Per-parameter axis-rendering hints for chart libraries. Both
+/// fields are optional; provide whichever ones the chart layer
+/// needs. Each non-empty vector must have the same length as the
+/// parent `ParameterVariant::values`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AxisRendering {
+    /// Display label per value (e.g. "Write-through" for the TOML
+    /// value "write_through"). Defaults to the value's string form
+    /// when omitted.
+    #[serde(default)]
+    pub labels: Option<Vec<String>>,
+    /// Color per value, in any format the renderer accepts
+    /// (typically hex "#rrggbb" or a named CSS color).
+    #[serde(default)]
+    pub colors: Option<Vec<String>>,
 }
 
 /// Approved module implementations for one topology slot. The plan
@@ -82,6 +109,16 @@ pub enum ValidationError {
     },
     #[error("variants.toml parameter `{name}`: values list is empty")]
     ParameterValuesEmpty { name: String },
+    #[error(
+        "variants.toml parameter `{name}` rendering.{field}: length {found} doesn't match \
+         values length {expected}"
+    )]
+    RenderingLengthMismatch {
+        name: String,
+        field: &'static str,
+        expected: usize,
+        found: usize,
+    },
     #[error("variants.toml module `{slot}`: default `{default}` is not in variants {variants:?}")]
     ModuleDefaultNotInVariants {
         slot: String,
@@ -114,6 +151,29 @@ impl VariantManifest {
                     default: param.default.clone(),
                     values: param.values.clone(),
                 });
+            }
+            if let Some(rendering) = &param.rendering {
+                let n = param.values.len();
+                if let Some(labels) = &rendering.labels
+                    && labels.len() != n
+                {
+                    return Err(ValidationError::RenderingLengthMismatch {
+                        name: name.clone(),
+                        field: "labels",
+                        expected: n,
+                        found: labels.len(),
+                    });
+                }
+                if let Some(colors) = &rendering.colors
+                    && colors.len() != n
+                {
+                    return Err(ValidationError::RenderingLengthMismatch {
+                        name: name.clone(),
+                        field: "colors",
+                        expected: n,
+                        found: colors.len(),
+                    });
+                }
             }
         }
         for (slot, module) in &self.modules {
@@ -347,5 +407,95 @@ default = 8
             modules: BTreeMap::new(),
         };
         assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
+    fn loads_enum_parameter_with_axis_rendering() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_manifest(
+            tmp.path(),
+            r##"
+schema_version = 1
+
+[parameters.write_policy]
+values = ["write_through", "write_back", "write_around"]
+default = "write_through"
+
+[parameters.write_policy.rendering]
+labels = ["Write-through", "Write-back", "Write-around"]
+colors = ["#1f77b4", "#ff7f0e", "#2ca02c"]
+"##,
+        );
+        let manifest = load(&path).expect("loads");
+        let param = manifest.parameter("write_policy").expect("present");
+        let rendering = param.rendering.as_ref().expect("rendering attached");
+        let labels = rendering.labels.as_ref().expect("labels");
+        assert_eq!(labels[1], "Write-back");
+        let colors = rendering.colors.as_ref().expect("colors");
+        assert_eq!(colors[0], "#1f77b4");
+    }
+
+    #[test]
+    fn rejects_rendering_labels_length_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_manifest(
+            tmp.path(),
+            r#"
+schema_version = 1
+
+[parameters.write_policy]
+values = ["a", "b", "c"]
+default = "a"
+
+[parameters.write_policy.rendering]
+labels = ["A", "B"]
+"#,
+        );
+        let err = load(&path).expect_err("labels too short");
+        assert!(format!("{err}").contains("labels"));
+    }
+
+    #[test]
+    fn rejects_rendering_colors_length_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_manifest(
+            tmp.path(),
+            r#"
+schema_version = 1
+
+[parameters.write_policy]
+values = ["a", "b"]
+default = "a"
+
+[parameters.write_policy.rendering]
+colors = ["red", "green", "blue"]
+"#,
+        );
+        let err = load(&path).expect_err("colors too long");
+        assert!(format!("{err}").contains("colors"));
+    }
+
+    #[test]
+    fn rendering_with_only_labels_is_valid() {
+        // labels OR colors -- both are independently optional.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_manifest(
+            tmp.path(),
+            r#"
+schema_version = 1
+
+[parameters.x]
+values = [1, 2, 3]
+default = 1
+
+[parameters.x.rendering]
+labels = ["one", "two", "three"]
+"#,
+        );
+        let manifest = load(&path).expect("loads");
+        let param = manifest.parameter("x").expect("present");
+        let rendering = param.rendering.as_ref().expect("rendering");
+        assert!(rendering.labels.is_some());
+        assert!(rendering.colors.is_none());
     }
 }
