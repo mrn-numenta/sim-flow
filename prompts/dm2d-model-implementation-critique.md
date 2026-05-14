@@ -93,20 +93,34 @@ internal priors):
 9. Does the implementation provide the structural support needed for the
    smoke-test and observability intent captured in `docs/testbench.md`
    where that support had to be designed in during implementation?
-10. Does the implementation match the plan? Every milestone in
-   `docs/impl-plan/` should have its tasks all `[x]`. Flag tasks still
-   `[ ]` (incomplete) and code that doesn't trace back to a plan
-   task (out-of-scope drift).
-11. Did the implementation introduce major architectural structures or
+10. **Observability discipline**: per the DM2d work prompt,
+    measurement-worthy state must live in `&self` fields covered by
+    `#[derive(SignalTraceState)]` rather than as `evaluate()` locals,
+    and embedded probes (`LatencyProbe`, `StallProbe`,
+    `ThroughputProbe`, `UtilizationProbe`, `OccupancyProbe`,
+    `HazardProbe`, `CongestionProbe`) should be absent by default --
+    DM4 attaches external probes by hierarchical path via
+    `docs/perf-plan/probes.toml`. Flag any embedded probe as
+    `UNRESOLVED:` unless the implementation includes a written
+    justification (e.g. the metric depends on an evaluate-local
+    computation that cannot reasonably be exposed as a field). Flag
+    local-only values that future perf work would want as observable
+    (e.g. hazard cause discriminators, stall reasons) as
+    `UNRESOLVED:` so DM2d can lift them into state.
+11. Does the implementation match the plan? Every milestone in
+    `docs/impl-plan/` should have its tasks all `[x]`. Flag tasks still
+    `[ ]` (incomplete) and code that doesn't trace back to a plan
+    task (out-of-scope drift).
+12. Did the implementation introduce major architectural structures or
     boundaries that are not reflected in DM2c's plan or the DM2a/DM2b
     artifacts?
-12. If this is a milestone critique rather than the final DM2d review,
+13. If this is a milestone critique rather than the final DM2d review,
     is the just-completed milestone solid enough that the next
     milestone can safely build on it? If this is the final review,
     do the milestone-local decisions still compose cleanly
     end-to-end without regression?
 
-13. **Coding Requirements (per the work prompt)**. Inspect every
+14. **Coding Requirements (per the work prompt)**. Inspect every
     Rust source file under `src/` landed or modified in this
     milestone:
     - **Idiomatic Rust**: any non-idiomatic patterns

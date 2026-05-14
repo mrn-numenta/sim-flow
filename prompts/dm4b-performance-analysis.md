@@ -61,7 +61,27 @@ Reference material (read on demand):
      starting the next milestone. Do NOT chain milestones
      automatically. The critique is the primary milestone gate;
      user review may happen around it.
-3. **Run-record discipline**. Each measurement is TWO tool calls:
+3. **Probe declaration**. External probes attach by hierarchical
+   path; declare them in `docs/perf-plan/probes.toml` rather than
+   editing the model. One TOML entry per metric, named so its key
+   doubles as the stats `path_root`:
+
+   ```toml
+   [probes.stage1_in_stalls]
+   kind = "stall"
+   path = "top.pipe.stage1"
+   port = 0
+   ```
+
+   The runtime resolves paths through the elaborated hierarchy at
+   sim setup and attaches probes to the dispatch event stream;
+   models stay untouched. If a metric requires a value that's
+   currently a local inside `evaluate()`, flag the missing
+   observable surface back to DM2d rather than embedding a probe
+   here -- the framework's `enabled: bool` escape hatch on
+   embedded probes exists only for the rare case where structural
+   exposure is impractical, not as the default analysis path.
+4. **Run-record discipline**. Each measurement is TWO tool calls:
 
    ```text
    run_cargo({command: "run", binary_args: ["--run-id", "<id>"]})
@@ -74,11 +94,11 @@ Reference material (read on demand):
    `baseline-<workload>` or `sweep-<param>-<value>`). After both
    calls succeed, flip the task to `[x]`. The critique verifies
    every cited run-id has a matching `experiments.db` row.
-4. **Sweep discipline**. Use `sim-flow sweep <sweep.toml>` for
+5. **Sweep discipline**. Use `sim-flow sweep <sweep.toml>` for
    parameter sweeps. The sweep TOML should reference the run-id
    pattern from the plan. Don't roll your own loops over single
    runs when a sweep config does the same job.
-5. **Reporting**. Each report under `docs/analysis/<topic>.md`
+6. **Reporting**. Each report under `docs/analysis/<topic>.md`
    must:
    - Open with a summary table of measured-vs-target metrics.
    - Identify bottlenecks with supporting evidence (per-module
@@ -90,13 +110,13 @@ Reference material (read on demand):
      just scalar summaries.
    - Conclude with the next optimization lever for any target
      that's missed.
-6. **Target verification milestone**. For each row of
+7. **Target verification milestone**. For each row of
    `docs/targets.md`, the corresponding task should record:
    `target met / not met` + the run-id that produced the
    measurement. Mark `BLOCKER:`-eligible items in the report
    prose so the critique can flag them.
 
-7. **Pre-stop hygiene** (every milestone, but especially when
+8. **Pre-stop hygiene** (every milestone, but especially when
    any Rust helpers / sweep glue / scratch binaries landed):
    `cargo fmt --check` AND `cargo clippy --all-targets -- -D
    warnings` are run AUTOMATICALLY by the orchestrator after

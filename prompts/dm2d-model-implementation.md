@@ -140,6 +140,20 @@ strictly.
    directly in `evaluate()` may be fine; for complex modules, factor
    helpers when that improves clarity. Do not treat those style notes as
    permission to ignore the plan's intended architecture.
+
+   **Observability discipline**: meaningful state (counters, flags,
+   queue depths, last-cause discriminators) lives in `&self` fields
+   covered by `#[derive(SignalTraceState)]`, not as locals inside
+   `evaluate()`. External probes attach to the model by hierarchical
+   path at perf-analysis time; they observe ports + struct fields, so
+   anything you'd later want to measure must survive evaluate as
+   addressable state. Do NOT embed `LatencyProbe` / `StallProbe` /
+   `ThroughputProbe` / `OccupancyProbe` etc. by default -- DM4 owns
+   the probe-instantiation policy via `docs/perf-plan/probes.toml`,
+   and embedded probes pay their hot-path cost on every run. Embed
+   one only when an evaluate-local computation legitimately cannot
+   be exposed as a field; flag the exception so the critique can
+   weigh it.
 7. **Cargo verification**: after each module lands, invoke the
    `run_cargo` tool to verify it compiles / passes:
    - `run_cargo({"command": "check"})` -- cheap type-only pass
