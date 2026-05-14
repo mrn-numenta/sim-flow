@@ -11,7 +11,7 @@ import type { CritiqueFile } from "../state/types";
 import type { FlowState } from "../state/types";
 import type { PlanProgress } from "../state/types";
 import { createStateWatcher, type SimFlowStateWatcher } from "../state/watcher";
-import { enumerateProjectDocuments } from "../state/documents";
+import type { DocumentEntry } from "./messages";
 
 import { enumerateModels } from "../llm/enumerate";
 import {
@@ -1014,10 +1014,7 @@ export class DashboardHost {
       this.loadRuns(),
       this.loadBaselines(),
     ]);
-    const documents = enumerateProjectDocuments({
-      projectDir: this.options.projectDir,
-      flow: flow.flow,
-    });
+    const documents = await this.loadDocuments(flow.flow);
     const planProgress = await this.loadPlanProgress(flow.current_step);
     // All-kinds progress so the dashboard can show milestone
     // pipelines under any plan-related step (DM2c outline,
@@ -1201,6 +1198,20 @@ export class DashboardHost {
       return;
     }
     await this.refresh();
+  }
+
+  private async loadDocuments(flow: string): Promise<DocumentEntry[]> {
+    // MVP architecture: project-documents enumeration goes through
+    // `sim-flow documents --flow <flow>`. The orchestrator owns
+    // the STEP_ARTIFACTS table, the directory walker, and the
+    // markdown-table preview extraction. Empty array on CLI
+    // failure keeps the dashboard rendering the rest of project
+    // state.
+    try {
+      return await this.options.cli.documents(flow);
+    } catch {
+      return [];
+    }
   }
 
   private async loadCritiques(): Promise<CritiqueFile[]> {

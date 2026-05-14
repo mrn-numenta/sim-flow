@@ -209,6 +209,17 @@ pub(crate) enum Command {
         #[arg(long)]
         step: Option<String>,
     },
+    /// Enumerate project documents (per-step work artifacts +
+    /// critique files + source spec) with stats, line counts for
+    /// code files, and inline previews for the markdown documents
+    /// the dashboard renders directly. JSON-only output for UI
+    /// surfaces. `--flow` selects which step sequence to walk;
+    /// defaults to `direct-modeling`.
+    Documents {
+        /// Flow id: `direct-modeling` (default) or `design-study`.
+        #[arg(long, default_value = "direct-modeling")]
+        flow: String,
+    },
     /// Validate the gate for a step and, if clean, mark it passed and
     /// advance `current_step` to the next step in the flow.
     ///

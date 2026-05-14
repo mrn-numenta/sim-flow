@@ -102,6 +102,22 @@ export class SimFlowCli {
     ]);
   }
 
+  /**
+   * Enumerate project documents (per-step work artifacts + critique
+   * files + source-spec) with stats, line counts, and inline
+   * previews. Orchestrator-mediated so the extension doesn't walk
+   * `STEP_ARTIFACTS` paths or parse markdown tables itself.
+   */
+  async documents(
+    flow: string,
+  ): Promise<import("../webview/messages").DocumentEntry[]> {
+    return this.execJson<import("../webview/messages").DocumentEntry[]>([
+      "documents",
+      "--flow",
+      flow,
+    ]);
+  }
+
   async runs(filter: RunFilter = {}): Promise<RunRow[]> {
     const args: string[] = ["runs", "--json"];
     if (filter.workload) {

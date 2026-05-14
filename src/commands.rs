@@ -92,6 +92,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             all,
         } => plan_progress_cmd(&project_dir, *kind, current_step.as_deref(), *all),
         Command::Critiques { step } => critiques_cmd(&project_dir, step.as_deref()),
+        Command::Documents { flow } => documents_cmd(&project_dir, flow),
         Command::Advance {
             step,
             candidate,
@@ -2213,6 +2214,16 @@ fn plan_progress_cmd(
     let report = plan_progress::read_plan_progress_for_kind(project, pk);
     let json = serde_json::to_string_pretty(&report)
         .map_err(|err| sim_flow::Error::Config(format!("serialize plan progress: {err}")))?;
+    println!("{json}");
+    Ok(())
+}
+
+fn documents_cmd(project: &Path, flow: &str) -> sim_flow::Result<()> {
+    use sim_flow::__internal::documents;
+    documents::validate_flow(flow)?;
+    let docs = documents::enumerate_project_documents(project, flow);
+    let json = serde_json::to_string_pretty(&docs)
+        .map_err(|err| sim_flow::Error::Config(format!("serialize documents: {err}")))?;
     println!("{json}");
     Ok(())
 }
