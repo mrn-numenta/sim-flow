@@ -208,7 +208,7 @@
         "sim-flow.llm.source": {
           "type": "string",
           "default": "vscode",
-          "description": "Which language model source to use. Built-in choices are `vscode`, `anthropic`, `openai`, `ollama`, `lmstudio`, `vllm`, `claude-cli`, `codex-cli`, `gh-copilot-cli`. You can also reference a user-defined server by its `name` from `sim-flow.llm.servers` -- those entries override the conventional default host/port for `ollama` / `lmstudio` / `vllm` / generic openai-compat backends."
+          "description": "Backend name passed to `sim-flow auto --llm-backend`; resolved entirely by the orchestrator. Built-in choices are `vscode`, `anthropic`, `openai`, `ollama`, `lmstudio`, `vllm`, `claude-cli`, `codex-cli`, `gh-copilot-cli`. You can also reference a user-defined server by its `name` from `sim-flow.llm.servers`; those entries override the conventional default host/port for `ollama` / `lmstudio` / `vllm` / generic openai-compat backends. The extension no longer dispatches LLM calls itself -- the value flows through to the Rust orchestrator which owns the backend client."
         },
         "sim-flow.llm.servers": {
           "type": "array",

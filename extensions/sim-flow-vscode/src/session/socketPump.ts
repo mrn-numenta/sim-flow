@@ -2,25 +2,11 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import * as net from "node:net";
 
-import * as vscode from "vscode";
-
-import {
-  DEFAULT_RESPONSE_NORMALIZER,
-  formatAdaptationSummary,
-  type LlmBackend,
-  type LlmMessage as BackendLlmMessage,
-  createBackend,
-  LlmError,
-  type LlmSource,
-  summarizeAdaptation,
-} from "../llm";
-import { estimateMessagesTokens } from "../llm/tokenEstimate";
 import { DebugLog } from "./debug-log";
 import { removePidRecord, writePidRecord } from "./processRegistry";
 import { acquirePumpLock, type PumpLock } from "./pumpLock";
 import {
   type LiveSessionTransport,
-  mergeBrevityDirective,
   type PumpLlmConfig,
   type PumpRenderer,
   type PumpSettleResult,
@@ -29,14 +15,12 @@ import type {
   Event as ProtocolEvent,
   HostEvent,
   HostInfo,
-  LlmMessage as ProtocolLlmMessage,
   SessionKindOut,
   SessionTag,
   StepDescriptorOut,
   StepMode,
 } from "./protocol-types";
 import { renderBuildOutput } from "./buildOutput";
-import { type LlmServerEntry, resolveLlmSource } from "../webview/messages";
 
 type SocketPumpBusEvent =
   | { type: "settled"; result: PumpSettleResult }
@@ -111,7 +95,6 @@ export class SocketSessionPump implements LiveSessionTransport {
   private terminationReason: PumpSettleResult | null = null;
   private sessionTag: SessionTag | null = null;
   private stepDescriptor: StepDescriptorOut | null = null;
-  private lastUsedSource: LlmSource | null = null;
   /**
    * Spawned `sim-flow` child. Tracked so `dispose()` can SIGTERM it
    * (otherwise the child outlives the pump if its socket close
@@ -173,22 +156,11 @@ export class SocketSessionPump implements LiveSessionTransport {
    * the per-step buttons stay disabled until the user resumes.
    */
   private awaitingUserInputFlag = false;
-  /**
-   * Cancellation source for the in-flight LLM stream. Each
-   * `dispatchLlm` call replaces this; `dispose()` cancels whatever
-   * is current. Without this, a Disconnect (or a crashed
-   * orchestrator) leaves the HTTP/SSE stream to the model server
-   * running to completion -- the user pays for tokens that go
-   * nowhere because every chunk's `sendHostEvent` no-ops on a
-   * destroyed socket and `currentRenderer` was already cleared.
-   */
-  private llmCancelSource: vscode.CancellationTokenSource | null = null;
 
   constructor(
     private readonly options: SocketSessionPumpOptions,
     private readonly llm: PumpLlmConfig,
   ) {
-    this.lastUsedSource = llm.source;
     this.debugLog = DebugLog.fromTokens(llm.debugTokens, llm.projectDir);
     this.attachTimeoutMs = options.attachTimeoutMs ?? 5000;
     if (options.launch) {
@@ -653,19 +625,6 @@ export class SocketSessionPump implements LiveSessionTransport {
       return;
     }
     this.disposed = true;
-    // Cancel any in-flight LLM stream before tearing the socket
-    // down. The backend client honours the cancellation token by
-    // aborting the underlying HTTP/SSE request, so the user stops
-    // paying for tokens that nobody is reading.
-    if (this.llmCancelSource) {
-      try {
-        this.llmCancelSource.cancel();
-      } catch {
-        // never throw out of dispose
-      }
-      this.llmCancelSource.dispose();
-      this.llmCancelSource = null;
-    }
     if (this.socket && !this.socket.destroyed) {
       this.socket.destroy();
     }
@@ -768,7 +727,6 @@ export class SocketSessionPump implements LiveSessionTransport {
         "text",
         "markdown",
         "user-input",
-        "llm-request",
         "tool-notifications",
         "followups",
       ],
@@ -886,20 +844,6 @@ export class SocketSessionPump implements LiveSessionTransport {
           type: "settled",
           result: { status: "awaiting-input" },
         } as SocketPumpBusEvent);
-        break;
-      case "request-llm-response":
-        // Viewer pumps don't drive: the orchestrator's primary host
-        // handles its own LLM dispatch. We just observe the events
-        // it emits afterwards. Skip without complaint.
-        if (this.options.viewer) {
-          break;
-        }
-        this.dispatchLlm(event).catch((err) => {
-          this.renderDiagnostic(
-            "error",
-            `LLM dispatch threw: ${(err as Error).message ?? String(err)}`,
-          );
-        });
         break;
       case "artifact-written":
         this.currentRenderer?.markdown(`\n_Wrote \`${event.path}\` (${event.bytes} bytes)._\n`);
@@ -1034,349 +978,6 @@ export class SocketSessionPump implements LiveSessionTransport {
     this.currentRenderer?.markdown(`\n${tag}: ${message}\n`);
   }
 
-  private readLiveLlmConfig(kind: SessionKindOut | undefined): {
-    source: LlmSource;
-    rawSource: string;
-    model?: string;
-    modelFamilyId?: string;
-    runtimeProfileId?: string;
-    ollamaBaseUrl?: string;
-    lmstudioBaseUrl?: string;
-    /**
-     * Resolved when `rawSource` is `server:<name>` and the entry
-     * exists in `llm.servers`. Wins over the legacy per-backend
-     * URL fields. `null` when the source claims `server:<name>`
-     * but no matching entry exists -- caller surfaces a clear
-     * error rather than silently falling back to a default.
-     */
-    serverBaseUrl: string | null | undefined;
-    verbose: boolean;
-    debugAdaptation: boolean;
-  } {
-    const config = vscode.workspace.getConfiguration("sim-flow");
-    // Per-kind routing: pick the override namespace (if any) based
-    // on the event's `kind`. When `kind === "critique"` AND
-    // `sim-flow.llm.critique.source` is non-empty, every "primary"
-    // field below reads from the `llm.critique.*` namespace with
-    // per-field fallback to the matching `llm.*` value. Same for
-    // `kind === "qa"` reading `llm.qa.*`. `kind === "work"` (and
-    // older orchestrators that don't emit `kind` at all -- serde
-    // default is `work`) uses the plain `llm.*` settings.
-    // Mirrors `resolve_llm_for_kind` / `resolve_llm_for_qa` in the
-    // Rust orchestrator; the two layers route independently from
-    // the same SessionKindOut tag on the wire.
-    const overrideNamespace =
-      kind === "critique" && (config.get<string>("llm.critique.source") ?? "").trim().length > 0
-        ? "critique"
-        : kind === "qa" && (config.get<string>("llm.qa.source") ?? "").trim().length > 0
-          ? "qa"
-          : null;
-    const overrideKey = (suffix: string): string =>
-      overrideNamespace === null
-        ? `llm.${suffix}` // unreachable when overrideNamespace is null; caller guards
-        : `llm.${overrideNamespace}.${suffix}`;
-    const pickStr = (workKey: string, suffix: string, fallback?: string): string => {
-      if (overrideNamespace !== null) {
-        const v = (config.get<string>(overrideKey(suffix)) ?? "").trim();
-        if (v.length > 0) return v;
-      }
-      return (config.get<string>(workKey) ?? "").trim() || fallback || "";
-    };
-    const rawSource =
-      overrideNamespace !== null
-        ? ((config.get<string>(overrideKey("source")) ?? "").trim() || this.llm.source)
-        : (config.get<string>("llm.source") ?? this.llm.source);
-    const model = pickStr("llm.model", "model", this.llm.model) || undefined;
-    const modelFamilyId =
-      pickStr("llm.modelFamily", "modelFamily", this.llm.modelFamilyId) || undefined;
-    const runtimeProfileId =
-      pickStr("llm.runtimeProfile", "runtimeProfile", this.llm.runtimeProfileId) || undefined;
-    const ollamaBaseUrl =
-      (config.get<string>("llm.ollama.baseUrl") ?? "").trim() || this.llm.ollamaBaseUrl;
-    const lmstudioBaseUrl =
-      (config.get<string>("llm.lmstudio.baseUrl") ?? "").trim() || this.llm.lmstudioBaseUrl;
-    const verbose = config.get<boolean>("llm.verbose") ?? true;
-    const debugAdaptation =
-      (config.get<boolean>("llm.debugAdaptation") ?? false) || this.llm.debugAdaptation === true;
-    // Resolve `server:<name>` against `sim-flow.llm.servers` so the
-    // factory sees the entry's `kind` + composed base URL instead of
-    // the raw "server:..." string (which it doesn't understand).
-    const servers = (config.get<unknown>("llm.servers") as LlmServerEntry[] | undefined) ?? [];
-    const resolved = resolveLlmSource(rawSource, servers);
-    if (resolved === null) {
-      return {
-        source: rawSource as LlmSource,
-        rawSource,
-        model,
-        modelFamilyId,
-        runtimeProfileId,
-        ollamaBaseUrl,
-        lmstudioBaseUrl,
-        serverBaseUrl: null,
-        verbose,
-        debugAdaptation,
-      };
-    }
-    return {
-      source: resolved.source as LlmSource,
-      rawSource,
-      // Per-server `model` overrides the global setting when set.
-      model: resolved.model ?? model,
-      modelFamilyId: resolved.modelFamilyId ?? modelFamilyId,
-      runtimeProfileId: resolved.runtimeProfileId ?? runtimeProfileId,
-      ollamaBaseUrl,
-      lmstudioBaseUrl,
-      serverBaseUrl: resolved.baseUrl,
-      verbose,
-      debugAdaptation,
-    };
-  }
-
-  private async dispatchLlm(
-    event: ProtocolEvent & { event: "request-llm-response" },
-  ): Promise<void> {
-    // The orchestrator (Rust side) sets `kind` to the session kind
-    // this dispatch belongs to (work / critique / qa). The pump
-    // routes per kind here: when the user has configured
-    // `sim-flow.llm.critique.source`, critique dispatches go to
-    // that backend while work / qa dispatches continue to use
-    // `sim-flow.llm.source`. Older orchestrator builds that
-    // predate the `kind` field on `RequestLlmResponse` deserialize
-    // with the serde default (`work`) -- that path keeps
-    // single-backend behavior, no per-kind override is applied.
-    const live = this.readLiveLlmConfig(event.kind);
-    if (live.serverBaseUrl === null) {
-      // `llm.source = "server:<name>"` but no matching entry in
-      // `llm.servers`. Tell the user what's wrong rather than
-      // letting the factory's default-arm "Unknown LLM source"
-      // error surface (which obscures the real cause).
-      this.sendHostEvent({
-        event: "llm-error",
-        request_id: event.request_id,
-        kind: "unsupported",
-        message: `LLM source \`${live.rawSource}\` references a custom server that isn't defined in \`sim-flow.llm.servers\`. Add the entry in the dashboard's Settings tab, or pick a built-in source.`,
-      });
-      return;
-    }
-    if (live.source !== this.lastUsedSource) {
-      this.currentRenderer?.markdown(
-        `_LLM source switched: \`${this.lastUsedSource ?? "(initial)"}\` → \`${live.source}\`._\n\n`,
-      );
-      this.lastUsedSource = live.source;
-    }
-    let backend: LlmBackend;
-    try {
-      backend = createBackend({
-        source: live.source,
-        model: live.model ?? event.model ?? undefined,
-        modelFamilyId: live.modelFamilyId ?? event.model_family_id ?? undefined,
-        runtimeProfileId: live.runtimeProfileId ?? event.runtime_profile_id ?? undefined,
-        secrets: this.llm.secrets,
-        projectDir: this.llm.projectDir,
-        binary: this.llm.binary,
-        ollamaBaseUrl: live.ollamaBaseUrl,
-        lmstudioBaseUrl: live.lmstudioBaseUrl,
-        // `server:<name>`-resolved base URL wins over the legacy
-        // per-backend fields. For built-in sources `serverBaseUrl`
-        // is undefined and the factory falls back to its
-        // conventional defaults.
-        baseUrl: live.serverBaseUrl ?? undefined,
-        streamIdleTimeoutMs: this.llm.streamIdleTimeoutMs,
-        session: undefined,
-      });
-    } catch (err) {
-      this.sendHostEvent({
-        event: "llm-error",
-        request_id: event.request_id,
-        kind: err instanceof LlmError ? err.kind : "factory",
-        message: (err as Error).message ?? String(err),
-      });
-      return;
-    }
-    const adaptationSummary = backend.adaptation
-      ? formatAdaptationSummary(summarizeAdaptation(backend.name, backend.adaptation))
-      : undefined;
-    const debugAdaptation = live.debugAdaptation || event.debug_adaptation === true;
-    if (debugAdaptation && adaptationSummary) {
-      this.currentRenderer?.markdown(`_LLM adaptation: ${adaptationSummary}_\n\n`);
-    }
-    const messages: BackendLlmMessage[] = (event.messages as ProtocolLlmMessage[]).map((m) => ({
-      role: m.role,
-      content: m.content,
-      attachments: m.attachments?.map((a) => ({
-        mime: a.mime,
-        data: a.data,
-        source: a.source ?? undefined,
-      })),
-    }));
-    if (!live.verbose) {
-      // Append the brevity directive to the leading system message
-      // when one is already in place; otherwise prepend it as a new
-      // system message. Splicing it mid-conversation (the prior
-      // implementation) trips strict OpenAI-compat servers like vllm
-      // which require system messages to be at the start, contiguous
-      // and unsplit ("System message must be at the beginning").
-      mergeBrevityDirective(messages);
-    }
-    this.currentRenderer?.requestTokensEstimate?.(estimateMessagesTokens(messages));
-    const tools = event.tools?.map((t) => ({
-      name: t.name,
-      description: t.description,
-      args_schema: t.args_schema,
-    }));
-    this.debugLog.logLlmDispatch(messages);
-    let chunkCount = 0;
-    let totalChars = 0;
-    let reasoningOpen = false;
-    const closeReasoning = () => {
-      if (reasoningOpen) {
-        this.currentRenderer?.markdown("\n\n</details>\n\n");
-        reasoningOpen = false;
-      }
-    };
-    // Cancel any prior in-flight stream before kicking off a new
-    // one. The orchestrator never overlaps two LLM dispatches, but
-    // defensive cancel keeps the bookkeeping simple.
-    this.llmCancelSource?.cancel();
-    this.llmCancelSource?.dispose();
-    this.llmCancelSource = new vscode.CancellationTokenSource();
-    const cancelSource = this.llmCancelSource;
-    try {
-      const responseNormalizer =
-        backend.adaptation?.responseNormalizer ?? DEFAULT_RESPONSE_NORMALIZER;
-      // Accumulator for native tool calls the backend yields
-      // alongside text chunks. Collected here BEFORE normalization
-      // because the normalizer only operates on text; tool calls
-      // are passed through structurally and shipped in `LlmEnd`.
-      const nativeToolCalls: import("../session/protocol-types").LlmToolCall[] = [];
-      let nextSyntheticToolCallId = 0;
-      // Last non-null `usage` payload the backend yielded this
-      // turn. openai-compat servers (vLLM, OpenAI's own API)
-      // emit `usage` on the FINAL SSE chunk when
-      // `stream_options.include_usage: true` is set on the
-      // request; we overwrite on every yield so a future
-      // multi-usage stream still ships the latest. `undefined`
-      // when the backend doesn't surface usage at all -- the
-      // orchestrator's metrics writer then falls back to its
-      // byte/4 estimate.
-      let usage: import("../llm/types").LlmStreamChunk["usage"] | undefined;
-      const absorbToolCalls = (chunk: { toolCalls?: import("../llm/types").StreamToolCall[] }) => {
-        if (!chunk.toolCalls || chunk.toolCalls.length === 0) {
-          return;
-        }
-        for (const tc of chunk.toolCalls) {
-          nativeToolCalls.push({
-            id: tc.id ?? `chatpump-tool-${nextSyntheticToolCallId++}`,
-            name: tc.name,
-            arguments_json: tc.argumentsJson,
-          });
-        }
-      };
-      const absorbUsage = (chunk: { usage?: import("../llm/types").LlmStreamChunk["usage"] }) => {
-        if (chunk.usage) {
-          usage = chunk.usage;
-        }
-      };
-      for await (const rawChunk of backend.stream(messages, cancelSource.token, tools)) {
-        absorbToolCalls(rawChunk);
-        absorbUsage(rawChunk);
-        for (const chunk of responseNormalizer.normalizeChunk(rawChunk)) {
-          if (chunk.text.length === 0) {
-            continue;
-          }
-          if (chunk.kind === "reasoning") {
-            if (!reasoningOpen) {
-              this.currentRenderer?.markdown(
-                "\n<details>\n<summary>Model reasoning (click to expand)</summary>\n\n",
-              );
-              reasoningOpen = true;
-            }
-            this.currentRenderer?.markdown(chunk.text);
-            continue;
-          }
-          closeReasoning();
-          chunkCount++;
-          totalChars += chunk.text.length;
-          this.debugLog.logLlmChunk(chunk.text);
-          this.sendHostEvent({
-            event: "llm-chunk",
-            request_id: event.request_id,
-            text: chunk.text,
-          });
-        }
-      }
-      for (const chunk of responseNormalizer.flush?.() ?? []) {
-        if (chunk.text.length === 0) {
-          continue;
-        }
-        if (chunk.kind === "reasoning") {
-          if (!reasoningOpen) {
-            this.currentRenderer?.markdown(
-              "\n<details>\n<summary>Model reasoning (click to expand)</summary>\n\n",
-            );
-            reasoningOpen = true;
-          }
-          this.currentRenderer?.markdown(chunk.text);
-          continue;
-        }
-        closeReasoning();
-        chunkCount++;
-        totalChars += chunk.text.length;
-        this.debugLog.logLlmChunk(chunk.text);
-        this.sendHostEvent({
-          event: "llm-chunk",
-          request_id: event.request_id,
-          text: chunk.text,
-        });
-      }
-      closeReasoning();
-      this.debugLog.logLlmEnd(totalChars, chunkCount);
-      this.sendHostEvent({
-        event: "llm-end",
-        request_id: event.request_id,
-        // Signal `tool_calls` when the backend gave us structured
-        // calls so the orchestrator's native-mode dispatch fires.
-        // Otherwise stop normally and let the orchestrator fall
-        // back to fenced-block extraction from the assistant text.
-        stop_reason: nativeToolCalls.length > 0 ? "tool_calls" : "stop",
-        tool_calls: nativeToolCalls,
-        // Pass through the server's exact-token usage when the
-        // backend yielded one this turn. The orchestrator's metric
-        // writer promotes the row to `tokens_exact: true` when
-        // this field is present.
-        usage: usage
-          ? {
-              prompt_tokens: usage.promptTokens,
-              completion_tokens: usage.completionTokens,
-            }
-          : undefined,
-      });
-    } catch (err) {
-      closeReasoning();
-      this.debugLog.logLlmError(err);
-      const baseMessage = (err as Error).message ?? String(err);
-      const detail = err instanceof LlmError ? err.detail : undefined;
-      const composed =
-        detail && detail.length > 0
-          ? `${baseMessage} -- response: ${detail.slice(0, 512)}`
-          : baseMessage;
-      this.sendHostEvent({
-        event: "llm-error",
-        request_id: event.request_id,
-        kind: err instanceof LlmError ? err.kind : "stream",
-        message: adaptationSummary ? `${composed} [${adaptationSummary}]` : composed,
-      });
-    } finally {
-      // Dispose only when this dispatch still owns the source;
-      // a back-to-back dispatch may have already replaced it.
-      if (this.llmCancelSource === cancelSource) {
-        cancelSource.dispose();
-        this.llmCancelSource = null;
-      } else {
-        cancelSource.dispose();
-      }
-    }
-  }
 
   private sendHostEvent(event: HostEvent): void {
     if (this.terminated || !this.socket || this.socket.destroyed) {

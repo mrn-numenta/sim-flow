@@ -27,24 +27,6 @@ export type Event =
       prompt?: string | null;
     }
   | {
-      backend: string;
-      debug_adaptation?: boolean;
-      event: "request-llm-response";
-      /**
-       * Session kind for this dispatch. Hosts that want to route per-kind (e.g. work to vLLM, critique to Anthropic) read this and pick a backend / model accordingly; hosts that don't care can ignore it. Defaulted to `Work` for backwards-compatibility with hosts written before the field existed.
-       */
-      kind?: SessionKindOut & string;
-      messages: LlmMessage[];
-      model?: string | null;
-      model_family_id?: string | null;
-      request_id: string;
-      runtime_profile_id?: string | null;
-      /**
-       * Tool catalog for backends that support native tool-use. Empty in M2; populated in M3.
-       */
-      tools?: LlmTool[];
-    }
-  | {
       bytes: number;
       event: "artifact-written";
       path: string;
@@ -112,7 +94,6 @@ export type Event =
  * Mirror of `client::SessionKind` exposed in the protocol. Kept independent of the internal type so the wire format stays stable even if the internal representation changes.
  */
 export type SessionKindOut = ("work" | "critique") | "qa";
-export type LlmRole = ("system" | "user" | "assistant") | "tool";
 export type DiagnosticLevel = "info" | "warning" | "error";
 /**
  * Terminal state of a `SessionEnd` event. Closed-set enum so hosts can route on it deterministically (e.g. only re-enable Connect after `Completed`/`Cancelled`/`Error` but treat `RunawayGuard` as a hard abort that requires user attention). Serialized in kebab-case to match the existing wire strings.
@@ -155,57 +136,6 @@ export interface StepDescriptorOut {
   tools?: string[];
   work_artifacts: string[];
 }
-export interface LlmMessage {
-  /**
-   * Optional binary attachments associated with this message. Most messages have none; tool-output user messages may carry image bytes that the agent should treat as inline content (multimodal). The host (extension) is responsible for forwarding these to the underlying LLM via whatever multimodal API the backend supports; if the backend can't accept images the attachments are dropped and a Diagnostic is emitted.
-   */
-  attachments?: LlmAttachment[];
-  content: string;
-  role: LlmRole;
-  /**
-   * On `role = Tool` messages: the wire-side call id this message is replying to. Pairs with `LlmToolCall.id` from a prior `LlmEnd` so the model can match tool results to the calls that produced them. `None` on any other role. Backends without a tool-result wire shape (CLI agents, plain chat-completions without tool-use) flatten Tool-role messages into User-role text in their converter.
-   */
-  tool_call_id?: string | null;
-  /**
-   * On `role = Assistant` messages: the tool calls this turn emitted (echoed back on subsequent requests so the model sees its own prior calls in history). `None` when the turn produced no native tool calls or when the backend doesn't support them.
-   */
-  tool_calls?: LlmToolCall[];
-}
-export interface LlmAttachment {
-  /**
-   * Base64-encoded payload bytes. Hosts decode and forward to the LLM. Base64 is used because the protocol is JSONL.
-   */
-  data: string;
-  /**
-   * MIME type, e.g. "image/jpeg" or "image/png".
-   */
-  mime: string;
-  /**
-   * Project-relative source path, surfaced for tracing in logs. Optional because not every attachment originates from a file.
-   */
-  source?: string | null;
-}
-/**
- * A single tool call the model emitted in a native-tool-use turn. Returned on `HostEvent::LlmEnd.tool_calls`. `arguments_json` is the raw JSON-encoded argument blob the model emitted -- the orchestrator parses it into a `serde_json::Value` at dispatch time so a malformed payload surfaces a clear diagnostic rather than a cryptic serde error mid-pipeline.
- */
-export interface LlmToolCall {
-  arguments_json: string;
-  id?: string | null;
-  name: string;
-}
-/**
- * Tool catalog descriptor for a single advertised tool. Phase 9 M3 fills the `args_schema` with real JSON Schema for arg shapes.
- */
-export interface LlmTool {
-  /**
-   * JSON Schema describing the tool's argument object.
-   */
-  args_schema: {
-    [k: string]: unknown;
-  };
-  description: string;
-  name: string;
-}
 export interface GateFailureOut {
   description: string;
   reason: string;
@@ -225,30 +155,6 @@ export type HostEvent =
   | {
       event: "user-message";
       text: string;
-    }
-  | {
-      event: "llm-chunk";
-      request_id: string;
-      text: string;
-    }
-  | {
-      event: "llm-end";
-      request_id: string;
-      stop_reason?: string | null;
-      /**
-       * Native tool calls the model emitted (when the backend supports native tool-use AND the orchestrator advertised a tool catalog on the matching `RequestLlmResponse`). Empty for fence-mode dispatches and for backends that don't support native tool calls. `#[serde(default)]` keeps the wire shape backward compatible with hosts that haven't been updated.
-       */
-      tool_calls?: LlmToolCall[];
-      /**
-       * Optional exact token usage reported by the model server. Populated by hosts whose backend surfaces a `usage` payload (in-process `TerminalHost` agents that ran `dispatch_chat` against an openai-compat server; extension dispatchers that capture the SSE `usage` chunk). Omitted by hosts that don't know -- the orchestrator's `llm-metrics.jsonl` falls back to a byte-based estimate in that case (`tokens_exact: false` on the metrics row). `#[serde(default)]` keeps older hosts wire-compatible.
-       */
-      usage?: LlmUsage | null;
-    }
-  | {
-      event: "llm-error";
-      kind: string;
-      message: string;
-      request_id: string;
     }
   | {
       action: string;
@@ -289,19 +195,4 @@ export type HostEvent =
 export interface HostInfo {
   name: string;
   version: string;
-}
-/**
- * A single tool call the model emitted in a native-tool-use turn. Returned on `HostEvent::LlmEnd.tool_calls`. `arguments_json` is the raw JSON-encoded argument blob the model emitted -- the orchestrator parses it into a `serde_json::Value` at dispatch time so a malformed payload surfaces a clear diagnostic rather than a cryptic serde error mid-pipeline.
- */
-export interface LlmToolCall {
-  arguments_json: string;
-  id?: string | null;
-  name: string;
-}
-/**
- * Optional exact token usage attached to `LlmEnd`. Mirrors the OpenAI `usage` object's two essential fields; hosts whose backend reports `total_tokens` separately can compute it from the two. Hosts that don't have these numbers omit the entire `usage` field on `LlmEnd`. When present, the orchestrator's `llm-metrics.jsonl` writer prefers these over the byte-estimated `tokens_in/out` and sets `tokens_exact: true` on the row.
- */
-export interface LlmUsage {
-  completion_tokens: number;
-  prompt_tokens: number;
 }

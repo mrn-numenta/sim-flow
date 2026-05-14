@@ -1,23 +1,26 @@
 // Append-only markdown debug log for the extension's view of a
 // session. Mirrors `tools/sim-flow/src/session/debug_log.rs`: same
 // env var (`SIM_FOUNDATION_DEBUG`), same comma-separated tokens
-// (`events`, `raw`, `llm`; shortcuts `1`/`true` -> events+llm, `all`
-// -> all three). Disabled when no token is selected; the methods
+// (`events`, `raw`; shortcuts `1`/`true` -> events, `all`
+// -> all three). The legacy `llm` token is still accepted but
+// no-ops: the extension no longer dispatches LLM calls itself, so
+// there's nothing to log on the chat side. The Rust orchestrator's
+// own DebugLog records LLM transcripts when `SIM_FOUNDATION_DEBUG`
+// includes `llm`. Disabled when no token is selected; the methods
 // short-circuit so calls in hot paths cost a single boolean check.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import type { Event as ProtocolEvent, HostEvent, LlmMessage } from "./protocol-types";
+import type { Event as ProtocolEvent, HostEvent } from "./protocol-types";
 
 export interface CategorySet {
   events: boolean;
   raw: boolean;
-  llm: boolean;
 }
 
 export function parseCategories(raw: string | undefined): CategorySet {
-  const out: CategorySet = { events: false, raw: false, llm: false };
+  const out: CategorySet = { events: false, raw: false };
   if (!raw) {
     return out;
   }
@@ -33,17 +36,17 @@ export function parseCategories(raw: string | undefined): CategorySet {
         out.raw = true;
         break;
       case "llm":
-        out.llm = true;
+        // No-op on the extension side now; the orchestrator owns
+        // LLM logging. Accept the token so existing user configs
+        // don't trigger a warning.
         break;
       case "1":
       case "true":
         out.events = true;
-        out.llm = true;
         break;
       case "all":
         out.events = true;
         out.raw = true;
-        out.llm = true;
         break;
       default:
         // Match the Rust side's tolerance: warn and ignore.
@@ -54,7 +57,7 @@ export function parseCategories(raw: string | undefined): CategorySet {
 }
 
 export function categoriesAny(c: CategorySet): boolean {
-  return c.events || c.raw || c.llm;
+  return c.events || c.raw;
 }
 
 export class DebugLog {
@@ -120,36 +123,6 @@ export class DebugLog {
   logRawOut(line: string): void {
     if (!this.cats.raw || this.fd === null) {return;}
     this.writeRaw("→", line);
-  }
-
-  logLlmDispatch(messages: readonly LlmMessage[]): void {
-    if (!this.cats.llm || this.fd === null) {return;}
-    let body = `### ${this.elapsed()} llm→ dispatch (${messages.length} message(s))\n`;
-    for (let i = 0; i < messages.length; i++) {
-      const m = messages[i]!;
-      body += `\n#### [${i}] ${m.role}\n\`\`\`\n${m.content}\n\`\`\`\n`;
-    }
-    body += "\n";
-    fs.writeSync(this.fd, body);
-  }
-
-  logLlmChunk(text: string): void {
-    if (!this.cats.llm || this.fd === null) {return;}
-    fs.writeSync(this.fd, `### ${this.elapsed()} llm← chunk (${text.length} chars)\n${text}\n\n`);
-  }
-
-  logLlmEnd(totalChars: number, chunkCount: number): void {
-    if (!this.cats.llm || this.fd === null) {return;}
-    fs.writeSync(
-      this.fd,
-      `### ${this.elapsed()} llm← end (${chunkCount} chunk(s), ${totalChars} total chars)\n\n`,
-    );
-  }
-
-  logLlmError(err: unknown): void {
-    if (!this.cats.llm || this.fd === null) {return;}
-    const msg = (err as Error)?.message ?? String(err);
-    fs.writeSync(this.fd, `### ${this.elapsed()} llm← error\n\`\`\`\n${msg}\n\`\`\`\n\n`);
   }
 
   /**

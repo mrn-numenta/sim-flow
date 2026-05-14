@@ -5,8 +5,7 @@ import * as os from "node:os";
 import * as vscode from "vscode";
 
 import { findProjectCandidates, resolveContext, resolveProjectDir } from "../context";
-import { LlmError, type LlmSource, type SecretStorage } from "../llm";
-import { estimateMessagesTokens } from "../llm/tokenEstimate";
+import type { LlmSource, SecretStorage } from "../llm";
 import { type PumpLlmConfig } from "../session/pump";
 import { SocketSessionPump } from "../session/socketPump";
 import { readFlowState } from "../state/flowState";
@@ -46,20 +45,11 @@ import {
   toStoredConversation,
   type ChatConversationState,
 } from "./state";
-import { buildPanelMessages, streamPanelReply, supportsPanelTransport } from "./session";
 
 export const CHAT_PANEL_VIEW_ID = "simFlow.chatPanel";
 export const CHAT_PANEL_CONTAINER_ID = "sim-flow-chat-panel";
 
 let pendingConversationWrites: Promise<void> = Promise.resolve();
-
-interface DirectResponseState {
-  projectDir: string | null;
-  source: vscode.CancellationTokenSource;
-  sourceTag: LlmSourceTag;
-  model: string;
-  stopRequested: boolean;
-}
 
 interface PendingAutoLaunchState {
   projectDir: string;
@@ -72,7 +62,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   private view: vscode.WebviewView | undefined;
   private readonly disposables: vscode.Disposable[] = [];
   private readonly conversations = new Map<string, ChatConversationState>();
-  private inFlight: DirectResponseState | undefined;
   private pendingAutoLaunch: PendingAutoLaunchState | undefined;
   private disposed = false;
   private refreshing = false;
@@ -273,19 +262,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   dispose(): void {
     this.disposed = true;
     this.refreshQueued = false;
-    if (this.inFlight) {
-      const projectDir = this.inFlight.projectDir;
-      const conversation = appendNote(
-        this.readConversation(projectDir),
-        "Session interrupted",
-        "Stopped the current response because the chat panel was reloaded or closed.",
-      );
-      void this.persistConversation(projectDir, conversation);
-    }
-    if (this.inFlight) {
-      this.inFlight.source.cancel();
-      this.inFlight = undefined;
-    }
     this.view = undefined;
     if (this.subSessionListenerDispose) {
       this.subSessionListenerDispose();
@@ -399,9 +375,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
     await this.reconcileModeSwitches();
-    if (this.inFlight) {
-      return;
-    }
     const context = await this.readPanelContext();
     if (
       this.pendingAutoLaunch &&
@@ -418,138 +391,31 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       }
       return;
     }
+    // No live orchestrator session: the chat panel used to dispatch
+    // directly against the configured LLM here, but the TS-side LLM
+    // clients were removed once the Rust orchestrator absorbed all
+    // dispatch. Without an active pump the panel is display-only;
+    // surface a note so the user knows where to start the flow.
     let conversation = this.readConversation(context.projectDir);
     if (hasInterruptedAutoSessionTranscript(conversation.transcript)) {
       conversation = appendNote(
         conversation,
         "Session no longer live",
-        "Relaunch the flow from the dashboard or clear the transcript to start a fresh direct chat.",
+        "Relaunch the flow from the dashboard or clear the transcript to start a fresh chat.",
       );
-      await this.persistConversation(context.projectDir, conversation);
-      await this.postState(context, conversation);
-      return;
-    }
-
-    if (context.unresolvedServer) {
+    } else {
       conversation = appendNote(
         conversation,
-        "Unknown LLM source",
-        `\`sim-flow.llm.source\` is set to \`${context.rawSource}\`, which references a custom server that isn't defined in \`sim-flow.llm.servers\`. Add the entry in the dashboard's Settings tab, or pick a built-in source.`,
-        "error",
+        "No active session",
+        "Start a flow from the dashboard's Run / Connect button to chat with the orchestrator.",
       );
-      await this.persistConversation(context.projectDir, conversation);
-      await this.postState(context, conversation);
-      return;
     }
-
-    if (!supportsPanelTransport(context.source)) {
-      conversation = appendNote(
-        conversation,
-        "Unsupported source",
-        'This panel only drives API backends. Switch `sim-flow.llm.source` to `lmstudio`, `ollama`, `openai`, `anthropic`, or `vscode` to send prompts here.',
-        "error",
-      );
-      await this.persistConversation(context.projectDir, conversation);
-      await this.postState(context, conversation);
-      return;
-    }
-
-    const requestTokensEstimate = estimateMessagesTokens(
-      buildPanelMessages(
-        context,
-        [
-          ...conversation.transcript,
-          {
-            id: "preview-user",
-            kind: "user",
-            title: "You",
-            body: prompt,
-            meta: userMeta(context),
-          },
-        ],
-        context.verbose,
-      ),
-    );
-    const { state: started, assistantId } = appendUserPrompt(
-      conversation,
-      prompt,
-      userMeta(context),
-      assistantMeta(context),
-      requestTokensEstimate,
-    );
-    conversation = started;
     await this.persistConversation(context.projectDir, conversation);
-
-    const source = new vscode.CancellationTokenSource();
-    this.inFlight = {
-      projectDir: context.projectDir,
-      source,
-      sourceTag: context.source,
-      model: context.model,
-      stopRequested: false,
-    };
     await this.postState(context, conversation);
-
-    try {
-      for await (const chunk of streamPanelReply(
-        {
-          source: context.source,
-          baseUrl: context.baseUrl,
-          modelFamilyId: context.modelFamilyId,
-          runtimeProfileId: context.runtimeProfileId,
-          model: context.model,
-          verbose: context.verbose,
-          ollamaBaseUrl: context.ollamaBaseUrl,
-          lmstudioBaseUrl: context.lmstudioBaseUrl,
-          secrets: this.secrets,
-        },
-        {
-          projectDir: context.projectDir,
-          currentStep: context.currentStep,
-          transcript: conversation.transcript,
-        },
-        source.token,
-      )) {
-        conversation = appendAssistantChunk(conversation, assistantId, chunk);
-        this.rememberConversation(context.projectDir, conversation);
-        await this.postState(context, conversation);
-      }
-      conversation = completeAssistantTurn(
-        this.readConversation(context.projectDir),
-        assistantId,
-      );
-    } catch (error) {
-      conversation = this.readConversation(context.projectDir);
-      conversation = completeAssistantTurn(
-        conversation,
-        assistantId,
-        "The request failed before the model returned any text.",
-      );
-      if (error instanceof LlmError && error.kind === "cancelled") {
-        conversation = appendNote(
-          conversation,
-          "Response stopped",
-          "Stopped the current response at the user's request.",
-        );
-      } else {
-        conversation = appendNote(
-          conversation,
-          `${context.sourceLabel} error`,
-          formatChatError(error),
-          "error",
-        );
-      }
-    } finally {
-      const settledProjectDir = context.projectDir;
-      this.inFlight = undefined;
-      await this.persistConversation(settledProjectDir, conversation);
-      const latestContext = await this.readPanelContext();
-      await this.postState(latestContext, this.readConversation(latestContext.projectDir));
-    }
   }
 
   private async clearTranscript(): Promise<void> {
-    if (this.inFlight || this.activePump) {
+    if (this.activePump) {
       return;
     }
     const context = await this.readPanelContext();
@@ -561,22 +427,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   private async stopConversation(): Promise<void> {
     const context = await this.readPanelContext();
     let conversation = this.readConversation(context.projectDir);
-
-    if (this.inFlight?.projectDir === context.projectDir) {
-      if (this.inFlight.stopRequested) {
-        return;
-      }
-      this.inFlight.stopRequested = true;
-      this.inFlight.source.cancel();
-      conversation = appendNote(
-        conversation,
-        "Stopping response",
-        "Cancellation requested for the current model response.",
-      );
-      await this.persistConversation(context.projectDir, conversation);
-      await this.postState(context, conversation);
-      return;
-    }
 
     if (this.activePump?.projectDir === context.projectDir) {
       if (this.activePump.stopRequested) {
@@ -596,18 +446,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   /**
    * Project the chat panel should be displaying RIGHT NOW. Anchors to
-   * the live session's project (active pump > pending launch > direct
-   * in-flight) so the panel doesn't auto-follow the user's active
-   * text editor when there's already a session attached. Without
-   * this anchor, switching files between sim-flow projects in the
-   * workspace flips the panel's transcript out from under a running
-   * session.
+   * the live session's project (active pump > pending launch) so the
+   * panel doesn't auto-follow the user's active text editor when
+   * there's already a session attached. Without this anchor,
+   * switching files between sim-flow projects in the workspace flips
+   * the panel's transcript out from under a running session.
    */
   private anchoredProjectDir(): string | null {
     return (
       this.activePump?.projectDir ??
       this.pendingAutoLaunch?.projectDir ??
-      this.inFlight?.projectDir ??
       null
     );
   }
@@ -688,13 +536,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
 
-    if (this.inFlight) {
-      await this.stopDirectResponse(
-        this.inFlight,
-        "Launching flow",
-        "Stopped the current response to launch a sim-flow session from the dashboard.",
-      );
-    }
     if (this.activePump) {
       await this.stopActivePumpSession(
         this.activePump,
@@ -880,13 +721,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
 
-    if (this.inFlight) {
-      await this.stopDirectResponse(
-        this.inFlight,
-        "Launching step session",
-        `Stopped the current response to launch \`${step}.${kind}\` from the dashboard.`,
-      );
-    }
     if (this.activePump) {
       await this.stopActivePumpSession(
         this.activePump,
@@ -1118,7 +952,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.activePump.projectDir === context.projectDir &&
       this.activePump.awaitingInput;
     const isStreaming =
-      this.inFlight?.projectDir === context.projectDir ||
       (!!this.pendingAutoLaunch &&
         this.pendingAutoLaunch.projectDir === context.projectDir) ||
       (!!this.activePump &&
@@ -1202,7 +1035,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           : null,
       supportsPromptEntry,
       canStop:
-        !!this.inFlight ||
         !!this.activePump ||
         (!!this.pendingAutoLaunch &&
           this.pendingAutoLaunch.projectDir === context.projectDir),
@@ -1573,28 +1405,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     const settings = readPanelSettings();
 
     if (
-      this.inFlight &&
-      shouldReconcileProjectSwitch &&
-      requestedProjectDir !== this.inFlight.projectDir
-    ) {
-      await this.stopDirectResponse(
-        this.inFlight,
-        "Project switched",
-        `Stopped the current response because the active project changed${requestedProjectDir ? ` to \`${path.basename(requestedProjectDir)}\`` : ""}.`,
-      );
-    } else if (
-      this.inFlight &&
-      requestedProjectDir === this.inFlight.projectDir &&
-      (this.inFlight.sourceTag !== settings.source || this.inFlight.model !== settings.model)
-    ) {
-      await this.stopDirectResponse(
-        this.inFlight,
-        "LLM source switched",
-        `Stopped the current response because the LLM source changed to \`${settings.sourceLabel}\`.`,
-      );
-    }
-
-    if (
       this.pendingAutoLaunch &&
       requestedProjectDir === this.pendingAutoLaunch.projectDir &&
       this.pendingAutoLaunch.sourceTag === settings.source &&
@@ -1684,21 +1494,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         },
       );
     }
-  }
-
-  private async stopDirectResponse(
-    inFlight: DirectResponseState,
-    title: string,
-    body: string,
-  ): Promise<void> {
-    inFlight.source.cancel();
-    this.inFlight = undefined;
-    const conversation = appendNote(
-      this.readConversation(inFlight.projectDir),
-      title,
-      body,
-    );
-    await this.persistConversation(inFlight.projectDir, conversation);
   }
 
   private async stopActivePumpSession(
@@ -2100,14 +1895,6 @@ function assistantMeta(context: PanelContext): string {
   return context.model.length > 0
     ? `${context.sourceLabel} • ${context.model}`
     : context.sourceLabel;
-}
-
-function formatChatError(error: unknown): string {
-  const baseMessage = error instanceof Error ? error.message : String(error);
-  if (error instanceof LlmError && error.detail && error.detail.length > 0) {
-    return `${baseMessage}\n\n${error.detail.slice(0, 512)}`;
-  }
-  return baseMessage;
 }
 
 function buildPumpLlmConfig(

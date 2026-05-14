@@ -15,11 +15,14 @@
 //   4. Awaits settle again, draining all events emitted in the
 //      meantime to the chat stream.
 //
-// LLM dispatch: when the orchestrator emits `RequestLlmResponse`,
-// the pump invokes the configured `LlmBackend` and streams chunks
-// back via stdin. Streaming runs concurrently with chat-event
-// rendering since the orchestrator may emit further events while the
-// LLM is still producing.
+// LLM dispatch: the orchestrator owns LLM dispatch end-to-end now.
+// The pump used to receive `RequestLlmResponse` events and ship the
+// streaming reply back as `LlmChunk` / `LlmEnd`, but those wire
+// events were removed once the orchestrator absorbed the LLM
+// client family. The pump's remaining job is to forward `UserMessage`
+// / control events to the orchestrator and surface presentation
+// events (`AssistantText`, `RequestUserInput`, `Diagnostic`, ...)
+// back to the chat renderer.
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -28,23 +31,11 @@ import { EventEmitter, once } from "node:events";
 import * as vscode from "vscode";
 
 import { bundledFrameworkDocsRoot, bundledPdfiumLibPath } from "../cli";
-import {
-  DEFAULT_RESPONSE_NORMALIZER,
-  formatAdaptationSummary,
-  type LlmBackend,
-  type LlmMessage as BackendLlmMessage,
-  type SecretStorage,
-  createBackend,
-  LlmError,
-  type LlmSource,
-  summarizeAdaptation,
-} from "../llm";
-import { estimateMessagesTokens } from "../llm/tokenEstimate";
+import type { LlmSource, SecretStorage } from "../llm";
 import type {
   Event as ProtocolEvent,
   HostEvent,
   HostInfo,
-  LlmMessage as ProtocolLlmMessage,
   SessionKindOut,
   SessionTag,
   StepDescriptorOut,
@@ -53,7 +44,6 @@ import type {
 import { renderBuildOutput } from "./buildOutput";
 import { DebugLog } from "./debug-log";
 import { removePidRecord, writePidRecord } from "./processRegistry";
-import { type LlmServerEntry, resolveLlmSource } from "../webview/messages";
 
 /** Configuration the registry hands to a freshly-spawned pump. */
 export interface SessionPumpOptions {
@@ -69,25 +59,30 @@ export interface SessionPumpOptions {
   env?: NodeJS.ProcessEnv;
 }
 
-/** Resolved settings the pump uses to dispatch RequestLlmResponse. */
+/**
+ * LLM-related metadata the pump needs to keep around for header
+ * rendering and pid-record tagging. The extension no longer
+ * dispatches LLM calls; these fields are pure labels that the
+ * Rust orchestrator already received via `--llm-backend` /
+ * `--llm-model` argv.
+ */
 export interface PumpLlmConfig {
   source: LlmSource;
   model?: string;
   modelFamilyId?: string;
   runtimeProfileId?: string;
   /**
-   * Generic base-URL override for OpenAI-compat backends. Set when
-   * the user picks a custom server (`server:<name>` in the source
-   * picker). Wins over `ollamaBaseUrl` / `lmstudioBaseUrl` and
-   * gets passed through as `--llm-base-url` to the spawned
-   * `sim-flow auto`.
+   * Generic base-URL override forwarded to the orchestrator via
+   * `--llm-base-url`. Set when the user picks a custom server
+   * (`server:<name>` in the source picker).
    */
   baseUrl?: string;
   ollamaBaseUrl?: string;
   lmstudioBaseUrl?: string;
   secrets?: SecretStorage;
-  /** Project dir + binary used by the CLI fallback backend (M9 dropped that backend; here for completeness). */
+  /** Sim-foundation project dir, used for pid records and debug-log paths. */
   projectDir: string;
+  /** Sim-flow CLI binary path. */
   binary: string;
   /**
    * Comma-joined debug categories from `sim-flow.debug` (or the
@@ -98,12 +93,9 @@ export interface PumpLlmConfig {
   debugTokens: string;
   debugAdaptation?: boolean;
   /**
-   * Abort SSE streams after this many ms of silence. Forwarded to
-   * openai-compat-family backends only (lmstudio / vllm /
-   * openai-compat / `server:<name>` resolved to those kinds). The
-   * production default lives in `OpenAiCompatibleBackend` (30 s);
-   * tests and slow-prefill setups (large remote vLLM with full
-   * DM-step system stacks) override here.
+   * Forwarded to the orchestrator via `--llm-stream-idle-timeout-ms`
+   * for callers that want to override the openai-compat backend
+   * idle-timeout. The pump itself no longer streams.
    */
   streamIdleTimeoutMs?: number;
 }
@@ -219,9 +211,12 @@ export interface LiveSessionTransport {
 }
 
 /**
- * System message slipped into LLM requests when `sim-flow.llm.verbose`
- * is OFF. Kept short and explicit because long brevity directives
- * paradoxically make models more verbose.
+ * Optional brevity directive the chat panel used to splice into LLM
+ * messages when `sim-flow.llm.verbose` was off. Kept as an exported
+ * constant only because the mockFlowHarness test still imports it
+ * to assert on the chat panel's settings plumbing. Pumps no longer
+ * touch it — the orchestrator handles brevity directly via its own
+ * `--llm-verbose` flag.
  */
 export const BREVITY_DIRECTIVE = [
   "Brevity directive (overrides any earlier prose-style guidance):",
@@ -232,28 +227,6 @@ export const BREVITY_DIRECTIVE = [
   "- Avoid hedging language ('I think...', 'It might be...', 'It's worth noting...').",
   "- Code, file paths, and tool calls over commentary.",
 ].join("\n");
-
-/**
- * Append the brevity directive to the leading system message, or
- * prepend it as a new system message when there isn't one. Mutates
- * `messages` in place.
- *
- * Why not splice mid-conversation: strict OpenAI-compat servers
- * (vllm being the loud case -- "System message must be at the
- * beginning") reject any non-leading system message. LM Studio /
- * Ollama / OpenAI tolerate it, so the original splice worked there
- * but quietly broke vllm. Keeping the directive as part of the
- * leading system block satisfies every supported backend without
- * burning a separate role slot.
- */
-export function mergeBrevityDirective(messages: BackendLlmMessage[]): void {
-  const head = messages[0];
-  if (head && head.role === "system") {
-    head.content = `${head.content}\n\n${BREVITY_DIRECTIVE}`;
-    return;
-  }
-  messages.unshift({ role: "system", content: BREVITY_DIRECTIVE });
-}
 
 /** Bind a `vscode.ChatResponseStream` as a `PumpRenderer`. */
 export function rendererFromChatStream(stream: vscode.ChatResponseStream): PumpRenderer {
@@ -281,16 +254,10 @@ export class SessionPump {
   private stdoutBuffer = "";
   private stderrBuffer = "";
   private currentRenderer: PumpRenderer | null = null;
-  private currentRequestId = 0;
   private terminated = false;
   private terminationReason: PumpSettleResult | null = null;
   private sessionTag: SessionTag | null = null;
   private stepDescriptor: StepDescriptorOut | null = null;
-  /**
-   * Last LLM source actually used by `dispatchLlm`. Lets us announce
-   * a banner when the user toggles `sim-flow.llm.source` mid-run.
-   */
-  private lastUsedSource: LlmSource | null = null;
   /**
    * Stable id for this pump's pid record. Generated internally
    * because callers don't supply one (unlike `SocketSessionPump`).
@@ -304,7 +271,6 @@ export class SessionPump {
     options: SessionPumpOptions,
     private readonly llm: PumpLlmConfig,
   ) {
-    this.lastUsedSource = llm.source;
     this.debugLog = DebugLog.fromTokens(llm.debugTokens, llm.projectDir);
     const pdfiumLib = bundledPdfiumLibPath();
     const frameworkDocsRoot = bundledFrameworkDocsRoot();
@@ -378,7 +344,6 @@ export class SessionPump {
         "text",
         "markdown",
         "user-input",
-        "llm-request",
         "tool-notifications",
         "followups",
       ],
@@ -512,16 +477,6 @@ export class SessionPump {
           result: { status: "awaiting-input" },
         } as PumpBusEvent);
         break;
-      case "request-llm-response":
-        // Run the LLM call concurrently; further events from the
-        // orchestrator continue to flow through this same pump.
-        this.dispatchLlm(event).catch((err) => {
-          this.renderDiagnostic(
-            "error",
-            `LLM dispatch threw: ${(err as Error).message ?? String(err)}`,
-          );
-        });
-        break;
       case "artifact-written":
         this.currentRenderer?.markdown(`\n_Wrote \`${event.path}\` (${event.bytes} bytes)._\n`);
         break;
@@ -606,271 +561,6 @@ export class SessionPump {
   private renderDiagnostic(level: string, message: string): void {
     const tag = level === "error" ? "**Error**" : level === "warning" ? "**Warning**" : "**Info**";
     this.currentRenderer?.markdown(`\n${tag}: ${message}\n`);
-  }
-
-  /**
-   * Snapshot the LLM-side settings as of right now. Re-read on every
-   * dispatch so the user can hot-swap source/model from the
-   * dashboard while a chat is running -- e.g. switching from
-   * Anthropic to Ollama mid-flow when API tokens are exhausted.
-   * Falls back to the values captured at construction for fields
-   * that aren't represented as VSCode settings (binary path, secrets
-   * handle, etc.).
-   */
-  private readLiveLlmConfig(): {
-    source: LlmSource;
-    rawSource: string;
-    model?: string;
-    modelFamilyId?: string;
-    runtimeProfileId?: string;
-    ollamaBaseUrl?: string;
-    lmstudioBaseUrl?: string;
-    /** See `socketPump.readLiveLlmConfig` for semantics. */
-    serverBaseUrl: string | null | undefined;
-    verbose: boolean;
-    debugAdaptation: boolean;
-  } {
-    const config = vscode.workspace.getConfiguration("sim-flow");
-    const rawSource = (config.get<string>("llm.source") ?? this.llm.source) as string;
-    const model = (config.get<string>("llm.model") ?? "").trim() || this.llm.model;
-    const modelFamilyId =
-      (config.get<string>("llm.modelFamily") ?? "").trim() || this.llm.modelFamilyId;
-    const runtimeProfileId =
-      (config.get<string>("llm.runtimeProfile") ?? "").trim() || this.llm.runtimeProfileId;
-    const ollamaBaseUrl =
-      (config.get<string>("llm.ollama.baseUrl") ?? "").trim() || this.llm.ollamaBaseUrl;
-    const lmstudioBaseUrl =
-      (config.get<string>("llm.lmstudio.baseUrl") ?? "").trim() || this.llm.lmstudioBaseUrl;
-    const verbose = config.get<boolean>("llm.verbose") ?? true;
-    const debugAdaptation =
-      (config.get<boolean>("llm.debugAdaptation") ?? false) || this.llm.debugAdaptation === true;
-    const servers = (config.get<unknown>("llm.servers") as LlmServerEntry[] | undefined) ?? [];
-    const resolved = resolveLlmSource(rawSource, servers);
-    if (resolved === null) {
-      return {
-        source: rawSource as LlmSource,
-        rawSource,
-        model,
-        modelFamilyId,
-        runtimeProfileId,
-        ollamaBaseUrl,
-        lmstudioBaseUrl,
-        serverBaseUrl: null,
-        verbose,
-        debugAdaptation,
-      };
-    }
-    return {
-      source: resolved.source as LlmSource,
-      rawSource,
-      model: resolved.model ?? model,
-      modelFamilyId: resolved.modelFamilyId ?? modelFamilyId,
-      runtimeProfileId: resolved.runtimeProfileId ?? runtimeProfileId,
-      ollamaBaseUrl,
-      lmstudioBaseUrl,
-      serverBaseUrl: resolved.baseUrl,
-      verbose,
-      debugAdaptation,
-    };
-  }
-
-  private async dispatchLlm(
-    event: ProtocolEvent & { event: "request-llm-response" },
-  ): Promise<void> {
-    this.currentRequestId++;
-    const token = new vscode.CancellationTokenSource().token;
-    // Re-read the live settings on every dispatch. Pumps live across
-    // many turns and the user can switch LLM source mid-run via the
-    // dashboard; the captured config from constructor time would
-    // pin them to whatever was active when the chat tab opened.
-    const live = this.readLiveLlmConfig();
-    if (live.serverBaseUrl === null) {
-      this.sendHostEvent({
-        event: "llm-error",
-        request_id: event.request_id,
-        kind: "unsupported",
-        message: `LLM source \`${live.rawSource}\` references a custom server that isn't defined in \`sim-flow.llm.servers\`. Add the entry in the dashboard's Settings tab, or pick a built-in source.`,
-      });
-      return;
-    }
-    if (live.source !== this.lastUsedSource) {
-      this.currentRenderer?.markdown(
-        `_LLM source switched: \`${this.lastUsedSource ?? "(initial)"}\` → \`${live.source}\`._\n\n`,
-      );
-      this.lastUsedSource = live.source;
-    }
-    let backend: LlmBackend;
-    try {
-      backend = createBackend({
-        source: live.source,
-        model: live.model ?? event.model ?? undefined,
-        modelFamilyId: live.modelFamilyId ?? event.model_family_id ?? undefined,
-        runtimeProfileId: live.runtimeProfileId ?? event.runtime_profile_id ?? undefined,
-        secrets: this.llm.secrets,
-        projectDir: this.llm.projectDir,
-        binary: this.llm.binary,
-        ollamaBaseUrl: live.ollamaBaseUrl,
-        lmstudioBaseUrl: live.lmstudioBaseUrl,
-        baseUrl: live.serverBaseUrl ?? undefined,
-        // The CLI fallback backend has been retired (Phase 9 M5); a
-        // stub session keeps the type happy for the few branches
-        // that still touch it.
-        session: undefined,
-      });
-    } catch (err) {
-      this.sendHostEvent({
-        event: "llm-error",
-        request_id: event.request_id,
-        kind: err instanceof LlmError ? err.kind : "factory",
-        message: (err as Error).message ?? String(err),
-      });
-      return;
-    }
-    const adaptationSummary = backend.adaptation
-      ? formatAdaptationSummary(summarizeAdaptation(backend.name, backend.adaptation))
-      : undefined;
-    const debugAdaptation = live.debugAdaptation || event.debug_adaptation === true;
-    if (debugAdaptation && adaptationSummary) {
-      this.currentRenderer?.markdown(`_LLM adaptation: ${adaptationSummary}_\n\n`);
-    }
-    const messages: BackendLlmMessage[] = (event.messages as ProtocolLlmMessage[]).map((m) => ({
-      role: m.role,
-      content: m.content,
-      attachments: m.attachments?.map((a) => ({
-        mime: a.mime,
-        data: a.data,
-        source: a.source ?? undefined,
-      })),
-    }));
-    // When the user has unchecked "Verbose" in the dashboard, fold
-    // the brevity directive into the leading system message. See
-    // `mergeBrevityDirective` for the rationale (strict
-    // OpenAI-compat servers reject non-leading system messages).
-    if (!live.verbose) {
-      mergeBrevityDirective(messages);
-    }
-    this.currentRenderer?.requestTokensEstimate?.(estimateMessagesTokens(messages));
-    const tools = event.tools?.map((t) => ({
-      name: t.name,
-      description: t.description,
-      args_schema: t.args_schema,
-    }));
-    this.debugLog.logLlmDispatch(messages);
-    let chunkCount = 0;
-    let totalChars = 0;
-    // Reasoning chunks from Qwen3-Coder / DeepSeek-R1 / o-series go
-    // into a collapsed `<details>` block in the chat pane and are
-    // NOT forwarded to the orchestrator (they would otherwise
-    // pollute artifact / tool-call extraction). We open the block
-    // lazily on the first reasoning delta and close it the moment
-    // real content arrives, when the stream ends, or on error.
-    let reasoningOpen = false;
-    const closeReasoning = () => {
-      if (reasoningOpen) {
-        this.currentRenderer?.markdown("\n\n</details>\n\n");
-        reasoningOpen = false;
-      }
-    };
-    try {
-      const responseNormalizer =
-        backend.adaptation?.responseNormalizer ?? DEFAULT_RESPONSE_NORMALIZER;
-      // Native tool calls the backend yields alongside text. Same
-      // accumulator pattern as SocketSessionPump; flowed into
-      // `LlmEnd.tool_calls` so the orchestrator's native dispatch
-      // fires.
-      const nativeToolCalls: import("./protocol-types").LlmToolCall[] = [];
-      let nextSyntheticToolCallId = 0;
-      const absorbToolCalls = (
-        chunk: { toolCalls?: import("../llm/types").StreamToolCall[] },
-      ) => {
-        if (!chunk.toolCalls || chunk.toolCalls.length === 0) {
-          return;
-        }
-        for (const tc of chunk.toolCalls) {
-          nativeToolCalls.push({
-            id: tc.id ?? `chatpump-tool-${nextSyntheticToolCallId++}`,
-            name: tc.name,
-            arguments_json: tc.argumentsJson,
-          });
-        }
-      };
-      for await (const rawChunk of backend.stream(messages, token, tools)) {
-        absorbToolCalls(rawChunk);
-        for (const chunk of responseNormalizer.normalizeChunk(rawChunk)) {
-          if (chunk.text.length === 0) {
-            continue;
-          }
-          if (chunk.kind === "reasoning") {
-            if (!reasoningOpen) {
-              this.currentRenderer?.markdown(
-                "\n<details>\n<summary>Model reasoning (click to expand)</summary>\n\n",
-              );
-              reasoningOpen = true;
-            }
-            this.currentRenderer?.markdown(chunk.text);
-            continue;
-          }
-          // Real content arrived; finalize any open reasoning block first
-          // so the collapsible doesn't swallow the answer.
-          closeReasoning();
-          chunkCount++;
-          totalChars += chunk.text.length;
-          this.debugLog.logLlmChunk(chunk.text);
-          this.sendHostEvent({
-            event: "llm-chunk",
-            request_id: event.request_id,
-            text: chunk.text,
-          });
-        }
-      }
-      for (const chunk of responseNormalizer.flush?.() ?? []) {
-        if (chunk.text.length === 0) {
-          continue;
-        }
-        if (chunk.kind === "reasoning") {
-          if (!reasoningOpen) {
-            this.currentRenderer?.markdown(
-              "\n<details>\n<summary>Model reasoning (click to expand)</summary>\n\n",
-            );
-            reasoningOpen = true;
-          }
-          this.currentRenderer?.markdown(chunk.text);
-          continue;
-        }
-        closeReasoning();
-        chunkCount++;
-        totalChars += chunk.text.length;
-        this.debugLog.logLlmChunk(chunk.text);
-        this.sendHostEvent({
-          event: "llm-chunk",
-          request_id: event.request_id,
-          text: chunk.text,
-        });
-      }
-      closeReasoning();
-      this.debugLog.logLlmEnd(totalChars, chunkCount);
-      this.sendHostEvent({
-        event: "llm-end",
-        request_id: event.request_id,
-        stop_reason: nativeToolCalls.length > 0 ? "tool_calls" : "stop",
-        tool_calls: nativeToolCalls,
-      });
-    } catch (err) {
-      closeReasoning();
-      this.debugLog.logLlmError(err);
-      const baseMessage = (err as Error).message ?? String(err);
-      const detail = err instanceof LlmError ? err.detail : undefined;
-      const composed =
-        detail && detail.length > 0
-          ? `${baseMessage} -- response: ${detail.slice(0, 512)}`
-          : baseMessage;
-      this.sendHostEvent({
-        event: "llm-error",
-        request_id: event.request_id,
-        kind: err instanceof LlmError ? err.kind : "stream",
-        message: adaptationSummary ? `${composed} [${adaptationSummary}]` : composed,
-      });
-    }
   }
 
   private sendHostEvent(event: HostEvent): void {

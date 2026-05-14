@@ -25,32 +25,41 @@ function readLog(): string {
 
 describe("parseCategories", () => {
   it("returns all-false for undefined / empty", () => {
-    expect(parseCategories(undefined)).toEqual({ events: false, raw: false, llm: false });
-    expect(parseCategories("")).toEqual({ events: false, raw: false, llm: false });
-    expect(parseCategories("   ")).toEqual({ events: false, raw: false, llm: false });
+    expect(parseCategories(undefined)).toEqual({ events: false, raw: false });
+    expect(parseCategories("")).toEqual({ events: false, raw: false });
+    expect(parseCategories("   ")).toEqual({ events: false, raw: false });
   });
 
   it("parses individual tokens", () => {
-    expect(parseCategories("events")).toEqual({ events: true, raw: false, llm: false });
-    expect(parseCategories("raw")).toEqual({ events: false, raw: true, llm: false });
-    expect(parseCategories("llm")).toEqual({ events: false, raw: false, llm: true });
+    expect(parseCategories("events")).toEqual({ events: true, raw: false });
+    expect(parseCategories("raw")).toEqual({ events: false, raw: true });
   });
 
-  it("supports `1` and `true` shortcuts (events + llm)", () => {
-    expect(parseCategories("1")).toEqual({ events: true, raw: false, llm: true });
-    expect(parseCategories("true")).toEqual({ events: true, raw: false, llm: true });
+  it("accepts the legacy `llm` token as a no-op", () => {
+    // The TS-side LLM client family was deleted once the Rust
+    // orchestrator absorbed all dispatch. `llm` is still parsed so
+    // existing `SIM_FOUNDATION_DEBUG=events,llm` configs don't
+    // print a warning; it simply produces no extra extension-side
+    // log output. The orchestrator's own DebugLog still honours
+    // `llm` on its side.
+    expect(parseCategories("llm")).toEqual({ events: false, raw: false });
+    expect(parseCategories("events,llm")).toEqual({ events: true, raw: false });
+  });
+
+  it("supports `1` and `true` shortcuts (events only now)", () => {
+    expect(parseCategories("1")).toEqual({ events: true, raw: false });
+    expect(parseCategories("true")).toEqual({ events: true, raw: false });
   });
 
   it("supports the `all` shortcut", () => {
-    expect(parseCategories("all")).toEqual({ events: true, raw: true, llm: true });
+    expect(parseCategories("all")).toEqual({ events: true, raw: true });
   });
 
   it("merges multiple comma-separated tokens", () => {
-    expect(parseCategories("events,raw")).toEqual({ events: true, raw: true, llm: false });
-    expect(parseCategories(" events , llm ")).toEqual({
+    expect(parseCategories("events,raw")).toEqual({ events: true, raw: true });
+    expect(parseCategories(" events , raw ")).toEqual({
       events: true,
-      raw: false,
-      llm: true,
+      raw: true,
     });
   });
 
@@ -60,20 +69,18 @@ describe("parseCategories", () => {
     expect(parseCategories("garbage,events")).toEqual({
       events: true,
       raw: false,
-      llm: false,
     });
   });
 });
 
 describe("categoriesAny", () => {
   it("returns false when no categories are enabled", () => {
-    expect(categoriesAny({ events: false, raw: false, llm: false })).toBe(false);
+    expect(categoriesAny({ events: false, raw: false })).toBe(false);
   });
 
   it("returns true when any category is enabled", () => {
-    expect(categoriesAny({ events: true, raw: false, llm: false })).toBe(true);
-    expect(categoriesAny({ events: false, raw: true, llm: false })).toBe(true);
-    expect(categoriesAny({ events: false, raw: false, llm: true })).toBe(true);
+    expect(categoriesAny({ events: true, raw: false })).toBe(true);
+    expect(categoriesAny({ events: false, raw: true })).toBe(true);
   });
 });
 
@@ -82,8 +89,17 @@ describe("DebugLog (disabled)", () => {
     const log = DebugLog.fromTokens("", projectDir);
     log.logEventIn({ event: "session-end", reason: "completed" } as never);
     log.logRawIn("anything");
-    log.logLlmEnd(0, 0);
     log.logProcessSpawn("/bin/sim-flow", ["auto"], 1234);
+    log.dispose();
+    expect(fs.existsSync(path.join(projectDir, ".sim-flow"))).toBe(false);
+  });
+
+  it("does not create files when only the legacy `llm` token is set", () => {
+    // Extension-side LLM logging is gone; the bare `llm` token has
+    // no extension-side effect and should not even open the log
+    // file. The Rust orchestrator's own DebugLog still records
+    // LLM transcripts under the same token.
+    const log = DebugLog.fromTokens("llm", projectDir);
     log.dispose();
     expect(fs.existsSync(path.join(projectDir, ".sim-flow"))).toBe(false);
   });
@@ -123,45 +139,6 @@ describe("DebugLog (raw category)", () => {
     expect(text).toContain("raw← `incoming line`");
     expect(text).toContain("raw→ `outgoing line`");
     expect(text).not.toContain("← hello-ack");
-  });
-});
-
-describe("DebugLog (llm category)", () => {
-  it("logs dispatch / chunk / end / error markers", () => {
-    const log = DebugLog.fromTokens("llm", projectDir);
-    log.logLlmDispatch([
-      { role: "system", content: "be helpful" },
-      { role: "user", content: "hi" },
-    ]);
-    log.logLlmChunk("partial text");
-    log.logLlmEnd(12, 1);
-    log.logLlmError(new Error("boom"));
-    log.dispose();
-    const text = readLog();
-    expect(text).toContain("llm→ dispatch (2 message(s))");
-    expect(text).toContain("[0] system");
-    expect(text).toContain("be helpful");
-    expect(text).toContain("[1] user");
-    expect(text).toContain("hi");
-    expect(text).toContain("llm← chunk (12 chars)");
-    expect(text).toContain("partial text");
-    expect(text).toContain("llm← end (1 chunk(s), 12 total chars)");
-    expect(text).toContain("llm← error");
-    expect(text).toContain("boom");
-  });
-
-  it("handles a non-Error value in logLlmError", () => {
-    const log = DebugLog.fromTokens("llm", projectDir);
-    log.logLlmError("a string error");
-    log.dispose();
-    expect(readLog()).toContain("a string error");
-  });
-
-  it("does not log llm markers when only the events category is enabled", () => {
-    const log = DebugLog.fromTokens("events", projectDir);
-    log.logLlmChunk("should be skipped");
-    log.dispose();
-    expect(readLog()).not.toContain("should be skipped");
   });
 });
 
@@ -234,7 +211,6 @@ describe("DebugLog (dispose)", () => {
     const before = readLog();
     log.logEventIn({ event: "hello-ack" } as never);
     log.logRawIn("nope");
-    log.logLlmChunk("nope");
     expect(readLog()).toBe(before);
   });
 });

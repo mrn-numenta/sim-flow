@@ -1,7 +1,32 @@
-import type { LlmMessage } from "../llm/types";
-import { estimateTextTokens } from "../llm/tokenEstimate";
-
 import type { ChatTranscriptEntry } from "./messages";
+
+/**
+ * Rough character-based token estimate. Mirrors the old
+ * `llm/tokenEstimate` helper that lived in the deleted TS LLM
+ * client family: each ~4 characters of UTF-8 text approximates one
+ * BPE token for the GPT-style tokenizers all our supported
+ * backends use. Kept here so the chat panel can show a running
+ * "tokens received" count next to the streaming assistant turn
+ * without taking a real tokenizer dependency.
+ */
+function estimateTextTokens(text: string): number {
+  if (text.length === 0) {
+    return 0;
+  }
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+
+/**
+ * Minimal vendor-neutral message shape kept for `toLlmMessages`.
+ * The extension no longer dispatches LLM calls itself, so this is
+ * only consumed by tests / introspection callers — there is no
+ * "send these messages" path that requires it to match a specific
+ * backend's wire format.
+ */
+export interface LlmMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+}
 
 export interface ChatConversationState {
   transcript: ChatTranscriptEntry[];
