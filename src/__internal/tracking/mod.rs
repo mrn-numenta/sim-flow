@@ -10,9 +10,13 @@ pub mod index;
 pub mod metrics;
 pub mod run_recording;
 pub mod sweep;
+pub mod variants;
 
 pub use baseline::{BaselineDelta, BaselineRecord};
 pub use git_state::GitState;
 pub use index::{ExperimentIndex, RunRow, experiments_db_path};
 pub use run_recording::{RecordRunOptions, RecordedRun};
 pub use sweep::{SweepDefinition, SweepResults};
+pub use variants::{
+    MANIFEST_FILENAME, ModuleVariant, ParameterVariant, ValidationError, VariantManifest,
+};
