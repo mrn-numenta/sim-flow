@@ -77,6 +77,24 @@ export class DashboardHost {
   private refreshing = false;
   private refreshQueued = false;
   /**
+   * Debounce window for watcher-driven refreshes. The state watcher
+   * fires `onDidChange` for every individual file write under
+   * `.sim-flow/` and `docs/critiques/` and `docs/plan/` -- during an
+   * active flow run the agent emits dozens of writes per turn
+   * (artifact-write, plan checkbox flip, critique JSON, critique
+   * markdown render, gate state.toml update) and each one fired a
+   * separate `state-update` to the webview, which rebuilt the entire
+   * `#app` DOM. Result: hover styles flickered every frame and click
+   * events between mousedown and mouseup raced with the rebuild and
+   * dropped.
+   *
+   * `requestWatcherRefresh()` coalesces a burst of file events into
+   * a single `refresh()` at the trailing edge of a 200ms quiet
+   * window. Button-click paths still call `refresh()` directly so
+   * user-initiated UI updates feel immediate.
+   */
+  private watcherRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  /**
    * Bookkeeping for the active pump's `StepModeChanged` listener.
    * The pump can change between refreshes (Connect → Disconnect →
    * Connect with different settings); we re-subscribe each time
@@ -179,6 +197,10 @@ export class DashboardHost {
   }
 
   dispose(): void {
+    if (this.watcherRefreshTimer !== undefined) {
+      clearTimeout(this.watcherRefreshTimer);
+      this.watcherRefreshTimer = undefined;
+    }
     this.watcher?.dispose();
     this.watcher = undefined;
     this.disposeStepModeListener();
@@ -618,6 +640,23 @@ export class DashboardHost {
     // No live session: optimistic refresh so the toggle visually
     // reflects the new persisted value immediately.
     await this.refresh();
+  }
+
+  /**
+   * Trailing-edge debounced refresh for watcher events. Resets a
+   * 200ms timer on every call; the timer fires exactly one
+   * `refresh()` once the file-write storm dies down. See the field
+   * docstring on `watcherRefreshTimer` for the failure mode this
+   * guards against.
+   */
+  private requestWatcherRefresh(): void {
+    if (this.watcherRefreshTimer !== undefined) {
+      clearTimeout(this.watcherRefreshTimer);
+    }
+    this.watcherRefreshTimer = setTimeout(() => {
+      this.watcherRefreshTimer = undefined;
+      void this.refresh();
+    }, 200);
   }
 
   /**
@@ -1319,7 +1358,12 @@ export class DashboardHost {
   private attachWatcher(): void {
     this.watcher = createStateWatcher(this.options.projectDir);
     this.watcher.onDidChange(() => {
-      void this.refresh();
+      // Debounce: during an active flow the watcher fires per-file
+      // for every artifact write / checkbox flip / critique render /
+      // state.toml update. Without the 200ms quiet window the
+      // webview burns frames re-rendering the full #app tree and
+      // hover/click input becomes unusable.
+      this.requestWatcherRefresh();
     });
     this.disposables.push(
       vscode.workspace.onDidChangeConfiguration((evt) => {

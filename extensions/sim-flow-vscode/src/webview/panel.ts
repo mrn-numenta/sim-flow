@@ -334,7 +334,26 @@ window.addEventListener("DOMContentLoaded", () => {
 // Rendering
 // --------------------------------------------------------------
 
+// `render()` is called from many places (message handlers, button
+// clicks, watchers). During a live e2e run the host pushes
+// `state-update` rapidly enough that immediate per-call rebuilds
+// produce visible flicker AND tear down per-button click listeners
+// in the gap between mousedown and mouseup, dropping clicks.
+// Coalesce via requestAnimationFrame so the DOM rebuilds at most
+// once per frame. Sub-16ms perceived latency is fine for UI updates;
+// the click race window collapses to a single frame.
+let pendingRender: number | null = null;
 function render(): void {
+  if (pendingRender !== null) {
+    return;
+  }
+  pendingRender = requestAnimationFrame(() => {
+    pendingRender = null;
+    renderNow();
+  });
+}
+
+function renderNow(): void {
   const root = document.getElementById("app");
   if (!root) {
     return;
