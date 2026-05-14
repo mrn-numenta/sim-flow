@@ -26,6 +26,7 @@ pub mod runners;
 pub mod signal_cleanup;
 pub mod socket_host;
 pub mod spec_ingest;
+pub mod stderr_presenter;
 pub mod tools;
 
 pub use auto::{AutoOptions, run_auto};
@@ -49,3 +50,4 @@ pub use protocol::{
     PROTOCOL_VERSION, SessionKindOut, SessionTag, StepDescriptorOut,
 };
 pub use socket_host::SocketHost;
+pub use stderr_presenter::StderrPresenter;
