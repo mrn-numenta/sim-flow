@@ -25,7 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::json;
 
 use crate::Result;
-use crate::session::host::Host;
+use crate::session::presenter::Presenter;
 use crate::session::protocol::{Event, HostEvent};
 
 /// JSONL capture sink. Shared so multiple decorators or background
@@ -89,27 +89,27 @@ impl JsonlCapture {
     }
 }
 
-/// `Host` decorator that tees every event in both directions to a
-/// `JsonlCapture`. The inner host still owns the actual protocol
+/// `Presenter` decorator that tees every event in both directions to a
+/// `JsonlCapture`. The inner presenter still owns the actual protocol
 /// behavior; this wrapper is purely observational.
-pub struct CaptureHost<H> {
-    inner: H,
+pub struct CapturePresenter<P> {
+    inner: P,
     capture: JsonlCapture,
 }
 
-impl<H: Host> CaptureHost<H> {
-    pub fn new(inner: H, capture: JsonlCapture) -> Self {
+impl<P: Presenter> CapturePresenter<P> {
+    pub fn new(inner: P, capture: JsonlCapture) -> Self {
         Self { inner, capture }
     }
 }
 
-impl<H: Host> Host for CaptureHost<H> {
-    fn write(&mut self, event: &Event) -> Result<()> {
+impl<P: Presenter> Presenter for CapturePresenter<P> {
+    fn send(&mut self, event: &Event) -> Result<()> {
         self.capture.record_out(event);
-        self.inner.write(event)
+        self.inner.send(event)
     }
-    fn read(&mut self) -> Result<Option<HostEvent>> {
-        let result = self.inner.read()?;
+    fn recv(&mut self) -> Result<Option<HostEvent>> {
+        let result = self.inner.recv()?;
         if let Some(event) = &result {
             self.capture.record_in(event);
         }
@@ -154,15 +154,18 @@ mod tests {
             },
             capabilities: vec![],
         });
-        let mut host = CaptureHost::new(inner, capture);
+        // TestHost satisfies `Presenter` via the blanket
+        // `impl<H: Host> Presenter for H`, so the capture decorator
+        // wraps it cleanly.
+        let mut host = CapturePresenter::new(inner, capture);
 
-        // One write, then one read. Lines must land in temporal
+        // One send, then one recv. Lines must land in temporal
         // order in the capture file.
-        host.write(&Event::PhaseChanged {
+        host.send(&Event::PhaseChanged {
             phase: "chat".into(),
         })
         .unwrap();
-        let got = host.read().unwrap().expect("queued hello");
+        let got = host.recv().unwrap().expect("queued hello");
         assert!(matches!(got, HostEvent::Hello { .. }));
 
         drop(host);

@@ -31,7 +31,7 @@ pub mod tools;
 
 pub use auto::{AutoOptions, run_auto};
 pub use auto_interactive::{AutoInteractiveOptions, run_auto_interactive};
-pub use capture_host::{CaptureHost, JsonlCapture};
+pub use capture_host::{CapturePresenter, JsonlCapture};
 pub use control_socket::{ControlCommand, ControlEvent, ControlListener, default_socket_path};
 pub use spec_ingest::{SpecIngestSummary, ingest_spec_file};
 
@@ -41,10 +41,12 @@ pub use agent::{
     ToolAdvertise, build_cli_agent,
 };
 pub use event_tap::{
-    EventTap, TappedHost, WatchRegistration, list_registrations as list_watch_registrations,
+    EventTap, TappedPresenter, WatchRegistration, list_registrations as list_watch_registrations,
 };
 pub use host::{Host, JsonlHost, TerminalHost, TestHost};
+pub use llm_adapter::LlmAdapter;
 pub use orchestrator::{OrchestratorOptions, run_session};
+pub use presenter::Presenter;
 pub use protocol::{
     DiagnosticLevel, Event, GateFailureOut, HostEvent, HostInfo, LlmMessage, LlmRole, LlmTool,
     PROTOCOL_VERSION, SessionKindOut, SessionTag, StepDescriptorOut,

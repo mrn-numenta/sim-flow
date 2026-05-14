@@ -820,24 +820,51 @@ fn auto_cmd(
         None => None,
     };
 
+    // After the Presenter / LlmAdapter split the orchestrator owns
+    // LLM dispatch in-process; build the agent here regardless of
+    // transport. `critique_llm_*` and `qa_llm_*` overrides are
+    // informational metadata only -- per-kind routing requires
+    // multiple agents, which v1 of the split doesn't model.
+    let agent_config = sim_flow::__internal::session::AgentConfig {
+        model: llm_model.map(String::from),
+        model_family_id: llm_model_family.map(String::from),
+        runtime_profile_id: llm_runtime_profile.map(String::from),
+        debug_adaptation: llm_debug_adaptation,
+        base_url: llm_base_url.map(String::from),
+        // The auto driver's CLI surface doesn't expose the
+        // per-backend ollama/openai URL knobs; `--llm-base-url`
+        // covers both via `AgentConfig::base_url` precedence.
+        ollama_base_url: None,
+        openai_base_url: None,
+    };
+    let mut agent = match sim_flow::__internal::session::build_cli_agent(llm_backend, agent_config)
+    {
+        Some(a) => a,
+        None => {
+            return Err(sim_flow::Error::State(format!(
+                "unknown LLM backend `{llm_backend}`. Available: {}.",
+                sim_flow::__internal::session::KNOWN_AGENTS.join(", "),
+            )));
+        }
+    };
     if let Some(socket_path) = transport_socket {
         run_with_socket_session_end(socket_path, |host| match watch_tap {
             Some(tap) => {
-                let mut tapped = sim_flow::__internal::session::TappedHost::new(host, tap);
-                sim_flow::__internal::session::run_auto(opts, &mut tapped)
+                let mut tapped = sim_flow::__internal::session::TappedPresenter::new(host, tap);
+                sim_flow::__internal::session::run_auto(opts, &mut tapped, agent.as_mut())
             }
-            None => sim_flow::__internal::session::run_auto(opts, host),
+            None => sim_flow::__internal::session::run_auto(opts, host, agent.as_mut()),
         })
     } else {
         let host = sim_flow::__internal::session::JsonlHost::stdio();
         match watch_tap {
             Some(tap) => {
-                let mut tapped = sim_flow::__internal::session::TappedHost::new(host, tap);
-                sim_flow::__internal::session::run_auto(opts, &mut tapped)
+                let mut tapped = sim_flow::__internal::session::TappedPresenter::new(host, tap);
+                sim_flow::__internal::session::run_auto(opts, &mut tapped, agent.as_mut())
             }
             None => {
                 let mut host = host;
-                sim_flow::__internal::session::run_auto(opts, &mut host)
+                sim_flow::__internal::session::run_auto(opts, &mut host, agent.as_mut())
             }
         }
     }
@@ -1024,44 +1051,47 @@ fn session_cmd(
         llm_debug_adaptation,
         ..Default::default()
     };
+    // After the Presenter / LlmAdapter split the orchestrator
+    // dispatches LLM calls in-process; every transport (socket /
+    // jsonl / terminal) needs the agent built here from `--llm-*`.
+    let agent_config = sim_flow::__internal::session::AgentConfig {
+        model: llm_model.map(String::from),
+        model_family_id: llm_model_family.map(String::from),
+        runtime_profile_id: llm_runtime_profile.map(String::from),
+        debug_adaptation: llm_debug_adaptation,
+        base_url: llm_base_url.map(String::from),
+        ollama_base_url: ollama_base_url.map(String::from),
+        openai_base_url: openai_base_url.map(String::from),
+    };
+    let mut agent = match sim_flow::__internal::session::build_cli_agent(llm_backend, agent_config)
+    {
+        Some(a) => a,
+        None => {
+            return Err(sim_flow::Error::State(format!(
+                "unknown LLM backend `{llm_backend}`. Available: {}.",
+                sim_flow::__internal::session::KNOWN_AGENTS.join(", "),
+            )));
+        }
+    };
     if let Some(socket_path) = transport_socket {
         run_with_socket_session_end(socket_path, |host| {
-            sim_flow::__internal::session::run_session(opts, host)
+            sim_flow::__internal::session::run_session(opts, host, agent.as_mut())
         })
     } else if jsonl {
         let mut host = sim_flow::__internal::session::JsonlHost::stdio();
-        sim_flow::__internal::session::run_session(opts, &mut host)
+        sim_flow::__internal::session::run_session(opts, &mut host, agent.as_mut())
     } else {
-        let agent_config = sim_flow::__internal::session::AgentConfig {
-            model: llm_model.map(String::from),
-            model_family_id: llm_model_family.map(String::from),
-            runtime_profile_id: llm_runtime_profile.map(String::from),
-            debug_adaptation: llm_debug_adaptation,
-            base_url: llm_base_url.map(String::from),
-            ollama_base_url: ollama_base_url.map(String::from),
-            openai_base_url: openai_base_url.map(String::from),
-        };
-        let agent = match sim_flow::__internal::session::build_cli_agent(llm_backend, agent_config)
-        {
-            Some(a) => a,
-            None => {
-                return Err(sim_flow::Error::State(format!(
-                    "TerminalHost has no built-in agent for `{llm_backend}`. Available: {}.",
-                    sim_flow::__internal::session::KNOWN_AGENTS.join(", "),
-                )));
-            }
-        };
         let stdin = std::io::stdin();
         let stdin_lock = stdin.lock();
         let stdout = std::io::stdout();
         let stderr = std::io::stderr();
-        let mut host = sim_flow::__internal::session::TerminalHost::new(
-            BoxedAgent(agent),
+        let mut presenter = sim_flow::__internal::session::StderrPresenter::new(
+            llm_backend,
             stdin_lock,
             stdout,
             stderr,
         );
-        sim_flow::__internal::session::run_session(opts, &mut host)
+        sim_flow::__internal::session::run_session(opts, &mut presenter, agent.as_mut())
     }
 }
 
@@ -1122,29 +1152,6 @@ impl<H: Host> Host for SessionEndTrackingHost<H> {
 
     fn read(&mut self) -> sim_flow::Result<Option<sim_flow::__internal::session::HostEvent>> {
         self.inner.read()
-    }
-}
-
-/// Wrapper that adapts `Box<dyn CliAgent>` to satisfy `TerminalHost`'s
-/// `A: CliAgent` bound. Cheap to inline.
-struct BoxedAgent(Box<dyn sim_flow::__internal::session::CliAgent>);
-
-impl sim_flow::__internal::session::CliAgent for BoxedAgent {
-    fn name(&self) -> &str {
-        self.0.name()
-    }
-
-    fn dispatch(
-        &self,
-        messages: &[sim_flow::__internal::session::LlmMessage],
-    ) -> sim_flow::Result<(String, sim_flow::__internal::session::agent::LlmCallMetrics)> {
-        self.0.dispatch(messages)
-    }
-
-    fn adaptation_summary(
-        &self,
-    ) -> Option<sim_flow::__internal::session::agent::AgentAdaptationSummary> {
-        self.0.adaptation_summary()
     }
 }
 

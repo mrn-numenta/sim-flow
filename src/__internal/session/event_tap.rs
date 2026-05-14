@@ -39,7 +39,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use crate::session::host::Host;
+use crate::session::presenter::Presenter;
 use crate::session::protocol::{Event, HostEvent};
 use crate::{Error, Result};
 
@@ -304,27 +304,27 @@ impl Drop for EventTap {
     }
 }
 
-/// `Host` decorator that broadcasts every emitted event to an
-/// `EventTap` while delegating reads + writes to the inner primary
-/// host. Used by the `auto` command when `--watch-socket` is set.
-pub struct TappedHost<H> {
-    inner: H,
+/// `Presenter` decorator that broadcasts every emitted event to an
+/// `EventTap` while delegating sends + recvs to the inner primary
+/// presenter. Used by the `auto` command when `--watch-socket` is set.
+pub struct TappedPresenter<P> {
+    inner: P,
     tap: EventTap,
 }
 
-impl<H: Host> TappedHost<H> {
-    pub fn new(inner: H, tap: EventTap) -> Self {
+impl<P: Presenter> TappedPresenter<P> {
+    pub fn new(inner: P, tap: EventTap) -> Self {
         Self { inner, tap }
     }
 }
 
-impl<H: Host> Host for TappedHost<H> {
-    fn write(&mut self, event: &Event) -> Result<()> {
+impl<P: Presenter> Presenter for TappedPresenter<P> {
+    fn send(&mut self, event: &Event) -> Result<()> {
         self.tap.broadcast(event);
-        self.inner.write(event)
+        self.inner.send(event)
     }
-    fn read(&mut self) -> Result<Option<HostEvent>> {
-        self.inner.read()
+    fn recv(&mut self) -> Result<Option<HostEvent>> {
+        self.inner.recv()
     }
 }
 

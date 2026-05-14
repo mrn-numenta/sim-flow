@@ -35,13 +35,13 @@ use std::io::{BufReader, Cursor};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use sim_flow::session::StderrPresenter;
 use sim_flow::session::agent::{
-    AnthropicAgent, ClaudeAgent, CliAgent, LlmCallMetrics, OllamaAgent, OpenAiCompatAgent,
+    AnthropicAgent, ClaudeAgent, CliAgent, OllamaAgent, OpenAiCompatAgent,
 };
-use sim_flow::session::host::TerminalHost;
-use sim_flow::session::protocol::{LlmMessage, StepMode};
+use sim_flow::session::protocol::StepMode;
 use sim_flow::session::{
-    AutoOptions, CaptureHost, EventTap, JsonlCapture, TappedHost, WatchRegistration,
+    AutoOptions, CapturePresenter, EventTap, JsonlCapture, TappedPresenter, WatchRegistration,
     ingest_spec_file, run_auto,
 };
 
@@ -469,7 +469,8 @@ fn run(args: &Args) -> std::result::Result<(), String> {
     let stdin = BufReader::new(Cursor::new(Vec::<u8>::new()));
     let stdout = std::io::stdout();
     let stderr = std::io::stderr();
-    let host = TerminalHost::new(BoxedAgent(agent), stdin, stdout, stderr);
+    let mut agent = agent;
+    let host = StderrPresenter::new(backend_label, stdin, stdout, stderr);
 
     // Optional read-only event broadcast. When `--watch-socket` is
     // set (default) the dashboard's "Attach to Running Watcher"
@@ -547,7 +548,7 @@ fn run(args: &Args) -> std::result::Result<(), String> {
 
     // Optional JSONL capture for the model-robustness study. The
     // wrapper goes OUTERMOST (closest to the orchestrator) so it
-    // sees every event before TappedHost broadcasts it AND every
+    // sees every event before TappedPresenter broadcasts it AND every
     // host event after TerminalHost reads from stdin.
     let capture = match &args.capture_jsonl {
         Some(path) => {
@@ -591,20 +592,20 @@ fn run(args: &Args) -> std::result::Result<(), String> {
     let started = Instant::now();
     let result = match (watch_tap, capture.clone()) {
         (Some(tap), Some(cap)) => {
-            let mut host = CaptureHost::new(TappedHost::new(host, tap), cap);
-            run_auto(opts, &mut host)
+            let mut host = CapturePresenter::new(TappedPresenter::new(host, tap), cap);
+            run_auto(opts, &mut host, agent.as_mut())
         }
         (Some(tap), None) => {
-            let mut host = TappedHost::new(host, tap);
-            run_auto(opts, &mut host)
+            let mut host = TappedPresenter::new(host, tap);
+            run_auto(opts, &mut host, agent.as_mut())
         }
         (None, Some(cap)) => {
-            let mut host = CaptureHost::new(host, cap);
-            run_auto(opts, &mut host)
+            let mut host = CapturePresenter::new(host, cap);
+            run_auto(opts, &mut host, agent.as_mut())
         }
         (None, None) => {
             let mut host = host;
-            run_auto(opts, &mut host)
+            run_auto(opts, &mut host, agent.as_mut())
         }
     };
     if let Some(cap) = &capture {
@@ -713,36 +714,6 @@ fn summarize_state(project_dir: &Path) -> std::result::Result<(), String> {
         println!("  {status:>7}  {label}  ({bytes} bytes)");
     }
     Ok(())
-}
-
-/// Wrap a `Box<dyn CliAgent>` so it satisfies `TerminalHost`'s
-/// `A: CliAgent` generic bound.
-struct BoxedAgent(Box<dyn CliAgent>);
-
-impl CliAgent for BoxedAgent {
-    fn name(&self) -> &str {
-        self.0.name()
-    }
-    fn dispatch(&self, messages: &[LlmMessage]) -> sim_flow::Result<(String, LlmCallMetrics)> {
-        self.0.dispatch(messages)
-    }
-    // Must delegate to inner agent or the CliAgent trait's default
-    // impl runs here and drops the tool catalog -- which silently
-    // routes native-mode requests through the legacy fence path.
-    fn dispatch_with_tools(
-        &self,
-        messages: &[LlmMessage],
-        tools: &[sim_flow::session::ToolAdvertise],
-    ) -> sim_flow::Result<(
-        String,
-        Vec<sim_flow::session::AdvertisedToolCall>,
-        LlmCallMetrics,
-    )> {
-        self.0.dispatch_with_tools(messages, tools)
-    }
-    fn adaptation_summary(&self) -> Option<sim_flow::session::AgentAdaptationSummary> {
-        self.0.adaptation_summary()
-    }
 }
 
 fn now_iso8601() -> String {

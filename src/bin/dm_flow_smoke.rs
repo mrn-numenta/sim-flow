@@ -36,9 +36,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
-use sim_flow::session::agent::{CliAgent, LlmCallMetrics};
-use sim_flow::session::host::TerminalHost;
-use sim_flow::session::protocol::LlmMessage;
+use sim_flow::session::StderrPresenter;
 use sim_flow::session::{AutoOptions, ClaudeAgent, run_auto};
 
 const FIXTURE_SPEC: &str = include_str!("dm_flow_smoke_spec.md");
@@ -145,16 +143,16 @@ fn run(args: &Args) -> std::result::Result<(), String> {
     // helper sees it.
     install_fixture_spec(&args.project_dir)?;
 
-    // 3. Run the auto driver. Wraps `ClaudeAgent` (one-shot `claude -p`)
-    // in a `TerminalHost` so each turn dispatches through the agent.
-    // stdin is closed (the auto driver shouldn't need user input;
-    // any RequestUserInput is treated as "fall back to the user" in
-    // interactive mode and we'll see it as a stuck terminal).
-    let agent = ClaudeAgent::new(args.model.clone(), None, None);
+    // 3. Run the auto driver. The orchestrator dispatches LLM calls
+    // via the `LlmAdapter` parameter; the presenter only renders
+    // events. stdin is closed (the auto driver shouldn't need user
+    // input; any RequestUserInput is treated as "fall back to the
+    // user" in interactive mode and we'll see it as a stuck terminal).
+    let mut agent = ClaudeAgent::new(args.model.clone(), None, None);
     let stdin = BufReader::new(Cursor::new(Vec::<u8>::new()));
     let stdout = std::io::stdout();
     let stderr = std::io::stderr();
-    let mut host = TerminalHost::new(BoxedAgent(Box::new(agent)), stdin, stdout, stderr);
+    let mut host = StderrPresenter::new("claude", stdin, stdout, stderr);
 
     let opts = AutoOptions {
         project_dir: args.project_dir.clone(),
@@ -188,7 +186,7 @@ fn run(args: &Args) -> std::result::Result<(), String> {
     println!("dm_flow_smoke: launching run_auto via TerminalHost + ClaudeAgent...");
     println!("            : (each step's transcript will print to this terminal)\n");
     let started_run = Instant::now();
-    run_auto(opts, &mut host).map_err(|err| format!("run_auto error: {err}"))?;
+    run_auto(opts, &mut host, &mut agent).map_err(|err| format!("run_auto error: {err}"))?;
     let run_elapsed = started_run.elapsed();
 
     println!(
@@ -298,17 +296,4 @@ fn summarize_state(project_dir: &Path) -> std::result::Result<(), String> {
         println!("  {status:>7}  {label}  ({bytes} bytes)");
     }
     Ok(())
-}
-
-/// Wrap a `Box<dyn CliAgent>` so it satisfies `TerminalHost`'s
-/// `A: CliAgent` generic bound.
-struct BoxedAgent(Box<dyn CliAgent>);
-
-impl CliAgent for BoxedAgent {
-    fn name(&self) -> &str {
-        self.0.name()
-    }
-    fn dispatch(&self, messages: &[LlmMessage]) -> sim_flow::Result<(String, LlmCallMetrics)> {
-        self.0.dispatch(messages)
-    }
 }

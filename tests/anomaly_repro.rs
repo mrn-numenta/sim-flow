@@ -21,12 +21,12 @@
 use std::path::PathBuf;
 
 use sim_flow::session::protocol::{
-    DiagnosticLevel, Event, HostEvent, HostInfo, LlmMessage, LlmToolCall, PROTOCOL_VERSION,
-    SessionKindOut, StepMode,
+    DiagnosticLevel, Event, HostEvent, HostInfo, LlmMessage, PROTOCOL_VERSION, SessionKindOut,
+    StepMode,
 };
 use sim_flow::session::{
-    AdvertisedToolCall, AutoOptions, CliAgent, LlmCallMetrics, MockAgent, TerminalHost, TestHost,
-    ToolAdvertise, run_auto,
+    AdvertisedToolCall, AutoOptions, CliAgent, LlmCallMetrics, MockAgent, TestHost, ToolAdvertise,
+    run_auto,
 };
 use sim_flow::state::{Flow, State};
 
@@ -262,6 +262,7 @@ fn tool_call_only_turn_does_not_trigger_empty_response_retry() {
     let project = init_project(&tmp);
 
     let mut host = TestHost::new();
+    let mut mock = MockAgent::new();
     host.enqueue(HostEvent::Hello {
         protocol_version: PROTOCOL_VERSION.into(),
         host: HostInfo {
@@ -271,51 +272,34 @@ fn tool_call_only_turn_does_not_trigger_empty_response_retry() {
         capabilities: vec!["text".into(), "user-input".into(), "llm-request".into()],
     });
 
-    // RunStep work for DM0. The orchestrator will emit
-    // RequestLlmResponse; we deliver one tool-call-only turn:
-    // empty content + a list_dir call. Pre-fix the orchestrator
-    // would fire "Your previous response was empty" and re-prompt.
+    // RunStep work for DM0. The orchestrator dispatches LLM calls
+    // in-process via the adapter (MockAgent); we script one
+    // tool-call-only turn: empty text + a list_dir call. Pre-fix
+    // the orchestrator would fire "Your previous response was
+    // empty" and re-prompt.
     host.enqueue(HostEvent::RunStep {
         step: "DM0".into(),
         kind: SessionKindOut::Work,
     });
-    host.enqueue(HostEvent::LlmChunk {
-        request_id: "lr-1".into(),
-        text: String::new(),
-    });
-    host.enqueue(HostEvent::LlmEnd {
-        request_id: "lr-1".into(),
-        stop_reason: Some("stop".into()),
-        tool_calls: vec![LlmToolCall {
-            id: Some("call_1".into()),
-            name: "list_dir".into(),
-            arguments_json: r#"{"path":"docs"}"#.into(),
-        }],
-        usage: None,
-    });
-    // The DM0 work session will iterate (no artifact landed yet)
-    // and emit another RequestLlmResponse. We give it the same
-    // shape twice more so the loop wind-down doesn't depend on
-    // hitting a specific cap.
-    for n in 2..=3 {
-        host.enqueue(HostEvent::LlmChunk {
-            request_id: format!("lr-{n}"),
-            text: String::new(),
-        });
-        host.enqueue(HostEvent::LlmEnd {
-            request_id: format!("lr-{n}"),
-            stop_reason: Some("stop".into()),
-            tool_calls: vec![LlmToolCall {
+    // Identical tool-call-only turns. The DM0 work session
+    // will iterate (no artifact landed yet); we enqueue enough
+    // turns to outlast any per-session cap so we never hit the
+    // empty default MockResponse path (which would itself trigger
+    // the empty-response diagnostic we're testing for). The
+    // session caps (max_llm_requests=100) terminate first.
+    for n in 1..=120 {
+        mock.enqueue_with_tool_calls(
+            "",
+            vec![AdvertisedToolCall {
                 id: Some(format!("call_{n}")),
                 name: "list_dir".into(),
                 arguments_json: r#"{"path":"docs"}"#.into(),
             }],
-            usage: None,
-        });
+        );
     }
     host.enqueue(HostEvent::Shutdown);
 
-    let _ = run_auto(auto_opts(&project, StepMode::Manual), &mut host);
+    let _ = run_auto(auto_opts(&project, StepMode::Manual), &mut host, &mut mock);
 
     // KEY ASSERTION: no diagnostic should mention "LLM returned no
     // content" -- that's the exact string the empty-response retry
@@ -351,6 +335,7 @@ fn truly_empty_response_still_triggers_diagnostic() {
     let project = init_project(&tmp);
 
     let mut host = TestHost::new();
+    let mut mock = MockAgent::new();
     host.enqueue(HostEvent::Hello {
         protocol_version: PROTOCOL_VERSION.into(),
         host: HostInfo {
@@ -376,7 +361,7 @@ fn truly_empty_response_still_triggers_diagnostic() {
     });
     host.enqueue(HostEvent::Shutdown);
 
-    let _ = run_auto(auto_opts(&project, StepMode::Manual), &mut host);
+    let _ = run_auto(auto_opts(&project, StepMode::Manual), &mut host, &mut mock);
 
     let empty_response_diagnostics: Vec<&str> = host
         .written
@@ -507,7 +492,7 @@ fn work_no_artifact_trips_max_auto_iters_diagnostic() {
     let tmp = tempfile::tempdir().unwrap();
     let project = init_project(&tmp);
 
-    let agent = MockAgent::new();
+    let mut agent = MockAgent::new();
     // Script several read-only turns. The orchestrator will keep
     // calling the agent until the max_auto_iters cap fires.
     // max_auto_iters=2 in auto_opts -- so the cap should fire after
@@ -530,7 +515,7 @@ fn work_no_artifact_trips_max_auto_iters_diagnostic() {
     let stdin = std::io::BufReader::new(std::io::Cursor::new(b"/end-session\n".to_vec()));
     let mut stdout = Vec::<u8>::new();
     let mut stderr = Vec::<u8>::new();
-    let mut host = TerminalHost::new(agent, stdin, &mut stdout, &mut stderr);
+    let mut host = sim_flow::session::StderrPresenter::new("mock", stdin, &mut stdout, &mut stderr);
 
     // Native mode + tools advertised so the MockAgent's tool_calls
     // actually flow through the right path. Without this the host
@@ -542,7 +527,7 @@ fn work_no_artifact_trips_max_auto_iters_diagnostic() {
     let prior = std::env::var("SIM_FLOW_TOOL_MODE").ok();
     unsafe { std::env::set_var("SIM_FLOW_TOOL_MODE", "native") };
 
-    let _ = run_auto(auto_opts(&project, StepMode::Auto), &mut host);
+    let _ = run_auto(auto_opts(&project, StepMode::Auto), &mut host, &mut agent);
 
     match prior {
         Some(v) => unsafe { std::env::set_var("SIM_FLOW_TOOL_MODE", v) },

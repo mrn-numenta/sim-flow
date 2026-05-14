@@ -18,7 +18,7 @@
 //!     never auto-advances; the user must issue `Advance`.
 //!
 //! Mode is shared via an `Arc<AtomicU8>` between the run loop and the
-//! `AutoHost` wrapper that intercepts host reads. `SetStepMode` host
+//! `AutoPresenter` wrapper that intercepts host reads. `SetStepMode` host
 //! events flip the flag at the next decision point — never mid-sub-
 //! session — and emit a `StepModeChanged` event so the dashboard can
 //! reflect the orchestrator's truth. The auto loop also flips to
@@ -33,7 +33,7 @@
 //! orchestrator terminates cleanly. The run loop sees the flag and
 //! emits a final `SessionEnd` before returning.
 //!
-//! `AutoHost` reuses the existing `run_session` entry point and:
+//! `AutoPresenter` reuses the existing `run_session` entry point and:
 //!
 //! - synthesizes a `Hello` for every sub-session after the first (so
 //!   the wrapped `run_session` thinks each iteration is a fresh
@@ -66,10 +66,11 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use crate::Result;
-use crate::session::host::Host;
+use crate::session::llm_adapter::LlmAdapter;
 use crate::session::orchestrator::{
     OrchestratorOptions, run_session, step_descriptor_for_protocol,
 };
+use crate::session::presenter::Presenter;
 use crate::session::protocol::{
     DiagnosticLevel, Event, GateFailureOut, HostEvent, HostInfo, LlmMessage, LlmRole,
     PROTOCOL_VERSION, SessionEndReason, SessionKindOut, SessionTag, StepMode,
@@ -167,7 +168,11 @@ pub struct AutoOptions {
     pub no_preamble: bool,
 }
 
-pub fn run_auto<H: Host>(opts: AutoOptions, host: &mut H) -> Result<()> {
+pub fn run_auto<P, L>(opts: AutoOptions, host: &mut P, llm: &mut L) -> Result<()>
+where
+    P: Presenter + ?Sized,
+    L: LlmAdapter + ?Sized,
+{
     info!(
         project = %opts.project_dir.display(),
         backend = %opts.llm_backend,
@@ -178,7 +183,7 @@ pub fn run_auto<H: Host>(opts: AutoOptions, host: &mut H) -> Result<()> {
         "run_auto starting"
     );
     let mode = Arc::new(AtomicU8::new(step_mode_to_u8(opts.step_mode)));
-    let mut auto_host = AutoHost::new(host, mode);
+    let mut auto_host = AutoPresenter::new(host, mode);
 
     // 1. Hello/HelloAck handshake. Once per process — every sub-
     //    session below queues a synthetic Hello via
@@ -191,7 +196,7 @@ pub fn run_auto<H: Host>(opts: AutoOptions, host: &mut H) -> Result<()> {
 
     // 2. Echo back the initial mode so the dashboard's toggle aligns
     //    with the orchestrator's truth before any sub-session runs.
-    auto_host.write(&Event::StepModeChanged {
+    auto_host.send(&Event::StepModeChanged {
         mode: opts.step_mode,
     })?;
 
@@ -231,7 +236,7 @@ pub fn run_auto<H: Host>(opts: AutoOptions, host: &mut H) -> Result<()> {
                 opts.llm_backend
             );
             warn!("{msg}");
-            auto_host.write(&Event::Diagnostic {
+            auto_host.send(&Event::Diagnostic {
                 level: DiagnosticLevel::Warning,
                 message: msg,
             })?;
@@ -253,7 +258,7 @@ pub fn run_auto<H: Host>(opts: AutoOptions, host: &mut H) -> Result<()> {
         match auto_host.current_step_mode() {
             StepMode::Auto => {
                 debug!("dispatching to run_auto_loop (auto mode)");
-                match run_auto_loop(&opts, &mut auto_host)? {
+                match run_auto_loop(&opts, &mut auto_host, llm)? {
                     AutoLoopOutcome::Completed => break RunOutcome::Completed,
                     AutoLoopOutcome::FlippedToManual => {
                         debug!("auto loop flipped to manual; re-evaluating mode");
@@ -264,7 +269,7 @@ pub fn run_auto<H: Host>(opts: AutoOptions, host: &mut H) -> Result<()> {
             }
             StepMode::Manual => {
                 debug!("dispatching to wait_for_command (manual mode)");
-                match wait_for_command(&opts, &mut auto_host, &mut qa_history)? {
+                match wait_for_command(&opts, &mut auto_host, &mut qa_history, llm)? {
                     ManualOutcome::Continue => continue,
                     ManualOutcome::Shutdown => break RunOutcome::Shutdown,
                     ManualOutcome::HostClosed => break RunOutcome::HostClosed,
@@ -274,7 +279,7 @@ pub fn run_auto<H: Host>(opts: AutoOptions, host: &mut H) -> Result<()> {
     };
 
     info!(outcome = ?outcome, "run_auto exiting");
-    // Final SessionEnd. AutoHost forwards this to the underlying host
+    // Final SessionEnd. AutoPresenter forwards this to the underlying host
     // (consume_session_end is reset to false here so the user sees a
     // clean end-of-auto-run banner).
     auto_host.consume_session_end = false;
@@ -292,7 +297,7 @@ pub fn run_auto<H: Host>(opts: AutoOptions, host: &mut H) -> Result<()> {
             Some("host disconnected".into()),
         ),
     };
-    auto_host.write(&Event::SessionEnd { reason, message })?;
+    auto_host.send(&Event::SessionEnd { reason, message })?;
     Ok(())
 }
 
@@ -354,10 +359,15 @@ fn step_mode_from_u8(value: u8) -> StepMode {
 // Auto loop: walk remaining steps end-to-end.
 // ---------------------------------------------------------------------
 
-fn run_auto_loop<H: Host>(
+fn run_auto_loop<P, L>(
     opts: &AutoOptions,
-    auto_host: &mut AutoHost<H>,
-) -> Result<AutoLoopOutcome> {
+    auto_host: &mut AutoPresenter<P>,
+    llm: &mut L,
+) -> Result<AutoLoopOutcome>
+where
+    P: Presenter + ?Sized,
+    L: LlmAdapter + ?Sized,
+{
     let state = State::load(&opts.project_dir.join(".sim-flow"))?;
     let registry = registry_for(state.flow);
     let order = registry.order_for(state.flow);
@@ -428,6 +438,7 @@ fn run_auto_loop<H: Host>(
                 auto_host,
                 /*consume_end=*/ true,
                 /*synth_hello=*/ true,
+                llm,
             )?;
             if let Some(o) =
                 check_post_subsession(auto_host, step_id, crate::client::SessionKind::Work, opts)?
@@ -462,6 +473,7 @@ fn run_auto_loop<H: Host>(
                 auto_host,
                 /*consume_end=*/ true,
                 /*synth_hello=*/ true,
+                llm,
             )?;
             if let Some(o) = check_post_subsession(
                 auto_host,
@@ -556,7 +568,7 @@ fn run_auto_loop<H: Host>(
                             prev_blocker_count,
                             "advance-milestone",
                         );
-                        auto_host.write(&Event::Diagnostic {
+                        auto_host.send(&Event::Diagnostic {
                             level: DiagnosticLevel::Info,
                             message: format!(
                                 "auto: {step_id} milestone-walk step has more pending milestones; \
@@ -604,7 +616,7 @@ fn run_auto_loop<H: Host>(
                         opts.max_critique_iters,
                     )
                 };
-                auto_host.write(&Event::Diagnostic {
+                auto_host.send(&Event::Diagnostic {
                     level: DiagnosticLevel::Error,
                     message: reason,
                 })?;
@@ -627,7 +639,7 @@ fn run_auto_loop<H: Host>(
                 ),
                 None => String::new(),
             };
-            auto_host.write(&Event::Diagnostic {
+            auto_host.send(&Event::Diagnostic {
                 level: DiagnosticLevel::Info,
                 message: format!(
                     "auto: {} critique reported {} gate-failing finding(s); re-running work (retry {}/{}{})",
@@ -653,7 +665,9 @@ fn run_auto_loop<H: Host>(
     Ok(AutoLoopOutcome::Completed)
 }
 
-fn check_pre_subsession<H: Host>(auto_host: &AutoHost<H>) -> Option<AutoLoopOutcome> {
+fn check_pre_subsession<P: Presenter + ?Sized>(
+    auto_host: &AutoPresenter<P>,
+) -> Option<AutoLoopOutcome> {
     if auto_host.shutdown_requested {
         return Some(AutoLoopOutcome::Shutdown);
     }
@@ -663,8 +677,8 @@ fn check_pre_subsession<H: Host>(auto_host: &AutoHost<H>) -> Option<AutoLoopOutc
     None
 }
 
-fn check_post_subsession<H: Host>(
-    auto_host: &mut AutoHost<H>,
+fn check_post_subsession<P: Presenter + ?Sized>(
+    auto_host: &mut AutoPresenter<P>,
     step_id: &str,
     kind: crate::client::SessionKind,
     opts: &AutoOptions,
@@ -840,20 +854,20 @@ fn clear_checkpoint(project_dir: &Path) {
     let _ = std::fs::remove_file(checkpoint_path(project_dir));
 }
 
-fn flip_to_manual<H: Host>(auto_host: &mut AutoHost<H>) -> Result<()> {
+fn flip_to_manual<P: Presenter + ?Sized>(auto_host: &mut AutoPresenter<P>) -> Result<()> {
     let prev = auto_host.current_step_mode();
     auto_host.store_step_mode(StepMode::Manual);
     if !matches!(prev, StepMode::Manual) {
         warn!("flipping step mode auto -> manual (cap exceeded or gate failure)");
-        auto_host.write(&Event::StepModeChanged {
+        auto_host.send(&Event::StepModeChanged {
             mode: StepMode::Manual,
         })?;
     }
     Ok(())
 }
 
-fn emit_cap_exceeded_diagnostic<H: Host>(
-    auto_host: &mut AutoHost<H>,
+fn emit_cap_exceeded_diagnostic<P: Presenter + ?Sized>(
+    auto_host: &mut AutoPresenter<P>,
     step_id: &str,
     kind: crate::client::SessionKind,
     opts: &AutoOptions,
@@ -862,7 +876,7 @@ fn emit_cap_exceeded_diagnostic<H: Host>(
         crate::client::SessionKind::Work => "work",
         crate::client::SessionKind::Critique => "critique",
     };
-    auto_host.write(&Event::Diagnostic {
+    auto_host.send(&Event::Diagnostic {
         level: DiagnosticLevel::Error,
         message: format!(
             "auto: {step_id} {kind_s} session hit the per-session iteration cap ({}); flipping to manual mode. \
@@ -885,16 +899,16 @@ fn emit_cap_exceeded_diagnostic<H: Host>(
 /// established signal for the host (the dashboard renders the banner
 /// from the first HelloAck and ignores subsequent ones for sub-
 /// session boundaries).
-fn perform_initial_handshake<H: Host>(
+fn perform_initial_handshake<P: Presenter + ?Sized>(
     opts: &AutoOptions,
-    auto_host: &mut AutoHost<H>,
+    auto_host: &mut AutoPresenter<P>,
 ) -> Result<()> {
-    let hello_version = match auto_host.read()? {
+    let hello_version = match auto_host.recv()? {
         Some(HostEvent::Hello {
             protocol_version, ..
         }) => protocol_version,
         Some(other) => {
-            auto_host.write(&Event::SessionEnd {
+            auto_host.send(&Event::SessionEnd {
                 reason: SessionEndReason::ProtocolError,
                 message: Some(format!("expected Hello first, got {other:?}")),
             })?;
@@ -907,7 +921,7 @@ fn perform_initial_handshake<H: Host>(
         }
     };
     if hello_version != PROTOCOL_VERSION {
-        auto_host.write(&Event::SessionEnd {
+        auto_host.send(&Event::SessionEnd {
             reason: SessionEndReason::ProtocolMismatch,
             message: Some(format!(
                 "host sent protocolVersion={hello_version}; orchestrator speaks {PROTOCOL_VERSION}"
@@ -931,7 +945,7 @@ fn perform_initial_handshake<H: Host>(
     })?;
     let descriptor =
         step_descriptor_for_protocol(step, SessionKindOut::Work, &opts.foundation_root);
-    auto_host.write(&Event::HelloAck {
+    auto_host.send(&Event::HelloAck {
         protocol_version: PROTOCOL_VERSION.into(),
         sim_flow_version: env!("CARGO_PKG_VERSION").into(),
         session: SessionTag {
@@ -944,15 +958,21 @@ fn perform_initial_handshake<H: Host>(
     Ok(())
 }
 
-fn run_subsession<H: Host>(
+#[allow(clippy::too_many_arguments)]
+fn run_subsession<P, L>(
     opts: &AutoOptions,
     step_id: &str,
     kind: crate::client::SessionKind,
     auto: bool,
-    host: &mut AutoHost<H>,
+    host: &mut AutoPresenter<P>,
     consume_end: bool,
     synth_hello: bool,
-) -> Result<()> {
+    llm: &mut L,
+) -> Result<()>
+where
+    P: Presenter + ?Sized,
+    L: LlmAdapter + ?Sized,
+{
     if synth_hello {
         host.queue_synthetic_hello();
     }
@@ -968,24 +988,29 @@ fn run_subsession<H: Host>(
     // of step-mode; auto mode drives multiple bracketed sub-
     // sessions per outer run, manual mode drives one per
     // dispatched command.
-    host.write(&Event::SubSessionStarted {
+    host.send(&Event::SubSessionStarted {
         step: step_id.to_string(),
         kind: kind_out,
     })?;
-    // Route the LLM stack per session kind. See `resolve_llm_for_kind`.
-    let llm = resolve_llm_for_kind(opts, kind);
+    // Route the LLM stack: `opts.llm_*` is the routing metadata
+    // logged with metrics and surfaced in diagnostics, but the actual
+    // dispatch goes through the injected `llm` adapter. The
+    // `critique_llm_*` / `qa_llm_*` overrides are informational only
+    // since the doc-endorsed simplification has run_auto take a
+    // single adapter for every sub-session.
+    let routing = resolve_llm_for_kind(opts, kind);
     let session_opts = OrchestratorOptions {
         project_dir: opts.project_dir.clone(),
         foundation_root: opts.foundation_root.clone(),
         step_id: step_id.to_string(),
         kind,
         candidate: None,
-        llm_backend: llm.backend,
-        llm_model: llm.model,
-        llm_model_family_id: llm.model_family_id,
-        llm_runtime_profile_id: llm.runtime_profile_id,
+        llm_backend: routing.backend,
+        llm_model: routing.model,
+        llm_model_family_id: routing.model_family_id,
+        llm_runtime_profile_id: routing.runtime_profile_id,
         llm_debug_adaptation: opts.llm_debug_adaptation,
-        llm_base_url: llm.base_url,
+        llm_base_url: routing.base_url,
         auto,
         max_auto_iters: opts.max_auto_iters,
         max_llm_requests: opts.max_llm_requests,
@@ -996,7 +1021,7 @@ fn run_subsession<H: Host>(
         agent_has_native_fs_tools: false,
         no_preamble: opts.no_preamble,
     };
-    let result = run_session(session_opts, host);
+    let result = run_session(session_opts, host, llm);
     host.in_subsession = false;
     host.in_subsession_parked = false;
     // run_session returns Ok(()) for both clean completion and
@@ -1008,7 +1033,7 @@ fn run_subsession<H: Host>(
     info!(step = step_id, kind = ?kind_out, outcome, "sub-session ended");
     // Best-effort: if writing the closing event fails (e.g. host
     // socket already closed), keep the inner `result` to surface.
-    let _ = host.write(&Event::SubSessionEnded {
+    let _ = host.send(&Event::SubSessionEnded {
         step: step_id.to_string(),
         kind: kind_out,
         outcome: outcome.into(),
@@ -1121,10 +1146,10 @@ enum AdvanceOutcome {
     Stuck,
 }
 
-fn try_advance_classified<H: Host>(
+fn try_advance_classified<P: Presenter + ?Sized>(
     project_dir: &Path,
     step_id: &str,
-    host: &mut AutoHost<H>,
+    host: &mut AutoPresenter<P>,
 ) -> Result<AdvanceOutcome> {
     use crate::gate;
     let dot = project_dir.join(".sim-flow");
@@ -1182,7 +1207,7 @@ fn try_advance_classified<H: Host>(
     if any_milestone_pending {
         return Ok(AdvanceOutcome::MoreMilestonesPending);
     }
-    host.write(&Event::Diagnostic {
+    host.send(&Event::Diagnostic {
         level: DiagnosticLevel::Error,
         message: format!(
             "auto: {step_id} gate is not clean after critique; cannot advance. {} failure(s).",
@@ -1190,7 +1215,7 @@ fn try_advance_classified<H: Host>(
         ),
     })?;
     for f in &report.failures {
-        host.write(&Event::Diagnostic {
+        host.send(&Event::Diagnostic {
             level: DiagnosticLevel::Error,
             message: format!("  - {}: {}", f.description, f.reason),
         })?;
@@ -1198,7 +1223,11 @@ fn try_advance_classified<H: Host>(
     Ok(AdvanceOutcome::Stuck)
 }
 
-fn try_advance<H: Host>(project_dir: &Path, step_id: &str, host: &mut AutoHost<H>) -> Result<bool> {
+fn try_advance<P: Presenter + ?Sized>(
+    project_dir: &Path,
+    step_id: &str,
+    host: &mut AutoPresenter<P>,
+) -> Result<bool> {
     use crate::gate;
     let dot = project_dir.join(".sim-flow");
     let mut state = State::load(&dot)?;
@@ -1208,7 +1237,7 @@ fn try_advance<H: Host>(project_dir: &Path, step_id: &str, host: &mut AutoHost<H
     })?;
     let report = gate::evaluate(project_dir, &step.gate_checks)?;
     if !report.is_clean() {
-        host.write(&Event::Diagnostic {
+        host.send(&Event::Diagnostic {
             level: DiagnosticLevel::Error,
             message: format!(
                 "auto: {step_id} gate is not clean after critique; cannot advance. {} failure(s).",
@@ -1241,13 +1270,13 @@ fn try_advance<H: Host>(project_dir: &Path, step_id: &str, host: &mut AutoHost<H
             netlist_in: None,
         }) {
             Ok(svg_path) => {
-                host.write(&Event::Diagnostic {
+                host.send(&Event::Diagnostic {
                     level: DiagnosticLevel::Info,
                     message: format!("auto: rendered block diagram at {}", svg_path.display()),
                 })?;
             }
             Err(err) => {
-                host.write(&Event::Diagnostic {
+                host.send(&Event::Diagnostic {
                     level: DiagnosticLevel::Warning,
                     message: format!("auto: block-diagram render failed (advancing anyway): {err}"),
                 })?;
@@ -1259,7 +1288,7 @@ fn try_advance<H: Host>(project_dir: &Path, step_id: &str, host: &mut AutoHost<H
     // committed git history reflects each gate-clean checkpoint.
     let outcome = crate::git_commit::commit_step_advance(project_dir, step.id, next);
     if let Some(msg) = crate::git_commit::outcome_message(&outcome) {
-        host.write(&Event::Diagnostic {
+        host.send(&Event::Diagnostic {
             level: DiagnosticLevel::Info,
             message: msg,
         })?;
@@ -1293,7 +1322,7 @@ fn try_advance<H: Host>(project_dir: &Path, step_id: &str, host: &mut AutoHost<H
         );
     }
 
-    host.write(&Event::StateAdvanced {
+    host.send(&Event::StateAdvanced {
         from: step.id.into(),
         to: next.map(String::from),
     })?;
@@ -1304,12 +1333,17 @@ fn try_advance<H: Host>(project_dir: &Path, step_id: &str, host: &mut AutoHost<H
 // Manual command dispatcher.
 // ---------------------------------------------------------------------
 
-fn wait_for_command<H: Host>(
+fn wait_for_command<P, L>(
     opts: &AutoOptions,
-    auto_host: &mut AutoHost<H>,
+    auto_host: &mut AutoPresenter<P>,
     qa_history: &mut Vec<LlmMessage>,
-) -> Result<ManualOutcome> {
-    match auto_host.read()? {
+    llm: &mut L,
+) -> Result<ManualOutcome>
+where
+    P: Presenter + ?Sized,
+    L: LlmAdapter + ?Sized,
+{
+    match auto_host.recv()? {
         None => Ok(ManualOutcome::HostClosed),
         Some(HostEvent::Shutdown) => Ok(ManualOutcome::Shutdown),
         Some(HostEvent::RunStep { step, kind }) => {
@@ -1321,7 +1355,7 @@ fn wait_for_command<H: Host>(
                     // command; Q&A is its own thing (triggered by
                     // UserMessage). A RunStep with kind=Qa is a host
                     // bug; warn and drop rather than dispatching.
-                    auto_host.write(&Event::Diagnostic {
+                    auto_host.send(&Event::Diagnostic {
                         level: DiagnosticLevel::Warning,
                         message: format!(
                             "RunStep with kind=qa is not a real command; \
@@ -1332,11 +1366,17 @@ fn wait_for_command<H: Host>(
                     return Ok(ManualOutcome::Continue);
                 }
             };
-            run_manual_subsession(opts, &step, session_kind, auto_host)?;
+            run_manual_subsession(opts, &step, session_kind, auto_host, llm)?;
             Ok(ManualOutcome::Continue)
         }
         Some(HostEvent::RunCritique { step }) => {
-            run_manual_subsession(opts, &step, crate::client::SessionKind::Critique, auto_host)?;
+            run_manual_subsession(
+                opts,
+                &step,
+                crate::client::SessionKind::Critique,
+                auto_host,
+                llm,
+            )?;
             Ok(ManualOutcome::Continue)
         }
         Some(HostEvent::RunGate { step }) => {
@@ -1357,12 +1397,12 @@ fn wait_for_command<H: Host>(
             let before = State::load(&opts.project_dir.join(".sim-flow"))
                 .ok()
                 .map(|s| s.current_step.clone());
-            run_manual_advance(opts, &step, auto_host)?;
+            run_manual_advance(opts, &step, auto_host, llm)?;
             let after = State::load(&opts.project_dir.join(".sim-flow"))
                 .ok()
                 .map(|s| s.current_step.clone());
             if before == after {
-                auto_host.write(&Event::RequestUserInput {
+                auto_host.send(&Event::RequestUserInput {
                     prompt: Some(format!(
                         "Advance refused: `{step}` did not change state. \
                          Inspect the prior Error diagnostics, then issue \
@@ -1388,7 +1428,7 @@ fn wait_for_command<H: Host>(
             // History persists across step commands within this
             // `run_auto` invocation so a follow-up question after a
             // Run Step retains its earlier context.
-            run_manual_qa_turn(opts, &text, qa_history, auto_host)?;
+            run_manual_qa_turn(opts, &text, qa_history, auto_host, llm)?;
             Ok(ManualOutcome::Continue)
         }
         Some(other) => {
@@ -1396,7 +1436,7 @@ fn wait_for_command<H: Host>(
             // (leftover LlmChunk, etc.). Surface a warning so the
             // host operator can see the event was dropped, then keep
             // parking.
-            auto_host.write(&Event::Diagnostic {
+            auto_host.send(&Event::Diagnostic {
                 level: DiagnosticLevel::Warning,
                 message: format!(
                     "manual mode: ignored unexpected host event: {}",
@@ -1408,12 +1448,17 @@ fn wait_for_command<H: Host>(
     }
 }
 
-fn run_manual_subsession<H: Host>(
+fn run_manual_subsession<P, L>(
     opts: &AutoOptions,
     step_id: &str,
     kind: crate::client::SessionKind,
-    auto_host: &mut AutoHost<H>,
-) -> Result<()> {
+    auto_host: &mut AutoPresenter<P>,
+    llm: &mut L,
+) -> Result<()>
+where
+    P: Presenter + ?Sized,
+    L: LlmAdapter + ?Sized,
+{
     if !validate_step_id(opts, step_id, kind_label_for_manual(kind), auto_host)? {
         return Ok(());
     }
@@ -1443,19 +1488,20 @@ fn run_manual_subsession<H: Host>(
         auto_host,
         /*consume_end=*/ true,
         /*synth_hello=*/ true,
+        llm,
     )
 }
 
-fn run_manual_gate<H: Host>(
+fn run_manual_gate<P: Presenter + ?Sized>(
     opts: &AutoOptions,
     step_id: &str,
-    auto_host: &mut AutoHost<H>,
+    auto_host: &mut AutoPresenter<P>,
 ) -> Result<()> {
     use crate::gate;
     let state = match State::load(&opts.project_dir.join(".sim-flow")) {
         Ok(s) => s,
         Err(err) => {
-            auto_host.write(&Event::Diagnostic {
+            auto_host.send(&Event::Diagnostic {
                 level: DiagnosticLevel::Error,
                 message: format!("RunGate: failed to load state: {err}"),
             })?;
@@ -1466,7 +1512,7 @@ fn run_manual_gate<H: Host>(
     let step = match registry.get(step_id) {
         Some(s) => s,
         None => {
-            auto_host.write(&Event::Diagnostic {
+            auto_host.send(&Event::Diagnostic {
                 level: DiagnosticLevel::Error,
                 message: format!("RunGate: `{step_id}` is not a {} step", state.flow.as_str()),
             })?;
@@ -1474,7 +1520,7 @@ fn run_manual_gate<H: Host>(
         }
     };
     let report = gate::evaluate(&opts.project_dir, &step.gate_checks)?;
-    auto_host.write(&Event::GateResult {
+    auto_host.send(&Event::GateResult {
         step: step.id.into(),
         clean: report.is_clean(),
         failures: report
@@ -1489,15 +1535,20 @@ fn run_manual_gate<H: Host>(
     Ok(())
 }
 
-fn run_manual_advance<H: Host>(
+fn run_manual_advance<P, L>(
     opts: &AutoOptions,
     step_id: &str,
-    auto_host: &mut AutoHost<H>,
-) -> Result<()> {
+    auto_host: &mut AutoPresenter<P>,
+    llm: &mut L,
+) -> Result<()>
+where
+    P: Presenter + ?Sized,
+    L: LlmAdapter + ?Sized,
+{
     let state = match State::load(&opts.project_dir.join(".sim-flow")) {
         Ok(s) => s,
         Err(err) => {
-            auto_host.write(&Event::Diagnostic {
+            auto_host.send(&Event::Diagnostic {
                 level: DiagnosticLevel::Error,
                 message: format!("Advance: failed to load state: {err}"),
             })?;
@@ -1506,7 +1557,7 @@ fn run_manual_advance<H: Host>(
     };
     let registry = registry_for(state.flow);
     if registry.get(step_id).is_none() {
-        auto_host.write(&Event::Diagnostic {
+        auto_host.send(&Event::Diagnostic {
             level: DiagnosticLevel::Error,
             message: format!("Advance: `{step_id}` is not a {} step", state.flow.as_str()),
         })?;
@@ -1575,7 +1626,7 @@ fn run_manual_advance<H: Host>(
                         cur_count, opts.max_critique_iters,
                     )
                 };
-                auto_host.write(&Event::Diagnostic {
+                auto_host.send(&Event::Diagnostic {
                     level: DiagnosticLevel::Error,
                     message: reason,
                 })?;
@@ -1593,7 +1644,7 @@ fn run_manual_advance<H: Host>(
                 ),
                 None => String::new(),
             };
-            auto_host.write(&Event::Diagnostic {
+            auto_host.send(&Event::Diagnostic {
                 level: DiagnosticLevel::Info,
                 message: format!(
                     "Advance: {step_id} critique has {} gate-failing finding(s); re-running Work + Critique \
@@ -1609,6 +1660,7 @@ fn run_manual_advance<H: Host>(
                 auto_host,
                 /*consume_end=*/ true,
                 /*synth_hello=*/ true,
+                llm,
             )?;
             run_subsession(
                 opts,
@@ -1618,6 +1670,7 @@ fn run_manual_advance<H: Host>(
                 auto_host,
                 /*consume_end=*/ true,
                 /*synth_hello=*/ true,
+                llm,
             )?;
             continue;
         }
@@ -1642,7 +1695,7 @@ fn run_manual_advance<H: Host>(
                 // so this can't loop forever.
                 critique_iters += 1;
                 if critique_iters > opts.max_critique_iters {
-                    auto_host.write(&Event::Diagnostic {
+                    auto_host.send(&Event::Diagnostic {
                         level: DiagnosticLevel::Error,
                         message: format!(
                             "Advance: {step_id} structural gate still dirty after \
@@ -1654,7 +1707,7 @@ fn run_manual_advance<H: Host>(
                     })?;
                     return Ok(());
                 }
-                auto_host.write(&Event::Diagnostic {
+                auto_host.send(&Event::Diagnostic {
                     level: DiagnosticLevel::Info,
                     message: format!(
                         "Advance: {step_id} structural gate dirty; re-running Work + \
@@ -1670,6 +1723,7 @@ fn run_manual_advance<H: Host>(
                     auto_host,
                     /*consume_end=*/ true,
                     /*synth_hello=*/ true,
+                    llm,
                 )?;
                 run_subsession(
                     opts,
@@ -1679,13 +1733,14 @@ fn run_manual_advance<H: Host>(
                     auto_host,
                     /*consume_end=*/ true,
                     /*synth_hello=*/ true,
+                    llm,
                 )?;
                 // Loop and re-attempt advance.
             }
             AdvanceOutcome::MoreMilestonesPending => {
                 walk_iter += 1;
                 if walk_iter > MILESTONE_WALK_CAP {
-                    auto_host.write(&Event::Diagnostic {
+                    auto_host.send(&Event::Diagnostic {
                         level: DiagnosticLevel::Error,
                         message: format!(
                             "Advance: {step_id} milestone walk exceeded {MILESTONE_WALK_CAP} iterations \
@@ -1700,7 +1755,7 @@ fn run_manual_advance<H: Host>(
                 critique_iters = 0;
                 no_progress_iters = 0;
                 prev_blocker_count = None;
-                auto_host.write(&Event::Diagnostic {
+                auto_host.send(&Event::Diagnostic {
                     level: DiagnosticLevel::Info,
                     message: format!(
                         "Advance: {step_id} has more pending milestones; running next Work + Critique pair."
@@ -1714,6 +1769,7 @@ fn run_manual_advance<H: Host>(
                     auto_host,
                     /*consume_end=*/ true,
                     /*synth_hello=*/ true,
+                    llm,
                 )?;
                 run_subsession(
                     opts,
@@ -1723,6 +1779,7 @@ fn run_manual_advance<H: Host>(
                     auto_host,
                     /*consume_end=*/ true,
                     /*synth_hello=*/ true,
+                    llm,
                 )?;
                 // Loop and re-attempt advance.
             }
@@ -1730,16 +1787,16 @@ fn run_manual_advance<H: Host>(
     }
 }
 
-fn run_manual_reset<H: Host>(
+fn run_manual_reset<P: Presenter + ?Sized>(
     opts: &AutoOptions,
     step_id: &str,
-    auto_host: &mut AutoHost<H>,
+    auto_host: &mut AutoPresenter<P>,
 ) -> Result<()> {
     let dot = opts.project_dir.join(".sim-flow");
     let mut state = match State::load(&dot) {
         Ok(s) => s,
         Err(err) => {
-            auto_host.write(&Event::Diagnostic {
+            auto_host.send(&Event::Diagnostic {
                 level: DiagnosticLevel::Error,
                 message: format!("Reset: failed to load state: {err}"),
             })?;
@@ -1749,7 +1806,7 @@ fn run_manual_reset<H: Host>(
     let registry = registry_for(state.flow);
     let order: Vec<&'static str> = registry.order_for(state.flow);
     let Some(idx) = order.iter().position(|s| *s == step_id) else {
-        auto_host.write(&Event::Diagnostic {
+        auto_host.send(&Event::Diagnostic {
             level: DiagnosticLevel::Error,
             message: format!("Reset: `{step_id}` is not a {} step", state.flow.as_str()),
         })?;
@@ -1765,7 +1822,7 @@ fn run_manual_reset<H: Host>(
 
     // Step 2: clear gate flags + rewind current_step.
     if let Err(err) = state.reset(step_id, &order) {
-        auto_host.write(&Event::Diagnostic {
+        auto_host.send(&Event::Diagnostic {
             level: DiagnosticLevel::Error,
             message: format!("Reset: {err}"),
         })?;
@@ -1791,7 +1848,7 @@ fn run_manual_reset<H: Host>(
             summary.push_str(&format!("\n  - {rel}"));
         }
     }
-    auto_host.write(&Event::Diagnostic {
+    auto_host.send(&Event::Diagnostic {
         level: DiagnosticLevel::Info,
         message: summary,
     })?;
@@ -1800,7 +1857,7 @@ fn run_manual_reset<H: Host>(
             .strip_prefix(&opts.project_dir)
             .unwrap_or(path)
             .display();
-        auto_host.write(&Event::Diagnostic {
+        auto_host.send(&Event::Diagnostic {
             level: DiagnosticLevel::Warning,
             message: format!("Reset: failed to delete {rel}: {err}"),
         })?;
@@ -1823,12 +1880,17 @@ fn run_manual_reset<H: Host>(
 ///
 /// Each turn is bracketed by `SubSessionStarted/Ended { kind: Qa }`
 /// so hosts can mark Q&A turns visually vs flow work.
-fn run_manual_qa_turn<H: Host>(
+fn run_manual_qa_turn<P, L>(
     opts: &AutoOptions,
     user_text: &str,
     qa_history: &mut Vec<LlmMessage>,
-    auto_host: &mut AutoHost<H>,
-) -> Result<()> {
+    auto_host: &mut AutoPresenter<P>,
+    llm: &mut L,
+) -> Result<()>
+where
+    P: Presenter + ?Sized,
+    L: LlmAdapter + ?Sized,
+{
     // Determine the current step for the bracket payload + system
     // prompt context. If state.toml is unreadable we still run Q&A,
     // just without the step anchor.
@@ -1837,7 +1899,7 @@ fn run_manual_qa_turn<H: Host>(
         .map(|s| s.current_step)
         .unwrap_or_else(|| "?".to_string());
 
-    auto_host.write(&Event::SubSessionStarted {
+    auto_host.send(&Event::SubSessionStarted {
         step: current_step.clone(),
         kind: SessionKindOut::Qa,
     })?;
@@ -1879,84 +1941,33 @@ fn run_manual_qa_turn<H: Host>(
     messages.push(system);
     messages.extend(qa_history.iter().cloned());
 
-    let request_id = format!("qa-{}", qa_history.len());
-    // Q&A LLM stack: per-field fallback to the work-side `llm_*`
-    // when `qa_llm_*` is unset (see `resolve_llm_for_qa`). The
-    // override lets users route conversational Q&A turns to a
-    // chattier / cheaper backend without changing work / critique
-    // routing.
-    let llm = resolve_llm_for_qa(opts);
-    auto_host.write(&Event::RequestLlmResponse {
-        request_id: request_id.clone(),
-        messages,
-        // Tools are deferred to the follow-up commit; emit an empty
-        // catalog for now so a host that gates on `tools.len() > 0`
-        // for native mode falls back to fenced / text-only dispatch.
-        tools: Vec::new(),
-        backend: llm.backend,
-        model: llm.model,
-        debug_adaptation: opts.llm_debug_adaptation,
-        model_family_id: llm.model_family_id,
-        runtime_profile_id: llm.runtime_profile_id,
-        kind: SessionKindOut::Qa,
-    })?;
-
-    // Collect the assistant turn. Hosts stream `LlmChunk` and finish
-    // with `LlmEnd`; we coalesce chunks into a single content string.
+    // Q&A LLM stack: `resolve_llm_for_qa` still produces the routing
+    // metadata so diagnostics / metrics see "this turn intended to
+    // route to backend X". The actual dispatch goes through the
+    // injected `llm` adapter (run_auto's parameter). The
+    // `qa_llm_*` override knob is now informational; if/when the
+    // dashboard wants per-kind routing back, run_auto's API will
+    // need to accept multiple adapters.
+    let _routing = resolve_llm_for_qa(opts);
+    // Tools are deferred — Q&A is text-only in v1. Subprocess CLI
+    // backends fall through to the trait-default `dispatch_with_tools`
+    // which drops the empty catalog and returns no tool calls.
+    let qa_tools: Vec<crate::session::agent::ToolAdvertise> = Vec::new();
     let mut assistant_text = String::new();
     let mut llm_failed = false;
     let mut llm_error_message: Option<String> = None;
-    loop {
-        match auto_host.read()? {
-            None => {
-                llm_failed = true;
-                llm_error_message = Some("host closed during Q&A dispatch".to_string());
-                break;
-            }
-            Some(HostEvent::LlmChunk {
-                request_id: rid,
-                text,
-            }) if rid == request_id => {
-                assistant_text.push_str(&text);
-                // Mirror the text to host so it renders in the
-                // transcript live. AssistantText is what the chat
-                // panel listens to for streaming.
-                auto_host.write(&Event::AssistantText {
-                    text,
-                    final_chunk: false,
-                })?;
-            }
-            Some(HostEvent::LlmEnd {
-                request_id: rid, ..
-            }) if rid == request_id => break,
-            Some(HostEvent::LlmError {
-                request_id: rid,
-                kind,
-                message,
-            }) if rid == request_id => {
-                llm_failed = true;
-                llm_error_message = Some(format!("{kind}: {message}"));
-                break;
-            }
-            Some(other) => {
-                // Anything else (Shutdown, stray RunStep, etc.) is
-                // dropped here -- the user clicking a step command
-                // mid-Q&A-dispatch is a race we don't handle in v1.
-                // Log + continue; the next wait_for_command call
-                // picks it up.
-                auto_host.write(&Event::Diagnostic {
-                    level: DiagnosticLevel::Warning,
-                    message: format!(
-                        "Q&A: dropped event during dispatch: {}",
-                        host_event_label(&other),
-                    ),
-                })?;
-            }
+    match llm.dispatch_with_tools(&messages, &qa_tools) {
+        Ok((text, _calls, _metrics)) => {
+            assistant_text = text;
+        }
+        Err(err) => {
+            llm_failed = true;
+            llm_error_message = Some(format!("{err}"));
         }
     }
 
     if llm_failed {
-        auto_host.write(&Event::Diagnostic {
+        auto_host.send(&Event::Diagnostic {
             level: DiagnosticLevel::Error,
             message: format!(
                 "Q&A turn failed: {}",
@@ -1965,7 +1976,7 @@ fn run_manual_qa_turn<H: Host>(
         })?;
         // Roll back the user message so a retry doesn't double up.
         qa_history.pop();
-        auto_host.write(&Event::SubSessionEnded {
+        auto_host.send(&Event::SubSessionEnded {
             step: current_step,
             kind: SessionKindOut::Qa,
             outcome: "error".to_string(),
@@ -1973,10 +1984,13 @@ fn run_manual_qa_turn<H: Host>(
         return Ok(());
     }
 
-    // Final chunk marker so the chat panel knows the streaming flush
-    // is done and can render any trailing text.
-    auto_host.write(&Event::AssistantText {
-        text: String::new(),
+    // Single AssistantText carrying the full Q&A reply plus the
+    // final-chunk marker. The legacy host-driven streaming path
+    // emitted chunks as they arrived; the in-process dispatch
+    // returns the full body at once so the chat panel sees one
+    // event per turn -- same shape as run_session's main path.
+    auto_host.send(&Event::AssistantText {
+        text: assistant_text.clone(),
         final_chunk: true,
     })?;
 
@@ -1986,7 +2000,7 @@ fn run_manual_qa_turn<H: Host>(
         ..LlmMessage::default()
     });
 
-    auto_host.write(&Event::SubSessionEnded {
+    auto_host.send(&Event::SubSessionEnded {
         step: current_step,
         kind: SessionKindOut::Qa,
         outcome: "completed".to_string(),
@@ -2293,16 +2307,16 @@ fn delete_with_upstream_protection(
     }
 }
 
-fn validate_step_id<H: Host>(
+fn validate_step_id<P: Presenter + ?Sized>(
     opts: &AutoOptions,
     step_id: &str,
     cmd_label: &str,
-    auto_host: &mut AutoHost<H>,
+    auto_host: &mut AutoPresenter<P>,
 ) -> Result<bool> {
     let state = match State::load(&opts.project_dir.join(".sim-flow")) {
         Ok(s) => s,
         Err(err) => {
-            auto_host.write(&Event::Diagnostic {
+            auto_host.send(&Event::Diagnostic {
                 level: DiagnosticLevel::Error,
                 message: format!("{cmd_label}: failed to load state: {err}"),
             })?;
@@ -2311,7 +2325,7 @@ fn validate_step_id<H: Host>(
     };
     let registry = registry_for(state.flow);
     if registry.get(step_id).is_none() {
-        auto_host.write(&Event::Diagnostic {
+        auto_host.send(&Event::Diagnostic {
             level: DiagnosticLevel::Error,
             message: format!(
                 "{cmd_label}: `{step_id}` is not a {} step",
@@ -2402,15 +2416,15 @@ fn is_manual_command(event: &HostEvent) -> bool {
 }
 
 // ---------------------------------------------------------------------
-// AutoHost wrapper
+// AutoPresenter wrapper
 // ---------------------------------------------------------------------
 
 /// `Host` wrapper that lets the auto driver run multiple back-to-back
 /// `run_session` calls through one underlying connection while
 /// surfacing manual-mode commands and step-mode transitions to the
 /// run loop.
-pub struct AutoHost<'a, H: Host> {
-    inner: &'a mut H,
+pub struct AutoPresenter<'a, P: Presenter + ?Sized> {
+    inner: &'a mut P,
     pending_reads: VecDeque<HostEvent>,
     /// Set true before each non-final sub-session; on the next
     /// SessionEnd write we swallow it instead of forwarding.
@@ -2433,7 +2447,7 @@ pub struct AutoHost<'a, H: Host> {
     pub in_subsession: bool,
     /// True while the inner sub-session is parked at
     /// `RequestUserInput`. The orchestrator isn't doing any work
-    /// during this span -- it's blocked at `host.read()` waiting for
+    /// during this span -- it's blocked at `host.recv()` waiting for
     /// the user's reply -- so a manual-mode command arriving here is
     /// reasonable to interpret as "I'm done with this sub-session;
     /// run the new command instead". Set on every `RequestUserInput`
@@ -2442,8 +2456,8 @@ pub struct AutoHost<'a, H: Host> {
     pub in_subsession_parked: bool,
 }
 
-impl<'a, H: Host> AutoHost<'a, H> {
-    pub fn new(inner: &'a mut H, step_mode: Arc<AtomicU8>) -> Self {
+impl<'a, P: Presenter + ?Sized> AutoPresenter<'a, P> {
+    pub fn new(inner: &'a mut P, step_mode: Arc<AtomicU8>) -> Self {
         Self {
             inner,
             pending_reads: VecDeque::new(),
@@ -2480,8 +2494,8 @@ impl<'a, H: Host> AutoHost<'a, H> {
     }
 }
 
-impl<H: Host> Host for AutoHost<'_, H> {
-    fn write(&mut self, event: &Event) -> Result<()> {
+impl<P: Presenter + ?Sized> Presenter for AutoPresenter<'_, P> {
+    fn send(&mut self, event: &Event) -> Result<()> {
         // Watch for the auto-cap diagnostic so the driver can stop
         // and queue a Cancel to break the in-flight sub-session
         // immediately rather than parking on RequestUserInput.
@@ -2524,22 +2538,22 @@ impl<H: Host> Host for AutoHost<'_, H> {
             self.consume_session_end = false;
             return Ok(());
         }
-        self.inner.write(event)
+        self.inner.send(event)
     }
 
-    fn read(&mut self) -> Result<Option<HostEvent>> {
+    fn recv(&mut self) -> Result<Option<HostEvent>> {
         loop {
             if let Some(h) = self.pending_reads.pop_front() {
                 return Ok(Some(h));
             }
-            let next = self.inner.read()?;
+            let next = self.inner.recv()?;
             match next {
                 Some(HostEvent::SetStepMode { mode }) => {
                     let prev = self.current_step_mode();
                     self.store_step_mode(mode);
                     if prev != mode {
                         info!(from = ?prev, to = ?mode, "step mode flipped by host command");
-                        self.inner.write(&Event::StepModeChanged { mode })?;
+                        self.inner.send(&Event::StepModeChanged { mode })?;
                     } else {
                         debug!(mode = ?mode, "SetStepMode received but mode unchanged");
                     }
@@ -2560,7 +2574,7 @@ impl<H: Host> Host for AutoHost<'_, H> {
                     let label = host_event_label(&cmd);
                     if matches!(self.current_step_mode(), StepMode::Auto) {
                         warn!(cmd = label, "rejecting manual command in auto mode");
-                        self.inner.write(&Event::Diagnostic {
+                        self.inner.send(&Event::Diagnostic {
                             level: DiagnosticLevel::Warning,
                             message: format!(
                                 "ignored {label}: auto mode owns step execution; toggle to manual first."
@@ -2571,7 +2585,7 @@ impl<H: Host> Host for AutoHost<'_, H> {
                     if self.in_subsession {
                         if self.in_subsession_parked {
                             // Parked sub-session: the orchestrator is
-                            // blocked at `host.read()` waiting for the
+                            // blocked at `host.recv()` waiting for the
                             // user's reply. The manual command is the
                             // user saying "I'm done with this session;
                             // run the new command instead". Queue the
@@ -2593,7 +2607,7 @@ impl<H: Host> Host for AutoHost<'_, H> {
                             cmd = label,
                             "rejecting manual command while sub-session in flight"
                         );
-                        self.inner.write(&Event::Diagnostic {
+                        self.inner.send(&Event::Diagnostic {
                             level: DiagnosticLevel::Warning,
                             message: format!(
                                 "ignored {label}: a sub-session is currently running; retry after it finishes."
@@ -2806,15 +2820,15 @@ not a finding
     }
 
     // -----------------------------------------------------------------
-    // AutoHost interception
+    // AutoPresenter interception
     // -----------------------------------------------------------------
 
     fn auto_host_with_mode(
         mode: StepMode,
         inner: &mut TestHost,
-    ) -> (AutoHost<'_, TestHost>, Arc<AtomicU8>) {
+    ) -> (AutoPresenter<'_, TestHost>, Arc<AtomicU8>) {
         let flag = Arc::new(AtomicU8::new(step_mode_to_u8(mode)));
-        (AutoHost::new(inner, flag.clone()), flag)
+        (AutoPresenter::new(inner, flag.clone()), flag)
     }
 
     #[test]
@@ -2826,7 +2840,7 @@ not a finding
         let (mut host, flag) = auto_host_with_mode(StepMode::Auto, &mut inner);
         // The intercepted SetStepMode flips the flag and continues
         // reading; with no follow-up event the inner read returns None.
-        let r = host.read().unwrap();
+        let r = host.recv().unwrap();
         assert!(r.is_none());
         assert_eq!(
             step_mode_from_u8(flag.load(Ordering::Acquire)),
@@ -2849,7 +2863,7 @@ not a finding
         inner.enqueue(HostEvent::Shutdown);
         let (mut host, _flag) = auto_host_with_mode(StepMode::Auto, &mut inner);
         host.in_subsession = true;
-        let r = host.read().unwrap();
+        let r = host.recv().unwrap();
         assert!(matches!(r, Some(HostEvent::Cancel)));
         assert!(host.shutdown_requested);
     }
@@ -2860,7 +2874,7 @@ not a finding
         inner.enqueue(HostEvent::Shutdown);
         let (mut host, _flag) = auto_host_with_mode(StepMode::Manual, &mut inner);
         host.in_subsession = false;
-        let r = host.read().unwrap();
+        let r = host.recv().unwrap();
         assert!(matches!(r, Some(HostEvent::Shutdown)));
         assert!(host.shutdown_requested);
     }
@@ -2875,7 +2889,7 @@ not a finding
         let (mut host, _flag) = auto_host_with_mode(StepMode::Auto, &mut inner);
         host.in_subsession = false;
         // RunStep is swallowed in auto mode; subsequent read returns None.
-        let r = host.read().unwrap();
+        let r = host.recv().unwrap();
         assert!(r.is_none());
         let saw_warn = inner.written.iter().any(|e| {
             matches!(
@@ -2896,7 +2910,7 @@ not a finding
         inner.enqueue(HostEvent::RunGate { step: "DM0".into() });
         let (mut host, _flag) = auto_host_with_mode(StepMode::Manual, &mut inner);
         host.in_subsession = true;
-        let r = host.read().unwrap();
+        let r = host.recv().unwrap();
         assert!(r.is_none());
         let saw_warn = inner.written.iter().any(|e| {
             matches!(
@@ -2911,7 +2925,7 @@ not a finding
     #[test]
     fn manual_command_during_parked_subsession_cancels_and_dispatches() {
         // The user clicks Run Step (or any manual command) while the
-        // inner sub-session is parked at RequestUserInput. AutoHost
+        // inner sub-session is parked at RequestUserInput. AutoPresenter
         // should:
         //   1. Cancel the parked inner session so it can unwind.
         //   2. Queue the manual command so the OUTER manual loop
@@ -2927,16 +2941,16 @@ not a finding
         host.in_subsession = true;
         // Simulate the orchestrator parking before the manual
         // command arrives.
-        host.write(&Event::RequestUserInput {
+        host.send(&Event::RequestUserInput {
             prompt: None,
             placeholder: None,
         })
         .unwrap();
         assert!(host.in_subsession_parked);
 
-        // Manual command arrives -- AutoHost returns Cancel to break
+        // Manual command arrives -- AutoPresenter returns Cancel to break
         // the inner read.
-        let first = host.read().unwrap();
+        let first = host.recv().unwrap();
         assert!(matches!(first, Some(HostEvent::Cancel)));
 
         // The inner sub-session ends, run_subsession resets
@@ -2944,7 +2958,7 @@ not a finding
         // queued RunStep.
         host.in_subsession = false;
         host.in_subsession_parked = false;
-        let second = host.read().unwrap();
+        let second = host.recv().unwrap();
         match second {
             Some(HostEvent::RunStep {
                 step,
@@ -2976,13 +2990,13 @@ not a finding
         let mut inner = TestHost::new();
         let (mut host, _flag) = auto_host_with_mode(StepMode::Manual, &mut inner);
         host.in_subsession = true;
-        host.write(&Event::RequestUserInput {
+        host.send(&Event::RequestUserInput {
             prompt: None,
             placeholder: None,
         })
         .unwrap();
         assert!(host.in_subsession_parked);
-        host.write(&Event::AssistantText {
+        host.send(&Event::AssistantText {
             text: "resuming".into(),
             final_chunk: false,
         })
@@ -2999,7 +3013,7 @@ not a finding
         });
         let (mut host, _flag) = auto_host_with_mode(StepMode::Manual, &mut inner);
         host.in_subsession = false;
-        let r = host.read().unwrap();
+        let r = host.recv().unwrap();
         match r {
             Some(HostEvent::RunStep {
                 step,
@@ -3017,7 +3031,7 @@ not a finding
         let (mut host, _flag) = auto_host_with_mode(StepMode::Auto, &mut inner);
         // The orchestrator emits this kind of Diagnostic when the
         // per-session cap fires.
-        host.write(&Event::Diagnostic {
+        host.send(&Event::Diagnostic {
             level: DiagnosticLevel::Error,
             message: "auto: DM0 exceeded max_auto_iters (3); ...".into(),
         })
@@ -3025,7 +3039,7 @@ not a finding
         assert!(host.cap_exceeded);
         // Next read should return the queued Cancel so the inner
         // orchestrator terminates immediately.
-        let r = host.read().unwrap();
+        let r = host.recv().unwrap();
         assert!(matches!(r, Some(HostEvent::Cancel)));
     }
 
@@ -3034,7 +3048,7 @@ not a finding
         let mut inner = TestHost::new();
         let (mut host, _flag) = auto_host_with_mode(StepMode::Auto, &mut inner);
         host.consume_session_end = true;
-        host.write(&Event::SessionEnd {
+        host.send(&Event::SessionEnd {
             reason: SessionEndReason::Completed,
             message: None,
         })
@@ -3053,7 +3067,7 @@ not a finding
         let mut inner = TestHost::new();
         let (mut host, _flag) = auto_host_with_mode(StepMode::Manual, &mut inner);
         host.consume_session_end = false;
-        host.write(&Event::SessionEnd {
+        host.send(&Event::SessionEnd {
             reason: SessionEndReason::Completed,
             message: None,
         })

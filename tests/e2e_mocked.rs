@@ -47,7 +47,7 @@ use sim_flow::new_project::{NewModelOptions, new_model};
 use sim_flow::session::protocol::{
     DiagnosticLevel, Event, HostEvent, HostInfo, PROTOCOL_VERSION, SessionKindOut, StepMode,
 };
-use sim_flow::session::{AutoOptions, MockAgent, TerminalHost, TestHost, run_auto};
+use sim_flow::session::{AutoOptions, MockAgent, TestHost, run_auto};
 use sim_flow::state::{Flow, State};
 use sim_flow::tracking::{ExperimentIndex, RunRow};
 
@@ -274,7 +274,7 @@ fn e2e_auto_walks_docs_only_dm_flow() {
     // responses unwrap to "" on queue exhaustion, which is fine -- a
     // successful walk only pulls 2 * #steps responses (one per
     // sub-session).
-    let agent = MockAgent::new();
+    let mut agent = MockAgent::new();
     for (_, work, critique) in docs_only_dm_script() {
         agent.enqueue(work);
         agent.enqueue(critique);
@@ -288,9 +288,10 @@ fn e2e_auto_walks_docs_only_dm_flow() {
     let stdin = Cursor::new(stdin_bytes.into_bytes());
     let mut stdout: Vec<u8> = Vec::new();
     let mut stderr: Vec<u8> = Vec::new();
-    let mut host = TerminalHost::new(agent, stdin, &mut stdout, &mut stderr);
+    let mut host = sim_flow::session::StderrPresenter::new("mock", stdin, &mut stdout, &mut stderr);
 
-    run_auto(auto_opts(&project, StepMode::Auto), &mut host).expect("run_auto should walk to end");
+    run_auto(auto_opts(&project, StepMode::Auto), &mut host, &mut agent)
+        .expect("run_auto should walk to end");
 
     // Every step's artifacts on disk.
     for (path, marker) in [
@@ -388,6 +389,7 @@ fn e2e_manual_drives_docs_only_dm_flow() {
     let project = init_project(&tmp);
 
     let mut host = TestHost::new();
+    let mut mock = MockAgent::new();
 
     // 1. Initial handshake.
     host.enqueue(HostEvent::Hello {
@@ -407,14 +409,14 @@ fn e2e_manual_drives_docs_only_dm_flow() {
             step: step.into(),
             kind: SessionKindOut::Work,
         });
-        host.enqueue_llm_response("lr-1", work);
+        mock.enqueue(work);
 
         // Critique sub-session: write critique then `/end-session`.
         host.enqueue(HostEvent::RunStep {
             step: step.into(),
             kind: SessionKindOut::Critique,
         });
-        host.enqueue_llm_response("lr-1", critique);
+        mock.enqueue(critique);
         host.enqueue(HostEvent::UserMessage {
             text: "/end-session".into(),
         });
@@ -425,7 +427,7 @@ fn e2e_manual_drives_docs_only_dm_flow() {
     // 3. Clean shutdown after the last Advance.
     host.enqueue(HostEvent::Shutdown);
 
-    run_auto(auto_opts(&project, StepMode::Manual), &mut host)
+    run_auto(auto_opts(&project, StepMode::Manual), &mut host, &mut mock)
         .expect("manual-mode run_auto should walk to end");
 
     // state.toml: all walked steps passed, current_step landed at
@@ -583,7 +585,7 @@ fn e2e_auto_walks_full_dm_flow() {
     // Critique sessions see effective_artifacts_empty=false (Critique
     // text non-empty, no tools) and fall through to RequestUserInput,
     // which the stdin "/end-session" lines below satisfy.
-    let agent = MockAgent::new();
+    let mut agent = MockAgent::new();
     // Over-enqueue. Mock returns "" on exhaustion, which the
     // orchestrator's empty-retry path handles cleanly when paired
     // with the pre-written artifacts (the wind-down hits before
@@ -596,7 +598,7 @@ fn e2e_auto_walks_full_dm_flow() {
     let stdin = Cursor::new(stdin_bytes.into_bytes());
     let mut stdout: Vec<u8> = Vec::new();
     let mut stderr: Vec<u8> = Vec::new();
-    let mut host = TerminalHost::new(agent, stdin, &mut stdout, &mut stderr);
+    let mut host = sim_flow::session::StderrPresenter::new("mock", stdin, &mut stdout, &mut stderr);
 
     // Sanity-probe every cargo-running step's structural gate
     // BEFORE launching run_auto. Saves a 40 s false-positive run
@@ -641,7 +643,7 @@ fn e2e_auto_walks_full_dm_flow() {
     opts.max_auto_iters = 6;
     opts.max_critique_iters = 3;
     opts.max_llm_requests = 200;
-    run_auto(opts, &mut host).expect("full-flow run_auto should walk to DM4b");
+    run_auto(opts, &mut host, &mut agent).expect("full-flow run_auto should walk to DM4b");
 
     // state.toml: every DM step's gate flag flipped. After DM4b
     // (the last step) advances, `state.current_step` stays at

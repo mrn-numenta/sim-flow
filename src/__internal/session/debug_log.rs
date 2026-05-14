@@ -23,7 +23,7 @@ use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::Result;
-use crate::session::host::Host;
+use crate::session::presenter::Presenter;
 use crate::session::protocol::{Event, HostEvent, LlmRole};
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -131,6 +131,13 @@ impl DebugLog {
             return;
         };
         let mut buf = String::new();
+        // After the presenter / LlmAdapter refactor the orchestrator
+        // no longer emits `Event::RequestLlmResponse` (LLM dispatch
+        // moved in-process). The arm is kept here for backward
+        // compatibility with any caller that still synthesizes it
+        // out-of-band; in the steady state we just take the regular
+        // path. The dedicated formatter dumps the full message stack,
+        // which is the load-bearing detail when debugging prompt drift.
         if matches!(event, Event::RequestLlmResponse { .. }) {
             self.format_request_llm(event, &mut buf);
         } else {
@@ -289,32 +296,32 @@ fn host_event_kind(event: &HostEvent) -> &'static str {
     }
 }
 
-/// Transparent `Host` wrapper that fans every event through a
-/// `DebugLog` before forwarding to the inner host. When no debug
+/// Transparent `Presenter` wrapper that fans every event through a
+/// `DebugLog` before forwarding to the inner presenter. When no debug
 /// categories are enabled the log calls are early-exit no-ops, so
 /// wrapping is essentially free.
-pub struct LoggingHost<'a, H: Host> {
-    inner: &'a mut H,
+pub struct LoggingPresenter<'a, P: Presenter + ?Sized> {
+    inner: &'a mut P,
     log: &'a DebugLog,
 }
 
-impl<'a, H: Host> LoggingHost<'a, H> {
-    pub fn new(inner: &'a mut H, log: &'a DebugLog) -> Self {
+impl<'a, P: Presenter + ?Sized> LoggingPresenter<'a, P> {
+    pub fn new(inner: &'a mut P, log: &'a DebugLog) -> Self {
         Self { inner, log }
     }
 }
 
-impl<H: Host> Host for LoggingHost<'_, H> {
-    fn write(&mut self, event: &Event) -> Result<()> {
+impl<P: Presenter + ?Sized> Presenter for LoggingPresenter<'_, P> {
+    fn send(&mut self, event: &Event) -> Result<()> {
         self.log.log_event_out(event);
         if let Ok(line) = serde_json::to_string(event) {
             self.log.log_raw_out(&line);
         }
-        self.inner.write(event)
+        self.inner.send(event)
     }
 
-    fn read(&mut self) -> Result<Option<HostEvent>> {
-        let r = self.inner.read()?;
+    fn recv(&mut self) -> Result<Option<HostEvent>> {
+        let r = self.inner.recv()?;
         if let Some(ref e) = r {
             self.log.log_event_in(e);
             if let Ok(line) = serde_json::to_string(e) {

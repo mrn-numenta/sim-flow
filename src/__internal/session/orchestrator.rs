@@ -17,7 +17,8 @@ use crate::config::Config;
 use crate::gate::{self, GateCheck, GateReport};
 use crate::prompts;
 use crate::session::auto::session_kind_to_protocol;
-use crate::session::host::Host;
+use crate::session::llm_adapter::LlmAdapter;
+use crate::session::presenter::Presenter;
 use crate::session::protocol::{
     DiagnosticLevel, Event, HostEvent, LlmMessage, LlmRole, LlmTool, PROTOCOL_VERSION,
     SessionEndReason, SessionKindOut, SessionTag, StepDescriptorOut,
@@ -165,15 +166,24 @@ impl Default for OrchestratorOptions {
 }
 
 /// Top-level entry point. Drives the session to completion against
-/// the supplied host. Returns `Err` on protocol / I/O failures; clean
-/// session end (user cancelled or gate clean) returns `Ok(())`.
-pub fn run_session<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result<()> {
+/// the supplied presenter + LLM adapter. Returns `Err` on protocol /
+/// I/O failures; clean session end (user cancelled or gate clean)
+/// returns `Ok(())`.
+pub fn run_session<P, L>(opts: OrchestratorOptions, presenter: &mut P, llm: &mut L) -> Result<()>
+where
+    P: Presenter + ?Sized,
+    L: LlmAdapter + ?Sized,
+{
     let log = crate::session::debug_log::DebugLog::open(&opts.project_dir);
-    let mut wrapped = crate::session::debug_log::LoggingHost::new(host, &log);
-    run_session_inner(opts, &mut wrapped)
+    let mut wrapped = crate::session::debug_log::LoggingPresenter::new(presenter, &log);
+    run_session_inner(opts, &mut wrapped, llm)
 }
 
-fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result<()> {
+fn run_session_inner<P, L>(opts: OrchestratorOptions, host: &mut P, llm: &mut L) -> Result<()>
+where
+    P: Presenter + ?Sized,
+    L: LlmAdapter + ?Sized,
+{
     // Structured per-turn LLM metrics. Lives next to the debug log
     // (`.sim-flow/logs/llm-metrics.jsonl`); created lazily on the
     // first record so a session that never reaches an LLM dispatch
@@ -199,12 +209,12 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
     let _config = Config::load(&dot)?;
 
     // 2. Handshake. Require a `Hello` first.
-    let hello = match host.read()? {
+    let hello = match host.recv()? {
         Some(HostEvent::Hello {
             protocol_version, ..
         }) => protocol_version,
         Some(other) => {
-            host.write(&Event::SessionEnd {
+            host.send(&Event::SessionEnd {
                 reason: SessionEndReason::ProtocolError,
                 message: Some(format!("expected Hello, got {other:?}")),
             })?;
@@ -217,7 +227,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
         }
     };
     if hello != PROTOCOL_VERSION {
-        host.write(&Event::SessionEnd {
+        host.send(&Event::SessionEnd {
             reason: SessionEndReason::ProtocolMismatch,
             message: Some(format!(
                 "host sent protocolVersion={hello}; orchestrator speaks {PROTOCOL_VERSION}"
@@ -235,7 +245,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
         SessionKind::Critique => SessionKindOut::Critique,
     };
     let descriptor_out = step_descriptor_for_protocol(&step, kind_out, &opts.foundation_root);
-    host.write(&Event::HelloAck {
+    host.send(&Event::HelloAck {
         protocol_version: PROTOCOL_VERSION.into(),
         sim_flow_version: env!("CARGO_PKG_VERSION").into(),
         session: SessionTag {
@@ -298,7 +308,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
     };
     let mut phase_idx: usize = 0;
     if let Some(p) = phases.first() {
-        host.write(&Event::PhaseChanged { phase: (*p).into() })?;
+        host.send(&Event::PhaseChanged { phase: (*p).into() })?;
     }
     let mut phase_iterations: u32 = 0;
     const MAX_ITER_PER_PHASE: u32 = 5;
@@ -461,7 +471,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
         // Hard cap on total LLM requests. Hitting this aborts the
         // session before another paid call goes out.
         if opts.max_llm_requests > 0 && turn_index > opts.max_llm_requests {
-            host.write(&Event::Diagnostic {
+            host.send(&Event::Diagnostic {
                 level: DiagnosticLevel::Error,
                 message: format!(
                     "session aborted: hit max_llm_requests cap ({}) -- runaway-loop guard. \
@@ -470,7 +480,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     opts.max_llm_requests,
                 ),
             })?;
-            host.write(&Event::SessionEnd {
+            host.send(&Event::SessionEnd {
                 reason: SessionEndReason::RunawayGuard,
                 message: Some(format!(
                     "max_llm_requests cap ({}) reached after {} turns",
@@ -484,7 +494,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
         // `consecutive_tool_error_turns` for the failure mode this
         // catches.
         if consecutive_tool_error_turns >= MAX_CONSECUTIVE_TOOL_ERROR_TURNS {
-            host.write(&Event::Diagnostic {
+            host.send(&Event::Diagnostic {
                 level: DiagnosticLevel::Error,
                 message: format!(
                     "session aborted: agent burned {} consecutive turns where every tool / \
@@ -495,7 +505,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     consecutive_tool_error_turns,
                 ),
             })?;
-            host.write(&Event::SessionEnd {
+            host.send(&Event::SessionEnd {
                 reason: SessionEndReason::RunawayGuard,
                 message: Some(format!(
                     "{} consecutive failed-tool turns",
@@ -505,188 +515,172 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             return Ok(());
         }
         let request_id = format!("lr-{turn_index}");
-        // Per-turn wall-time tracking. Hosts emit per-call token /
-        // wall metrics at the dispatch site (TerminalHost via
-        // `agent.dispatch`); the orchestrator measures end-to-end
-        // round-trip including chunk streaming and protocol
-        // serialization, which can differ from the host-side view.
+        // Per-turn wall-time tracking. The orchestrator measures
+        // end-to-end round-trip including the dispatch and any
+        // post-processing the adapter does (HTTP serialize, parse
+        // response, etc.); the adapter-returned `LlmCallMetrics`
+        // gives the inner-call timing if a host wants to compare.
         let turn_started = std::time::Instant::now();
-        // Measured BEFORE the request goes out so a host or transport
+        // Measured BEFORE the request goes out so a dispatch
         // failure can't bias the count. Sum of content bytes across
         // every message in the prompt; matches what the model
         // server's tokenizer sees byte-wise. Attachments and the
         // small JSON envelope per message are not counted.
         let prompt_bytes: u64 = messages.iter().map(|m| m.content.len() as u64).sum();
-        host.write(&Event::RequestLlmResponse {
-            request_id: request_id.clone(),
-            backend: opts.llm_backend.clone(),
-            model: opts.llm_model.clone(),
-            model_family_id: opts.llm_model_family_id.clone(),
-            runtime_profile_id: opts.llm_runtime_profile_id.clone(),
-            debug_adaptation: opts.llm_debug_adaptation,
-            kind: session_kind_to_protocol(opts.kind),
-            messages: messages.clone(),
-            tools: llm_tools.clone(),
-        })?;
+
+        // Native-mode tool catalog: when the orchestrator advertises
+        // tools and the agent supports native function calls, we
+        // route through `dispatch_with_tools` so the model sees the
+        // structured catalog. Adapters that don't implement native
+        // tools inherit the default impl which drops the catalog
+        // and returns no tool calls -- same shape, just empty
+        // `native_tool_calls` afterwards.
+        let advertise: Vec<crate::session::agent::ToolAdvertise> = llm_tools
+            .iter()
+            .map(|t| crate::session::agent::ToolAdvertise {
+                name: t.name.clone(),
+                description: t.description.clone(),
+                parameters: t.args_schema.clone(),
+            })
+            .collect();
+
+        let dispatch_result = llm.dispatch_with_tools(&messages, &advertise);
 
         let mut assistant_text = String::new();
         let mut native_tool_calls: Vec<crate::session::protocol::LlmToolCall> = Vec::new();
         let mut llm_failed = false;
         let mut llm_error_kind: Option<String> = None;
         let mut llm_error_message: Option<String> = None;
-        loop {
-            match host.read()? {
-                Some(HostEvent::LlmChunk {
-                    request_id: rid,
-                    text,
-                }) if rid == request_id => {
-                    host.write(&Event::AssistantText {
-                        text: text.clone(),
-                        final_chunk: false,
-                    })?;
-                    assistant_text.push_str(&text);
+        match dispatch_result {
+            Ok((text, calls, metrics)) => {
+                // Per-call structured metrics so live tailing
+                // (`RUST_LOG=sim_flow::metrics=info`) catches every
+                // dispatch. Mirrors what TerminalHost used to log
+                // pre-rewire so existing log-scraping tools don't
+                // see a behavior change.
+                tracing::info!(
+                    target: "sim_flow::metrics",
+                    event = "llm_call",
+                    request_id = %request_id,
+                    agent = %llm.name(),
+                    tokens_in = ?metrics.tokens_in,
+                    tokens_out = ?metrics.tokens_out,
+                    wall_ms = metrics.wall_ms,
+                    content_bytes = text.len(),
+                    native_tool_calls = calls.len(),
+                );
+                assistant_text = text;
+                native_tool_calls = calls
+                    .into_iter()
+                    .map(|c| crate::session::protocol::LlmToolCall {
+                        id: c.id,
+                        name: c.name,
+                        arguments_json: c.arguments_json,
+                    })
+                    .collect();
+                let llm_stop_reason: Option<String> = if native_tool_calls.is_empty() {
+                    Some("stop".into())
+                } else {
+                    Some("tool_calls".into())
+                };
+                let llm_usage = match (metrics.tokens_in, metrics.tokens_out) {
+                    (Some(p), Some(c)) => Some(crate::session::protocol::LlmUsage {
+                        prompt_tokens: p,
+                        completion_tokens: c,
+                    }),
+                    _ => None,
+                };
+                // Single AssistantText carrying the full turn body
+                // plus the final-chunk marker. Presenters that
+                // expected streaming see one event per turn; the
+                // VS Code chat panel UX that depended on per-chunk
+                // streaming was previously synthesized by the
+                // extension's TS-side SSE parser and is intentionally
+                // dropped here (see refactor plan, step 2).
+                host.send(&Event::AssistantText {
+                    text: assistant_text.clone(),
+                    final_chunk: true,
+                })?;
+                let turn_wall_ms = turn_started.elapsed().as_millis() as u64;
+                // Native tool calls are part of the model's
+                // completion, not separate plumbing -- their
+                // serialized JSON is what the server actually
+                // generated this turn. A `write_file`-only turn
+                // has `assistant_text.len() == 0` but emitted
+                // potentially thousands of bytes of
+                // `arguments_json`; counting only the text
+                // under-reports completion size by orders of
+                // magnitude for tool-heavy turns. Include the
+                // tool call payload (name + arguments + id) so
+                // tokens_out matches the model's actual output.
+                let tool_calls_bytes: u64 = native_tool_calls
+                    .iter()
+                    .map(|c| {
+                        (c.id.as_deref().map(str::len).unwrap_or(0)
+                            + c.name.len()
+                            + c.arguments_json.len()) as u64
+                    })
+                    .sum();
+                let completion_bytes = assistant_text.len() as u64 + tool_calls_bytes;
+                tracing::info!(
+                    target: "sim_flow::metrics",
+                    event = "turn_end",
+                    step = step.id,
+                    kind = ?opts.kind,
+                    request_id = %request_id,
+                    turn_index,
+                    assistant_bytes = assistant_text.len(),
+                    tool_calls_bytes,
+                    wall_ms = turn_wall_ms,
+                );
+                let mut metric = crate::session::llm_metrics::LlmMetricsRecord::from_byte_estimate(
+                    unix_seconds_now(),
+                    step.id,
+                    session_kind_to_protocol(opts.kind),
+                    &opts.llm_backend,
+                    opts.llm_model.as_deref(),
+                    &request_id,
+                    turn_index,
+                    turn_wall_ms,
+                    llm_stop_reason.as_deref(),
+                    prompt_bytes,
+                    completion_bytes,
+                );
+                if let Some(u) = &llm_usage {
+                    metric =
+                        metric.with_exact_usage(u.prompt_tokens.into(), u.completion_tokens.into());
                 }
-                Some(HostEvent::LlmEnd {
-                    request_id: rid,
-                    tool_calls: native_calls,
-                    stop_reason,
-                    usage,
-                    ..
-                }) if rid == request_id => {
-                    native_tool_calls = native_calls;
-                    let llm_stop_reason = stop_reason;
-                    let llm_usage = usage;
-                    host.write(&Event::AssistantText {
-                        text: String::new(),
-                        final_chunk: true,
-                    })?;
-                    let turn_wall_ms = turn_started.elapsed().as_millis() as u64;
-                    // Native tool calls are part of the model's
-                    // completion, not separate plumbing -- their
-                    // serialized JSON is what the server actually
-                    // generated this turn. A `write_file`-only turn
-                    // has `assistant_text.len() == 0` but emitted
-                    // potentially thousands of bytes of
-                    // `arguments_json`; counting only the text
-                    // under-reports completion size by orders of
-                    // magnitude for tool-heavy turns. Include the
-                    // tool call payload (name + arguments + id) so
-                    // tokens_out matches the model's actual output.
-                    let tool_calls_bytes: u64 = native_tool_calls
-                        .iter()
-                        .map(|c| {
-                            (c.id.as_deref().map(str::len).unwrap_or(0)
-                                + c.name.len()
-                                + c.arguments_json.len()) as u64
-                        })
-                        .sum();
-                    let completion_bytes = assistant_text.len() as u64 + tool_calls_bytes;
-                    tracing::info!(
-                        target: "sim_flow::metrics",
-                        event = "turn_end",
-                        step = step.id,
-                        kind = ?opts.kind,
-                        request_id = %request_id,
+                llm_metrics.record(&metric);
+            }
+            Err(err) => {
+                let kind = "agent-failed".to_string();
+                let message = format!("{err}");
+                host.send(&Event::Diagnostic {
+                    level: DiagnosticLevel::Error,
+                    message: format!("LLM error ({kind}): {message}"),
+                })?;
+                llm_failed = true;
+                llm_error_kind = Some(kind);
+                llm_error_message = Some(message);
+                let turn_wall_ms = turn_started.elapsed().as_millis() as u64;
+                // On the error path no tool calls were received;
+                // whatever (empty) `assistant_text` we have is the
+                // partial completion, count only that.
+                llm_metrics.record(
+                    &crate::session::llm_metrics::LlmMetricsRecord::from_byte_estimate(
+                        unix_seconds_now(),
+                        step.id,
+                        session_kind_to_protocol(opts.kind),
+                        &opts.llm_backend,
+                        opts.llm_model.as_deref(),
+                        &request_id,
                         turn_index,
-                        assistant_bytes = assistant_text.len(),
-                        tool_calls_bytes,
-                        wall_ms = turn_wall_ms,
-                    );
-                    let mut metric =
-                        crate::session::llm_metrics::LlmMetricsRecord::from_byte_estimate(
-                            unix_seconds_now(),
-                            step.id,
-                            session_kind_to_protocol(opts.kind),
-                            &opts.llm_backend,
-                            opts.llm_model.as_deref(),
-                            &request_id,
-                            turn_index,
-                            turn_wall_ms,
-                            llm_stop_reason.as_deref(),
-                            prompt_bytes,
-                            completion_bytes,
-                        );
-                    if let Some(u) = &llm_usage {
-                        metric = metric
-                            .with_exact_usage(u.prompt_tokens.into(), u.completion_tokens.into());
-                    }
-                    llm_metrics.record(&metric);
-                    break;
-                }
-                Some(HostEvent::LlmError {
-                    request_id: rid,
-                    kind,
-                    message,
-                }) if rid == request_id => {
-                    host.write(&Event::Diagnostic {
-                        level: DiagnosticLevel::Error,
-                        message: format!("LLM error ({kind}): {message}"),
-                    })?;
-                    llm_failed = true;
-                    llm_error_kind = Some(kind);
-                    llm_error_message = Some(message);
-                    let turn_wall_ms = turn_started.elapsed().as_millis() as u64;
-                    // On the error path no tool calls were received
-                    // (LlmError supersedes LlmEnd in the wire
-                    // contract); whatever streamed assistant_text
-                    // came back is the partial completion, count
-                    // only that.
-                    llm_metrics.record(
-                        &crate::session::llm_metrics::LlmMetricsRecord::from_byte_estimate(
-                            unix_seconds_now(),
-                            step.id,
-                            session_kind_to_protocol(opts.kind),
-                            &opts.llm_backend,
-                            opts.llm_model.as_deref(),
-                            &request_id,
-                            turn_index,
-                            turn_wall_ms,
-                            Some("error"),
-                            prompt_bytes,
-                            assistant_text.len() as u64,
-                        ),
-                    );
-                    break;
-                }
-                Some(HostEvent::Cancel) => {
-                    // Mid-turn cancellation: record what we know
-                    // (wall time spent + any partial completion
-                    // bytes streamed) before bailing. The partial
-                    // tokens have already been generated server-
-                    // side, so they're billable; the metrics row
-                    // captures that for cost analysis.
-                    let turn_wall_ms = turn_started.elapsed().as_millis() as u64;
-                    llm_metrics.record(
-                        &crate::session::llm_metrics::LlmMetricsRecord::from_byte_estimate(
-                            unix_seconds_now(),
-                            step.id,
-                            session_kind_to_protocol(opts.kind),
-                            &opts.llm_backend,
-                            opts.llm_model.as_deref(),
-                            &request_id,
-                            turn_index,
-                            turn_wall_ms,
-                            Some("cancelled"),
-                            prompt_bytes,
-                            assistant_text.len() as u64,
-                        ),
-                    );
-                    host.write(&Event::SessionEnd {
-                        reason: SessionEndReason::Cancelled,
-                        message: None,
-                    })?;
-                    return Ok(());
-                }
-                Some(other) => {
-                    // Out-of-order events: emit a diagnostic and keep waiting.
-                    host.write(&Event::Diagnostic {
-                        level: DiagnosticLevel::Warning,
-                        message: format!("unexpected host event during LLM call: {other:?}"),
-                    })?;
-                }
-                None => {
-                    return Err(Error::HostClosed("mid-turn".into()));
-                }
+                        turn_wall_ms,
+                        Some("error"),
+                        prompt_bytes,
+                        assistant_text.len() as u64,
+                    ),
+                );
             }
         }
 
@@ -708,7 +702,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             }
             let all_equal = recent_response_hashes.iter().all(|x| *x == h);
             if recent_response_hashes.len() == cap && all_equal {
-                host.write(&Event::Diagnostic {
+                host.send(&Event::Diagnostic {
                     level: DiagnosticLevel::Error,
                     message: format!(
                         "session aborted: agent produced {} structurally-identical responses in a row -- runaway-loop guard. \
@@ -718,7 +712,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         cap,
                     ),
                 })?;
-                host.write(&Event::SessionEnd {
+                host.send(&Event::SessionEnd {
                     reason: SessionEndReason::RunawayGuard,
                     message: Some(format!("{} identical responses in a row", cap)),
                 })?;
@@ -760,7 +754,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
         // them and feed back the Tool-role results as normal.
         if !llm_failed && assistant_text.trim().is_empty() && native_tool_calls.is_empty() {
             if empty_response_retries < MAX_EMPTY_RETRIES {
-                host.write(&Event::Diagnostic {
+                host.send(&Event::Diagnostic {
                     level: DiagnosticLevel::Warning,
                     message: "LLM returned no content. Retrying once with an explicit nudge."
                         .into(),
@@ -778,7 +772,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 empty_response_retries += 1;
                 continue;
             } else {
-                host.write(&Event::Diagnostic {
+                host.send(&Event::Diagnostic {
                     level: DiagnosticLevel::Warning,
                     message: "LLM returned no content twice in a row. Pausing for your input \
                               - try rephrasing or running /step again."
@@ -885,7 +879,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     > 0;
                 if has_findings {
                     let path = format!("docs/critiques/{}-critique.md", step.id);
-                    host.write(&Event::Diagnostic {
+                    host.send(&Event::Diagnostic {
                         level: DiagnosticLevel::Warning,
                         message: format!(
                             "{}: critique response had no fenced artifact-write block; \
@@ -945,7 +939,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                             ),
                         )
                     };
-                    host.write(&Event::Diagnostic { level, message })?;
+                    host.send(&Event::Diagnostic { level, message })?;
                     artifacts.push(ExtractedArtifact {
                         relative_path: path,
                         content: salvaged,
@@ -964,7 +958,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     // error" (error tone, scary banner) which
                     // overstates a routine re-prompt.
                     let json_path = format!("docs/critiques/{}-critique.json", step.id);
-                    host.write(&Event::Diagnostic {
+                    host.send(&Event::Diagnostic {
                         level: DiagnosticLevel::Warning,
                         message: format!(
                             "{}: critique response produced no critique file (no `write_file` \
@@ -1014,7 +1008,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 && !assistant_text.trim().is_empty()
                 && critique_already_on_disk
             {
-                host.write(&Event::SessionEnd {
+                host.send(&Event::SessionEnd {
                     reason: SessionEndReason::Completed,
                     message: Some(format!(
                         "auto: {} critique already on disk; ending after prose-summary turn",
@@ -1054,11 +1048,11 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                             &art.relative_path,
                         );
                         this_turn_touched_paths.insert(opts.project_dir.join(&art.relative_path));
-                        host.write(&Event::ArtifactWritten {
+                        host.send(&Event::ArtifactWritten {
                             path: art.relative_path.clone(),
                             bytes,
                         })?;
-                        host.write(&Event::ToolInvoked {
+                        host.send(&Event::ToolInvoked {
                             name: "write_file".into(),
                             args_summary: art.relative_path.clone(),
                             status: "ok".into(),
@@ -1067,11 +1061,11 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     }
                     Err(err) => {
                         let detail = format!("{err}");
-                        host.write(&Event::Diagnostic {
+                        host.send(&Event::Diagnostic {
                             level: DiagnosticLevel::Error,
                             message: format!("failed to write {}: {detail}", art.relative_path),
                         })?;
-                        host.write(&Event::ToolInvoked {
+                        host.send(&Event::ToolInvoked {
                             name: "write_file".into(),
                             args_summary: art.relative_path.clone(),
                             status: "error".into(),
@@ -1216,7 +1210,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     } else {
                         tool_failures += 1;
                     }
-                    host.write(&Event::ToolInvoked {
+                    host.send(&Event::ToolInvoked {
                         name: call.name.clone(),
                         args_summary: tool_args_summary(call),
                         status: status.into(),
@@ -1365,11 +1359,11 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                                 write_paths.join(", ")
                             },
                         );
-                        host.write(&Event::RequestUserInput {
+                        host.send(&Event::RequestUserInput {
                             prompt: Some(prompt),
                             placeholder: Some("yes / no, or course-correction text".into()),
                         })?;
-                        match host.read()? {
+                        match host.recv()? {
                             Some(HostEvent::UserMessage { text }) => {
                                 let trimmed = text.trim().to_ascii_lowercase();
                                 let approved = matches!(
@@ -1382,7 +1376,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                                             approved_deletes.push(p.clone());
                                         }
                                     }
-                                    host.write(&Event::Diagnostic {
+                                    host.send(&Event::Diagnostic {
                                         level: DiagnosticLevel::Info,
                                         message: format!(
                                             "scope override granted for {} path(s): {listed}. \
@@ -1408,14 +1402,14 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                                 });
                             }
                             Some(HostEvent::Cancel) | None => {
-                                host.write(&Event::SessionEnd {
+                                host.send(&Event::SessionEnd {
                                     reason: SessionEndReason::Cancelled,
                                     message: None,
                                 })?;
                                 return Ok(());
                             }
                             Some(other) => {
-                                host.write(&Event::Diagnostic {
+                                host.send(&Event::Diagnostic {
                                     level: DiagnosticLevel::Warning,
                                     message: format!(
                                         "unexpected host event during delete_file scope-override prompt: {other:?}; treating as no-approve"
@@ -1532,7 +1526,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     expectation_nudge_emitted,
                     EXPECTATION_NUDGE_AFTER_FIXES,
                 ) {
-                    host.write(&Event::Diagnostic {
+                    host.send(&Event::Diagnostic {
                         level: DiagnosticLevel::Info,
                         message: format!(
                             "auto: expectation nudge -- you have called `declare_fix` {} times \
@@ -1592,7 +1586,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                             step.id, opts.max_auto_iters, investigation_only_iters,
                         )
                     };
-                    host.write(&Event::Diagnostic {
+                    host.send(&Event::Diagnostic {
                         level: DiagnosticLevel::Error,
                         message,
                     })?;
@@ -1610,7 +1604,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 let current_phase = phases.get(phase_idx).copied().unwrap_or("chat");
                 match run_phase_validator(current_phase, &opts.project_dir) {
                     Some(out) => {
-                        host.write(&Event::BuildOutput {
+                        host.send(&Event::BuildOutput {
                             command: out.command.clone(),
                             stdout_tail: out.stdout_tail.clone(),
                             stderr_tail: out.stderr_tail.clone(),
@@ -1619,7 +1613,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         if !out.ok() {
                             phase_iterations += 1;
                             if phase_iterations >= MAX_ITER_PER_PHASE {
-                                host.write(&Event::Diagnostic {
+                                host.send(&Event::Diagnostic {
                                     level: DiagnosticLevel::Error,
                                     message: format!(
                                         "{current_phase} phase exceeded {MAX_ITER_PER_PHASE} iterations; pausing for user input."
@@ -1653,7 +1647,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                             phase_iterations = 0;
                             phase_idx += 1;
                             if let Some(next) = phases.get(phase_idx) {
-                                host.write(&Event::PhaseChanged {
+                                host.send(&Event::PhaseChanged {
                                     phase: (*next).into(),
                                 })?;
                             }
@@ -1713,7 +1707,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         /*walk_scope=*/ true,
                     )?;
                     if report.is_clean() {
-                        host.write(&Event::SessionEnd {
+                        host.send(&Event::SessionEnd {
                             reason: SessionEndReason::Completed,
                             message: Some(format!("auto: {} structural gate clean", step.id)),
                         })?;
@@ -1721,7 +1715,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     }
                     auto_iterations += 1;
                     if auto_iterations >= opts.max_auto_iters {
-                        host.write(&Event::Diagnostic {
+                        host.send(&Event::Diagnostic {
                             level: DiagnosticLevel::Error,
                             message: format!(
                                 "auto: {} exceeded max_auto_iters ({}); switching to interactive. Last gate failures: {}",
@@ -1808,7 +1802,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 let report =
                     evaluate_structural_gate(&opts.project_dir, &step, /*walk_scope=*/ true)?;
                 if can_wind_down_clean && report.is_clean() {
-                    host.write(&Event::SessionEnd {
+                    host.send(&Event::SessionEnd {
                         reason: SessionEndReason::Completed,
                         message: Some(format!(
                             "auto: {} structural gate clean (no-artifact wind-down)",
@@ -1890,7 +1884,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                         CurrentMilestone::NoMilestonesPresent => false,
                     };
                     if milestone_done {
-                        host.write(&Event::SessionEnd {
+                        host.send(&Event::SessionEnd {
                             reason: SessionEndReason::Completed,
                             message: Some(format!(
                                 "auto: {} milestone complete (no-artifact wind-down); critique will run",
@@ -1917,7 +1911,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             }
             auto_iterations += 1;
             if auto_iterations >= opts.max_auto_iters {
-                host.write(&Event::Diagnostic {
+                host.send(&Event::Diagnostic {
                     level: DiagnosticLevel::Error,
                     message: format!(
                         "auto: {} exceeded max_auto_iters ({}) without producing an artifact; switching to interactive.",
@@ -1971,20 +1965,20 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
             (None, None)
         };
         if llm_failed {
-            host.write(&Event::Followup {
+            host.send(&Event::Followup {
                 label: "Retry".into(),
                 action: "/retry".into(),
             })?;
-            host.write(&Event::Followup {
+            host.send(&Event::Followup {
                 label: "Cancel".into(),
                 action: "/end-session".into(),
             })?;
         }
-        host.write(&Event::RequestUserInput {
+        host.send(&Event::RequestUserInput {
             prompt: request_prompt,
             placeholder: request_placeholder,
         })?;
-        match host.read()? {
+        match host.recv()? {
             Some(HostEvent::UserMessage { text }) => {
                 // `/retry` after an LlmError re-issues the same request
                 // to the same backend without a course-correction turn.
@@ -2004,14 +1998,14 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                 empty_response_retries = 0;
             }
             Some(HostEvent::Cancel) | None => {
-                host.write(&Event::SessionEnd {
+                host.send(&Event::SessionEnd {
                     reason: SessionEndReason::Cancelled,
                     message: None,
                 })?;
                 return Ok(());
             }
             Some(other) => {
-                host.write(&Event::Diagnostic {
+                host.send(&Event::Diagnostic {
                     level: DiagnosticLevel::Warning,
                     message: format!("unexpected host event waiting for input: {other:?}"),
                 })?;
@@ -2030,7 +2024,7 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
         }) = messages.last()
             && content.trim() == "/end-session"
         {
-            host.write(&Event::SessionEnd {
+            host.send(&Event::SessionEnd {
                 reason: SessionEndReason::Completed,
                 message: None,
             })?;
