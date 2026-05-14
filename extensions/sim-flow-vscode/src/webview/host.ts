@@ -9,9 +9,8 @@ import * as vscode from "vscode";
 import type { SimFlowCli } from "../cli/simflow";
 import type { CritiqueFile } from "../state/critiques";
 import { listCritiqueFiles } from "../state/critiques";
-import type { FlowState } from "../state/flowState";
+import type { FlowState } from "../state/types";
 import { readAllPlanProgress, readPlanProgress } from "../state/planProgress";
-import { readFlowState } from "../state/flowState";
 import { createStateWatcher, type SimFlowStateWatcher } from "../state/watcher";
 import { enumerateProjectDocuments } from "../state/documents";
 
@@ -754,7 +753,7 @@ export class DashboardHost {
    * that case.
    */
   private async generateVerilog(): Promise<void> {
-    const flow = await readFlowStateSafe(this.options.projectDir);
+    const flow = await this.loadFlowState();
     const dm2dPassed = flow.gates?.["DM2d"]?.passed === true;
     if (!dm2dPassed) {
       await this.post({
@@ -1011,7 +1010,7 @@ export class DashboardHost {
 
   private async buildState(): Promise<DashboardState> {
     const [flow, critiques, runs, baselines] = await Promise.all([
-      readFlowStateSafe(this.options.projectDir),
+      this.loadFlowState(),
       listCritiqueFilesSafe(this.options.projectDir),
       this.loadRuns(),
       this.loadBaselines(),
@@ -1203,6 +1202,26 @@ export class DashboardHost {
       return;
     }
     await this.refresh();
+  }
+
+  private async loadFlowState(): Promise<FlowState> {
+    // MVP architecture: flow state flows through the orchestrator
+    // CLI (`sim-flow status --json`), not via direct state.toml
+    // parse. `StatusResult` is structurally identical to `FlowState`
+    // (type alias in src/state/types.ts). Falls back to an "empty"
+    // state on CLI failure so the dashboard still renders something
+    // navigable even when the orchestrator is unreachable.
+    try {
+      return await this.options.cli.status();
+    } catch {
+      return {
+        flow: "direct-modeling",
+        current_step: "DM0",
+        started: null,
+        gates: {},
+        archived_gates: {},
+      };
+    }
   }
 
   private async loadRuns(): Promise<DashboardState["runs"]> {
@@ -1541,20 +1560,6 @@ export class DashboardHost {
     <script nonce="${nonce}" src="${scriptUri}"></script>
   </body>
 </html>`;
-  }
-}
-
-async function readFlowStateSafe(projectDir: string): Promise<FlowState> {
-  try {
-    return await readFlowState(projectDir);
-  } catch {
-    return {
-      flow: "direct-modeling",
-      current_step: "DM0",
-      started: null,
-      gates: {},
-      archived_gates: {},
-    };
   }
 }
 
