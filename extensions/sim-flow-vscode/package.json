@@ -105,6 +105,10 @@
         "title": "sim-flow: Open Flow Dashboard"
       },
       {
+        "command": "sim-flow.openPerfPanel",
+        "title": "sim-flow: Open Perf Panel"
+      },
+      {
         "command": "sim-flow.attachWatcher",
         "title": "sim-flow: Attach to Running Watcher"
       },
@@ -429,8 +433,8 @@
     "typecheck:extension": "tsc -p ./ --noEmit",
     "codegen:protocol": "node --import tsx scripts/generate-protocol-types.ts",
     "compile:extension": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --external:better-sqlite3 --outfile=dist/extension.js --log-level=warning",
-    "compile:webview": "esbuild src/webview/panel.ts --bundle --format=iife --outfile=dist/webview/panel.js --target=es2022 --log-level=warning && esbuild src/chatPanel/panel.ts --bundle --format=iife --outfile=dist/webview/chatPanel/panel.js --target=es2022 --log-level=warning",
-    "compile:webview-types": "tsc -p src/webview/tsconfig.json && tsc -p src/chatPanel/tsconfig.json",
+    "compile:webview": "esbuild src/webview/panel.ts --bundle --format=iife --outfile=dist/webview/panel.js --target=es2022 --log-level=warning && esbuild src/chatPanel/panel.ts --bundle --format=iife --outfile=dist/webview/chatPanel/panel.js --target=es2022 --log-level=warning && esbuild src/perfPanel/panel.ts --bundle --format=iife --outfile=dist/webview/perfPanel/panel.js --target=es2022 --log-level=warning",
+    "compile:webview-types": "tsc -p src/webview/tsconfig.json && tsc -p src/chatPanel/tsconfig.json && tsc -p src/perfPanel/tsconfig.json",
     "compile": "npm run codegen:protocol && npm run typecheck:extension && npm run compile:extension && npm run compile:webview-types && npm run compile:webview",
     "compile:cargo": "node scripts/compile-cargo.mjs",
     "watch": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --external:better-sqlite3 --outfile=dist/extension.js --watch",

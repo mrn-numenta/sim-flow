@@ -26,8 +26,10 @@ import { AutoSessionManager } from "./chatPanel/autoSessionManager";
 import { cleanupStalePidsAsync } from "./session/processRegistry";
 import { DashboardHost } from "./webview/host";
 import { cliBackendArgFor, isTerminalLlmSource, type LlmSourceTag } from "./webview/messages";
+import { PerfPanelHost } from "./perfPanel/host";
 
 const dashboardHosts = new Map<string, DashboardHost>();
+const perfPanelHosts = new Map<string, PerfPanelHost>();
 const terminals = new Map<string, SimFlowTerminal>();
 let chatPanelProvider: ChatPanelProvider | undefined;
 let autoSessionManager: AutoSessionManager | undefined;
@@ -69,6 +71,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerWebviewViewProvider(CHAT_PANEL_VIEW_ID, chatPanelProvider),
     vscode.commands.registerCommand("sim-flow.openChatPanel", () => openChatPanel()),
     vscode.commands.registerCommand("sim-flow.openDashboard", () => openDashboard(context)),
+    vscode.commands.registerCommand("sim-flow.openPerfPanel", () => openPerfPanel(context)),
     vscode.commands.registerCommand("sim-flow.runStep", (step: unknown, projectDir?: unknown) =>
       runStepCommand(step, "runStep", asString(projectDir)),
     ),
@@ -394,6 +397,34 @@ async function openDashboardForProject(
       autoSessions: autoSessionManager,
     });
     dashboardHosts.set(canonicalDir, host);
+  }
+  await host.open();
+}
+
+async function openPerfPanel(context: vscode.ExtensionContext): Promise<void> {
+  const projectDir = await selectProjectDir();
+  if (!projectDir) {
+    return;
+  }
+  const binary = tryResolveBinary();
+  if (!binary) {
+    return;
+  }
+  const canonicalDir = canonicalizePath(projectDir);
+  let host = perfPanelHosts.get(canonicalDir);
+  if (!host) {
+    const cli = new SimFlowCli({
+      binary,
+      projectDir: canonicalDir,
+      foundationRoot: getStringSetting("foundationRoot", ""),
+    });
+    host = new PerfPanelHost({
+      extensionUri: context.extensionUri,
+      projectDir: canonicalDir,
+      cli,
+      binary,
+    });
+    perfPanelHosts.set(canonicalDir, host);
   }
   await host.open();
 }
