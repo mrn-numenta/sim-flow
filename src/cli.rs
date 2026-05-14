@@ -168,6 +168,17 @@ pub(crate) enum Command {
         #[arg(long)]
         file: Option<PathBuf>,
     },
+    /// Diff metrics between two recorded run-ids. Useful for CI
+    /// regression checks ("did baseline get worse?") and
+    /// interactive "what changed between A and B?" inspection.
+    /// Output is markdown (pipe into a PR comment or design-review
+    /// doc without further formatting).
+    Diff {
+        /// Left-hand-side run-id (the baseline).
+        lhs: String,
+        /// Right-hand-side run-id (the comparison).
+        rhs: String,
+    },
     /// Validate the gate for a step and, if clean, mark it passed and
     /// advance `current_step` to the next step in the flow.
     ///

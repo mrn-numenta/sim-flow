@@ -5,6 +5,7 @@
 //! milestones this module implements.
 
 pub mod baseline;
+pub mod diff;
 pub mod git_state;
 pub mod index;
 pub mod metrics;

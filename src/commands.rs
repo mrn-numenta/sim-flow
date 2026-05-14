@@ -85,6 +85,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
         Command::Sweep { file } => sweep_cmd(&project_dir, file),
         Command::SweepResults { parent } => sweep_results_cmd(&project_dir, parent),
         Command::PerfRun { file } => perf_run_cmd(&project_dir, file.as_deref()),
+        Command::Diff { lhs, rhs } => diff_cmd(&project_dir, lhs, rhs),
         Command::Advance {
             step,
             candidate,
@@ -2157,6 +2158,13 @@ fn perf_run_cmd(project: &Path, file: Option<&Path>) -> sim_flow::Result<()> {
             study.cells.len()
         );
     }
+    Ok(())
+}
+
+fn diff_cmd(project: &Path, lhs: &str, rhs: &str) -> sim_flow::Result<()> {
+    use sim_flow::__internal::tracking::diff;
+    let report = diff::run(project, lhs, rhs)?;
+    print!("{}", diff::render_markdown(&report));
     Ok(())
 }
 
