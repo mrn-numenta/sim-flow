@@ -10,7 +10,7 @@ import type { SimFlowCli } from "../cli/simflow";
 import type { CritiqueFile } from "../state/critiques";
 import { listCritiqueFiles } from "../state/critiques";
 import type { FlowState } from "../state/types";
-import { readAllPlanProgress, readPlanProgress } from "../state/planProgress";
+import type { PlanProgress } from "../state/types";
 import { createStateWatcher, type SimFlowStateWatcher } from "../state/watcher";
 import { enumerateProjectDocuments } from "../state/documents";
 
@@ -1019,14 +1019,14 @@ export class DashboardHost {
       projectDir: this.options.projectDir,
       flow: flow.flow,
     });
-    const planProgress = await readPlanProgress(this.options.projectDir, flow.current_step);
+    const planProgress = await this.loadPlanProgress(flow.current_step);
     // All-kinds progress so the dashboard can show milestone
     // pipelines under any plan-related step (DM2c outline,
     // DM2cd detail, DM2d execution, etc.) regardless of which
     // step is current. Each kind is scanned independently so
     // missing-on-disk plans render as empty boxes rather than
     // hiding the section.
-    const planProgressByKind = await readAllPlanProgress(this.options.projectDir);
+    const planProgressByKind = await this.loadAllPlanProgress();
     const specPath = this.readSpecPath();
     // Coverage settings live in the project's `.sim-flow/config.toml`
     // (the orchestrator side reads them too). Read failures fall
@@ -1202,6 +1202,48 @@ export class DashboardHost {
       return;
     }
     await this.refresh();
+  }
+
+  private async loadPlanProgress(currentStep: string): Promise<PlanProgress> {
+    // MVP architecture: plan-progress walks come from
+    // `sim-flow plan-progress --current-step <step>` (orchestrator
+    // owns the milestone-file parser). Falls back to a `kind: none`
+    // shape on CLI failure so the dashboard renders the rest of
+    // project state.
+    try {
+      return await this.options.cli.planProgress(currentStep);
+    } catch {
+      return {
+        kind: "none",
+        milestones: [],
+        currentTask: null,
+        currentTaskFilePath: null,
+        currentTaskLine: null,
+      };
+    }
+  }
+
+  private async loadAllPlanProgress(): Promise<{
+    impl: PlanProgress;
+    test: PlanProgress;
+    perf: PlanProgress;
+  }> {
+    try {
+      return await this.options.cli.planProgressAll();
+    } catch {
+      const empty = (kind: PlanProgress["kind"]): PlanProgress => ({
+        kind,
+        milestones: [],
+        currentTask: null,
+        currentTaskFilePath: null,
+        currentTaskLine: null,
+      });
+      return {
+        impl: empty("impl"),
+        test: empty("test"),
+        perf: empty("perf"),
+      };
+    }
   }
 
   private async loadFlowState(): Promise<FlowState> {

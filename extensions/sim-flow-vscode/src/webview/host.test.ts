@@ -108,25 +108,6 @@ vi.mock("../state/critiques", () => ({
   listCritiqueFiles: async () => [],
 }));
 
-vi.mock("../state/planProgress", () => ({
-  readAllPlanProgress: async () => ({
-    impl: { milestoneOrder: [], milestones: {} },
-    test: { milestoneOrder: [], milestones: {} },
-    perf: { milestoneOrder: [], milestones: {} },
-  }),
-  readPlanProgress: async () => ({ milestoneOrder: [], milestones: {} }),
-}));
-
-vi.mock("../state/flowState", () => ({
-  readFlowState: async () => ({
-    flow: "direct-modeling",
-    current_step: "DM0",
-    started: null,
-    gates: {},
-    archived_gates: {},
-  }),
-}));
-
 vi.mock("../state/experiments", () => ({
   openExperiments: () => null,
 }));

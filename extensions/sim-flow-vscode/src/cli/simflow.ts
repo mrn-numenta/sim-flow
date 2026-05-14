@@ -52,6 +52,33 @@ export class SimFlowCli {
     return this.execJson<StatusResult>(["status", "--json"]);
   }
 
+  /**
+   * Read plan progress for one kind by deriving it from the
+   * supplied step id. The orchestrator owns the milestone-file
+   * parser; the extension stays MVP-pure by consuming the JSON
+   * shape rather than reading docs/ directly.
+   */
+  async planProgress(currentStep: string): Promise<import("../state/types").PlanProgress> {
+    return this.execJson<import("../state/types").PlanProgress>([
+      "plan-progress",
+      "--current-step",
+      currentStep,
+    ]);
+  }
+
+  /**
+   * Read plan progress for every plan kind (impl / test / perf) in
+   * one CLI call. Mirrors the dashboard's "show every plan pipeline
+   * regardless of current_step" semantic.
+   */
+  async planProgressAll(): Promise<{
+    impl: import("../state/types").PlanProgress;
+    test: import("../state/types").PlanProgress;
+    perf: import("../state/types").PlanProgress;
+  }> {
+    return this.execJson(["plan-progress", "--all"]);
+  }
+
   async runs(filter: RunFilter = {}): Promise<RunRow[]> {
     const args: string[] = ["runs", "--json"];
     if (filter.workload) {

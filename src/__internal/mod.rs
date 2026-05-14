@@ -11,6 +11,7 @@ pub mod git_commit;
 pub mod keys;
 pub mod manifest;
 pub mod new_project;
+pub mod plan_progress;
 pub mod preflight;
 pub mod prompts;
 pub mod runner;

@@ -10,7 +10,7 @@ use sim_flow::__internal::steps::registry_for;
 
 use crate::cli::{
     BaselineAction, BugsAction, Cli, Command, ConfigAction, CoverageAction, KeysAction, NewKind,
-    PromptResetScope, PromptScopeArg, PromptsAction, SessionMode, WatchersAction,
+    PlanKindArg, PromptResetScope, PromptScopeArg, PromptsAction, SessionMode, WatchersAction,
 };
 
 pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
@@ -86,6 +86,11 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
         Command::SweepResults { parent } => sweep_results_cmd(&project_dir, parent),
         Command::PerfRun { file } => perf_run_cmd(&project_dir, file.as_deref()),
         Command::Diff { lhs, rhs } => diff_cmd(&project_dir, lhs, rhs),
+        Command::PlanProgress {
+            kind,
+            current_step,
+            all,
+        } => plan_progress_cmd(&project_dir, *kind, current_step.as_deref(), *all),
         Command::Advance {
             step,
             candidate,
@@ -2165,6 +2170,49 @@ fn diff_cmd(project: &Path, lhs: &str, rhs: &str) -> sim_flow::Result<()> {
     use sim_flow::__internal::tracking::diff;
     let report = diff::run(project, lhs, rhs)?;
     print!("{}", diff::render_markdown(&report));
+    Ok(())
+}
+
+fn plan_progress_cmd(
+    project: &Path,
+    kind: Option<PlanKindArg>,
+    current_step: Option<&str>,
+    all: bool,
+) -> sim_flow::Result<()> {
+    use sim_flow::__internal::plan_progress::{self, PlanKind};
+    let supplied = [kind.is_some(), current_step.is_some(), all]
+        .iter()
+        .filter(|x| **x)
+        .count();
+    if supplied > 1 {
+        return Err(sim_flow::Error::Config(
+            "plan-progress: --kind, --current-step, and --all are mutually exclusive".into(),
+        ));
+    }
+    if all {
+        let report = plan_progress::read_all_plan_progress(project);
+        let json = serde_json::to_string_pretty(&report)
+            .map_err(|err| sim_flow::Error::Config(format!("serialize plan progress: {err}")))?;
+        println!("{json}");
+        return Ok(());
+    }
+    let pk = match (kind, current_step) {
+        (Some(k), _) => match k {
+            PlanKindArg::Impl => PlanKind::Impl,
+            PlanKindArg::Test => PlanKind::Test,
+            PlanKindArg::Perf => PlanKind::Perf,
+        },
+        (None, Some(step)) => plan_progress::plan_kind_for_step(step),
+        (None, None) => {
+            return Err(sim_flow::Error::Config(
+                "plan-progress: must pass one of --kind, --current-step, or --all".into(),
+            ));
+        }
+    };
+    let report = plan_progress::read_plan_progress_for_kind(project, pk);
+    let json = serde_json::to_string_pretty(&report)
+        .map_err(|err| sim_flow::Error::Config(format!("serialize plan progress: {err}")))?;
+    println!("{json}");
     Ok(())
 }
 

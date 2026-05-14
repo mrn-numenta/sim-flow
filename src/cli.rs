@@ -179,6 +179,26 @@ pub(crate) enum Command {
         /// Right-hand-side run-id (the comparison).
         rhs: String,
     },
+    /// Plan-execution progress. JSON-only output for UI surfaces
+    /// (VS Code dashboard, future web/terminal viewers) so the
+    /// extension doesn't reach into milestone files directly.
+    /// Pass `--kind <impl|test|perf>` for one kind, or `--all`
+    /// for every kind in one call; `--current-step <step>` returns
+    /// whichever plan that step drives.
+    PlanProgress {
+        /// One plan kind to read (impl / test / perf).
+        #[arg(long, value_enum)]
+        kind: Option<PlanKindArg>,
+        /// Step id from which to derive the plan kind (e.g. DM4b).
+        /// Mutually exclusive with `--kind` and `--all`; specifying
+        /// more than one is a CLI error.
+        #[arg(long)]
+        current_step: Option<String>,
+        /// Return all three plan kinds (impl + test + perf) in one
+        /// call.
+        #[arg(long)]
+        all: bool,
+    },
     /// Validate the gate for a step and, if clean, mark it passed and
     /// advance `current_step` to the next step in the flow.
     ///
@@ -791,6 +811,15 @@ pub(crate) enum FlowArg {
     DirectModeling,
     DesignStudy,
     SystemverilogConvert,
+}
+
+/// Which plan-kind to read in `sim-flow plan-progress`. Mirrors
+/// `crate::plan_progress::PlanKind` minus the `None` variant.
+#[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
+pub(crate) enum PlanKindArg {
+    Impl,
+    Test,
+    Perf,
 }
 
 /// Step-axis mode. Orthogonal to `SessionMode` (transport / agent
