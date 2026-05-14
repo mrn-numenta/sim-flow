@@ -326,6 +326,7 @@ function shouldClearErrorOnSend(type: WebviewMessage["type"]): boolean {
 
 // Announce readiness so the host sends the first state snapshot.
 window.addEventListener("DOMContentLoaded", () => {
+  installTabDelegationOnce();
   send({ type: "ready" });
 });
 
@@ -1183,14 +1184,43 @@ function tabs(): HTMLElement {
     }
     const [id, label] = def;
     const cls = id === ui.activeTab ? "tab active" : "tab";
-    const tab = el("button", { class: cls }, label) as HTMLButtonElement;
-    tab.addEventListener("click", () => {
-      ui.activeTab = id;
-      render();
-    });
+    // Tab click handling lives on `document.body` via event
+    // delegation (see installTabDelegationOnce) so a click survives
+    // the DOM rebuild that happens on every render. `data-tab` is
+    // the source of truth for which tab was clicked; per-button
+    // addEventListener used to race with state-update redraws and
+    // drop clicks intermittently when refreshes ran during the
+    // mousedown -> mouseup window.
+    const tab = el("button", {
+      class: cls,
+      "data-tab": id,
+    }, label) as HTMLButtonElement;
     bar.appendChild(tab);
   }
   return bar;
+}
+
+let tabDelegationInstalled = false;
+
+function installTabDelegationOnce(): void {
+  if (tabDelegationInstalled) {
+    return;
+  }
+  tabDelegationInstalled = true;
+  document.body.addEventListener("click", (ev) => {
+    const target = (ev.target as HTMLElement | null)?.closest<HTMLElement>(
+      ".tab[data-tab]",
+    );
+    if (!target) {
+      return;
+    }
+    const id = target.getAttribute("data-tab") as TabId | null;
+    if (!id) {
+      return;
+    }
+    ui.activeTab = id;
+    render();
+  });
 }
 
 function panel(id: TabId, content: Node[]): HTMLElement {
@@ -1554,8 +1584,15 @@ function renderSelectedStepDetail(data: DashboardState): HTMLElement {
       "Deletes generated work artifacts and critique files (when an orchestrator is attached) " +
       "and clears the matching gate flags. Confirmation is required.";
   }
+  // Generate Verilog stays enabled even without an active
+  // orchestrator session -- clicking it without one will fall back
+  // to the host's error surface ("Click Connect first") so the
+  // user sees a clear path forward. Unlike Run Step / Run Critique
+  // (which mutate flow state via the control socket), Generate
+  // Verilog is a project-level action that's safe to surface
+  // independent of session lifecycle.
   const generateVerilogBtn = actions.showGenerateVerilog
-    ? buildGenerateVerilogButton(stepId, flowUnlocked)
+    ? buildGenerateVerilogButton(stepId, true)
     : null;
   // Layout: per-step actions left-to-right, optional Generate Verilog
   // immediately after Advance, then Reset (manual mode only) pinned

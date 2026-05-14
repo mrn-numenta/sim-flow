@@ -371,8 +371,14 @@ main {
    starting the automated driver. The spec row + Play / Stop
    buttons stay live (they're outside `.flow-layout`). */
 .flow-layout.flow-locked {
+  /* Visual cue that the flow isn't currently being driven by an
+     orchestrator session: dimmed + desaturated. Mutate buttons
+     (Run Step / Run Critique / Run Gate / Advance / Reset) are
+     individually disabled via `applyButtonState` so they can't be
+     clicked; navigation (step-rail selection, document opens) and
+     non-mutating actions stay live so the user can browse an
+     existing project without first launching the orchestrator. */
   opacity: 0.5;
-  pointer-events: none;
   filter: saturate(0.6);
 }
 
