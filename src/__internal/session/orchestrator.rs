@@ -421,6 +421,16 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
     let mut declared_fixes_count: u32 = 0;
     const MAX_DECLARED_FIXES: u32 = 8;
 
+    // Test-expectation nudge: after several declared fixes that
+    // haven't shrunk the target failing set, surface a one-time
+    // diagnostic suggesting the agent reconsider whether the TEST
+    // expectations are wrong (rather than the implementation).
+    // This is option C from the classifier critique: give the agent
+    // one explicit reframing before the declared-fix cap fires and
+    // we switch to interactive. Fires at most once per session.
+    let mut expectation_nudge_emitted: bool = false;
+    const EXPECTATION_NUDGE_AFTER_FIXES: u32 = 4;
+
     // Tool-error-streak guard. Catches a failure mode the
     // identical-response check misses: the model keeps emitting
     // *slightly different* tool calls (different prose, different
@@ -1504,6 +1514,39 @@ fn run_session_inner<H: Host>(opts: OrchestratorOptions, host: &mut H) -> Result
                     // to register as a fix attempt.
                     touched_existing_since_last_test = false;
                     declared_fix_pending = false;
+                }
+
+                // Test-expectation nudge (option C from the
+                // classifier critique). Once the agent has declared
+                // a meaningful number of fixes that still haven't
+                // shrunk the target failing set, drop a one-time
+                // reframing into the next turn's context: "have you
+                // considered that the test EXPECTATION might be
+                // wrong, not the implementation?" Fires at most once
+                // per session and stays well below MAX_DECLARED_FIXES
+                // so the agent gets a real chance to act on it
+                // before the cap bails to interactive.
+                if should_emit_expectation_nudge(
+                    declared_fixes_count,
+                    no_progress_iters,
+                    expectation_nudge_emitted,
+                    EXPECTATION_NUDGE_AFTER_FIXES,
+                ) {
+                    host.write(&Event::Diagnostic {
+                        level: DiagnosticLevel::Info,
+                        message: format!(
+                            "auto: expectation nudge -- you have called `declare_fix` {} times \
+                             this session and the target failing-test set has not shrunk. \
+                             Before declaring another fix on the implementation, pause and \
+                             consider whether the TEST EXPECTATION itself might be wrong: \
+                             does the test assert the right value? Is the cycle count / port \
+                             id / payload shape it expects actually what the spec says? If a \
+                             test is asserting against a stale expectation, fix the test \
+                             instead of chasing the impl.",
+                            declared_fixes_count,
+                        ),
+                    })?;
+                    expectation_nudge_emitted = true;
                 }
 
                 // Bail if we've burned `max_auto_iters` consecutive
@@ -3826,6 +3869,21 @@ pub(super) fn classify_progress(
     }
 }
 
+/// Decide whether to surface the one-time test-expectation nudge.
+/// Fires when the agent has declared at least `threshold` fixes AND
+/// at least one of those fix attempts produced no progress AND the
+/// nudge hasn't already been emitted this session. Pure function so
+/// it's covered by unit tests without spinning up the auto-mode
+/// loop.
+pub(super) fn should_emit_expectation_nudge(
+    declared_fixes_count: u32,
+    no_progress_iters: u32,
+    already_emitted: bool,
+    threshold: u32,
+) -> bool {
+    !already_emitted && declared_fixes_count >= threshold && no_progress_iters > 0
+}
+
 #[cfg(test)]
 mod progress_class_tests {
     use super::*;
@@ -3952,6 +4010,36 @@ mod progress_class_tests {
             classify_progress(&target, &current, true, true),
             ProgressClass::FixAttemptNoProgress
         );
+    }
+
+    #[test]
+    fn expectation_nudge_fires_after_threshold_with_no_progress() {
+        // 4 declared fixes, 2 no-progress iters, not yet emitted,
+        // threshold 4 -> fire.
+        assert!(should_emit_expectation_nudge(4, 2, false, 4));
+    }
+
+    #[test]
+    fn expectation_nudge_skipped_below_threshold() {
+        // 3 declared fixes < threshold of 4. Doesn't fire yet -- the
+        // agent gets a few free declared fixes before the reframing
+        // lands.
+        assert!(!should_emit_expectation_nudge(3, 5, false, 4));
+    }
+
+    #[test]
+    fn expectation_nudge_skipped_when_no_progress_zero() {
+        // 4 declared fixes but no_progress_iters == 0 means the
+        // agent IS making progress (or has just started); no nudge
+        // needed.
+        assert!(!should_emit_expectation_nudge(4, 0, false, 4));
+    }
+
+    #[test]
+    fn expectation_nudge_skipped_once_already_emitted() {
+        // Even if all other conditions are met, the nudge fires at
+        // most once per session.
+        assert!(!should_emit_expectation_nudge(99, 99, true, 4));
     }
 }
 

@@ -112,6 +112,23 @@ bails so the operator can decide whether to raise the budget,
 inject more framework context, or commit a fix manually. Use the
 budget thoughtfully.
 
+**Test-expectation nudge**. After your 4th declared fix without
+progress, the auto driver emits a one-time Diagnostic asking you
+to consider whether the TEST EXPECTATION is wrong rather than the
+implementation. If you see that nudge, pause and check:
+
+- Does the failing assertion match what the spec actually says?
+- Is the expected cycle count / output value / port shape derived
+  from the spec, or copy-pasted from an earlier draft?
+- Is the test asserting against a stale value the implementation
+  has since correctly updated past?
+
+If the test expectation is the problem, fix the TEST instead of
+declaring another fix on the implementation. The nudge fires at
+most once per session and is advisory -- you can ignore it if the
+implementation really is wrong, but ignoring it without
+considering the alternative is how impl-chasing loops happen.
+
 ## Bug log
 
 Every project carries a persistent bug log at
