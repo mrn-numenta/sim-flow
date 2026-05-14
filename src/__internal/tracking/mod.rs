@@ -8,6 +8,7 @@ pub mod baseline;
 pub mod git_state;
 pub mod index;
 pub mod metrics;
+pub mod perf_plan;
 pub mod run_recording;
 pub mod sweep;
 pub mod variants;
@@ -15,6 +16,10 @@ pub mod variants;
 pub use baseline::{BaselineDelta, BaselineRecord};
 pub use git_state::GitState;
 pub use index::{ExperimentIndex, RunRow, experiments_db_path};
+pub use perf_plan::{
+    Chart, ChartKind, DoePattern, Metric, MetricAggregate, PerfPlan, PlanGoal, PlanHeader, Study,
+    Workload,
+};
 pub use run_recording::{RecordRunOptions, RecordedRun};
 pub use sweep::{SweepDefinition, SweepResults};
 pub use variants::{
