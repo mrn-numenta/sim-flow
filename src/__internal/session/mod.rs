@@ -43,7 +43,7 @@ pub use agent::{
 pub use event_tap::{
     EventTap, TappedPresenter, WatchRegistration, list_registrations as list_watch_registrations,
 };
-pub use host::{Host, JsonlHost, TerminalHost, TestHost};
+pub use host::{JsonlHost, TestHost};
 pub use llm_adapter::LlmAdapter;
 pub use orchestrator::{OrchestratorOptions, run_session};
 pub use presenter::Presenter;
@@ -51,5 +51,5 @@ pub use protocol::{
     DiagnosticLevel, Event, GateFailureOut, HostEvent, HostInfo, LlmMessage, LlmRole, LlmTool,
     PROTOCOL_VERSION, SessionKindOut, SessionTag, StepDescriptorOut,
 };
-pub use socket_host::SocketHost;
+pub use socket_host::SocketPresenter;
 pub use stderr_presenter::StderrPresenter;

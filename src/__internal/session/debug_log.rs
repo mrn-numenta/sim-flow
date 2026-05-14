@@ -24,7 +24,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::Result;
 use crate::session::presenter::Presenter;
-use crate::session::protocol::{Event, HostEvent, LlmRole};
+use crate::session::protocol::{Event, HostEvent};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CategorySet {
@@ -131,18 +131,7 @@ impl DebugLog {
             return;
         };
         let mut buf = String::new();
-        // After the presenter / LlmAdapter refactor the orchestrator
-        // no longer emits `Event::RequestLlmResponse` (LLM dispatch
-        // moved in-process). The arm is kept here for backward
-        // compatibility with any caller that still synthesizes it
-        // out-of-band; in the steady state we just take the regular
-        // path. The dedicated formatter dumps the full message stack,
-        // which is the load-bearing detail when debugging prompt drift.
-        if matches!(event, Event::RequestLlmResponse { .. }) {
-            self.format_request_llm(event, &mut buf);
-        } else {
-            format_event_section(&mut buf, &self.elapsed(), "→", event_kind(event), event);
-        }
+        format_event_section(&mut buf, &self.elapsed(), "→", event_kind(event), event);
         let _ = file.lock().unwrap().write_all(buf.as_bytes());
     }
 
@@ -190,51 +179,6 @@ impl DebugLog {
         let d = self.start.elapsed();
         format!("[+{:>3}.{:03}s]", d.as_secs(), d.subsec_millis())
     }
-
-    fn format_request_llm(&self, event: &Event, buf: &mut String) {
-        use std::fmt::Write;
-        let Event::RequestLlmResponse {
-            request_id,
-            backend,
-            model,
-            model_family_id,
-            runtime_profile_id,
-            debug_adaptation,
-            messages,
-            ..
-        } = event
-        else {
-            return;
-        };
-        writeln!(
-            buf,
-            "### {} → RequestLlmResponse #{request_id}",
-            self.elapsed()
-        )
-        .unwrap();
-        writeln!(
-            buf,
-            "backend: `{backend}`  model: {}  family: {}  runtime: {}  debug-adaptation: {}",
-            model.as_deref().unwrap_or("(default)"),
-            model_family_id.as_deref().unwrap_or("(infer)"),
-            runtime_profile_id.as_deref().unwrap_or("(default)"),
-            if *debug_adaptation { "on" } else { "off" }
-        )
-        .unwrap();
-        writeln!(buf, "{} message(s):\n", messages.len()).unwrap();
-        for (i, m) in messages.iter().enumerate() {
-            let role = match m.role {
-                LlmRole::System => "system",
-                LlmRole::User => "user",
-                LlmRole::Assistant => "assistant",
-                LlmRole::Tool => "tool",
-            };
-            writeln!(buf, "#### [{i}] {role}").unwrap();
-            writeln!(buf, "```").unwrap();
-            writeln!(buf, "{}", m.content).unwrap();
-            writeln!(buf, "```\n").unwrap();
-        }
-    }
 }
 
 fn format_event_section<E: serde::Serialize>(
@@ -270,7 +214,6 @@ fn event_kind(event: &Event) -> &'static str {
         Event::Diagnostic { .. } => "Diagnostic",
         Event::SessionEnd { .. } => "SessionEnd",
         Event::RequestUserInput { .. } => "RequestUserInput",
-        Event::RequestLlmResponse { .. } => "RequestLlmResponse",
         Event::StepModeChanged { .. } => "StepModeChanged",
         Event::SubSessionStarted { .. } => "SubSessionStarted",
         Event::SubSessionEnded { .. } => "SubSessionEnded",
@@ -282,9 +225,6 @@ fn host_event_kind(event: &HostEvent) -> &'static str {
         HostEvent::Hello { .. } => "Hello",
         HostEvent::UserMessage { .. } => "UserMessage",
         HostEvent::Cancel => "Cancel",
-        HostEvent::LlmChunk { .. } => "LlmChunk",
-        HostEvent::LlmEnd { .. } => "LlmEnd",
-        HostEvent::LlmError { .. } => "LlmError",
         HostEvent::FollowupSelected { .. } => "FollowupSelected",
         HostEvent::RunStep { .. } => "RunStep",
         HostEvent::RunCritique { .. } => "RunCritique",

@@ -211,18 +211,6 @@ where
                 self.stderr.flush().map_err(write_err)?;
                 self.awaiting_user_input = true;
             }
-            // Dispatch lives in the orchestrator now via `LlmAdapter`,
-            // so the presenter never sees this event. The match has to
-            // stay exhaustive though; if anyone wires the old path
-            // through us we'd rather warn than silently drop.
-            Event::RequestLlmResponse { .. } => {
-                writeln!(
-                    self.stderr,
-                    "  [warn] unexpected RequestLlmResponse reached StderrPresenter; dispatch \
-                     belongs to the orchestrator's LlmAdapter"
-                )
-                .map_err(write_err)?;
-            }
             Event::StepModeChanged { mode } => {
                 writeln!(self.stderr, "  [step mode now: {mode:?}]").map_err(write_err)?;
             }
@@ -393,26 +381,6 @@ mod tests {
         .unwrap();
         let out = String::from_utf8(p.stderr.clone()).unwrap();
         assert!(out.contains("[warn] watch out"), "got: {out}");
-    }
-
-    #[test]
-    fn warns_when_request_llm_response_reaches_presenter() {
-        let mut p = make_presenter();
-        // Synthesize one as if a legacy call path leaked.
-        p.send(&Event::RequestLlmResponse {
-            request_id: "lr-0".into(),
-            backend: "x".into(),
-            model: None,
-            model_family_id: None,
-            runtime_profile_id: None,
-            debug_adaptation: false,
-            kind: SessionKindOut::Work,
-            messages: Vec::new(),
-            tools: Vec::new(),
-        })
-        .unwrap();
-        let out = String::from_utf8(p.stderr.clone()).unwrap();
-        assert!(out.contains("unexpected RequestLlmResponse"), "got: {out}",);
     }
 
     #[test]

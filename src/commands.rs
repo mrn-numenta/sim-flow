@@ -4,7 +4,7 @@ use sim_flow::__internal::config::Config;
 use sim_flow::__internal::foundation_root;
 use sim_flow::__internal::runner::{DOT_SIM_FLOW, StepRunner};
 use sim_flow::__internal::session::protocol::SessionEndReason;
-use sim_flow::__internal::session::{Event, Host};
+use sim_flow::__internal::session::{Event, Presenter};
 use sim_flow::__internal::state::{Flow, State};
 use sim_flow::__internal::steps::registry_for;
 
@@ -1098,27 +1098,28 @@ fn session_cmd(
 fn run_with_socket_session_end<F>(socket_path: &Path, run: F) -> sim_flow::Result<()>
 where
     F: FnOnce(
-        &mut SessionEndTrackingHost<sim_flow::__internal::session::SocketHost>,
+        &mut SessionEndTrackingPresenter<sim_flow::__internal::session::SocketPresenter>,
     ) -> sim_flow::Result<()>,
 {
-    let socket_host = sim_flow::__internal::session::SocketHost::bind(socket_path.to_path_buf())?;
-    let mut host = SessionEndTrackingHost::new(socket_host);
+    let socket_host =
+        sim_flow::__internal::session::SocketPresenter::bind(socket_path.to_path_buf())?;
+    let mut host = SessionEndTrackingPresenter::new(socket_host);
     run_with_error_session_end(&mut host, run)
 }
 
-fn run_with_error_session_end<H: Host, F>(
-    host: &mut SessionEndTrackingHost<H>,
+fn run_with_error_session_end<P: Presenter, F>(
+    host: &mut SessionEndTrackingPresenter<P>,
     run: F,
 ) -> sim_flow::Result<()>
 where
-    F: FnOnce(&mut SessionEndTrackingHost<H>) -> sim_flow::Result<()>,
+    F: FnOnce(&mut SessionEndTrackingPresenter<P>) -> sim_flow::Result<()>,
 {
     match run(host) {
         Ok(()) => Ok(()),
         Err(err) => {
             if !host.saw_session_end {
                 let message = format!("sim-flow session failed: {err}");
-                let _ = host.write(&Event::SessionEnd {
+                let _ = host.send(&Event::SessionEnd {
                     reason: SessionEndReason::Error,
                     message: Some(message),
                 });
@@ -1128,13 +1129,13 @@ where
     }
 }
 
-struct SessionEndTrackingHost<H> {
-    inner: H,
+struct SessionEndTrackingPresenter<P> {
+    inner: P,
     saw_session_end: bool,
 }
 
-impl<H> SessionEndTrackingHost<H> {
-    fn new(inner: H) -> Self {
+impl<P> SessionEndTrackingPresenter<P> {
+    fn new(inner: P) -> Self {
         Self {
             inner,
             saw_session_end: false,
@@ -1142,16 +1143,16 @@ impl<H> SessionEndTrackingHost<H> {
     }
 }
 
-impl<H: Host> Host for SessionEndTrackingHost<H> {
-    fn write(&mut self, event: &Event) -> sim_flow::Result<()> {
+impl<P: Presenter> Presenter for SessionEndTrackingPresenter<P> {
+    fn send(&mut self, event: &Event) -> sim_flow::Result<()> {
         if matches!(event, Event::SessionEnd { .. }) {
             self.saw_session_end = true;
         }
-        self.inner.write(event)
+        self.inner.send(event)
     }
 
-    fn read(&mut self) -> sim_flow::Result<Option<sim_flow::__internal::session::HostEvent>> {
-        self.inner.read()
+    fn recv(&mut self) -> sim_flow::Result<Option<sim_flow::__internal::session::HostEvent>> {
+        self.inner.recv()
     }
 }
 
@@ -1164,24 +1165,24 @@ mod tests {
     use super::*;
 
     #[derive(Default)]
-    struct RecordingHost {
+    struct RecordingPresenter {
         written: Vec<Event>,
     }
 
-    impl Host for RecordingHost {
-        fn write(&mut self, event: &Event) -> sim_flow::Result<()> {
+    impl Presenter for RecordingPresenter {
+        fn send(&mut self, event: &Event) -> sim_flow::Result<()> {
             self.written.push(event.clone());
             Ok(())
         }
 
-        fn read(&mut self) -> sim_flow::Result<Option<sim_flow::__internal::session::HostEvent>> {
+        fn recv(&mut self) -> sim_flow::Result<Option<sim_flow::__internal::session::HostEvent>> {
             Ok(None)
         }
     }
 
     #[test]
     fn fallback_session_end_is_emitted_on_runtime_error() {
-        let mut host = SessionEndTrackingHost::new(RecordingHost::default());
+        let mut host = SessionEndTrackingPresenter::new(RecordingPresenter::default());
         let err = run_with_error_session_end(&mut host, |_host| {
             Err(sim_flow::Error::State("boom".into()))
         })
@@ -1203,9 +1204,9 @@ mod tests {
 
     #[test]
     fn fallback_session_end_is_skipped_when_session_already_ended() {
-        let mut host = SessionEndTrackingHost::new(RecordingHost::default());
+        let mut host = SessionEndTrackingPresenter::new(RecordingPresenter::default());
         let err = run_with_error_session_end(&mut host, |host| {
-            host.write(&Event::SessionEnd {
+            host.send(&Event::SessionEnd {
                 reason: SessionEndReason::ProtocolMismatch,
                 message: Some("bad hello".into()),
             })?;

@@ -35,13 +35,11 @@ use std::time::Instant;
 
 use serde_json::Value;
 use sim_flow::session::JsonlCapture;
-use sim_flow::session::agent::{
-    ClaudeAgent, CliAgent, OllamaAgent, OpenAiCompatAgent, ToolAdvertise,
-};
+use sim_flow::session::agent::{ClaudeAgent, CliAgent, OllamaAgent, OpenAiCompatAgent};
 use sim_flow::session::ingest_spec_file;
 use sim_flow::session::protocol::{
-    DiagnosticLevel, Event, HostEvent, HostInfo, LlmMessage, LlmToolCall, PROTOCOL_VERSION,
-    SessionKindOut, StepMode,
+    DiagnosticLevel, Event, HostEvent, HostInfo, LlmMessage, PROTOCOL_VERSION, SessionKindOut,
+    StepMode,
 };
 use sim_flow::test_validation::validate_step_advanced;
 
@@ -637,7 +635,7 @@ fn handle_event(
     phase: ManualPhase,
     event: Event,
     stdin: &mut ChildStdin,
-    agent: &dyn CliAgent,
+    _agent: &dyn CliAgent,
     project_dir: &std::path::Path,
     verdict: &mut TestVerdict,
     capture: Option<&JsonlCapture>,
@@ -838,135 +836,6 @@ fn handle_event(
                 },
                 capture,
             )?;
-            Ok(phase)
-        }
-        Event::RequestLlmResponse {
-            request_id,
-            messages,
-            tools,
-            ..
-        } => {
-            // Dispatch synchronously to the configured backend.
-            // The orchestrator blocks waiting for chunks/end on the
-            // same request_id, so doing this inline (rather than on
-            // a thread) is safe and keeps the driver simple.
-            //
-            // Native-mode gate matches TerminalHost (host.rs): when
-            // `SIM_FLOW_TOOL_MODE=native` (or `native-tool-calls`)
-            // AND the orchestrator advertises a non-empty tool
-            // catalog, route through `dispatch_with_tools` so the
-            // backend receives the `tools` parameter and the model
-            // can emit native `tool_calls[]`. Without this gate the
-            // tool catalog gets silently dropped and the model
-            // falls back to free-form text that looks like
-            // `read_file({...})`, which the orchestrator can't
-            // execute -- the failure mode that motivated this fix.
-            let native_mode = matches!(
-                std::env::var("SIM_FLOW_TOOL_MODE").ok().as_deref(),
-                Some("native") | Some("native-tool-calls")
-            );
-            let dispatch_start = Instant::now();
-            println!(
-                "e2e_manual:   LLM dispatch ({}, {} messages, {} tools, native={}) ...",
-                request_id,
-                messages.len(),
-                tools.len(),
-                native_mode,
-            );
-            use std::io::Write;
-            let _ = std::io::stdout().flush();
-            let dispatch_result: sim_flow::Result<(
-                String,
-                Vec<sim_flow::session::agent::AdvertisedToolCall>,
-                sim_flow::session::agent::LlmCallMetrics,
-            )> = if native_mode && !tools.is_empty() {
-                let advertise: Vec<ToolAdvertise> = tools
-                    .iter()
-                    .map(|t| ToolAdvertise {
-                        name: t.name.clone(),
-                        description: t.description.clone(),
-                        parameters: t.args_schema.clone(),
-                    })
-                    .collect();
-                agent.dispatch_with_tools(&messages, &advertise)
-            } else {
-                agent
-                    .dispatch(&messages)
-                    .map(|(text, metrics)| (text, Vec::new(), metrics))
-            };
-            match dispatch_result {
-                Ok((text, calls, metrics)) => {
-                    println!(
-                        "e2e_manual:   LLM dispatch ({}) -> {} bytes, {} tool_call(s) in {:.1}s",
-                        request_id,
-                        text.len(),
-                        calls.len(),
-                        dispatch_start.elapsed().as_secs_f64()
-                    );
-                    tracing::info!(
-                        target: "sim_flow::metrics",
-                        event = "llm_call",
-                        request_id = %request_id,
-                        agent = %agent.name(),
-                        tokens_in = ?metrics.tokens_in,
-                        tokens_out = ?metrics.tokens_out,
-                        wall_ms = metrics.wall_ms,
-                        content_bytes = text.len(),
-                        tool_calls = calls.len(),
-                    );
-                    send_host_event(
-                        stdin,
-                        &HostEvent::LlmChunk {
-                            request_id: request_id.clone(),
-                            text,
-                        },
-                        capture,
-                    )?;
-                    let tool_calls: Vec<LlmToolCall> = calls
-                        .into_iter()
-                        .map(|c| LlmToolCall {
-                            id: c.id,
-                            name: c.name,
-                            arguments_json: c.arguments_json,
-                        })
-                        .collect();
-                    let stop_reason = if tool_calls.is_empty() {
-                        "stop"
-                    } else {
-                        "tool_calls"
-                    };
-                    send_host_event(
-                        stdin,
-                        &HostEvent::LlmEnd {
-                            request_id,
-                            stop_reason: Some(stop_reason.into()),
-                            tool_calls,
-                            // e2e_manual is a test driver; the
-                            // exact-token metric isn't material to
-                            // its assertions.
-                            usage: None,
-                        },
-                        capture,
-                    )?;
-                }
-                Err(err) => {
-                    println!(
-                        "e2e_manual:   LLM dispatch ({}) FAILED after {:.1}s: {}",
-                        request_id,
-                        dispatch_start.elapsed().as_secs_f64(),
-                        err,
-                    );
-                    send_host_event(
-                        stdin,
-                        &HostEvent::LlmError {
-                            request_id,
-                            kind: "dispatch".into(),
-                            message: format!("{err}"),
-                        },
-                        capture,
-                    )?;
-                }
-            }
             Ok(phase)
         }
         Event::Followup { label, action } => {

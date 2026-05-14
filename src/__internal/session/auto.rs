@@ -2389,9 +2389,6 @@ fn host_event_label(event: &HostEvent) -> &'static str {
     match event {
         HostEvent::Hello { .. } => "Hello",
         HostEvent::UserMessage { .. } => "UserMessage",
-        HostEvent::LlmChunk { .. } => "LlmChunk",
-        HostEvent::LlmEnd { .. } => "LlmEnd",
-        HostEvent::LlmError { .. } => "LlmError",
         HostEvent::FollowupSelected { .. } => "FollowupSelected",
         HostEvent::Cancel => "Cancel",
         HostEvent::RunStep { .. } => "RunStep",

@@ -55,17 +55,14 @@ pub trait Presenter {
     fn recv(&mut self) -> Result<Option<HostEvent>>;
 }
 
-/// Blanket implementation: any `Host` is automatically a `Presenter`.
-/// Lets us introduce `Presenter` without breaking existing call sites
-/// during the multi-commit refactor. After step 2 lands (orchestrator
-/// takes `&mut dyn Presenter` directly), this impl becomes the only
-/// way the legacy `JsonlHost` etc. participate -- and after step 5
-/// (`Host` deletion) it goes away with them.
-impl<H: super::host::Host + ?Sized> Presenter for H {
+/// Forward `Presenter` through a mutable reference so wrappers like
+/// `TappedPresenter<&mut P>` (built inside a `FnOnce` closure that
+/// only has a `&mut P`) satisfy `Presenter` without taking ownership.
+impl<P: Presenter + ?Sized> Presenter for &mut P {
     fn send(&mut self, event: &Event) -> Result<()> {
-        self.write(event)
+        (**self).send(event)
     }
     fn recv(&mut self) -> Result<Option<HostEvent>> {
-        self.read()
+        (**self).recv()
     }
 }

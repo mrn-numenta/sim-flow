@@ -427,125 +427,11 @@ fn cancel_during_llm_call_ends_session_cleanly() {
     }
 }
 
-#[test]
-#[ignore = "TODO: MockAgent needs enqueue_error to script dispatch failures after Presenter / LlmAdapter split (orchestrator no longer reads HostEvent::LlmError)"]
-fn llm_error_emits_retry_followups_and_rich_user_input_prompt() {
-    // When the host returns LlmError, the orchestrator must surface
-    // the failure inline (Diagnostic), advertise quick-actions
-    // (Followup retry / cancel), and prompt the user with a populated
-    // RequestUserInput rather than the bare prompt-less form. This
-    // gives operators agency on every failure instead of dropping
-    // them at an empty input box with no context.
-    let tmp = tempfile::tempdir().unwrap();
-    let project = init_project(&tmp);
-    let mut host = TestHost::new();
-    host.enqueue(hello()).enqueue(HostEvent::LlmError {
-        request_id: "lr-1".into(),
-        kind: "rate-limit".into(),
-        message: "429 too many requests".into(),
-    });
-    // After the failure prompt, user cancels.
-    host.enqueue(HostEvent::Cancel);
-    let mut mock = MockAgent::new();
-
-    run_session(opts(&project, SessionKind::Work), &mut host, &mut mock).unwrap();
-
-    // Diagnostic carries the error verbatim.
-    let saw_diag = host.written.iter().any(|e| match e {
-        Event::Diagnostic { message, .. } => message.contains("rate-limit"),
-        _ => false,
-    });
-    assert!(saw_diag, "expected error Diagnostic with kind=rate-limit");
-
-    // Followup quick-actions: Retry + Cancel.
-    let actions: Vec<&str> = host
-        .written
-        .iter()
-        .filter_map(|e| match e {
-            Event::Followup { action, .. } => Some(action.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert!(
-        actions.contains(&"/retry"),
-        "expected /retry Followup, got actions={actions:?}",
-    );
-    assert!(
-        actions.contains(&"/end-session"),
-        "expected /end-session Followup, got actions={actions:?}",
-    );
-
-    // RequestUserInput prompt mentions the error and the available
-    // commands so terminal hosts (no Followup rendering) still see
-    // them.
-    let prompt = host.written.iter().find_map(|e| match e {
-        Event::RequestUserInput { prompt, .. } => prompt.clone(),
-        _ => None,
-    });
-    let prompt = prompt.expect("expected a populated RequestUserInput prompt");
-    assert!(
-        prompt.contains("rate-limit"),
-        "prompt missing kind: {prompt}"
-    );
-    assert!(prompt.contains("/retry"), "prompt missing /retry: {prompt}");
-    assert!(
-        prompt.contains("/end-session"),
-        "prompt missing /end-session: {prompt}",
-    );
-}
-
-#[test]
-#[ignore = "TODO: MockAgent needs enqueue_error to script dispatch failures after Presenter / LlmAdapter split (orchestrator no longer reads HostEvent::LlmError)"]
-fn slash_retry_after_llm_error_reissues_request_without_user_turn() {
-    // `/retry` must re-issue the *same* RequestLlmResponse without
-    // pushing a User turn (the LLM should never see the literal
-    // "/retry" text). Verify by counting RequestLlmResponse events
-    // and inspecting the second one's messages: the message stack
-    // must be byte-identical to the first.
-    let tmp = tempfile::tempdir().unwrap();
-    let project = init_project(&tmp);
-    let mut host = TestHost::new();
-    host.enqueue(hello())
-        .enqueue(HostEvent::LlmError {
-            request_id: "lr-1".into(),
-            kind: "transport".into(),
-            message: "socket reset".into(),
-        })
-        .enqueue(HostEvent::UserMessage {
-            text: "/retry".into(),
-        });
-    // Second turn succeeds and the user ends the session.
-    let mut mock = MockAgent::new();
-    mock.enqueue("no changes needed");
-    host.enqueue(HostEvent::UserMessage {
-        text: "/end-session".into(),
-    });
-
-    run_session(opts(&project, SessionKind::Work), &mut host, &mut mock).unwrap();
-
-    let llm_requests: Vec<_> = host
-        .written
-        .iter()
-        .filter_map(|e| match e {
-            Event::RequestLlmResponse { messages, .. } => Some(messages.clone()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        llm_requests.len(),
-        2,
-        "expected exactly two RequestLlmResponse events (initial + post-retry)",
-    );
-    assert_eq!(
-        llm_requests[0].len(),
-        llm_requests[1].len(),
-        "/retry must not push a User turn into messages",
-    );
-    for (a, b) in llm_requests[0].iter().zip(llm_requests[1].iter()) {
-        assert_eq!(a.role, b.role);
-        assert_eq!(a.content, b.content);
-    }
-}
+// TODO: Re-add the LLM-error / `/retry` regression tests once
+// MockAgent gains an `enqueue_error` API to script per-dispatch
+// failures (the orchestrator no longer reads `HostEvent::LlmError`,
+// and the error path is exercised through the `LlmAdapter` return
+// value instead).
 
 #[test]
 fn write_outside_step_allowlist_is_rejected_and_fed_back_to_agent() {
@@ -1249,14 +1135,10 @@ fn manual_mode_starts_parked_and_emits_initial_step_mode_changed() {
         other => panic!("expected SessionEnd, got {other:?}"),
     }
     // Manual-mode parking should never run a sub-session without a
-    // command, so no LLM request should ever go out.
-    let saw_llm = host
-        .written
-        .iter()
-        .any(|e| matches!(e, Event::RequestLlmResponse { .. }));
+    // command, so the orchestrator should never have dispatched.
     assert!(
-        !saw_llm,
-        "no LLM request should fire in a parked manual run"
+        mock.seen.borrow().is_empty(),
+        "no LLM dispatch should fire in a parked manual run"
     );
 }
 
@@ -1288,11 +1170,10 @@ fn manual_mode_dispatches_run_gate_and_keeps_parking() {
         host.written
     );
     // No LLM dispatch should happen for RunGate.
-    let saw_llm = host
-        .written
-        .iter()
-        .any(|e| matches!(e, Event::RequestLlmResponse { .. }));
-    assert!(!saw_llm, "RunGate should not dispatch an LLM call");
+    assert!(
+        mock.seen.borrow().is_empty(),
+        "RunGate should not dispatch an LLM call"
+    );
 }
 
 #[test]

@@ -22,6 +22,12 @@ pub const PROTOCOL_VERSION: &str = "1";
 /// variant name and the payload fields flattened next to it. We use
 /// kebab-case for the tag to match the JSON convention in the
 /// extension's existing types.
+// Wire protocol type: `HelloAck` carries the resolved `StepDescriptorOut`
+// (~300 bytes when all paths/phases are populated) which dwarfs the
+// other variants. Boxing it just to satisfy clippy would force every
+// caller to indirect through a heap allocation on the hot HelloAck
+// emit path; we'd rather pay the extra stack for `match` discriminants.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "event", rename_all = "kebab-case")]
 pub enum Event {
@@ -44,33 +50,6 @@ pub enum Event {
         prompt: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         placeholder: Option<String>,
-    },
-    /// Ask the host to run an LLM call. Host streams the response
-    /// back as `LlmChunk` / `LlmEnd` host events tagged with the same
-    /// `request_id`.
-    RequestLlmResponse {
-        request_id: String,
-        backend: String,
-        model: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        model_family_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        runtime_profile_id: Option<String>,
-        #[serde(default)]
-        debug_adaptation: bool,
-        /// Session kind for this dispatch. Hosts that want to route
-        /// per-kind (e.g. work to vLLM, critique to Anthropic) read
-        /// this and pick a backend / model accordingly; hosts that
-        /// don't care can ignore it. Defaulted to `Work` for
-        /// backwards-compatibility with hosts written before the
-        /// field existed.
-        #[serde(default = "default_session_kind_out")]
-        kind: SessionKindOut,
-        messages: Vec<LlmMessage>,
-        /// Tool catalog for backends that support native tool-use.
-        /// Empty in M2; populated in M3.
-        #[serde(default)]
-        tools: Vec<LlmTool>,
     },
     /// The orchestrator wrote a project file. Informational only;
     /// the host displays "wrote spec.md (123 bytes)" or similar.
@@ -167,42 +146,6 @@ pub enum HostEvent {
     },
     /// User typed (or pasted) the next message in the chat.
     UserMessage { text: String },
-    /// Streaming LLM response chunk fulfilling a prior
-    /// `RequestLlmResponse`.
-    LlmChunk { request_id: String, text: String },
-    /// LLM response finished.
-    LlmEnd {
-        request_id: String,
-        #[serde(default)]
-        stop_reason: Option<String>,
-        /// Native tool calls the model emitted (when the backend
-        /// supports native tool-use AND the orchestrator advertised
-        /// a tool catalog on the matching `RequestLlmResponse`).
-        /// Empty for fence-mode dispatches and for backends that
-        /// don't support native tool calls. `#[serde(default)]`
-        /// keeps the wire shape backward compatible with hosts
-        /// that haven't been updated.
-        #[serde(default)]
-        tool_calls: Vec<LlmToolCall>,
-        /// Optional exact token usage reported by the model server.
-        /// Populated by hosts whose backend surfaces a `usage`
-        /// payload (in-process `TerminalHost` agents that ran
-        /// `dispatch_chat` against an openai-compat server;
-        /// extension dispatchers that capture the SSE `usage`
-        /// chunk). Omitted by hosts that don't know -- the
-        /// orchestrator's `llm-metrics.jsonl` falls back to a
-        /// byte-based estimate in that case (`tokens_exact: false`
-        /// on the metrics row). `#[serde(default)]` keeps older
-        /// hosts wire-compatible.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        usage: Option<LlmUsage>,
-    },
-    /// LLM dispatch failed.
-    LlmError {
-        request_id: String,
-        kind: String,
-        message: String,
-    },
     /// User clicked a `Followup` quick-action.
     FollowupSelected { action: String },
     /// User requested cancellation. The orchestrator stops, evaluates
@@ -327,13 +270,6 @@ pub enum SessionKindOut {
     /// exits Q&A by clicking a step command (RunStep / RunCritique /
     /// Advance / Reset / Shutdown).
     Qa,
-}
-
-/// Serde default for `RequestLlmResponse.kind`. Hosts written before
-/// the field existed deserialize without the tag; treat them as
-/// work-side dispatch so the per-kind routing override is a no-op.
-fn default_session_kind_out() -> SessionKindOut {
-    SessionKindOut::Work
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

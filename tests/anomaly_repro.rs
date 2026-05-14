@@ -348,17 +348,10 @@ fn truly_empty_response_still_triggers_diagnostic() {
         step: "DM0".into(),
         kind: SessionKindOut::Work,
     });
-    // Truly-empty turn: empty content, empty tool_calls.
-    host.enqueue(HostEvent::LlmChunk {
-        request_id: "lr-1".into(),
-        text: String::new(),
-    });
-    host.enqueue(HostEvent::LlmEnd {
-        request_id: "lr-1".into(),
-        stop_reason: Some("stop".into()),
-        tool_calls: Vec::new(),
-        usage: None,
-    });
+    // Truly-empty turn: default `MockAgent` (no responses enqueued)
+    // returns an empty string with no tool calls on every dispatch
+    // -- exactly the "LLM dropped the turn" case the orchestrator's
+    // retry diagnostic targets.
     host.enqueue(HostEvent::Shutdown);
 
     let _ = run_auto(auto_opts(&project, StepMode::Manual), &mut host, &mut mock);

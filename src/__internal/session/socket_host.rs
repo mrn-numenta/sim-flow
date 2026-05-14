@@ -1,10 +1,16 @@
-//! Reconnectable Unix-socket host for IDE-driven sessions.
+//! Reconnectable Unix-socket [`Presenter`] for IDE-driven sessions.
 //!
 //! Unlike `JsonlHost`, which binds the session lifecycle to one stdio
-//! stream pair, `SocketHost` keeps the orchestrator alive across host
-//! disconnects. Each attaching client sends the normal `Hello`
+//! stream pair, `SocketPresenter` keeps the orchestrator alive across
+//! host disconnects. Each attaching client sends the normal `Hello`
 //! handshake, receives a replay of prior session events, and then
 //! continues streaming live events over the same JSONL protocol.
+//!
+//! After the Presenter / LlmAdapter split, LLM dispatch lives inside
+//! the orchestrator; the socket transport only carries user-facing
+//! events + user input, exactly what `Presenter` requires.
+//!
+//! [`Presenter`]: super::presenter::Presenter
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -14,11 +20,11 @@ use std::thread::{self, JoinHandle};
 
 use tracing::{debug, info};
 
-use crate::session::host::Host;
+use crate::session::presenter::Presenter;
 use crate::session::protocol::{Event, HostEvent};
 use crate::{Error, Result};
 
-pub struct SocketHost {
+pub struct SocketPresenter {
     socket_path: PathBuf,
     accept_rx: Receiver<std::os::unix::net::UnixStream>,
     history: Vec<Event>,
@@ -29,7 +35,7 @@ pub struct SocketHost {
     _accept_thread: JoinHandle<()>,
 }
 
-impl SocketHost {
+impl SocketPresenter {
     pub fn bind(path: PathBuf) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|err| {
@@ -133,8 +139,8 @@ impl SocketHost {
     }
 }
 
-impl Host for SocketHost {
-    fn write(&mut self, event: &Event) -> Result<()> {
+impl Presenter for SocketPresenter {
+    fn send(&mut self, event: &Event) -> Result<()> {
         self.adopt_pending_connection(false)?;
         self.history.push(event.clone());
         if let Some(writer) = self.active_writer.as_mut()
@@ -145,7 +151,7 @@ impl Host for SocketHost {
         Ok(())
     }
 
-    fn read(&mut self) -> Result<Option<HostEvent>> {
+    fn recv(&mut self) -> Result<Option<HostEvent>> {
         if let Some(hello) = self.pending_hello.take() {
             return Ok(Some(hello));
         }
@@ -177,7 +183,7 @@ impl Host for SocketHost {
     }
 }
 
-impl Drop for SocketHost {
+impl Drop for SocketPresenter {
     fn drop(&mut self) {
         if let Ok(mut g) = self.shutdown_flag.lock() {
             *g = true;
@@ -302,8 +308,7 @@ fn write_event_line(writer: &mut std::os::unix::net::UnixStream, event: &Event) 
 mod tests {
     use super::*;
     use crate::session::protocol::{
-        Event, HostEvent, HostInfo, LlmMessage, LlmRole, PROTOCOL_VERSION, SessionKindOut,
-        SessionTag, StepDescriptorOut,
+        Event, HostEvent, HostInfo, PROTOCOL_VERSION, SessionKindOut, SessionTag, StepDescriptorOut,
     };
 
     fn temp_socket_path(name: &str) -> PathBuf {
@@ -337,10 +342,10 @@ mod tests {
     #[test]
     fn socket_host_replays_history_to_reattached_clients() {
         let socket_path = temp_socket_path("socket-host-replay");
-        let mut host = SocketHost::bind(socket_path.clone()).unwrap();
+        let mut host = SocketPresenter::bind(socket_path.clone()).unwrap();
 
         let _first = connect_and_hello(&socket_path);
-        match host.read().unwrap() {
+        match host.recv().unwrap() {
             Some(HostEvent::Hello {
                 protocol_version, ..
             }) => {
@@ -349,7 +354,7 @@ mod tests {
             other => panic!("expected hello, got {other:?}"),
         }
 
-        host.write(&Event::HelloAck {
+        host.send(&Event::HelloAck {
             protocol_version: PROTOCOL_VERSION.into(),
             sim_flow_version: "0.0.0-test".into(),
             session: SessionTag {
@@ -371,7 +376,7 @@ mod tests {
             },
         })
         .unwrap();
-        host.write(&Event::RequestUserInput {
+        host.send(&Event::RequestUserInput {
             prompt: Some("continue".into()),
             placeholder: None,
         })
@@ -379,7 +384,7 @@ mod tests {
 
         let second = connect_and_hello(&socket_path);
         std::thread::sleep(std::time::Duration::from_millis(100));
-        host.write(&Event::Diagnostic {
+        host.send(&Event::Diagnostic {
             level: crate::session::protocol::DiagnosticLevel::Info,
             message: "replayed".into(),
         })
@@ -399,12 +404,18 @@ mod tests {
     }
 
     #[test]
-    fn socket_host_delivers_large_request_events_without_dropping_connection() {
-        let socket_path = temp_socket_path("socket-host-large-request");
-        let mut host = SocketHost::bind(socket_path.clone()).unwrap();
+    fn socket_host_delivers_large_events_without_dropping_connection() {
+        // 32 KiB assistant turn body. After the Presenter / LlmAdapter
+        // split the orchestrator no longer emits `RequestLlmResponse`,
+        // but `AssistantText` is the natural large-payload event a
+        // single LLM turn produces -- a long reply easily fits 32 KiB
+        // and round-trips through the same JSONL serializer the
+        // legacy test exercised.
+        let socket_path = temp_socket_path("socket-host-large-event");
+        let mut host = SocketPresenter::bind(socket_path.clone()).unwrap();
 
         let first = connect_and_hello(&socket_path);
-        match host.read().unwrap() {
+        match host.recv().unwrap() {
             Some(HostEvent::Hello {
                 protocol_version, ..
             }) => {
@@ -413,7 +424,7 @@ mod tests {
             other => panic!("expected hello, got {other:?}"),
         }
 
-        host.write(&Event::HelloAck {
+        host.send(&Event::HelloAck {
             protocol_version: PROTOCOL_VERSION.into(),
             sim_flow_version: "0.0.0-test".into(),
             session: SessionTag {
@@ -435,27 +446,16 @@ mod tests {
             },
         })
         .unwrap();
-        host.write(&Event::PhaseChanged {
+        host.send(&Event::PhaseChanged {
             phase: "chat".into(),
         })
         .unwrap();
+        let big_body = "x".repeat(32 * 1024);
+        let writer_body = big_body.clone();
         let writer = std::thread::spawn(move || {
-            host.write(&Event::RequestLlmResponse {
-                request_id: "lr-1".into(),
-                backend: "openai-compat".into(),
-                model: Some("qwen/qwen3-coder-next".into()),
-                model_family_id: Some("qwen3_6".into()),
-                runtime_profile_id: Some("openai_compat_generic".into()),
-                debug_adaptation: true,
-                kind: crate::session::protocol::SessionKindOut::Work,
-                messages: vec![LlmMessage {
-                    role: LlmRole::System,
-                    content: "x".repeat(32 * 1024),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                }],
-                tools: Vec::new(),
+            host.send(&Event::AssistantText {
+                text: writer_body,
+                final_chunk: true,
             })
             .unwrap();
         });
@@ -477,20 +477,11 @@ mod tests {
         reader.read_line(&mut line).unwrap();
         let request: Event = serde_json::from_str(line.trim()).unwrap();
         match request {
-            Event::RequestLlmResponse {
-                request_id,
-                backend,
-                model,
-                messages,
-                ..
-            } => {
-                assert_eq!(request_id, "lr-1");
-                assert_eq!(backend, "openai-compat");
-                assert_eq!(model.as_deref(), Some("qwen/qwen3-coder-next"));
-                assert_eq!(messages.len(), 1);
-                assert_eq!(messages[0].content.len(), 32 * 1024);
+            Event::AssistantText { text, final_chunk } => {
+                assert_eq!(text.len(), 32 * 1024);
+                assert!(final_chunk);
             }
-            other => panic!("expected RequestLlmResponse, got {other:?}"),
+            other => panic!("expected AssistantText, got {other:?}"),
         }
 
         writer.join().unwrap();
