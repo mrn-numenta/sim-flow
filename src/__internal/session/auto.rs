@@ -2154,6 +2154,28 @@ pub fn clear_step_collateral_forward(
             &mut deleted,
             &mut failures,
         );
+        // Pass 3: milestone-progress reset. Steps that walk a
+        // milestone directory (DM2d / DM3b / DM3c / DM4b) store
+        // per-task progress as `- [x]` rows inside files OWNED by
+        // an upstream step (DM2c / DM3a). Those files survive the
+        // file sweep above (they're upstream's `work_artifacts`)
+        // and the `[x]` marks leak across resets, so the dashboard
+        // reports 100% completion for a step with no source code
+        // on disk and the agent's next run hits a confused state.
+        // `MilestoneManager::reset` flips each `[x]`/`[-]` back to
+        // `[ ]` in place, preserving the task TEXT (which the
+        // upstream's planning content owns) and clearing only the
+        // progress state this step writes.
+        use crate::__internal::steps::MilestoneManager;
+        if let Some(walk) = step.milestone_walk {
+            match walk.reset(project_dir) {
+                Ok(paths) => deleted.extend(paths),
+                Err(err) => {
+                    let dir = project_dir.join(walk.dir().trim_end_matches('/'));
+                    failures.push((dir, format!("milestone reset failed: {err}")));
+                }
+            }
+        }
     }
     (deleted, failures)
 }

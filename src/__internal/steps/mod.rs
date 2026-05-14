@@ -170,6 +170,108 @@ pub fn allowed_write_paths(step: &StepDescriptor, kind: crate::client::SessionKi
     }
 }
 
+/// Walk + reset interface for steps whose work / critique sessions
+/// iterate over a directory of milestone files.
+///
+/// Co-locating the two methods is the load-bearing detail: the walker
+/// reads per-milestone progress state (checkbox marks or placeholder
+/// markers) to pick the next target, and `sim-flow reset <step>` has
+/// to clear EXACTLY the same state so post-reset on-disk shape
+/// equals never-run shape. Before the trait existed, the file sweep
+/// in `clear_step_collateral_forward` only deleted things in the
+/// step's `work_artifacts` list -- but the milestone checkbox state
+/// lives in upstream-owned files (DM2c owns `docs/impl-plan/*.md`;
+/// DM2d only flips boxes inside them), so a `reset DM2d` left every
+/// `- [x]` from the prior run intact and the dashboard reported 100%
+/// completion for a step with no source code on disk.
+///
+/// One impl per progress shape: [`MilestoneWalkConfig`] covers both
+/// the checkbox-driven mode (DM2d / DM3b / DM3c / DM4b) and the
+/// placeholder-marker mode (DM2cd / DM3ad / DM4ad) via a single
+/// branch on `placeholder_marker`. Future shapes (e.g. JSON-state
+/// driven) get their own impl without touching either call site.
+pub trait MilestoneManager: std::fmt::Debug + Send + Sync {
+    /// Project-relative directory holding the milestone files.
+    /// Always ends in `/`.
+    fn dir(&self) -> &str;
+
+    /// Project-relative path of the plan-index file alongside the
+    /// milestone files. Inlined into every session's inputs.
+    fn index_file(&self) -> &str;
+
+    /// True when `- [-]` (deferred) rows count as pending. Drives
+    /// the walker to keep targeting milestones with deferrals until
+    /// they're converted to `- [x]`. Default `false`.
+    fn forbids_deferred(&self) -> bool {
+        false
+    }
+
+    /// Find the milestone file the next session should target.
+    /// See [`find_current_milestone`] for the contract; this method
+    /// is the trait-facing entry point. The free-standing function
+    /// stays as the implementation detail so existing callers keep
+    /// compiling unchanged.
+    fn walk(
+        &self,
+        project_dir: &std::path::Path,
+        prior_critique_has_blockers: bool,
+    ) -> CurrentMilestone;
+
+    /// Clear all per-milestone progress so post-reset state is
+    /// equivalent to a never-run step. Called from
+    /// `clear_step_collateral_forward`. Returns the list of files
+    /// modified. Errors propagate; the caller surfaces them as
+    /// reset diagnostics.
+    fn reset(&self, project_dir: &std::path::Path) -> std::io::Result<Vec<std::path::PathBuf>>;
+}
+
+impl MilestoneManager for MilestoneWalkConfig {
+    fn dir(&self) -> &str {
+        self.dir
+    }
+
+    fn index_file(&self) -> &str {
+        self.index_file
+    }
+
+    fn forbids_deferred(&self) -> bool {
+        self.forbid_deferred
+    }
+
+    fn walk(
+        &self,
+        project_dir: &std::path::Path,
+        prior_critique_has_blockers: bool,
+    ) -> CurrentMilestone {
+        find_current_milestone(project_dir, self, prior_critique_has_blockers)
+    }
+
+    fn reset(&self, project_dir: &std::path::Path) -> std::io::Result<Vec<std::path::PathBuf>> {
+        match self.placeholder_marker {
+            // Checkbox mode (DM2d / DM3b / DM3c / DM4b): flip every
+            // `- [x]` / `- [X]` / `- [-]` row back to `- [ ]`. The
+            // milestone files themselves stay -- they're upstream's
+            // (DM2c's) work_artifacts and contain the task TEXT,
+            // which we don't want to regenerate.
+            None => reset_checkbox_milestones(project_dir, self),
+            // Placeholder mode (DM2cd / DM3ad / DM4ad): the milestone
+            // files were stubs containing `marker`, replaced by real
+            // task lists when this step ran. We don't have the
+            // original stub content to restore, so an in-place
+            // reset isn't possible. Skip silently: the only path
+            // to a clean placeholder-mode reset is also resetting
+            // the upstream outline step (DM2c / DM3a / DM4a), which
+            // the downstream cascade in `clear_step_collateral_forward`
+            // will sweep when the user issues `reset <outline-step>`.
+            // Returning an error here would block the rest of the
+            // reset (which DOES want to proceed for the other
+            // collateral) -- worse outcome than the user having to
+            // re-run reset against the upstream.
+            Some(_) => Ok(Vec::new()),
+        }
+    }
+}
+
 /// Outcome of `find_current_milestone`. The orchestrator uses this
 /// to decide which milestone file to scope the next work / critique
 /// session to.
@@ -354,6 +456,83 @@ fn milestone_has_deferred_row(path: &std::path::Path) -> bool {
     };
     body.lines()
         .any(|line| line.trim_start().starts_with("- [-]"))
+}
+
+/// Reset every milestone file under `walk.dir` matching one of
+/// `walk.file_prefixes`: flip every `- [x]` / `- [X]` / `- [-]` row
+/// back to `- [ ]`. The task TEXT after the checkbox is preserved
+/// verbatim, as are non-task lines (headings, prose, code fences).
+/// Files outside the prefix set (e.g. `plan.md`,
+/// `plan-management.md`) are left untouched. Returns the list of
+/// files actually rewritten (skipped when already in their target
+/// shape so we don't churn mtimes).
+fn reset_checkbox_milestones(
+    project_dir: &std::path::Path,
+    walk: &MilestoneWalkConfig,
+) -> std::io::Result<Vec<std::path::PathBuf>> {
+    let dir = project_dir.join(walk.dir.trim_end_matches('/'));
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+    };
+    let mut touched = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.ends_with(".md") {
+            continue;
+        }
+        let Some(prefix) = walk.file_prefixes.iter().find(|p| name.starts_with(**p)) else {
+            continue;
+        };
+        // Same digit-suffix gate as find_current_milestone so non-
+        // milestone files (plan.md, plan-management.md) aren't
+        // touched even if their basename happens to start with the
+        // prefix.
+        let rest = &name[prefix.len()..];
+        if !rest
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let body = std::fs::read_to_string(&path)?;
+        let mut changed = false;
+        let new_lines: Vec<String> = body
+            .lines()
+            .map(|line| {
+                let trimmed_start = line.trim_start();
+                let indent_len = line.len() - trimmed_start.len();
+                if trimmed_start.starts_with("- [x]")
+                    || trimmed_start.starts_with("- [X]")
+                    || trimmed_start.starts_with("- [-]")
+                {
+                    // Replace just the 5-char `- [x]` prefix; keep
+                    // the indentation and trailing text byte-exact.
+                    changed = true;
+                    let after = &trimmed_start[5..];
+                    format!("{}- [ ]{}", &line[..indent_len], after)
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect();
+        if !changed {
+            continue;
+        }
+        let mut new_body = new_lines.join("\n");
+        if body.ends_with('\n') && !new_body.ends_with('\n') {
+            new_body.push('\n');
+        }
+        std::fs::write(&path, new_body)?;
+        touched.push(path);
+    }
+    Ok(touched)
 }
 
 /// True iff the file at `path` contains at least one line whose
@@ -1054,6 +1233,131 @@ mod write_path_tests {
             result,
             CurrentMilestone::File("docs/test-plan/tb-milestone-02-drivers.md".into()),
             "lexicographic order across both prefixes; tb-* sorts before test-*"
+        );
+    }
+
+    fn dm2d_like_walk() -> MilestoneWalkConfig {
+        MilestoneWalkConfig {
+            dir: "docs/impl-plan/",
+            file_prefixes: &["milestone-"],
+            index_file: "docs/impl-plan/plan.md",
+            placeholder_marker: None,
+            forbid_deferred: true,
+        }
+    }
+
+    #[test]
+    fn reset_checkbox_milestones_unticks_all_marked_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("docs/impl-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("milestone-01-payload-types.md");
+        std::fs::write(
+            &path,
+            "# Milestone 1\n\
+             \n\
+             - [x] First task\n\
+             - [X] Second task\n\
+             - [-] Third deferred\n\
+             - [ ] Fourth still open\n\
+             \n\
+             Some prose that has `- [x]` inline but no leading marker -- preserved.\n",
+        )
+        .unwrap();
+
+        let walk = dm2d_like_walk();
+        let touched = walk.reset(tmp.path()).unwrap();
+        assert_eq!(touched.len(), 1, "the one milestone file got rewritten");
+
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            body.contains("- [ ] First task"),
+            "[x] flipped to [ ]: {body}"
+        );
+        assert!(
+            body.contains("- [ ] Second task"),
+            "[X] flipped to [ ]: {body}"
+        );
+        assert!(
+            body.contains("- [ ] Third deferred"),
+            "[-] flipped to [ ]: {body}"
+        );
+        assert!(
+            body.contains("- [ ] Fourth still open"),
+            "already-empty rows untouched: {body}"
+        );
+        assert!(
+            body.contains("inline but no leading marker -- preserved."),
+            "prose mid-line `- [x]` untouched: {body}",
+        );
+    }
+
+    #[test]
+    fn reset_checkbox_milestones_skips_non_milestone_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("docs/impl-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        // plan.md and plan-management.md don't match `milestone-NN-*`.
+        // They must NOT be touched, even though they may contain `- [x]`.
+        let plan = dir.join("plan.md");
+        std::fs::write(&plan, "# Plan\n\n- [x] meta-task\n").unwrap();
+        let m01 = dir.join("milestone-01-foo.md");
+        std::fs::write(&m01, "- [x] real task\n").unwrap();
+
+        let walk = dm2d_like_walk();
+        let touched = walk.reset(tmp.path()).unwrap();
+        assert_eq!(touched.len(), 1, "only the milestone file was touched");
+        assert!(touched[0].ends_with("milestone-01-foo.md"));
+
+        assert_eq!(
+            std::fs::read_to_string(&plan).unwrap(),
+            "# Plan\n\n- [x] meta-task\n",
+            "plan.md is untouched: it doesn't match `milestone-NN-*`",
+        );
+        assert!(
+            std::fs::read_to_string(&m01).unwrap().contains("- [ ]"),
+            "milestone-01 was reset",
+        );
+    }
+
+    #[test]
+    fn reset_checkbox_milestones_is_idempotent_and_no_op_when_all_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("docs/impl-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("milestone-01-x.md");
+        std::fs::write(&path, "- [ ] open\n- [ ] also open\n").unwrap();
+
+        let walk = dm2d_like_walk();
+        let touched = walk.reset(tmp.path()).unwrap();
+        assert!(touched.is_empty(), "no rewrite when nothing to flip");
+
+        // Second call still a no-op.
+        let touched = walk.reset(tmp.path()).unwrap();
+        assert!(touched.is_empty());
+    }
+
+    #[test]
+    fn reset_checkbox_milestones_no_op_when_dir_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let walk = dm2d_like_walk();
+        let touched = walk.reset(tmp.path()).unwrap();
+        assert!(touched.is_empty(), "missing dir resets to nothing");
+    }
+
+    #[test]
+    fn placeholder_mode_reset_is_a_silent_noop() {
+        // Placeholder-mode milestones (DM2cd / DM3ad / DM4ad) can't be
+        // reset in place -- the stub content isn't preserved. The
+        // reset cascade has to handle that by also resetting the
+        // upstream outline step; here we just need to NOT propagate
+        // an error that would abort the rest of the cascade.
+        let walk = placeholder_walk();
+        let tmp = tempfile::tempdir().unwrap();
+        let touched = walk.reset(tmp.path()).unwrap();
+        assert!(
+            touched.is_empty(),
+            "placeholder mode resets nothing in place"
         );
     }
 }
