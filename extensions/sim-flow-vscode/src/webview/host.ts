@@ -12,7 +12,6 @@ import { listCritiqueFiles } from "../state/critiques";
 import type { FlowState } from "../state/flowState";
 import { readAllPlanProgress, readPlanProgress } from "../state/planProgress";
 import { readFlowState } from "../state/flowState";
-import { openExperiments } from "../state/experiments";
 import { createStateWatcher, type SimFlowStateWatcher } from "../state/watcher";
 import { enumerateProjectDocuments } from "../state/documents";
 
@@ -1207,26 +1206,25 @@ export class DashboardHost {
   }
 
   private async loadRuns(): Promise<DashboardState["runs"]> {
-    const reader = openExperiments(this.options.projectDir);
-    if (!reader) {
-      return [];
-    }
+    // MVP architecture: all run data flows through the orchestrator
+    // CLI (`sim-flow runs --json`), not via direct experiments.db
+    // open. Decouples the extension from better-sqlite3 + the DB
+    // schema, and lets future UI surfaces consume the same data
+    // path. Empty array on CLI failure so the dashboard still
+    // renders the rest of project state.
     try {
-      return reader.listRuns({ limit: MAX_DASHBOARD_RUNS });
-    } finally {
-      reader.close();
+      return await this.options.cli.runs({ limit: MAX_DASHBOARD_RUNS });
+    } catch {
+      return [];
     }
   }
 
   private async loadBaselines(): Promise<DashboardState["baselines"]> {
-    const reader = openExperiments(this.options.projectDir);
-    if (!reader) {
-      return [];
-    }
+    // Orchestrator-mediated (see `loadRuns`).
     try {
-      return reader.listBaselines();
-    } finally {
-      reader.close();
+      return await this.options.cli.baselineList();
+    } catch {
+      return [];
     }
   }
 
