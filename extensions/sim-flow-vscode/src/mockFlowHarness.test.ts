@@ -457,6 +457,7 @@ vi.mock("vscode", () => ({
     },
     showErrorMessage: async () => undefined,
     showWarningMessage: async () => undefined,
+    showInformationMessage: async () => undefined,
     showQuickPick: async () => undefined,
   },
   commands: {

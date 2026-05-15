@@ -3,6 +3,10 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["src/**/*.test.ts"],
+    // `build/stage/` is a packaging-time copy of the tree produced by
+    // scripts/package-dev.mjs. It contains a snapshot of `src/` and
+    // would otherwise re-run every test file against stale source.
+    exclude: ["**/node_modules/**", "**/dist/**", "build/**"],
     environment: "node",
     coverage: {
       provider: "v8",

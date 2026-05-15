@@ -6,3 +6,7 @@ coverage/
 *.vsix
 .vscode-test/
 .DS_Store
+# Staged at package time by scripts/bundle-bin.mjs from the cargo
+# `target/sim-flow-vscode-api-docs` rustdoc output; rebuilt on every
+# packaging run, not a source artifact.
+foundation-docs/

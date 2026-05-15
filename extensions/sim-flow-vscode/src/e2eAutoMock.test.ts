@@ -132,34 +132,30 @@ function buildMockServer(requestLog: Array<{ url: string; step: string | null; k
       requestLog.push({ url: req.url ?? "", step, kind });
 
       const writeFileCall = pickResponseForStep(step, kind);
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      });
-      // Emit a minimal SSE stream:
-      //  - role marker
-      //  - tool_calls delta with our scripted call
-      //  - finish_reason=tool_calls
-      //  - [DONE]
+      // The orchestrator dispatches chat-completions with
+      // `stream: false`, so the response is a single non-streaming
+      // JSON body (not an SSE stream). Shape:
+      //   { choices: [{ message: { role, content, tool_calls? },
+      //                 finish_reason }], usage }
       const id = `chatcmpl-mock-${Date.now()}`;
-      const send = (obj: unknown) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
-      send({
-        id,
-        object: "chat.completion.chunk",
-        choices: [{ index: 0, delta: { role: "assistant", content: "" } }],
-      });
+      const tokensIn = parsed.messages.reduce(
+        (sum, m) => sum + (m.content?.length ?? 0),
+        0,
+      );
+      let responseBody: Record<string, unknown>;
       if (writeFileCall) {
-        send({
+        responseBody = {
           id,
-          object: "chat.completion.chunk",
+          object: "chat.completion",
+          model: MODEL,
           choices: [
             {
               index: 0,
-              delta: {
+              message: {
+                role: "assistant",
+                content: "",
                 tool_calls: [
                   {
-                    index: 0,
                     id: `call_mock_${Date.now()}`,
                     type: "function",
                     function: {
@@ -169,45 +165,72 @@ function buildMockServer(requestLog: Array<{ url: string; step: string | null; k
                   },
                 ],
               },
+              finish_reason: "tool_calls",
             },
           ],
-        });
-        send({
-          id,
-          object: "chat.completion.chunk",
-          choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
-        });
+          usage: {
+            prompt_tokens: Math.ceil(tokensIn / 4),
+            completion_tokens: 16,
+            total_tokens: Math.ceil(tokensIn / 4) + 16,
+          },
+        };
       } else {
-        // No-op completion -- lets the orchestrator's auto-mode
-        // pump push us forward (or wind down if the gate is clean).
-        send({
+        // No-op completion -- lets the orchestrator's auto-mode pump
+        // push us forward (or wind down if the gate is clean).
+        responseBody = {
           id,
-          object: "chat.completion.chunk",
-          choices: [{ index: 0, delta: { content: "done." } }],
-        });
-        send({
-          id,
-          object: "chat.completion.chunk",
-          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-        });
+          object: "chat.completion",
+          model: MODEL,
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: "done." },
+              finish_reason: "stop",
+            },
+          ],
+          usage: {
+            prompt_tokens: Math.ceil(tokensIn / 4),
+            completion_tokens: 1,
+            total_tokens: Math.ceil(tokensIn / 4) + 1,
+          },
+        };
       }
-      res.write("data: [DONE]\n\n");
-      res.end();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(responseBody));
     });
   });
 }
+
+/**
+ * Track which (step, kind) write_file calls we've already returned
+ * during this run so the second request doesn't loop on the same
+ * artifact. Real LLMs follow up a successful tool call with a
+ * "done" message; the mock has to emulate that by short-circuiting
+ * to a no-op stop response after the first artifact is on disk.
+ */
+const writtenArtifacts = new Set<string>();
 
 function pickResponseForStep(
   step: string | null,
   kind: string | null,
 ): { path: string; content: string } | null {
+  const key = `${step ?? ""}:${kind ?? ""}`;
+  if (writtenArtifacts.has(key)) {
+    // Already wrote the artifact for this (step, kind). Returning
+    // null makes the mock emit a plain "done." stop response, which
+    // ends the LLM turn and lets the orchestrator advance to the
+    // next sub-session (work -> critique -> gate -> next step).
+    return null;
+  }
   if (step === "DM0" && kind === "work") {
+    writtenArtifacts.add(key);
     return {
       path: "docs/spec.md",
       content: SPEC_MD_FIXTURE,
     };
   }
   if (step === "DM0" && kind === "critique") {
+    writtenArtifacts.add(key);
     return {
       path: "docs/critiques/DM0-critique.json",
       content: CRITIQUE_JSON_FIXTURE,
@@ -291,6 +314,7 @@ describe("e2e auto smoke (mock LLM)", () => {
     }
     // Spin up the embedded mock server on an OS-assigned port.
     requestLog = [];
+    writtenArtifacts.clear();
     server = buildMockServer(requestLog);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const addr = server.address() as AddressInfo;
