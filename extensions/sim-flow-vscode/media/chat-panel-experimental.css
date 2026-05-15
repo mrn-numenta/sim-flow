@@ -139,6 +139,24 @@ body {
   );
 }
 
+/* Bubble expand/collapse toggle: icon-only square button anchored
+ * at the left edge of the toolbar. The embedded SVG inherits
+ * `currentColor` from this rule so the glyph picks up the panel's
+ * foreground colour. */
+.x-toolbar-bubble-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--vscode-foreground);
+}
+
+.x-toolbar-bubble-toggle svg {
+  display: block;
+}
+
 /* Project switcher: same chrome as the other toolbar controls but
  * we let the label grow to absorb long project names, and clip with
  * an ellipsis rather than wrapping so the toolbar height stays one

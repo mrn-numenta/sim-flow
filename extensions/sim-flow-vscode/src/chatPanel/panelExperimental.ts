@@ -50,6 +50,14 @@ interface UiState {
   pinnedToBottom: boolean;
   scrollTop: number;
   palette: PaletteName;
+  /**
+   * Whether the toolbar's expand/collapse toggle most recently
+   * set bubbles to the expanded state. The toggle icon flips on
+   * each click to indicate what the *next* click would do.
+   * Initial value reflects how newly-rendered bubbles default
+   * (tool results closed, everything else open).
+   */
+  bubblesExpanded: boolean;
 }
 
 interface PersistedState {
@@ -64,6 +72,7 @@ const ui: UiState = {
   pinnedToBottom: true,
   scrollTop: 0,
   palette: isPaletteName(persisted?.palette) ? persisted.palette : DEFAULT_PALETTE,
+  bubblesExpanded: true,
 };
 
 applyPalette();
@@ -222,8 +231,57 @@ function buildShell(): Node[] {
   return [shell];
 }
 
+/**
+ * Inline SVGs that approximate VS Code's `expand-all` / `collapse-all`
+ * codicons (two overlapping squares with a +/- in the front one).
+ * Embedding the SVG avoids depending on the codicon font file, which
+ * the chat panel webview doesn't currently load.
+ */
+const TOGGLE_BUBBLES_COLLAPSE_SVG = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1" stroke-linejoin="round">
+  <rect x="1.5" y="1.5" width="9" height="9"/>
+  <rect x="5.5" y="5.5" width="9" height="9" fill="var(--vscode-editor-background)"/>
+  <line x1="7.5" y1="10" x2="12.5" y2="10"/>
+</svg>`;
+
+const TOGGLE_BUBBLES_EXPAND_SVG = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1" stroke-linejoin="round">
+  <rect x="1.5" y="1.5" width="9" height="9"/>
+  <rect x="5.5" y="5.5" width="9" height="9" fill="var(--vscode-editor-background)"/>
+  <line x1="7.5" y1="10" x2="12.5" y2="10"/>
+  <line x1="10" y1="7.5" x2="10" y2="12.5"/>
+</svg>`;
+
 function buildToolbar(state: ChatPanelState): HTMLElement {
   const root = div("x-toolbar");
+
+  // Bubble expand/collapse toggle on the far left. Single button
+  // whose icon mirrors what the *next* click will do:
+  //   - bubbles currently expanded -> show collapse-all glyph
+  //   - bubbles currently collapsed -> show expand-all glyph
+  // The state is tracked locally (ui.bubblesExpanded) so the toggle
+  // survives state-update re-renders without consulting the DOM.
+  const toggleBtn = document.createElement("button");
+  toggleBtn.type = "button";
+  toggleBtn.className = "x-toolbar-bubble-toggle";
+  toggleBtn.innerHTML = ui.bubblesExpanded
+    ? TOGGLE_BUBBLES_COLLAPSE_SVG
+    : TOGGLE_BUBBLES_EXPAND_SVG;
+  toggleBtn.setAttribute(
+    "aria-label",
+    ui.bubblesExpanded ? "Collapse all bubbles" : "Expand all bubbles",
+  );
+  toggleBtn.title = ui.bubblesExpanded
+    ? "Collapse all message bubbles in the transcript."
+    : "Expand all message bubbles in the transcript.";
+  toggleBtn.addEventListener("click", () => {
+    ui.bubblesExpanded = !ui.bubblesExpanded;
+    setAllBubblesOpen(ui.bubblesExpanded);
+    // Re-render so the icon flips to reflect the new "next click"
+    // semantic without waiting for a host state-update.
+    render();
+  });
+  root.appendChild(toggleBtn);
 
   // Project button: doubles as the Start-session affordance when
   // no pump is anchored. Window reloads no longer auto-launch, so
@@ -261,30 +319,7 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   });
   root.appendChild(projectBtn);
 
-  // LLM connection indicator. Three visual states derived from
-  // `sessionActive` + `isStreaming`:
-  //   - no pump      -> hollow dot, "No session"
-  //   - pump idle    -> solid dot, "Ready · <sourceLabel>"
-  //   - pump working -> solid dot + working class, "Working · <sourceLabel>"
-  // We don't actively probe the LLM endpoint -- a live pump that's
-  // producing events is the strongest signal the user actually wants.
-  const llmStatus = document.createElement("span");
-  llmStatus.className = "x-toolbar-llm";
-  if (!state.sessionActive) {
-    llmStatus.classList.add("x-llm-offline");
-    llmStatus.textContent = "○ No session";
-    llmStatus.title =
-      "No sim-flow pump is anchored to this project. Click \"Project: ...\" to start one.";
-  } else if (state.isStreaming) {
-    llmStatus.classList.add("x-llm-working");
-    llmStatus.textContent = `● Working · ${state.sourceLabel}`;
-    llmStatus.title = `sim-flow is talking to ${state.sourceLabel} right now.`;
-  } else {
-    llmStatus.classList.add("x-llm-ready");
-    llmStatus.textContent = `● Ready · ${state.sourceLabel}`;
-    llmStatus.title = `Pump is connected; ${state.sourceLabel} will be called on the next sub-session.`;
-  }
-  root.appendChild(llmStatus);
+  root.appendChild(div("x-toolbar-spacer"));
 
   const paletteLabel = document.createElement("span");
   paletteLabel.className = "x-toolbar-label";
@@ -311,21 +346,30 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   });
   root.appendChild(select);
 
-  root.appendChild(div("x-toolbar-spacer"));
-
-  const expand = document.createElement("button");
-  expand.type = "button";
-  expand.textContent = "Expand all";
-  expand.title = "Open every message bubble in the transcript.";
-  expand.addEventListener("click", () => setAllBubblesOpen(true));
-  root.appendChild(expand);
-
-  const collapse = document.createElement("button");
-  collapse.type = "button";
-  collapse.textContent = "Collapse all";
-  collapse.title = "Close every message bubble in the transcript.";
-  collapse.addEventListener("click", () => setAllBubblesOpen(false));
-  root.appendChild(collapse);
+  // LLM connection indicator on the far right. Three visual states
+  // derived from `sessionActive` + `isStreaming`:
+  //   - no pump      -> hollow dot, "No session"
+  //   - pump idle    -> solid dot, "Ready · <sourceLabel>"
+  //   - pump working -> solid dot + working class, "Working · <sourceLabel>"
+  // We don't actively probe the LLM endpoint -- a live pump that's
+  // producing events is the strongest signal the user actually wants.
+  const llmStatus = document.createElement("span");
+  llmStatus.className = "x-toolbar-llm";
+  if (!state.sessionActive) {
+    llmStatus.classList.add("x-llm-offline");
+    llmStatus.textContent = "○ No session";
+    llmStatus.title =
+      "No sim-flow pump is anchored to this project. Click \"Start session\" to start one.";
+  } else if (state.isStreaming) {
+    llmStatus.classList.add("x-llm-working");
+    llmStatus.textContent = `● Working · ${state.sourceLabel}`;
+    llmStatus.title = `sim-flow is talking to ${state.sourceLabel} right now.`;
+  } else {
+    llmStatus.classList.add("x-llm-ready");
+    llmStatus.textContent = `● Ready · ${state.sourceLabel}`;
+    llmStatus.title = `Pump is connected; ${state.sourceLabel} will be called on the next sub-session.`;
+  }
+  root.appendChild(llmStatus);
 
   return root;
 }
