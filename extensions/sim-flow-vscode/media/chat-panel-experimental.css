@@ -139,6 +139,18 @@ body {
   );
 }
 
+/* Project switcher: same chrome as the other toolbar controls but
+ * we let the label grow to absorb long project names, and clip with
+ * an ellipsis rather than wrapping so the toolbar height stays one
+ * row in the common case. */
+.x-toolbar-project {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
 .x-loading {
   align-items: center;
   justify-items: center;

@@ -166,4 +166,11 @@ export type WebviewMessage =
    * `ChatPanelState.nextAction`; the webview just signals intent
    * and the host dispatches the right host-event over the pump.
    */
-  | { type: "continue-flow" };
+  | { type: "continue-flow" }
+  /**
+   * Switch the chat panel to a different sim-flow project. The
+   * host shows the standard QuickPick (with a "+ New project..."
+   * entry); if the user picks one, the active session is stopped
+   * and a fresh session is launched against the chosen project.
+   */
+  | { type: "switch-project" };

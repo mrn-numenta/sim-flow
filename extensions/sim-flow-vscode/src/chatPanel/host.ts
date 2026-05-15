@@ -439,9 +439,45 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       case "continue-flow":
         await this.continueFlow();
         return;
+      case "switch-project":
+        await this.switchProject();
+        return;
       default:
         return;
     }
+  }
+
+  /**
+   * User-initiated project switch from the chat panel toolbar.
+   * Always shows the QuickPick (no remembered-project shortcut --
+   * the whole point is to pick a different one). If a project is
+   * selected, `launchAutoSession` stops the active pump (if any)
+   * and starts a fresh session against the chosen project; the
+   * `LAST_PROJECT_KEY` workspaceState entry gets overwritten by
+   * `launchAutoSession` itself, so the next cold start lands on
+   * the new project.
+   */
+  private async switchProject(): Promise<void> {
+    const candidates = await findProjectCandidates();
+    if (candidates.length === 0) {
+      await vscode.commands.executeCommand("sim-flow.newProject");
+      return;
+    }
+    const picked = await pickProject(candidates, { allowNew: true });
+    if (picked === undefined) {
+      return;
+    }
+    if (picked === PICK_PROJECT_NEW) {
+      await vscode.commands.executeCommand("sim-flow.newProject");
+      return;
+    }
+    if (this.activePump?.projectDir === picked) {
+      // No-op: user re-picked the project that's already anchored.
+      // Avoid the relaunch (which would stop + restart the pump for
+      // no reason).
+      return;
+    }
+    await this.launchAutoSession(undefined, picked);
   }
 
   /**

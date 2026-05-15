@@ -216,14 +216,33 @@ function buildShell(): Node[] {
     ];
   }
   const shell = div("x-shell");
-  shell.appendChild(buildToolbar());
+  shell.appendChild(buildToolbar(ui.state));
   shell.appendChild(buildTranscript(ui.state));
   shell.appendChild(buildComposer(ui.state));
   return [shell];
 }
 
-function buildToolbar(): HTMLElement {
+function buildToolbar(state: ChatPanelState): HTMLElement {
   const root = div("x-toolbar");
+
+  // Project switcher: the currently-anchored project is the button
+  // label, so the user reads "what am I working on" at a glance.
+  // Clicking the button posts `switch-project`; the host shows the
+  // standard QuickPick and launches the chosen project.
+  const projectBtn = document.createElement("button");
+  projectBtn.type = "button";
+  projectBtn.className = "x-toolbar-project";
+  const projectName =
+    state.projectLabel && state.projectLabel.length > 0
+      ? state.projectLabel
+      : "No project";
+  projectBtn.textContent = `Project: ${projectName}`;
+  projectBtn.title =
+    "Switch the chat panel to a different sim-flow project. Stops the active session and launches a fresh one on the chosen project.";
+  projectBtn.addEventListener("click", () => {
+    send({ type: "switch-project" });
+  });
+  root.appendChild(projectBtn);
 
   const paletteLabel = document.createElement("span");
   paletteLabel.className = "x-toolbar-label";
