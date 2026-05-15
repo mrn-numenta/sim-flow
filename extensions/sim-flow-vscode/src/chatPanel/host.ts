@@ -432,9 +432,42 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       case "set-step-mode":
         await this.handleSetStepMode(msg.mode);
         return;
+      case "pick-file":
+        await this.pickFile();
+        return;
       default:
         return;
     }
+  }
+
+  /**
+   * Open the native file-picker so the user can drop a path into
+   * the composer textarea. Used primarily for the DM0 spec ask but
+   * intentionally generic: any orchestrator `RequestUserInput` that
+   * wants a file path can be answered this way. The Spec / All
+   * files filters mirror the dashboard's existing spec picker.
+   */
+  private async pickFile(): Promise<void> {
+    const picked = await vscode.window.showOpenDialog({
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: false,
+      openLabel: "Insert path",
+      filters: {
+        Spec: ["pdf", "md", "txt"],
+        "All files": ["*"],
+      },
+    });
+    if (!picked || picked.length === 0) {
+      return;
+    }
+    if (!this.view || this.disposed) {
+      return;
+    }
+    await this.view.webview.postMessage({
+      type: "file-picked",
+      path: picked[0]!.fsPath,
+    });
   }
 
   /**

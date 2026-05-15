@@ -80,8 +80,43 @@ window.addEventListener("message", (event) => {
   if (msg.type === "state-update") {
     ui.state = msg.state;
     render();
+    return;
+  }
+  if (msg.type === "file-picked") {
+    insertIntoDraft(msg.path);
+    return;
   }
 });
+
+/**
+ * Append a file path (or any text) to the current composer draft.
+ * Used by the Browse button's response from the host. Adds a space
+ * separator only when the existing draft is non-empty and doesn't
+ * already end in whitespace, so consecutive Browse clicks don't
+ * collapse paths together.
+ */
+function insertIntoDraft(text: string): void {
+  if (text.length === 0) {
+    return;
+  }
+  const needsSeparator =
+    ui.draft.length > 0 && !/\s$/.test(ui.draft);
+  ui.draft = needsSeparator ? `${ui.draft} ${text}` : `${ui.draft}${text}`;
+  persist();
+  render();
+  // Refocus the textarea after the re-render so the user can keep
+  // typing without a manual click. The render call replaces the DOM
+  // node, so `document.activeElement` would otherwise have moved.
+  queueMicrotask(() => {
+    const area = document.querySelector<HTMLTextAreaElement>(
+      ".x-composer-input",
+    );
+    if (area) {
+      area.focus();
+      area.setSelectionRange(area.value.length, area.value.length);
+    }
+  });
+}
 
 function send(message: WebviewMessage): void {
   vscode.postMessage(message);
@@ -492,8 +527,28 @@ function buildComposer(state: ChatPanelState): HTMLElement {
     submitPrompt();
   });
 
+  // Browse button to drop a file path into the draft. The orchestrator
+  // asks for one at DM0 (spec ingest) but the button is intentionally
+  // generic: any prompt that wants a file path can be answered this
+  // way. Disabled in viewer mode and while a stream is in flight --
+  // matching the textarea's own enablement.
+  const browseBtn = document.createElement("button");
+  browseBtn.type = "button";
+  browseBtn.className = "x-browse";
+  browseBtn.textContent = "Browse…";
+  browseBtn.title =
+    "Pick a file (e.g. a DM0 spec) and insert its absolute path into the message.";
+  browseBtn.disabled =
+    state.isViewer || !state.supportsPromptEntry || state.isStreaming;
+  browseBtn.addEventListener("click", () => {
+    if (browseBtn.disabled) {
+      return;
+    }
+    send({ type: "pick-file" });
+  });
+
   const inputRow = div("x-composer-input-row");
-  inputRow.append(area, sendBtn);
+  inputRow.append(area, browseBtn, sendBtn);
   root.appendChild(inputRow);
   root.appendChild(buildComposerMeta(state));
   return root;

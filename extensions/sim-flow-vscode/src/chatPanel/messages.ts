@@ -119,7 +119,15 @@ export type ChatTranscriptEntry =
       streaming?: boolean;
     };
 
-export type HostMessage = { type: "state-update"; state: ChatPanelState };
+export type HostMessage =
+  | { type: "state-update"; state: ChatPanelState }
+  /**
+   * Reply to a `pick-file` request. Carries the absolute path of
+   * the file the user chose; the webview appends it to the current
+   * draft. The host only posts this message when the user actually
+   * selected a file (cancel + dismiss are silent).
+   */
+  | { type: "file-picked"; path: string };
 
 export type WebviewMessage =
   | { type: "ready" }
@@ -128,4 +136,12 @@ export type WebviewMessage =
   | { type: "followup-selected"; action: string; label: string }
   | { type: "clear-transcript" }
   | { type: "stop-conversation" }
-  | { type: "set-step-mode"; mode: StepMode };
+  | { type: "set-step-mode"; mode: StepMode }
+  /**
+   * Open the native file-picker dialog. The host responds with a
+   * `file-picked` HostMessage if the user selected a file. Used by
+   * the composer's Browse button so the user can drop a spec path
+   * (or any other file path) into the prompt when the orchestrator
+   * asks for one.
+   */
+  | { type: "pick-file" };

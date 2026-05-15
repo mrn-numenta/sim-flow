@@ -547,3 +547,28 @@ body {
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+.x-browse {
+  border: 1px solid var(--x-border);
+  background: transparent;
+  color: var(--vscode-foreground);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  min-height: 32px;
+}
+
+.x-browse:hover:not(:disabled) {
+  background: color-mix(
+    in srgb,
+    var(--vscode-input-background) 70%,
+    var(--vscode-foreground)
+  );
+}
+
+.x-browse:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
