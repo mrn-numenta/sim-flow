@@ -274,6 +274,54 @@ impl GlobalDb {
         Ok(())
     }
 
+    /// Mirror one [`ToolTimingRecord`] from a project's
+    /// `logs/tool-timings.jsonl` into the global ledger.
+    ///
+    /// `INSERT` (no UNIQUE collision target): the `tool_timings` table
+    /// uses a plain auto-increment id and no row-level dedup. Gate-
+    /// driven invocations don't have a stable identity (no request_id,
+    /// no turn_index), and a synthetic discriminator that worked
+    /// across re-mirror passes would be fragile; `db backfill` will
+    /// use a JSONL-offset tracker in `meta` to skip already-imported
+    /// lines instead.
+    ///
+    /// Indexed columns surface the common filter axes (`timestamp`,
+    /// `step`, `caller_kind`, `tool_name`); the full record JSON is
+    /// stored so reports get every field without a schema change.
+    pub fn record_tool_timing(
+        &self,
+        project_dir: &Path,
+        record: &crate::__internal::session::tool_timings::ToolTimingRecord,
+    ) -> Result<()> {
+        let project_dir = project_dir_key(project_dir);
+        let record_json = serde_json::to_string(record)
+            .map_err(|e| Error::State(format!("tool_timing record serialize: {e}")))?;
+        let user = user_identity();
+        self.conn
+            .execute(
+                r#"INSERT INTO tool_timings
+                    (project_dir, request_id, turn_index, timestamp, step, caller_kind,
+                     tool_name, wall_ms, exit_code, user_identity, machine_id, record_json)
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"#,
+                params![
+                    project_dir,
+                    record.request_id,
+                    record.turn_index,
+                    record.started_unix.to_string(),
+                    record.step,
+                    record.caller_kind.as_column_str(),
+                    record.tool_name,
+                    record.wall_ms,
+                    record.exit_code,
+                    user,
+                    self.machine_id,
+                    record_json,
+                ],
+            )
+            .map_err(wrap_sqlite)?;
+        Ok(())
+    }
+
     /// Mirror one [`BugRecord`] from a project's `bug-log.jsonl` into
     /// the global ledger. Idempotent: `INSERT OR REPLACE` on
     /// `UNIQUE(project_dir, bug_id)` so re-mirroring an updated record
@@ -377,15 +425,19 @@ fn apply_schema(conn: &Connection) -> Result<()> {
 
         -- Tool timings (LLM-invoked tools + gate-driven shell checks).
         -- One row per invocation. `caller_kind` distinguishes the two
-        -- sources ("llm" / "gate"); unique-key includes a sequence so
-        -- repeated invocations of the same tool inside one turn don't
-        -- collide.
+        -- sources ("llm" / "gate"). No UNIQUE on this table -- gate
+        -- invocations don't have a stable identity (no request_id /
+        -- turn_index), and constructing a synthetic discriminator that
+        -- works across re-mirror passes is fragile. The live writer
+        -- writes each row exactly once; `db backfill` will use a
+        -- file-offset tracker in `meta` (one row per JSONL source) to
+        -- skip already-imported lines instead of relying on row-level
+        -- dedup.
         CREATE TABLE IF NOT EXISTS tool_timings (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             project_dir     TEXT NOT NULL,
             request_id      TEXT,
             turn_index      INTEGER,
-            invocation_seq  INTEGER NOT NULL,
             timestamp       TEXT NOT NULL,
             step            TEXT,
             caller_kind     TEXT NOT NULL,
@@ -394,8 +446,7 @@ fn apply_schema(conn: &Connection) -> Result<()> {
             exit_code       INTEGER,
             user_identity   TEXT NOT NULL DEFAULT '',
             machine_id      TEXT NOT NULL DEFAULT '',
-            record_json     TEXT NOT NULL,
-            UNIQUE(project_dir, request_id, turn_index, invocation_seq, tool_name)
+            record_json     TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_tool_timings_step        ON tool_timings(step);
         CREATE INDEX IF NOT EXISTS idx_tool_timings_caller_kind ON tool_timings(caller_kind);
@@ -760,6 +811,75 @@ mod tests {
             )
             .expect("wall_ms");
         assert_eq!(wall_ms, 500, "first write's wall_ms must win");
+    }
+
+    #[test]
+    fn record_tool_timing_round_trips_llm_and_gate_kinds() {
+        use crate::__internal::session::tool_timings::{CallerKind, ToolTimingRecord};
+
+        let db = GlobalDb::open_in_memory().expect("open");
+        let project_dir = std::env::temp_dir();
+
+        let llm = ToolTimingRecord {
+            started_unix: 1_700_000_000,
+            step: Some("DM3c".to_string()),
+            caller_kind: CallerKind::Llm,
+            tool_name: "run_cargo".to_string(),
+            args_summary: "test --quiet".to_string(),
+            status: "ok".to_string(),
+            wall_ms: 4_200,
+            exit_code: Some(0),
+            request_id: Some("req-1".to_string()),
+            turn_index: Some(2),
+        };
+        let gate = ToolTimingRecord {
+            started_unix: 1_700_000_100,
+            step: Some("DM3c".to_string()),
+            caller_kind: CallerKind::Gate,
+            tool_name: "cargo".to_string(),
+            args_summary: "clippy --all-targets --quiet".to_string(),
+            status: "ok".to_string(),
+            wall_ms: 12_500,
+            exit_code: Some(0),
+            request_id: None,
+            turn_index: None,
+        };
+        db.record_tool_timing(&project_dir, &llm)
+            .expect("record llm");
+        db.record_tool_timing(&project_dir, &gate)
+            .expect("record gate");
+
+        let rows: Vec<(String, String, i64, Option<String>)> = db
+            .conn()
+            .prepare(
+                "SELECT caller_kind, tool_name, wall_ms, request_id FROM tool_timings ORDER BY id",
+            )
+            .expect("prep")
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            })
+            .expect("query")
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("collect");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0],
+            (
+                "llm".to_string(),
+                "run_cargo".to_string(),
+                4_200,
+                Some("req-1".to_string())
+            )
+        );
+        assert_eq!(
+            rows[1],
+            ("gate".to_string(), "cargo".to_string(), 12_500, None)
+        );
     }
 
     #[test]

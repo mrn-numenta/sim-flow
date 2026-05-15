@@ -190,6 +190,12 @@ where
     // leaves no empty file.
     let llm_metrics = crate::session::llm_metrics::LlmMetricsLog::for_project(&opts.project_dir);
 
+    // Per-tool-invocation wall-clock timings (LLM-driven tools). Same
+    // lazy-open / best-effort shape as `LlmMetricsLog`. Captures the
+    // `Event::ToolInvoked` payloads with `caller_kind = "llm"` so
+    // reports can split out tool time from model-wait time per step.
+    let tool_timings = crate::session::tool_timings::ToolTimingsLog::for_project(&opts.project_dir);
+
     // 1. Load state + step descriptor.
     let dot = opts.project_dir.join(".sim-flow");
     let state = State::load(&dot)?;
@@ -1038,8 +1044,27 @@ where
             let mut artifact_write_failures: Vec<(String, String)> = Vec::new();
             let mut artifact_write_successes: u32 = 0;
             for art in &artifacts {
+                let started_unix = crate::session::tool_timings::now_unix_seconds();
                 let started = std::time::Instant::now();
-                match write_artifact(&opts.project_dir, &write_paths, art) {
+                let outcome = write_artifact(&opts.project_dir, &write_paths, art);
+                let wall_ms = started.elapsed().as_millis() as u64;
+                let (status, detail_for_failures) = match &outcome {
+                    Ok(_) => ("ok", None),
+                    Err(err) => ("error", Some(format!("{err}"))),
+                };
+                tool_timings.record(&crate::session::tool_timings::ToolTimingRecord {
+                    started_unix,
+                    step: Some(step.id.to_string()),
+                    caller_kind: crate::session::tool_timings::CallerKind::Llm,
+                    tool_name: "write_file".to_string(),
+                    args_summary: art.relative_path.clone(),
+                    status: status.to_string(),
+                    wall_ms,
+                    exit_code: None,
+                    request_id: None,
+                    turn_index: None,
+                });
+                match outcome {
                     Ok(bytes) => {
                         artifact_write_successes += 1;
                         crate::manifest::record_write(
@@ -1056,11 +1081,12 @@ where
                             name: "write_file".into(),
                             args_summary: art.relative_path.clone(),
                             status: "ok".into(),
-                            duration_ms: started.elapsed().as_millis() as u64,
+                            duration_ms: wall_ms,
                         })?;
                     }
-                    Err(err) => {
-                        let detail = format!("{err}");
+                    Err(_) => {
+                        let detail = detail_for_failures
+                            .expect("status='error' implies detail_for_failures is Some");
                         host.send(&Event::Diagnostic {
                             level: DiagnosticLevel::Error,
                             message: format!("failed to write {}: {detail}", art.relative_path),
@@ -1069,7 +1095,7 @@ where
                             name: "write_file".into(),
                             args_summary: art.relative_path.clone(),
                             status: "error".into(),
-                            duration_ms: started.elapsed().as_millis() as u64,
+                            duration_ms: wall_ms,
                         })?;
                         artifact_write_failures.push((art.relative_path.clone(), detail));
                     }
@@ -1176,6 +1202,7 @@ where
                 // a User-role feedback message.
                 let mut per_call_displays: Vec<String> = Vec::with_capacity(tool_calls.len());
                 for call in &tool_calls {
+                    let started_unix = crate::session::tool_timings::now_unix_seconds();
                     let started = std::time::Instant::now();
                     // Read the current milestone's body fresh for
                     // each call -- the agent may have just edited it.
@@ -1210,11 +1237,25 @@ where
                     } else {
                         tool_failures += 1;
                     }
+                    let wall_ms = started.elapsed().as_millis() as u64;
+                    let args_summary = tool_args_summary(call);
+                    tool_timings.record(&crate::session::tool_timings::ToolTimingRecord {
+                        started_unix,
+                        step: Some(step.id.to_string()),
+                        caller_kind: crate::session::tool_timings::CallerKind::Llm,
+                        tool_name: call.name.clone(),
+                        args_summary: args_summary.clone(),
+                        status: status.to_string(),
+                        wall_ms,
+                        exit_code: None,
+                        request_id: None,
+                        turn_index: None,
+                    });
                     host.send(&Event::ToolInvoked {
                         name: call.name.clone(),
-                        args_summary: tool_args_summary(call),
+                        args_summary,
                         status: status.into(),
-                        duration_ms: started.elapsed().as_millis() as u64,
+                        duration_ms: wall_ms,
                     })?;
                     per_call_displays.push(outcome.display.clone());
                     if let Some(c) = outcome.test_failure_count {

@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Instant;
 
 use regex::Regex;
 use serde::Serialize;
@@ -240,10 +241,44 @@ fn evaluate_one(project_dir: &Path, check: &GateCheck) -> Result<Option<GateFail
             args,
             description,
         } => {
+            // Record per-gate-shell wall-clock timing alongside the
+            // existing pass/fail outcome. The timing row lands in the
+            // project-local `tool-timings.jsonl` and (best-effort) the
+            // global DB with `caller_kind = "gate"` so reports can
+            // separate gate-evaluation cost from agent-tool cost.
+            use crate::session::tool_timings::{
+                CallerKind, ToolTimingRecord, ToolTimingsLog, now_unix_seconds,
+            };
+            let started_unix = now_unix_seconds();
+            let started = Instant::now();
             let output = Command::new(cmd)
                 .args(args)
                 .current_dir(project_dir)
                 .output();
+            let wall_ms = started.elapsed().as_millis() as u64;
+            let (status_str, exit_code) = match &output {
+                Ok(out) if out.status.success() => ("ok", out.status.code()),
+                Ok(out) => ("error", out.status.code()),
+                Err(_) => ("error", None),
+            };
+            let timings = ToolTimingsLog::for_project(project_dir);
+            timings.record(&ToolTimingRecord {
+                started_unix,
+                // Gate evaluation runs outside the per-step session
+                // loop; the step id isn't in scope at this depth. Step
+                // attribution lives on the orchestrator's gate-emit
+                // events; here we leave it None and let the consumer
+                // group by command name or timestamp.
+                step: None,
+                caller_kind: CallerKind::Gate,
+                tool_name: cmd.to_string(),
+                args_summary: args.join(" "),
+                status: status_str.to_string(),
+                wall_ms,
+                exit_code,
+                request_id: None,
+                turn_index: None,
+            });
             match output {
                 Ok(out) if out.status.success() => Ok(None),
                 Ok(out) => Ok(Some(GateFailure {
