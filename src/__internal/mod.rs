@@ -9,6 +9,7 @@ pub mod error;
 pub mod foundation_root;
 pub mod gate;
 pub mod git_commit;
+pub mod global_db;
 pub mod keys;
 pub mod manifest;
 pub mod new_project;
