@@ -611,10 +611,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
     if (this.activePump) {
-      if (
-        this.activePump.projectDir === context.projectDir &&
-        this.activePump.awaitingInput
-      ) {
+      // Route to the pump whenever it's anchored to this project --
+      // not only when `awaitingInput` is true. In manual mode the
+      // orchestrator parks at `wait_for_command` between sub-sessions
+      // WITHOUT emitting `RequestUserInput`, so awaitingInput stays
+      // false there even though `UserMessage` is the right thing to
+      // send (the orchestrator dispatches it as a Q&A turn). The
+      // composer is already disabled while `isStreaming` (i.e.
+      // mid-sub-session), so this widened path doesn't admit racy
+      // sends during active work.
+      if (this.activePump.projectDir === context.projectDir) {
         await this.sendPumpPrompt(context, prompt);
       }
       return;
