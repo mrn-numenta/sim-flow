@@ -170,6 +170,12 @@ pub fn open(
         status: "open".to_string(),
     });
     save_all(project_dir, &records)?;
+    // Best-effort mirror to the per-user global DB. Failure logs a
+    // `tracing::warn!` inside `with_db` and never aborts the caller --
+    // the project-local JSONL is authoritative.
+    if let Some(last) = records.last() {
+        let _ = crate::__internal::global_db::with_db(|db| db.record_bug(project_dir, last));
+    }
     Ok(id)
 }
 
@@ -178,12 +184,16 @@ pub fn open(
 /// best-effort logger, not a state machine.
 pub fn append_event(project_dir: &Path, id: &str, event: BugEvent) -> std::io::Result<()> {
     let mut records = load_all(project_dir);
-    if let Some(rec) = records.iter_mut().find(|r| r.id == id)
-        && rec.status == "open"
-    {
-        rec.events.push(event);
-        return save_all(project_dir, &records);
-    }
+    let Some(idx) = records
+        .iter()
+        .position(|r| r.id == id && r.status == "open")
+    else {
+        return Ok(());
+    };
+    records[idx].events.push(event);
+    save_all(project_dir, &records)?;
+    // Best-effort global mirror of the mutated record.
+    let _ = crate::__internal::global_db::with_db(|db| db.record_bug(project_dir, &records[idx]));
     Ok(())
 }
 
@@ -198,12 +208,15 @@ pub fn resolve(
     status_override: Option<&str>,
 ) -> std::io::Result<()> {
     let mut records = load_all(project_dir);
-    if let Some(rec) = records.iter_mut().find(|r| r.id == id) {
-        rec.status = status_override.unwrap_or("resolved").to_string();
-        rec.closed_at = Some(now_iso());
-        rec.resolution = Some(resolution.to_string());
-        return save_all(project_dir, &records);
-    }
+    let Some(idx) = records.iter().position(|r| r.id == id) else {
+        return Ok(());
+    };
+    records[idx].status = status_override.unwrap_or("resolved").to_string();
+    records[idx].closed_at = Some(now_iso());
+    records[idx].resolution = Some(resolution.to_string());
+    save_all(project_dir, &records)?;
+    // Best-effort global mirror of the closed record.
+    let _ = crate::__internal::global_db::with_db(|db| db.record_bug(project_dir, &records[idx]));
     Ok(())
 }
 

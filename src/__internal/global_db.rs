@@ -83,6 +83,22 @@ pub fn user_identity() -> String {
         .clone()
 }
 
+/// Canonicalize a project directory into the string form stored in the
+/// `project_dir` column on every telemetry row.
+///
+/// Resolves symlinks and converts to absolute path when possible, so two
+/// different shell paths into the same project (one through a symlink,
+/// one direct) don't fragment that project's rows across the DB. Falls
+/// back to the lexical path string when canonicalization fails (e.g. the
+/// directory was deleted between op and mirror) -- the row still lands,
+/// just with the un-resolved string as the key.
+pub fn project_dir_key(path: &Path) -> String {
+    path.canonicalize()
+        .ok()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string_lossy().to_string())
+}
+
 fn git_user_email() -> Option<String> {
     let output = std::process::Command::new("git")
         .args(["config", "--global", "--get", "user.email"])
@@ -184,8 +200,9 @@ impl GlobalDb {
     }
 
     /// Access the underlying connection. Used by writer modules in
-    /// follow-up tasks (bugs / llm-metrics / tool-timings mirrors).
-    #[allow(dead_code)] // wired by Phase 1 mirror tasks (bugs / metrics / timings)
+    /// follow-up tasks (llm-metrics / tool-timings / experiments
+    /// mirrors).
+    #[allow(dead_code)] // wired by Phase 1 mirror tasks (metrics / timings / experiments)
     pub(crate) fn conn(&self) -> &Connection {
         &self.conn
     }
@@ -194,6 +211,48 @@ impl GlobalDb {
     #[allow(dead_code)] // wired by Phase 1 mirror tasks
     pub(crate) fn conn_mut(&mut self) -> &mut Connection {
         &mut self.conn
+    }
+
+    /// Mirror one [`BugRecord`] from a project's `bug-log.jsonl` into
+    /// the global ledger. Idempotent: `INSERT OR REPLACE` on
+    /// `UNIQUE(project_dir, bug_id)` so re-mirroring an updated record
+    /// (after `append_event` / `resolve` mutates it in place) replaces
+    /// the prior snapshot.
+    ///
+    /// Indexed columns (`opened_at`, `step`, `category`, `status`) are
+    /// extracted from the record so reports can filter without parsing
+    /// `record_json`. The full record JSON is stored too so new fields
+    /// added to [`BugRecord`] surface in the global DB without a schema
+    /// change.
+    pub fn record_bug(
+        &self,
+        project_dir: &Path,
+        record: &crate::__internal::bug_log::BugRecord,
+    ) -> Result<()> {
+        let project_dir = project_dir_key(project_dir);
+        let record_json = serde_json::to_string(record)
+            .map_err(|e| Error::State(format!("bug record serialize: {e}")))?;
+        let user = user_identity();
+        self.conn
+            .execute(
+                r#"INSERT OR REPLACE INTO bugs
+                    (project_dir, bug_id, opened_at, step, category, status,
+                     user_identity, machine_id, record_json)
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"#,
+                params![
+                    project_dir,
+                    record.id,
+                    record.opened_at,
+                    record.step,
+                    record.category,
+                    record.status,
+                    user,
+                    self.machine_id,
+                    record_json,
+                ],
+            )
+            .map_err(wrap_sqlite)?;
+        Ok(())
     }
 }
 
@@ -474,6 +533,114 @@ mod tests {
     fn user_identity_is_non_empty() {
         let id = user_identity();
         assert!(!id.is_empty(), "user_identity should never be empty");
+    }
+
+    #[test]
+    fn project_dir_key_canonicalizes_when_possible() {
+        let dir = tempdir();
+        // Existing path canonicalizes (absolute, symlinks resolved).
+        let key = project_dir_key(dir.path());
+        let canonical = dir.path().canonicalize().expect("canonicalize tempdir");
+        assert_eq!(key, canonical.to_string_lossy());
+        assert!(
+            Path::new(&key).is_absolute(),
+            "project_dir_key must be absolute when canonicalize succeeds: {key:?}"
+        );
+    }
+
+    #[test]
+    fn project_dir_key_falls_back_when_canonicalize_fails() {
+        let nonexistent = Path::new("/this/path/does/not/exist/abc123xyz");
+        // Canonicalize fails -> the lexical string still comes back as the
+        // key (so the row lands rather than getting dropped on a missing
+        // dir). The exact value is the input path's string form.
+        assert_eq!(project_dir_key(nonexistent), nonexistent.to_string_lossy());
+    }
+
+    #[test]
+    fn record_bug_inserts_row_and_round_trips_fields() {
+        let db = GlobalDb::open_in_memory().expect("open");
+        let project_dir = std::env::temp_dir();
+        let bug = crate::__internal::bug_log::BugRecord {
+            id: "bug-007".to_string(),
+            opened_at: "1700000000".to_string(),
+            closed_at: None,
+            step: "DM3c".to_string(),
+            milestone: Some("test-milestone-03-stress.md".to_string()),
+            category: "test_flake".to_string(),
+            issue: "tarpaulin times out under load".to_string(),
+            events: Vec::new(),
+            resolution: None,
+            status: "open".to_string(),
+        };
+        db.record_bug(&project_dir, &bug).expect("record_bug");
+
+        let (bug_id, step, category, status, mid): (String, String, String, String, String) = db
+            .conn()
+            .query_row(
+                "SELECT bug_id, step, category, status, machine_id FROM bugs",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .expect("query row");
+        assert_eq!(bug_id, "bug-007");
+        assert_eq!(step, "DM3c");
+        assert_eq!(category, "test_flake");
+        assert_eq!(status, "open");
+        assert_eq!(mid, db.machine_id(), "machine_id must be stamped on row");
+    }
+
+    #[test]
+    fn record_bug_insert_or_replace_keeps_latest_snapshot() {
+        let db = GlobalDb::open_in_memory().expect("open");
+        let project_dir = std::env::temp_dir();
+        let mut bug = crate::__internal::bug_log::BugRecord {
+            id: "bug-001".to_string(),
+            opened_at: "1700000000".to_string(),
+            closed_at: None,
+            step: "DM2d".to_string(),
+            milestone: None,
+            category: "wire_up".to_string(),
+            issue: "port-name typo".to_string(),
+            events: Vec::new(),
+            resolution: None,
+            status: "open".to_string(),
+        };
+        db.record_bug(&project_dir, &bug).expect("first write");
+
+        // Mutate (resolve) and re-mirror; the unique key on (project_dir,
+        // bug_id) must keep exactly one row carrying the latest state.
+        bug.status = "resolved".to_string();
+        bug.closed_at = Some("1700000010".to_string());
+        bug.resolution = Some("renamed port; gate green".to_string());
+        db.record_bug(&project_dir, &bug).expect("second write");
+
+        let row_count: i64 = db
+            .conn()
+            .query_row(
+                "SELECT count(*) FROM bugs WHERE bug_id = ?1",
+                params!["bug-001"],
+                |row| row.get(0),
+            )
+            .expect("count rows");
+        assert_eq!(row_count, 1, "INSERT OR REPLACE should keep one row");
+        let status: String = db
+            .conn()
+            .query_row(
+                "SELECT status FROM bugs WHERE bug_id = ?1",
+                params!["bug-001"],
+                |row| row.get(0),
+            )
+            .expect("status");
+        assert_eq!(status, "resolved", "latest snapshot must win");
     }
 
     // ─── Test helpers ─────────────────────────────────────────────────
