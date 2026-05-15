@@ -556,10 +556,21 @@ function buildComposer(state: ChatPanelState): HTMLElement {
     submitPrompt();
   });
 
+  // Send / Stop button. Renders as an icon (↑ for send, ■ for stop)
+  // since both glyphs are universally understood and read at a
+  // glance. The button's class swaps between `x-send-send` and
+  // `x-send-stop` so CSS can recolour the stop state in the warning
+  // palette without changing the layout. aria-label + title carry
+  // the verbal action for screen readers and hover tooltips.
   const sendBtn = document.createElement("button");
   sendBtn.type = "button";
-  sendBtn.className = "x-send";
-  sendBtn.textContent = state.isStreaming ? "Stop" : "Send";
+  sendBtn.className = state.isStreaming ? "x-send x-send-stop" : "x-send x-send-send";
+  sendBtn.textContent = state.isStreaming ? "■" : "↑";
+  sendBtn.setAttribute(
+    "aria-label",
+    state.isStreaming ? "Stop the current request" : "Send message",
+  );
+  sendBtn.title = state.isStreaming ? "Stop" : "Send";
   sendBtn.disabled = state.isStreaming ? !state.canStop : !canSend(state);
   sendBtn.addEventListener("click", () => {
     if (state.isStreaming) {
@@ -571,28 +582,31 @@ function buildComposer(state: ChatPanelState): HTMLElement {
     submitPrompt();
   });
 
-  // Browse button to drop a file path into the draft. The orchestrator
-  // asks for one at DM0 (spec ingest) but the button is intentionally
-  // generic: any prompt that wants a file path can be answered this
-  // way. Disabled in viewer mode and while a stream is in flight --
-  // matching the textarea's own enablement.
-  const browseBtn = document.createElement("button");
-  browseBtn.type = "button";
-  browseBtn.className = "x-browse";
-  browseBtn.textContent = "Browse…";
-  browseBtn.title =
-    "Pick a file or directory and insert its absolute path into the message.";
-  browseBtn.disabled =
-    state.isViewer || !state.supportsPromptEntry || state.isStreaming;
-  browseBtn.addEventListener("click", () => {
-    if (browseBtn.disabled) {
-      return;
-    }
-    send({ type: "pick-file" });
-  });
-
   const inputRow = div("x-composer-input-row");
-  inputRow.append(area, browseBtn, sendBtn);
+  // Browse… is only meaningful while the orchestrator is in DM0
+  // (the spec-ingest step). Other steps don't take a file path as
+  // their primary input, so the button just adds clutter there.
+  // When DM0 advances to DM1 the button disappears automatically
+  // because `state.currentStep` reflects state.toml.
+  if (state.currentStep === "DM0") {
+    const browseBtn = document.createElement("button");
+    browseBtn.type = "button";
+    browseBtn.className = "x-browse";
+    browseBtn.textContent = "Browse…";
+    browseBtn.title =
+      "Pick a file or directory and insert its absolute path into the message.";
+    browseBtn.disabled =
+      state.isViewer || !state.supportsPromptEntry || state.isStreaming;
+    browseBtn.addEventListener("click", () => {
+      if (browseBtn.disabled) {
+        return;
+      }
+      send({ type: "pick-file" });
+    });
+    inputRow.append(area, browseBtn, sendBtn);
+  } else {
+    inputRow.append(area, sendBtn);
+  }
   root.appendChild(inputRow);
   root.appendChild(buildComposerMeta(state));
   return root;
@@ -609,46 +623,10 @@ function buildComposerMeta(state: ChatPanelState): HTMLElement {
   const root = div("x-composer-meta");
   const disabled = state.currentStepMode === null;
 
-  // Single checkbox whose label flips between "Auto" and "Manual"
-  // based on the orchestrator's current step mode. Checked == auto
-  // (run sub-sessions to completion), unchecked == manual (park
-  // between sub-sessions and wait for Continue). The label name
-  // tracks the live value so the user reads the *current* mode at
-  // a glance instead of inferring it from checkbox state.
-  const modeLabel = document.createElement("label");
-  modeLabel.className = "x-mode-checkbox";
-  const checkbox = document.createElement("input");
-  checkbox.type = "checkbox";
-  checkbox.checked = state.currentStepMode === "auto";
-  checkbox.disabled = disabled;
-  checkbox.addEventListener("change", () => {
-    send({ type: "set-step-mode", mode: checkbox.checked ? "auto" : "manual" });
-  });
-  const text = document.createElement("span");
-  // Mirror the checkbox state in the label so an unchecked box
-  // reads as "Manual" and a checked one as "Auto". When no pump
-  // is live we still pick a label from the checkbox so the row
-  // doesn't collapse to an unlabelled box.
-  text.textContent = checkbox.checked ? "Auto" : "Manual";
-  text.title =
-    "Checked = Auto (orchestrator runs sub-sessions to completion). " +
-    "Unchecked = Manual (orchestrator parks between sub-sessions; click Continue to advance).";
-  modeLabel.append(checkbox, text);
-  root.appendChild(modeLabel);
-
-  if (disabled) {
-    const hint = document.createElement("span");
-    hint.className = "x-composer-meta-hint";
-    hint.textContent = "(no live session)";
-    root.appendChild(hint);
-  }
-
-  root.appendChild(div("x-composer-meta-spacer"));
-
-  // Continue button -- only meaningful when the host computed a
-  // next action (manual mode + parked + has a successor). We
-  // always render it so the user has a stable target; disabled
-  // state communicates "nothing to do right now".
+  // Continue button on the left -- the primary flow-driving action,
+  // placed where the eye reads first. Only meaningful when the host
+  // computed a next action (manual mode + parked + has a successor);
+  // we always render it so the user has a stable target.
   const continueBtn = document.createElement("button");
   continueBtn.type = "button";
   continueBtn.className = "x-continue";
@@ -665,6 +643,38 @@ function buildComposerMeta(state: ChatPanelState): HTMLElement {
     send({ type: "continue-flow" });
   });
   root.appendChild(continueBtn);
+
+  root.appendChild(div("x-composer-meta-spacer"));
+
+  if (disabled) {
+    const hint = document.createElement("span");
+    hint.className = "x-composer-meta-hint";
+    hint.textContent = "(no live session)";
+    root.appendChild(hint);
+  }
+
+  // Mode toggle on the right -- text-only button (no background,
+  // no border) so it reads as a plain label that happens to be
+  // clickable. The button text is the *current* mode ("Auto" or
+  // "Manual"); clicking flips to the other. We keep it as a
+  // <button> rather than a span so keyboard focus + Enter work
+  // the same as any other control.
+  const isAuto = state.currentStepMode === "auto";
+  const modeBtn = document.createElement("button");
+  modeBtn.type = "button";
+  modeBtn.className = "x-mode-toggle";
+  modeBtn.textContent = isAuto ? "Auto" : "Manual";
+  modeBtn.disabled = disabled;
+  modeBtn.title = isAuto
+    ? "Auto (orchestrator runs sub-sessions to completion). Click to switch to Manual."
+    : "Manual (orchestrator parks between sub-sessions; click Continue to advance). Click to switch to Auto.";
+  modeBtn.addEventListener("click", () => {
+    if (modeBtn.disabled) {
+      return;
+    }
+    send({ type: "set-step-mode", mode: isAuto ? "manual" : "auto" });
+  });
+  root.appendChild(modeBtn);
 
   return root;
 }

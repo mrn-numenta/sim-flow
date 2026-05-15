@@ -517,28 +517,26 @@ body {
   font-style: italic;
 }
 
-.x-mode-checkbox {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+/* Text-only mode toggle: reads as a plain label that happens to
+ * be clickable. No background, no border; a subtle underline on
+ * hover communicates affordance without competing visually with
+ * the primary Continue button on the left of the row. */
+.x-mode-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
   font-size: 11px;
   color: var(--vscode-foreground);
   cursor: pointer;
-  user-select: none;
 }
 
-.x-mode-checkbox input[type="checkbox"] {
-  margin: 0;
-  cursor: pointer;
+.x-mode-toggle:hover:not(:disabled) {
+  text-decoration: underline;
 }
 
-.x-mode-checkbox input[type="checkbox"]:disabled {
+.x-mode-toggle:disabled {
   opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.x-mode-checkbox input[type="checkbox"]:disabled + span {
-  opacity: 0.55;
   cursor: not-allowed;
 }
 
@@ -546,9 +544,13 @@ body {
   flex: 1;
 }
 
+/* Continue: outline-only button. Border in the accent colour
+ * communicates "primary action" without competing with the filled
+ * Send button up in the input row. Hover gets a faint tint so the
+ * affordance is still legible. */
 .x-continue {
   border: 1px solid var(--x-accent);
-  background: color-mix(in srgb, var(--x-palette-output) 24%, var(--vscode-editor-background));
+  background: transparent;
   color: var(--vscode-foreground);
   border-radius: 4px;
   padding: 3px 12px;
@@ -559,7 +561,11 @@ body {
 }
 
 .x-continue:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--x-palette-output) 36%, var(--vscode-editor-background));
+  background: color-mix(
+    in srgb,
+    var(--x-palette-output) 14%,
+    transparent
+  );
 }
 
 .x-continue:disabled {
@@ -598,11 +604,20 @@ body {
   background: var(--vscode-button-background);
   color: var(--vscode-button-foreground);
   border-radius: 8px;
-  padding: 7px 14px;
+  /* Square-ish so the glyph reads as an icon button rather than a
+   * text button. Fixed width keeps the layout stable as the icon
+   * swaps between ↑ (send) and ■ (stop). */
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
   font: inherit;
+  font-size: 14px;
+  line-height: 1;
   font-weight: 600;
   cursor: pointer;
-  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .x-send:hover:not(:disabled) {
@@ -612,6 +627,22 @@ body {
 .x-send:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* Stop variant: tinted in the warning palette so a streaming
+ * cancel reads as destructive (matches VS Code's red palette
+ * tokens; fall back to a fixed red if the variable isn't set). */
+.x-send-stop {
+  background: var(--vscode-errorForeground, #d2522d);
+  color: var(--vscode-button-foreground, #fff);
+}
+
+.x-send-stop:hover:not(:disabled) {
+  background: color-mix(
+    in srgb,
+    var(--vscode-errorForeground, #d2522d) 80%,
+    black
+  );
 }
 
 .x-browse {
