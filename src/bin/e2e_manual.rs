@@ -714,7 +714,9 @@ fn handle_event(
             println!("e2e_manual:   phase -> {phase_str}");
             Ok(phase)
         }
-        Event::AssistantText { text, final_chunk } => {
+        Event::AssistantText {
+            text, final_chunk, ..
+        } => {
             // Render concisely so the smoke run is readable.
             if !text.is_empty() {
                 print!("{text}");
@@ -869,6 +871,7 @@ fn handle_event(
             let _ = StepMode::Auto;
             Ok(phase)
         }
+        Event::LlmRequest { .. } => Ok(phase),
     }
     .and_then(|new_phase| {
         // After a sub-session ends, dispatch the next command in the

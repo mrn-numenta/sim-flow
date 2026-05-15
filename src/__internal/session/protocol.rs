@@ -41,8 +41,30 @@ pub enum Event {
         step_descriptor: StepDescriptorOut,
     },
     /// A chunk of assistant text to render in the chat UI. `final` is
-    /// true on the last chunk of a single turn.
-    AssistantText { text: String, final_chunk: bool },
+    /// true on the last chunk of a single turn. `tool_calls` carries
+    /// the native tool calls the model emitted alongside the text so
+    /// experimental hosts can render a complete record of what the LLM
+    /// actually replied with (text + tool calls), not just the prose.
+    /// Empty on turns with no tool calls.
+    AssistantText {
+        text: String,
+        final_chunk: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tool_calls: Vec<LlmToolCall>,
+    },
+    /// A non-Assistant message the orchestrator added to the LLM
+    /// prompt stack just before dispatching turn `turn_index`. Used by
+    /// experimental hosts to render the running "prompts sent to the
+    /// LLM" alongside the assistant replies, giving the user a full
+    /// transparent view of the model conversation. The orchestrator
+    /// skips System role messages (they're constant per session and
+    /// would be noisy); User and Tool role messages are emitted.
+    LlmRequest {
+        role: LlmRole,
+        content: String,
+        turn_index: u32,
+        request_id: String,
+    },
     /// Pause the orchestrator and wait for a `UserMessage` on stdin.
     /// Hosts use the optional hints to focus or label the input area.
     RequestUserInput {
@@ -460,15 +482,23 @@ mod tests {
         let e = Event::AssistantText {
             text: "hello".into(),
             final_chunk: true,
+            tool_calls: Vec::new(),
         };
         let s = serde_json::to_string(&e).unwrap();
         assert!(s.contains("\"event\":\"assistant-text\""));
         assert!(s.contains("\"text\":\"hello\""));
+        // tool_calls omitted when empty.
+        assert!(!s.contains("\"tool_calls\""));
         let parsed: Event = serde_json::from_str(&s).unwrap();
         match parsed {
-            Event::AssistantText { text, final_chunk } => {
+            Event::AssistantText {
+                text,
+                final_chunk,
+                tool_calls,
+            } => {
                 assert_eq!(text, "hello");
                 assert!(final_chunk);
+                assert!(tool_calls.is_empty());
             }
             other => panic!("unexpected variant: {:?}", other),
         }

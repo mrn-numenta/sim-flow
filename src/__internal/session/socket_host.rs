@@ -456,6 +456,7 @@ mod tests {
             host.send(&Event::AssistantText {
                 text: writer_body,
                 final_chunk: true,
+                tool_calls: Vec::new(),
             })
             .unwrap();
         });
@@ -477,7 +478,9 @@ mod tests {
         reader.read_line(&mut line).unwrap();
         let request: Event = serde_json::from_str(line.trim()).unwrap();
         match request {
-            Event::AssistantText { text, final_chunk } => {
+            Event::AssistantText {
+                text, final_chunk, ..
+            } => {
                 assert_eq!(text.len(), 32 * 1024);
                 assert!(final_chunk);
             }

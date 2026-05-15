@@ -824,10 +824,41 @@ export class SocketSessionPump implements LiveSessionTransport {
         this.stepDescriptor = event.step_descriptor;
         this.renderHelloAck(event);
         break;
-      case "assistant-text":
-        if (event.text.length > 0) {
+      case "assistant-text": {
+        const toolCalls = (event.tool_calls ?? []).map((c) => ({
+          id: c.id ?? undefined,
+          name: c.name,
+          argumentsJson: c.arguments_json,
+        }));
+        // Prefer the structured `assistantTurn` renderer hook when
+        // available -- it carries both the prose AND the tool calls
+        // the LLM emitted, so experimental hosts can render a
+        // complete record even on tool-only turns (text=""). Fall
+        // back to `markdown(text)` for the legacy chat-participant
+        // path, which has no concept of tool calls.
+        if (this.currentRenderer?.assistantTurn) {
+          this.currentRenderer.assistantTurn({
+            text: event.text,
+            finalChunk: event.final_chunk,
+            toolCalls,
+          });
+        } else if (event.text.length > 0) {
           this.currentRenderer?.markdown(event.text);
         }
+        break;
+      }
+      case "llm-request":
+        // Experimental: surface every non-Assistant message the
+        // orchestrator added to the prompt stack so hosts can render
+        // the running prompt+response transcript. Renderers that
+        // don't implement `llmRequest` (e.g. VS Code chat
+        // participant) silently ignore.
+        this.currentRenderer?.llmRequest?.({
+          role: event.role,
+          content: event.content,
+          turnIndex: event.turn_index,
+          requestId: event.request_id,
+        });
         break;
       case "request-user-input":
         // Surface prompt + placeholder to subscribers before the

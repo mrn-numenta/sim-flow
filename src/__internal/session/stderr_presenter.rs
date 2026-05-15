@@ -116,7 +116,9 @@ where
                 )
                 .map_err(write_err)?;
             }
-            Event::AssistantText { text, final_chunk } => {
+            Event::AssistantText {
+                text, final_chunk, ..
+            } => {
                 self.assistant_buffer.push_str(text);
                 if *final_chunk {
                     let buffer = std::mem::take(&mut self.assistant_buffer);
@@ -228,6 +230,11 @@ where
                     "  [sub-session ended: {step}.{kind:?} ({outcome})]"
                 )
                 .map_err(write_err)?;
+            }
+            Event::LlmRequest { .. } => {
+                // Experimental chat-panel feature; the stderr presenter
+                // intentionally stays out of the way -- printing each
+                // LLM-bound message would dominate terminal sessions.
             }
         }
         Ok(())

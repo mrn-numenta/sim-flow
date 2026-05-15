@@ -116,6 +116,33 @@ export interface PumpRenderer {
   markdown(text: string): void;
   reference?(uri: vscode.Uri, label?: string): void;
   requestTokensEstimate?(tokens: number): void;
+  /**
+   * Optional, experimental: structured "prompt sent to LLM" event
+   * carrying the latest non-Assistant message the orchestrator
+   * appended to the prompt stack before dispatching. Lets hosts
+   * render the running prompt+response transcript instead of just
+   * the assistant prose. Renderers that don't implement this
+   * simply never see the data; the chat panel falls back to
+   * `markdown()` for everything else.
+   */
+  llmRequest?(args: {
+    role: string;
+    content: string;
+    turnIndex: number;
+    requestId: string;
+  }): void;
+  /**
+   * Optional, experimental: assistant turn carrying both the prose
+   * `text` AND the native `tool_calls` the LLM emitted this turn.
+   * When implemented, the pump routes the `assistant-text` event
+   * here instead of through `markdown(text)` so the host gets the
+   * full reply (including tool-only turns where `text` is empty).
+   */
+  assistantTurn?(args: {
+    text: string;
+    finalChunk: boolean;
+    toolCalls: Array<{ id?: string; name: string; argumentsJson: string }>;
+  }): void;
 }
 
 export interface LiveSessionTransport {
@@ -465,10 +492,30 @@ export class SessionPump {
         this.stepDescriptor = event.step_descriptor;
         this.renderHelloAck(event);
         break;
-      case "assistant-text":
-        if (event.text.length > 0) {
+      case "assistant-text": {
+        const toolCalls = (event.tool_calls ?? []).map((c) => ({
+          id: c.id ?? undefined,
+          name: c.name,
+          argumentsJson: c.arguments_json,
+        }));
+        if (this.currentRenderer?.assistantTurn) {
+          this.currentRenderer.assistantTurn({
+            text: event.text,
+            finalChunk: event.final_chunk,
+            toolCalls,
+          });
+        } else if (event.text.length > 0) {
           this.currentRenderer?.markdown(event.text);
         }
+        break;
+      }
+      case "llm-request":
+        this.currentRenderer?.llmRequest?.({
+          role: event.role,
+          content: event.content,
+          turnIndex: event.turn_index,
+          requestId: event.request_id,
+        });
         break;
       case "request-user-input":
         // Orchestrator parked; release the current settle promise.

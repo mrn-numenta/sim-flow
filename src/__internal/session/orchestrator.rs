@@ -470,6 +470,14 @@ where
     // path triggers a new prompt.
     let mut approved_deletes: Vec<String> = Vec::new();
 
+    // Cursor into `messages` tracking which entries have already been
+    // surfaced to the host via `LlmRequest` events. Each turn, any
+    // newly-appended non-Assistant message (User / Tool) is emitted
+    // before dispatch so the chat UI can render the running prompt
+    // stack alongside the assistant replies. System messages stay
+    // off-wire -- they're constant per session and would be noisy.
+    let mut last_emitted_message_index: usize = 0;
+
     // 5c. Turn loop.
     let mut turn_index: u32 = 0;
     loop {
@@ -550,6 +558,26 @@ where
             })
             .collect();
 
+        // Surface any non-Assistant / non-System messages that were
+        // appended to the prompt stack since the previous dispatch.
+        // Typically: the initial user message (turn 1) or the tool
+        // result messages added after the prior assistant turn.
+        // System messages are skipped (constant per session, would
+        // dominate the UI). Assistant messages are skipped too --
+        // they were already surfaced via `AssistantText` last turn.
+        for msg in &messages[last_emitted_message_index..] {
+            if matches!(msg.role, LlmRole::System | LlmRole::Assistant) {
+                continue;
+            }
+            host.send(&Event::LlmRequest {
+                role: msg.role,
+                content: msg.content.clone(),
+                turn_index,
+                request_id: request_id.clone(),
+            })?;
+        }
+        last_emitted_message_index = messages.len();
+
         let dispatch_result = llm.dispatch_with_tools(&messages, &advertise);
 
         let mut assistant_text = String::new();
@@ -603,9 +631,15 @@ where
                 // streaming was previously synthesized by the
                 // extension's TS-side SSE parser and is intentionally
                 // dropped here (see refactor plan, step 2).
+                //
+                // `tool_calls` carries any native tool calls the model
+                // emitted this turn so experimental hosts can render
+                // a full record of the LLM's reply (prose + tool
+                // calls). Standard hosts ignore the extra field.
                 host.send(&Event::AssistantText {
                     text: assistant_text.clone(),
                     final_chunk: true,
+                    tool_calls: native_tool_calls.clone(),
                 })?;
                 let turn_wall_ms = turn_started.elapsed().as_millis() as u64;
                 // Native tool calls are part of the model's

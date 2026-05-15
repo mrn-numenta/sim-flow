@@ -29,6 +29,47 @@
             ],
             "type": "object"
           },
+          "LlmRole": {
+            "oneOf": [
+              {
+                "enum": [
+                  "system",
+                  "user",
+                  "assistant"
+                ],
+                "type": "string"
+              },
+              {
+                "description": "Reply to a prior assistant `tool_calls[]` emission. On the OpenAI wire shape, these turns serialize as `{role: \"tool\", tool_call_id: \"<id>\", content: \"...\"}`. CLI agents and non-tool-aware HTTP backends flatten them to User-role text in the converter.",
+                "enum": [
+                  "tool"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "LlmToolCall": {
+            "description": "A single tool call the model emitted in a native-tool-use turn. Returned on `HostEvent::LlmEnd.tool_calls`. `arguments_json` is the raw JSON-encoded argument blob the model emitted -- the orchestrator parses it into a `serde_json::Value` at dispatch time so a malformed payload surfaces a clear diagnostic rather than a cryptic serde error mid-pipeline.",
+            "properties": {
+              "arguments_json": {
+                "type": "string"
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "arguments_json",
+              "name"
+            ],
+            "type": "object"
+          },
           "SessionEndReason": {
             "description": "Terminal state of a `SessionEnd` event. Closed-set enum so hosts can route on it deterministically (e.g. only re-enable Connect after `Completed`/`Cancelled`/`Error` but treat `RunawayGuard` as a hard abort that requires user attention). Serialized in kebab-case to match the existing wire strings.",
             "oneOf": [
@@ -234,7 +275,7 @@
             "type": "object"
           },
           {
-            "description": "A chunk of assistant text to render in the chat UI. `final` is true on the last chunk of a single turn.",
+            "description": "A chunk of assistant text to render in the chat UI. `final` is true on the last chunk of a single turn. `tool_calls` carries the native tool calls the model emitted alongside the text so experimental hosts can render a complete record of what the LLM actually replied with (text + tool calls), not just the prose. Empty on turns with no tool calls.",
             "properties": {
               "event": {
                 "enum": [
@@ -247,12 +288,51 @@
               },
               "text": {
                 "type": "string"
+              },
+              "tool_calls": {
+                "items": {
+                  "$ref": "#/definitions/LlmToolCall"
+                },
+                "type": "array"
               }
             },
             "required": [
               "event",
               "final_chunk",
               "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A non-Assistant message the orchestrator added to the LLM prompt stack just before dispatching turn `turn_index`. Used by experimental hosts to render the running \"prompts sent to the LLM\" alongside the assistant replies, giving the user a full transparent view of the model conversation. The orchestrator skips System role messages (they're constant per session and would be noisy); User and Tool role messages are emitted.",
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "event": {
+                "enum": [
+                  "llm-request"
+                ],
+                "type": "string"
+              },
+              "request_id": {
+                "type": "string"
+              },
+              "role": {
+                "$ref": "#/definitions/LlmRole"
+              },
+              "turn_index": {
+                "format": "uint32",
+                "minimum": 0.0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "content",
+              "event",
+              "request_id",
+              "role",
+              "turn_index"
             ],
             "type": "object"
           },

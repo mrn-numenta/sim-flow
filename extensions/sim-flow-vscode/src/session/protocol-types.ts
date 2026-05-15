@@ -20,6 +20,14 @@ export type Event =
       event: "assistant-text";
       final_chunk: boolean;
       text: string;
+      tool_calls?: LlmToolCall[];
+    }
+  | {
+      content: string;
+      event: "llm-request";
+      request_id: string;
+      role: LlmRole;
+      turn_index: number;
     }
   | {
       event: "request-user-input";
@@ -94,6 +102,7 @@ export type Event =
  * Mirror of `client::SessionKind` exposed in the protocol. Kept independent of the internal type so the wire format stays stable even if the internal representation changes.
  */
 export type SessionKindOut = ("work" | "critique") | "qa";
+export type LlmRole = ("system" | "user" | "assistant") | "tool";
 export type DiagnosticLevel = "info" | "warning" | "error";
 /**
  * Terminal state of a `SessionEnd` event. Closed-set enum so hosts can route on it deterministically (e.g. only re-enable Connect after `Completed`/`Cancelled`/`Error` but treat `RunawayGuard` as a hard abort that requires user attention). Serialized in kebab-case to match the existing wire strings.
@@ -135,6 +144,14 @@ export interface StepDescriptorOut {
    */
   tools?: string[];
   work_artifacts: string[];
+}
+/**
+ * A single tool call the model emitted in a native-tool-use turn. Returned on `HostEvent::LlmEnd.tool_calls`. `arguments_json` is the raw JSON-encoded argument blob the model emitted -- the orchestrator parses it into a `serde_json::Value` at dispatch time so a malformed payload surfaces a clear diagnostic rather than a cryptic serde error mid-pipeline.
+ */
+export interface LlmToolCall {
+  arguments_json: string;
+  id?: string | null;
+  name: string;
 }
 export interface GateFailureOut {
   description: string;

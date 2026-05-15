@@ -164,6 +164,7 @@ mod tests {
         host.send(&Event::AssistantText {
             text: "hi".into(),
             final_chunk: true,
+            tool_calls: Vec::new(),
         })
         .unwrap();
         drop(host);
@@ -205,6 +206,7 @@ mod tests {
         host.send(&Event::AssistantText {
             text: "hello".into(),
             final_chunk: true,
+            tool_calls: Vec::new(),
         })
         .unwrap();
         assert_eq!(host.written.len(), 1);

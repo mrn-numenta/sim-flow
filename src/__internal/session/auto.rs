@@ -1992,6 +1992,7 @@ where
     auto_host.send(&Event::AssistantText {
         text: assistant_text.clone(),
         final_chunk: true,
+        tool_calls: Vec::new(),
     })?;
 
     qa_history.push(LlmMessage {
@@ -3018,6 +3019,7 @@ not a finding
         host.send(&Event::AssistantText {
             text: "resuming".into(),
             final_chunk: false,
+            tool_calls: Vec::new(),
         })
         .unwrap();
         assert!(!host.in_subsession_parked);
