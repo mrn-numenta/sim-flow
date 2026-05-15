@@ -465,39 +465,28 @@ body {
   font-style: italic;
 }
 
-.x-mode-toggle {
+.x-mode-checkbox {
   display: inline-flex;
-  border: 1px solid var(--x-border);
-  border-radius: 4px;
-  overflow: hidden;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  user-select: none;
 }
 
-.x-mode-toggle button {
-  border: none;
-  background: transparent;
-  color: var(--x-muted);
-  padding: 2px 10px;
-  font: inherit;
-  font-size: 11px;
+.x-mode-checkbox input[type="checkbox"] {
+  margin: 0;
   cursor: pointer;
 }
 
-.x-mode-toggle button:hover:not(:disabled):not(.active) {
-  background: color-mix(
-    in srgb,
-    var(--vscode-input-background) 70%,
-    var(--vscode-foreground)
-  );
-}
-
-.x-mode-toggle button.active {
-  background: var(--x-accent);
-  color: var(--vscode-button-foreground, #fff);
-  cursor: default;
-}
-
-.x-mode-toggle button:disabled {
+.x-mode-checkbox input[type="checkbox"]:disabled {
   opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.x-mode-checkbox input[type="checkbox"]:disabled + span {
+  opacity: 0.55;
   cursor: not-allowed;
 }
 

@@ -563,34 +563,34 @@ function buildComposer(state: ChatPanelState): HTMLElement {
  */
 function buildComposerMeta(state: ChatPanelState): HTMLElement {
   const root = div("x-composer-meta");
-  const label = document.createElement("span");
-  label.className = "x-composer-meta-label";
-  label.textContent = "Mode";
-  root.appendChild(label);
-
-  const toggle = div("x-mode-toggle");
   const disabled = state.currentStepMode === null;
-  for (const mode of ["manual", "auto"] as const) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.textContent = mode === "manual" ? "Manual" : "Auto";
-    btn.title =
-      mode === "manual"
-        ? "Manual: orchestrator parks between sub-sessions and waits for a Continue."
-        : "Auto: orchestrator runs sub-sessions to completion without pausing.";
-    if (state.currentStepMode === mode) {
-      btn.classList.add("active");
-    }
-    btn.disabled = disabled;
-    btn.addEventListener("click", () => {
-      if (state.currentStepMode === mode) {
-        return;
-      }
-      send({ type: "set-step-mode", mode });
-    });
-    toggle.appendChild(btn);
-  }
-  root.appendChild(toggle);
+
+  // Single checkbox whose label flips between "Auto" and "Manual"
+  // based on the orchestrator's current step mode. Checked == auto
+  // (run sub-sessions to completion), unchecked == manual (park
+  // between sub-sessions and wait for Continue). The label name
+  // tracks the live value so the user reads the *current* mode at
+  // a glance instead of inferring it from checkbox state.
+  const modeLabel = document.createElement("label");
+  modeLabel.className = "x-mode-checkbox";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = state.currentStepMode === "auto";
+  checkbox.disabled = disabled;
+  checkbox.addEventListener("change", () => {
+    send({ type: "set-step-mode", mode: checkbox.checked ? "auto" : "manual" });
+  });
+  const text = document.createElement("span");
+  // Mirror the checkbox state in the label so an unchecked box
+  // reads as "Manual" and a checked one as "Auto". When no pump
+  // is live we still pick a label from the checkbox so the row
+  // doesn't collapse to an unlabelled box.
+  text.textContent = checkbox.checked ? "Auto" : "Manual";
+  text.title =
+    "Checked = Auto (orchestrator runs sub-sessions to completion). " +
+    "Unchecked = Manual (orchestrator parks between sub-sessions; click Continue to advance).";
+  modeLabel.append(checkbox, text);
+  root.appendChild(modeLabel);
 
   if (disabled) {
     const hint = document.createElement("span");
