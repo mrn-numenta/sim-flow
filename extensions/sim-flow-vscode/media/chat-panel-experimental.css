@@ -518,13 +518,14 @@ body {
 }
 
 /* Text-only mode toggle: reads as a plain label that happens to
- * be clickable. No background, no border; a subtle underline on
- * hover communicates affordance without competing visually with
- * the primary Continue button on the left of the row. */
+ * be clickable. No background or border by default; hover paints
+ * a subtle gray pill so the affordance is discoverable without
+ * competing with the primary Continue button on the left. */
 .x-mode-toggle {
   background: none;
   border: none;
-  padding: 0;
+  padding: 2px 8px;
+  border-radius: 4px;
   font: inherit;
   font-size: 11px;
   color: var(--vscode-foreground);
@@ -532,7 +533,10 @@ body {
 }
 
 .x-mode-toggle:hover:not(:disabled) {
-  text-decoration: underline;
+  background: var(
+    --vscode-toolbar-hoverBackground,
+    color-mix(in srgb, var(--vscode-foreground) 12%, transparent)
+  );
 }
 
 .x-mode-toggle:disabled {
@@ -544,12 +548,11 @@ body {
   flex: 1;
 }
 
-/* Continue: outline-only button. Border in the accent colour
- * communicates "primary action" without competing with the filled
- * Send button up in the input row. Hover gets a faint tint so the
- * affordance is still legible. */
+/* Continue: text-only by default; hover paints a subtle gray
+ * pill so the affordance is visible without the button competing
+ * with the filled Send icon up in the input row. */
 .x-continue {
-  border: 1px solid var(--x-accent);
+  border: none;
   background: transparent;
   color: var(--vscode-foreground);
   border-radius: 4px;
@@ -561,10 +564,9 @@ body {
 }
 
 .x-continue:hover:not(:disabled) {
-  background: color-mix(
-    in srgb,
-    var(--x-palette-output) 14%,
-    transparent
+  background: var(
+    --vscode-toolbar-hoverBackground,
+    color-mix(in srgb, var(--vscode-foreground) 12%, transparent)
   );
 }
 

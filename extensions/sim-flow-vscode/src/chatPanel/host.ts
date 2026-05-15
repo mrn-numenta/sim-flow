@@ -1308,12 +1308,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       !!this.activePump &&
       this.activePump.projectDir === context.projectDir &&
       this.activePump.awaitingInput;
+    // "Streaming" here means "the orchestrator is actively working;
+    // disable user input and show the stop icon." Originally derived
+    // from `!awaitingInput`, but that flag stays false in manual
+    // mode's `wait_for_command` park -- so the UI thought the pump
+    // was busy when it was actually idle, which gated Continue and
+    // kept the stop glyph visible. `pump.inSubSession` is the
+    // accurate "orchestrator is mid-work" signal; `pendingAutoLaunch`
+    // covers the pre-helloAck launching window.
     const isStreaming =
       (!!this.pendingAutoLaunch &&
         this.pendingAutoLaunch.projectDir === context.projectDir) ||
       (!!this.activePump &&
         this.activePump.projectDir === context.projectDir &&
-        !this.activePump.awaitingInput);
+        this.activePump.pump.inSubSession === true);
     const isViewer =
       !!this.activePump &&
       this.activePump.projectDir === context.projectDir &&
