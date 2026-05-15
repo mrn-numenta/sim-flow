@@ -120,6 +120,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
    * the literal command."
    */
   private followupListenerDispose: (() => void) | null = null;
+  /**
+   * Subscription to the active pump's `onStepModeChanged`. The
+   * orchestrator echoes its current StepMode (auto/manual) on every
+   * transition, including the initial echo of the launch-time
+   * `--step-mode` flag. The chat panel uses this to keep the
+   * toolbar toggle visually in sync with what the orchestrator is
+   * actually doing.
+   */
+  private stepModeListenerDispose: (() => void) | null = null;
 
   /**
    * Set once per ChatPanelHost lifetime once the first "ready"
@@ -199,6 +208,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.attachSubSessionListener(session);
       this.attachRequestUserInputListener(session);
       this.attachFollowupListener(session);
+      this.attachStepModeListener(session);
       // A newly attached/replaced session changes the panel's anchor
       // immediately; refresh so OFFLINE flips to VIEWING/STREAMING
       // without waiting for the next pump event. We intentionally do
@@ -209,6 +219,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       if (session) {
         void this.refresh();
       }
+    });
+  }
+
+  private attachStepModeListener(
+    session: ManagedAutoSessionState | undefined,
+  ): void {
+    if (this.stepModeListenerDispose) {
+      this.stepModeListenerDispose();
+      this.stepModeListenerDispose = null;
+    }
+    if (!session || typeof session.pump.onStepModeChanged !== "function") {
+      return;
+    }
+    this.stepModeListenerDispose = session.pump.onStepModeChanged(() => {
+      // The mode value lives on the pump itself; refresh recomputes
+      // ChatPanelState which reads it. Coalescing-via-refresh is
+      // fine because StepModeChanged is low-frequency (echoed on
+      // launch + once per user toggle).
+      void this.refresh();
     });
   }
 
@@ -326,6 +355,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.followupListenerDispose();
       this.followupListenerDispose = null;
     }
+    if (this.stepModeListenerDispose) {
+      this.stepModeListenerDispose();
+      this.stepModeListenerDispose = null;
+    }
     for (const d of this.disposables) {
       d.dispose();
     }
@@ -396,9 +429,35 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       case "stop-conversation":
         await this.stopConversation();
         return;
+      case "set-step-mode":
+        await this.handleSetStepMode(msg.mode);
+        return;
       default:
         return;
     }
+  }
+
+  /**
+   * Apply a live step-mode change. Mirrors the dashboard's
+   * `handleSetStepMode`: persist the config so the next launch
+   * starts in this mode, then send `SetStepMode` over the pump if
+   * one is alive. The orchestrator echoes the new value via
+   * `StepModeChanged`, which our listener turns into a refresh so
+   * the toolbar toggle ends up reflecting the orchestrator's
+   * truth.
+   */
+  private async handleSetStepMode(mode: "auto" | "manual"): Promise<void> {
+    await vscode.workspace
+      .getConfiguration("sim-flow")
+      .update("flow.stepMode", mode, vscode.ConfigurationTarget.Workspace);
+    const pump = this.activePump?.pump;
+    if (pump && typeof pump.setStepMode === "function") {
+      pump.setStepMode(mode);
+      return;
+    }
+    // No live pump: optimistic refresh so the toggle reflects the
+    // persisted value immediately.
+    await this.refresh();
   }
 
   private async refresh(): Promise<void> {
@@ -1223,6 +1282,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         !!this.activePump ||
         (!!this.pendingAutoLaunch &&
           this.pendingAutoLaunch.projectDir === context.projectDir),
+      currentStepMode:
+        this.activePump?.projectDir === context.projectDir
+          ? (this.activePump.pump.stepMode ?? null)
+          : null,
     };
   }
 

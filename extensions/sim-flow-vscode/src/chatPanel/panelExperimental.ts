@@ -442,6 +442,11 @@ function looksLikeMarkdown(text: string): boolean {
 
 function buildComposer(state: ChatPanelState): HTMLElement {
   const root = div("x-composer");
+  // The composer wraps two stacked rows -- the input row (textarea +
+  // send) and the meta row (mode toggle, future continue button).
+  // Stack them via flex column rather than appending to the panel's
+  // grid; the meta row sits inside the same bordered container so
+  // the visual seam is one panel, not two.
   const area = document.createElement("textarea");
   area.className = "x-composer-input";
   area.rows = 1;
@@ -487,7 +492,58 @@ function buildComposer(state: ChatPanelState): HTMLElement {
     submitPrompt();
   });
 
-  root.append(area, sendBtn);
+  const inputRow = div("x-composer-input-row");
+  inputRow.append(area, sendBtn);
+  root.appendChild(inputRow);
+  root.appendChild(buildComposerMeta(state));
+  return root;
+}
+
+/**
+ * Composer footer holding the Manual/Auto step-mode toggle. The
+ * orchestrator's current mode comes back via `state.currentStepMode`
+ * (null when no pump is live); the toggle is disabled in that case
+ * because there's nothing to drive. Mode change takes effect at the
+ * orchestrator's next decision point, not mid-sub-session -- the
+ * tooltip surfaces that caveat.
+ */
+function buildComposerMeta(state: ChatPanelState): HTMLElement {
+  const root = div("x-composer-meta");
+  const label = document.createElement("span");
+  label.className = "x-composer-meta-label";
+  label.textContent = "Mode";
+  root.appendChild(label);
+
+  const toggle = div("x-mode-toggle");
+  const disabled = state.currentStepMode === null;
+  for (const mode of ["manual", "auto"] as const) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = mode === "manual" ? "Manual" : "Auto";
+    btn.title =
+      mode === "manual"
+        ? "Manual: orchestrator parks between sub-sessions and waits for a Continue."
+        : "Auto: orchestrator runs sub-sessions to completion without pausing.";
+    if (state.currentStepMode === mode) {
+      btn.classList.add("active");
+    }
+    btn.disabled = disabled;
+    btn.addEventListener("click", () => {
+      if (state.currentStepMode === mode) {
+        return;
+      }
+      send({ type: "set-step-mode", mode });
+    });
+    toggle.appendChild(btn);
+  }
+  root.appendChild(toggle);
+
+  if (disabled) {
+    const hint = document.createElement("span");
+    hint.className = "x-composer-meta-hint";
+    hint.textContent = "(no live session)";
+    root.appendChild(hint);
+  }
   return root;
 }
 

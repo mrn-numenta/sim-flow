@@ -1,4 +1,4 @@
-import type { LlmSourceTag } from "../webview/messages";
+import type { LlmSourceTag, StepMode } from "../webview/messages";
 
 export interface ChatPanelState {
   mode: "live";
@@ -88,6 +88,16 @@ export interface ChatPanelState {
   sessionKind: "work" | "critique" | "qa" | null;
   supportsPromptEntry: boolean;
   canStop: boolean;
+  /**
+   * Current orchestrator step mode for the active pump, if any.
+   * `auto` means the orchestrator walks through sub-sessions
+   * without pausing; `manual` means it parks between sub-sessions
+   * for the user to advance. Wired to the pump's
+   * `onStepModeChanged` event; null when no pump is anchored to
+   * this project or the orchestrator hasn't emitted its initial
+   * `StepModeChanged` echo yet.
+   */
+  currentStepMode: StepMode | null;
 }
 
 export type ChatTranscriptEntry =
@@ -117,4 +127,5 @@ export type WebviewMessage =
   | { type: "send-prompt"; prompt: string }
   | { type: "followup-selected"; action: string; label: string }
   | { type: "clear-transcript" }
-  | { type: "stop-conversation" };
+  | { type: "stop-conversation" }
+  | { type: "set-step-mode"; mode: StepMode };

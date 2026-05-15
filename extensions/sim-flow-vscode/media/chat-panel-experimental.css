@@ -434,11 +434,71 @@ body {
 
 .x-composer {
   display: flex;
-  gap: 8px;
-  align-items: flex-end;
-  padding: 8px 12px 12px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px 10px;
   border-top: 1px solid var(--x-border);
   background: var(--vscode-editor-background);
+}
+
+.x-composer-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.x-composer-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--x-muted);
+}
+
+.x-composer-meta-label {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.x-composer-meta-hint {
+  color: var(--x-muted);
+  font-style: italic;
+}
+
+.x-mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--x-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.x-mode-toggle button {
+  border: none;
+  background: transparent;
+  color: var(--x-muted);
+  padding: 2px 10px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.x-mode-toggle button:hover:not(:disabled):not(.active) {
+  background: color-mix(
+    in srgb,
+    var(--vscode-input-background) 70%,
+    var(--vscode-foreground)
+  );
+}
+
+.x-mode-toggle button.active {
+  background: var(--x-accent);
+  color: var(--vscode-button-foreground, #fff);
+  cursor: default;
+}
+
+.x-mode-toggle button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .x-composer-input {
