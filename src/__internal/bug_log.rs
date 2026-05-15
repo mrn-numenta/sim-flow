@@ -81,6 +81,148 @@ fn bug_log_path(project_dir: &Path) -> PathBuf {
     project_dir.join(".sim-flow").join("bug-log.jsonl")
 }
 
+/// Standard bug-category taxonomy. Closed enum -- the `log_bug` tool
+/// rejects anything else, so cross-project rollups can group without
+/// fuzzy-matching the free-form strings the orchestrator accepted
+/// before this taxonomy landed.
+///
+/// Stored as a `String` on [`BugRecord::category`] (not as this enum)
+/// so existing on-disk records with legacy values (`framework`, `test`,
+/// `impl`, `tooling`) still load cleanly. New writes go through
+/// [`normalize_category`], which maps the legacy names to their
+/// canonical replacements; persisted rows carry the canonical form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BugCategory {
+    /// `cargo build` / `cargo check` failed (rustc / clippy errors).
+    CompileError,
+    /// `cargo test` failed -- correctness symptom, not a missing
+    /// target file. Distinct from `Correctness` (the diagnosis).
+    TestFailure,
+    /// `cargo test --test <name>` couldn't find the target file.
+    MissingTestTarget,
+    /// A gate check rejected the agent's output (write-path allowlist,
+    /// milestone deferral, schema validation, etc).
+    GateViolation,
+    /// The agent invoked a tool with wrong args / wrong path / wrong
+    /// shape.
+    ToolMisuse,
+    /// The agent misunderstood a Foundation API (used `HasInstances`
+    /// where `HasLogic` was needed, ConnectivityPlanBuilder when
+    /// inline `connect()` was wanted, etc.).
+    FrameworkMisuse,
+    /// The instruction was unclear; the agent took a defensible-but-
+    /// wrong interpretation. Distinguishes "agent error" from
+    /// "prompt error" for downstream prompt edits.
+    PromptAmbiguity,
+    /// A required crate / binary / file wasn't on disk or on PATH.
+    MissingDependency,
+    /// LLM dispatch failure, server unreachable, timeout.
+    Network,
+    /// Model logic was wrong and a test caught it (or critique flagged
+    /// it). Distinct from `TestFailure` which is the symptom.
+    Correctness,
+    /// Model produced correct output but missed a perf target.
+    Performance,
+    /// Markdown / schema / formatting issue, not behavior.
+    Documentation,
+    /// The orchestrator / sim-flow itself misbehaved (not the agent's
+    /// fault).
+    FlowLogic,
+    /// Escape hatch. Use sparingly; critique flags `other`-heavy logs.
+    Other,
+}
+
+impl BugCategory {
+    /// Canonical wire string stored on disk and in the global DB.
+    /// Stable; downstream readers depend on these names.
+    pub const fn as_canonical_str(self) -> &'static str {
+        match self {
+            Self::CompileError => "compile_error",
+            Self::TestFailure => "test_failure",
+            Self::MissingTestTarget => "missing_test_target",
+            Self::GateViolation => "gate_violation",
+            Self::ToolMisuse => "tool_misuse",
+            Self::FrameworkMisuse => "framework_misuse",
+            Self::PromptAmbiguity => "prompt_ambiguity",
+            Self::MissingDependency => "missing_dependency",
+            Self::Network => "network",
+            Self::Correctness => "correctness",
+            Self::Performance => "performance",
+            Self::Documentation => "documentation",
+            Self::FlowLogic => "flow_logic",
+            Self::Other => "other",
+        }
+    }
+
+    /// Every canonical name, in the order they should appear in the
+    /// `log_bug` args-schema enum and in operator-facing error
+    /// messages.
+    pub const ALL: &'static [BugCategory] = &[
+        Self::CompileError,
+        Self::TestFailure,
+        Self::MissingTestTarget,
+        Self::GateViolation,
+        Self::ToolMisuse,
+        Self::FrameworkMisuse,
+        Self::PromptAmbiguity,
+        Self::MissingDependency,
+        Self::Network,
+        Self::Correctness,
+        Self::Performance,
+        Self::Documentation,
+        Self::FlowLogic,
+        Self::Other,
+    ];
+}
+
+/// Map a free-form `category` value (from the LLM, from a backfilled
+/// JSONL row, from an operator-typed CLI arg) to its canonical bug-
+/// category string. Returns `None` when the input doesn't match a
+/// known category -- the `log_bug` tool surfaces that as a tool error
+/// so the agent retries with a valid name.
+///
+/// Accepts case variants (`COMPILE_ERROR` → `compile_error`), the
+/// canonical separator-flipped forms (`compile-error` →
+/// `compile_error`), and the legacy short names that pre-dated this
+/// taxonomy (`framework` → `framework_misuse`, `test` → `test_failure`,
+/// `impl` → `correctness`, `tooling` → `tool_misuse`, `perf` →
+/// `performance`). The legacy mapping keeps on-disk JSONL rows from
+/// projects that pre-date the taxonomy parseable.
+pub fn normalize_category(input: &str) -> Option<&'static str> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Lowercase + collapse hyphens to underscores; the canonical form
+    // uses lowercase underscores.
+    let key: String = trimmed
+        .chars()
+        .map(|c| {
+            if c == '-' {
+                '_'
+            } else {
+                c.to_ascii_lowercase()
+            }
+        })
+        .collect();
+    // Exact-match against canonical names.
+    for cat in BugCategory::ALL {
+        if cat.as_canonical_str() == key {
+            return Some(cat.as_canonical_str());
+        }
+    }
+    // Legacy short-form mapping (pre-taxonomy: 5-entry enum).
+    let legacy = match key.as_str() {
+        "framework" => Some(BugCategory::FrameworkMisuse),
+        "test" => Some(BugCategory::TestFailure),
+        "impl" => Some(BugCategory::Correctness),
+        "tooling" => Some(BugCategory::ToolMisuse),
+        "perf" => Some(BugCategory::Performance),
+        _ => None,
+    };
+    legacy.map(BugCategory::as_canonical_str)
+}
+
 /// Load every bug record from the project's log. Returns an empty
 /// `Vec` when the log doesn't exist yet (first bug of the project
 /// will create it). Records that fail to parse are skipped with a
@@ -236,6 +378,37 @@ fn now_iso() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_category_accepts_canonical_names() {
+        for cat in BugCategory::ALL {
+            let canonical = cat.as_canonical_str();
+            assert_eq!(normalize_category(canonical), Some(canonical));
+            // Case-insensitive and hyphen-tolerant.
+            assert_eq!(
+                normalize_category(&canonical.to_uppercase().replace('_', "-")),
+                Some(canonical),
+                "case + hyphen normalization should round-trip for {canonical}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_category_maps_legacy_short_names() {
+        assert_eq!(normalize_category("framework"), Some("framework_misuse"));
+        assert_eq!(normalize_category("test"), Some("test_failure"));
+        assert_eq!(normalize_category("impl"), Some("correctness"));
+        assert_eq!(normalize_category("tooling"), Some("tool_misuse"));
+        assert_eq!(normalize_category("perf"), Some("performance"));
+    }
+
+    #[test]
+    fn normalize_category_rejects_unknown() {
+        assert_eq!(normalize_category(""), None);
+        assert_eq!(normalize_category("   "), None);
+        assert_eq!(normalize_category("rubbish"), None);
+        assert_eq!(normalize_category("network_error"), None); // typo of `network`
+    }
 
     #[test]
     fn open_creates_record_and_assigns_id() {

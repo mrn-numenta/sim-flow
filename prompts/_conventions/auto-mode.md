@@ -147,9 +147,32 @@ BLOCKERs that re-occur.
 - Cargo / framework / external tooling refuses to run as expected.
 - You spot a Foundation behavior the docs don't predict.
 
-ONE bug per distinct issue (not one per turn). Categories:
-`framework` | `test` | `impl` | `perf` | `tooling` | `other`. The
-orchestrator auto-fills the step id and current milestone path.
+ONE bug per distinct issue (not one per turn). Categories (closed
+taxonomy -- anything else is a tool error):
+
+- `compile_error` -- `cargo build` / `cargo check` failed.
+- `test_failure` -- `cargo test` failed (correctness symptom).
+- `missing_test_target` -- `cargo test --test <name>` couldn't find
+  the target file.
+- `gate_violation` -- a gate check rejected output (write-path,
+  milestone deferral, schema).
+- `tool_misuse` -- you invoked a tool with wrong args / path / shape.
+- `framework_misuse` -- misunderstood a Foundation API.
+- `prompt_ambiguity` -- the instruction was unclear; you took a
+  defensible-but-wrong interpretation. Use this to flag prompts that
+  need editing.
+- `missing_dependency` -- a required crate / binary / file wasn't on
+  disk or on PATH.
+- `network` -- LLM dispatch failure, server unreachable, timeout.
+- `correctness` -- model logic was wrong (the diagnosis, vs the
+  `test_failure` symptom).
+- `performance` -- correct output but missed a perf target.
+- `documentation` -- markdown / schema / formatting issue, not behavior.
+- `flow_logic` -- sim-flow itself misbehaved (not your fault).
+- `other` -- escape hatch, use sparingly; critique flags `other`-
+  heavy logs.
+
+The orchestrator auto-fills the step id and current milestone path.
 
 **While investigating**: call
 `declare_hypothesis({"rationale": "<one-line guess>"})` whenever
