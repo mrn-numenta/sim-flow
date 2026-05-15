@@ -158,6 +158,7 @@ impl LlmMetricsRecord {
 /// that emits zero turns (e.g. one that fails the handshake) leaves
 /// no empty file behind.
 pub struct LlmMetricsLog {
+    project_dir: PathBuf,
     path: PathBuf,
     handle: Mutex<Option<File>>,
 }
@@ -171,6 +172,7 @@ impl LlmMetricsLog {
             .join("logs")
             .join(METRICS_FILE);
         Self {
+            project_dir: project_dir.to_path_buf(),
             path,
             handle: Mutex::new(None),
         }
@@ -216,6 +218,12 @@ impl LlmMetricsLog {
         if let Err(err) = writeln!(file, "{line}") {
             tracing::warn!(target: "sim_flow::metrics", error = %err, "llm-metrics write failed");
         }
+        // Best-effort mirror to the per-user global DB. Failure logs a
+        // `tracing::warn!` inside `with_db` and never aborts the caller
+        // -- the project-local JSONL is authoritative.
+        let _ = crate::__internal::global_db::with_db(|db| {
+            db.record_llm_metric(&self.project_dir, rec)
+        });
     }
 }
 

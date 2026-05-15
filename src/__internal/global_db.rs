@@ -213,6 +213,67 @@ impl GlobalDb {
         &mut self.conn
     }
 
+    /// Mirror one [`LlmMetricsRecord`] from a project's
+    /// `logs/llm-metrics.jsonl` into the global ledger.
+    ///
+    /// `INSERT OR IGNORE` on `UNIQUE(project_dir, request_id,
+    /// turn_index)`: the metrics row is immutable once emitted, so a
+    /// re-mirror pass (e.g. via `db backfill` over the JSONL tail) is a
+    /// no-op rather than re-stamping the row's `id`. This matches the
+    /// design's "immutable once written" semantics.
+    ///
+    /// Indexed columns surface the common filter axes (`timestamp`,
+    /// `step`, `kind`, `backend`, `model`, `wall_ms`, token counts);
+    /// the full record JSON is stored too so reports get every field
+    /// without a schema change when new ones land.
+    pub fn record_llm_metric(
+        &self,
+        project_dir: &Path,
+        record: &crate::__internal::session::llm_metrics::LlmMetricsRecord,
+    ) -> Result<()> {
+        use crate::__internal::session::protocol::SessionKindOut;
+
+        let project_dir = project_dir_key(project_dir);
+        let record_json = serde_json::to_string(record)
+            .map_err(|e| Error::State(format!("llm_metrics record serialize: {e}")))?;
+        let user = user_identity();
+        // Stable column-friendly string -- avoids round-tripping the
+        // SessionKindOut enum through `serde_json::to_value` for one
+        // discriminator.
+        let kind_str = match record.kind {
+            SessionKindOut::Work => "work",
+            SessionKindOut::Critique => "critique",
+            SessionKindOut::Qa => "qa",
+        };
+        self.conn
+            .execute(
+                r#"INSERT OR IGNORE INTO llm_metrics
+                    (project_dir, request_id, turn_index, timestamp, step, kind,
+                     backend, model, wall_ms, tokens_in, tokens_out,
+                     user_identity, machine_id, record_json)
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                           ?13, ?14)"#,
+                params![
+                    project_dir,
+                    record.request_id,
+                    record.turn_index,
+                    record.started_unix.to_string(),
+                    record.step,
+                    kind_str,
+                    record.backend,
+                    record.model,
+                    record.wall_ms,
+                    record.tokens_in,
+                    record.tokens_out,
+                    user,
+                    self.machine_id,
+                    record_json,
+                ],
+            )
+            .map_err(wrap_sqlite)?;
+        Ok(())
+    }
+
     /// Mirror one [`BugRecord`] from a project's `bug-log.jsonl` into
     /// the global ledger. Idempotent: `INSERT OR REPLACE` on
     /// `UNIQUE(project_dir, bug_id)` so re-mirroring an updated record
@@ -596,6 +657,109 @@ mod tests {
         assert_eq!(category, "test_flake");
         assert_eq!(status, "open");
         assert_eq!(mid, db.machine_id(), "machine_id must be stamped on row");
+    }
+
+    #[test]
+    fn record_llm_metric_inserts_row_and_round_trips_fields() {
+        use crate::__internal::session::llm_metrics::LlmMetricsRecord;
+        use crate::__internal::session::protocol::SessionKindOut;
+
+        let db = GlobalDb::open_in_memory().expect("open");
+        let project_dir = std::env::temp_dir();
+        let rec = LlmMetricsRecord::from_byte_estimate(
+            1700000000,
+            "DM0",
+            SessionKindOut::Work,
+            "vllm",
+            Some("qwen3.6"),
+            "req-42",
+            5,
+            12_500,
+            Some("stop"),
+            4096,
+            2048,
+        );
+        db.record_llm_metric(&project_dir, &rec)
+            .expect("record_llm_metric");
+
+        let (req, turn, step, kind, backend, wall_ms): (String, i64, String, String, String, i64) =
+            db.conn()
+                .query_row(
+                    "SELECT request_id, turn_index, step, kind, backend, wall_ms FROM llm_metrics",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, String>(4)?,
+                            row.get::<_, i64>(5)?,
+                        ))
+                    },
+                )
+                .expect("query row");
+        assert_eq!(req, "req-42");
+        assert_eq!(turn, 5);
+        assert_eq!(step, "DM0");
+        assert_eq!(kind, "work");
+        assert_eq!(backend, "vllm");
+        assert_eq!(wall_ms, 12_500);
+    }
+
+    #[test]
+    fn record_llm_metric_insert_or_ignore_keeps_first_write() {
+        use crate::__internal::session::llm_metrics::LlmMetricsRecord;
+        use crate::__internal::session::protocol::SessionKindOut;
+
+        let db = GlobalDb::open_in_memory().expect("open");
+        let project_dir = std::env::temp_dir();
+        let first = LlmMetricsRecord::from_byte_estimate(
+            1700000000,
+            "DM0",
+            SessionKindOut::Work,
+            "vllm",
+            None,
+            "req-1",
+            1,
+            500,
+            Some("stop"),
+            100,
+            50,
+        );
+        // Same (project_dir, request_id, turn_index) but different wall_ms
+        // -- INSERT OR IGNORE must keep the first write.
+        let dup = LlmMetricsRecord::from_byte_estimate(
+            1700000999,
+            "DM0",
+            SessionKindOut::Work,
+            "vllm",
+            None,
+            "req-1",
+            1,
+            9999,
+            Some("stop"),
+            100,
+            50,
+        );
+        db.record_llm_metric(&project_dir, &first).expect("first");
+        db.record_llm_metric(&project_dir, &dup)
+            .expect("dup is no-op");
+
+        let row_count: i64 = db
+            .conn()
+            .query_row("SELECT count(*) FROM llm_metrics", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(row_count, 1, "INSERT OR IGNORE should keep one row");
+        let wall_ms: i64 = db
+            .conn()
+            .query_row(
+                "SELECT wall_ms FROM llm_metrics WHERE request_id = ?1",
+                params!["req-1"],
+                |row| row.get(0),
+            )
+            .expect("wall_ms");
+        assert_eq!(wall_ms, 500, "first write's wall_ms must win");
     }
 
     #[test]
