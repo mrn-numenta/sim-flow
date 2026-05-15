@@ -258,17 +258,15 @@ body {
   border-left: 3px solid transparent;
 }
 
-/* Role tinting. Stripe uses the full-saturation palette anchor;
- * background uses the same anchor mixed against the editor bg.
- * The color-mix is inlined here (rather than going through an
- * intermediate `--x-user-bg` token defined on :root) because the
- * indirection seems to defeat substitution in this Chromium build:
- * the stripe -- which reads --x-palette-input directly -- renders,
- * but the background -- which read it through a :root token -- did
- * not. Defining the mix on the consuming rule guarantees the
- * inheritance chain resolves at the consumer scope. */
+/* Role tinting. Background uses `color-mix(... <palette> X%, transparent)`
+ * -- a translucent overlay that paints over whatever's beneath the
+ * bubble. We tried mixing against `var(--vscode-editor-background)`
+ * first, but that arm wasn't producing a paint in the user's
+ * Chromium build, while the same pattern WITH `transparent` (proven
+ * by the orchestrator stripe rule below) renders fine. So we
+ * standardise on the transparent variant for every bubble bg. */
 .x-bubble-user {
-  background: color-mix(in srgb, var(--x-palette-input) 35%, var(--vscode-editor-background));
+  background: color-mix(in srgb, var(--x-palette-input) 35%, transparent);
   color: var(--x-user-fg);
   border-left-color: var(--x-palette-input);
 }
@@ -277,7 +275,7 @@ body {
  * the typed-user bubble so the human's turn pops next to the
  * orchestrator's chatter. */
 .x-bubble-user.x-bubble-orchestrator {
-  background: color-mix(in srgb, var(--x-palette-input) 18%, var(--vscode-editor-background));
+  background: color-mix(in srgb, var(--x-palette-input) 20%, transparent);
   color: var(--x-orchestrator-fg);
   border-left-color: color-mix(
     in srgb,
@@ -290,13 +288,13 @@ body {
  * the most saturated colour in each palette) since the tool anchor
  * itself is a near-white cream that would disappear as a 3px line. */
 .x-bubble-user.x-bubble-orchestrator.x-bubble-tool {
-  background: color-mix(in srgb, var(--x-palette-tool) 35%, var(--vscode-editor-background));
+  background: color-mix(in srgb, var(--x-palette-tool) 30%, transparent);
   color: var(--x-tool-fg);
   border-left-color: var(--x-palette-accent);
 }
 
 .x-bubble-assistant {
-  background: color-mix(in srgb, var(--x-palette-output) 35%, var(--vscode-editor-background));
+  background: color-mix(in srgb, var(--x-palette-output) 30%, transparent);
   color: var(--x-assistant-fg);
   border-left-color: var(--x-palette-output);
 }
