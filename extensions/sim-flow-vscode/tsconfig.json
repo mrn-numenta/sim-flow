@@ -25,7 +25,9 @@
     "out",
     "src/**/*.test.ts",
     "src/webview/panel.ts",
+    "src/webview/panelExperimental.ts",
     "src/chatPanel/panel.ts",
+    "src/chatPanel/panelExperimental.ts",
     "src/chatPanel/renderMarkdown.ts",
     "src/perfPanel/panel.ts"
   ]

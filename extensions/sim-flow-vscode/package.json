@@ -105,6 +105,10 @@
         "title": "sim-flow: Open Flow Dashboard"
       },
       {
+        "command": "sim-flow.toggleExperimentalUi",
+        "title": "sim-flow: Toggle Experimental UI"
+      },
+      {
         "command": "sim-flow.openPerfPanel",
         "title": "sim-flow: Open Perf Panel"
       },
@@ -352,6 +356,11 @@
           "default": false,
           "description": "Automatically open the Flow Dashboard when a sim-flow project is detected in the workspace."
         },
+        "sim-flow.dashboard.experimentalUi": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use the experimental Flow Dashboard UI instead of the standard UI. Intended for side-by-side workflow trials before changes are adopted as the default."
+        },
         "sim-flow.dashboard.showFullyAutomated": {
           "type": "boolean",
           "default": false,
@@ -433,7 +442,7 @@
     "typecheck:extension": "tsc -p ./ --noEmit",
     "codegen:protocol": "node --import tsx scripts/generate-protocol-types.ts",
     "compile:extension": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --external:better-sqlite3 --outfile=dist/extension.js --log-level=warning",
-    "compile:webview": "esbuild src/webview/panel.ts --bundle --format=iife --outfile=dist/webview/panel.js --target=es2022 --log-level=warning && esbuild src/chatPanel/panel.ts --bundle --format=iife --outfile=dist/webview/chatPanel/panel.js --target=es2022 --log-level=warning && esbuild src/perfPanel/panel.ts --bundle --format=iife --outfile=dist/webview/perfPanel/panel.js --target=es2022 --log-level=warning",
+    "compile:webview": "esbuild src/webview/panel.ts --bundle --format=iife --outfile=dist/webview/panel.js --target=es2022 --log-level=warning && esbuild src/webview/panelExperimental.ts --bundle --format=iife --outfile=dist/webview/panelExperimental.js --target=es2022 --log-level=warning && esbuild src/chatPanel/panel.ts --bundle --format=iife --outfile=dist/webview/chatPanel/panel.js --target=es2022 --log-level=warning && esbuild src/perfPanel/panel.ts --bundle --format=iife --outfile=dist/webview/perfPanel/panel.js --target=es2022 --log-level=warning",
     "compile:webview-types": "tsc -p src/webview/tsconfig.json && tsc -p src/chatPanel/tsconfig.json && tsc -p src/perfPanel/tsconfig.json",
     "compile": "npm run codegen:protocol && npm run typecheck:extension && npm run compile:extension && npm run compile:webview-types && npm run compile:webview",
     "compile:cargo": "node scripts/compile-cargo.mjs",

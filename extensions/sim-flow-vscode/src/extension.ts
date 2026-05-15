@@ -71,6 +71,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerWebviewViewProvider(CHAT_PANEL_VIEW_ID, chatPanelProvider),
     vscode.commands.registerCommand("sim-flow.openChatPanel", () => openChatPanel()),
     vscode.commands.registerCommand("sim-flow.openDashboard", () => openDashboard(context)),
+    vscode.commands.registerCommand("sim-flow.toggleExperimentalUi", () =>
+      toggleExperimentalUiCommand(),
+    ),
     vscode.commands.registerCommand("sim-flow.openPerfPanel", () => openPerfPanel(context)),
     vscode.commands.registerCommand("sim-flow.runStep", (step: unknown, projectDir?: unknown) =>
       runStepCommand(step, "runStep", asString(projectDir)),
@@ -399,6 +402,18 @@ async function openDashboardForProject(
     dashboardHosts.set(canonicalDir, host);
   }
   await host.open();
+}
+
+async function toggleExperimentalUiCommand(): Promise<void> {
+  const config = vscode.workspace.getConfiguration("sim-flow");
+  const enabled = config.get<boolean>("dashboard.experimentalUi") === true;
+  const next = !enabled;
+  await config.update("dashboard.experimentalUi", next, vscode.ConfigurationTarget.Workspace);
+  void vscode.window.showInformationMessage(
+    next
+      ? "sim-flow: experimental dashboard UI enabled."
+      : "sim-flow: reverted to the standard dashboard UI.",
+  );
 }
 
 async function openPerfPanel(context: vscode.ExtensionContext): Promise<void> {

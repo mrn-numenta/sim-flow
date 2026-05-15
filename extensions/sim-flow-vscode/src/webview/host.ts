@@ -1410,8 +1410,19 @@ export class DashboardHost {
         if (evt.affectsConfiguration("sim-flow.llm")) {
           void this.postLlmConfig();
         }
+        if (evt.affectsConfiguration("sim-flow.dashboard.experimentalUi")) {
+          void this.reloadWebviewMode();
+        }
       }),
     );
+  }
+
+  private async reloadWebviewMode(): Promise<void> {
+    if (!this.panel) {
+      return;
+    }
+    this.panel.webview.html = await this.renderHtml(this.panel.webview);
+    await this.refresh();
   }
 
   private async postLlmConfig(): Promise<void> {
@@ -1682,11 +1693,23 @@ export class DashboardHost {
 
   private async renderHtml(webview: vscode.Webview): Promise<string> {
     const nonce = randomNonce();
+    const experimental =
+      vscode.workspace.getConfiguration("sim-flow").get<boolean>("dashboard.experimentalUi") ===
+      true;
     const scriptUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.options.extensionUri, "dist", "webview", "panel.js"),
+      vscode.Uri.joinPath(
+        this.options.extensionUri,
+        "dist",
+        "webview",
+        experimental ? "panelExperimental.js" : "panel.js",
+      ),
     );
     const styleUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.options.extensionUri, "media", "panel.css"),
+      vscode.Uri.joinPath(
+        this.options.extensionUri,
+        "media",
+        experimental ? "panelExperimental.css" : "panel.css",
+      ),
     );
     const csp = [
       `default-src 'none'`,

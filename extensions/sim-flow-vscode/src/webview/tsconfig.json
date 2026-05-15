@@ -16,5 +16,11 @@
     "noEmit": true,
     "types": []
   },
-  "include": ["panel.ts", "messages.ts", "../cli/types.ts", "../state/types.ts"]
+  "include": [
+    "panel.ts",
+    "panelExperimental.ts",
+    "messages.ts",
+    "../cli/types.ts",
+    "../state/types.ts"
+  ]
 }

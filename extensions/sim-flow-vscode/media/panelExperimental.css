@@ -1,0 +1,1406 @@
+:root {
+  /* Match the DOT diagram palette so the dashboard feels continuous
+     with docs/architecture/ai-flow/images/. */
+  --rail-primary: #8cb8ff;
+  --rail-neutral: #e8e8e8;
+  --rail-success: #c9e9c9;
+  --rail-warning: #ffd966;
+  --rail-danger: #cc5555;
+  --rail-disabled-bg: #f3f3f3;
+  --rail-disabled-fg: #6a6a6a;
+
+  --step-bg: var(--rail-neutral);
+  --step-bg-passed: var(--rail-success);
+  --step-bg-current: var(--rail-primary);
+  --step-bg-disabled-ahead: var(--rail-disabled-bg);
+  --step-fg: #111;
+  --step-fg-disabled-ahead: var(--rail-disabled-fg);
+  --gate-bg: var(--rail-warning);
+  --gate-bg-passed: #66cc66;
+  --gate-bg-failed: var(--rail-danger);
+  --border-color: #b8b8b8;
+  --muted: #6a6a6a;
+  --accent: #3366cc;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  font-family: var(--vscode-font-family, system-ui, sans-serif);
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+  margin: 0;
+  padding: 0;
+  font-size: var(--vscode-font-size, 13px);
+  display: flex;
+  flex-direction: column;
+}
+
+header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.header-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mode-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(51, 102, 204, 0.14);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+main {
+  padding: 16px 20px 16px;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tab-panel.active {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* -----------------------------------------------------------------
+   Auto-flow row (above the step rail / detail layout)
+   ----------------------------------------------------------------- */
+
+.project-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.project-row .spacer {
+  flex: 1 1 auto;
+}
+
+/* -----------------------------------------------------------------
+   Projects + Settings tabs
+   ----------------------------------------------------------------- */
+
+.settings-section {
+  margin-top: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+.settings-section:last-child {
+  border-bottom: none;
+}
+.settings-section h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.llm-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-left: 8px;
+}
+
+.documents-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0 16px;
+  font-size: 12px;
+}
+
+.documents-table th,
+.documents-table td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: middle;
+}
+
+.documents-table th {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.documents-table .actions {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.doc-missing td {
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.doc-group {
+  margin-top: 16px;
+  font-size: 13px;
+}
+
+.llm-source-select {
+  font: inherit;
+  padding: 2px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--vscode-input-background, #fff);
+  color: var(--vscode-input-foreground, #111);
+}
+
+.llm-source-refresh {
+  margin-left: 4px;
+  padding: 2px 6px;
+  font-size: 13px;
+  line-height: 1;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--vscode-input-background, #fff);
+  color: var(--vscode-input-foreground, #111);
+  cursor: pointer;
+}
+
+.llm-source-refresh:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.llm-verbose {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-left: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.llm-verbose input[type="checkbox"] {
+  margin: 0;
+}
+
+.new-project-input {
+  width: 220px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--vscode-input-background, #fff);
+  color: var(--vscode-input-foreground, #111);
+  font: inherit;
+}
+
+/* Two-row flow control panel: play/stop icon buttons on top, spec
+   path picker beneath. Stacking them puts the action buttons at
+   the same column as the step rail's first box and lets the spec
+   row stretch to full width. */
+.auto-flow-row {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 12px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+/* Holds the help text on top of the input. `flex: 1 1 auto` so it
+   absorbs the leftover row width between the Spec label and the
+   Browse button -- mirroring what the bare <input> used to do. The
+   `min-width: 0` is the standard fix that lets a flex child shrink
+   below its content's natural width. */
+.auto-spec-input-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Inline description for the Spec field. Italic + mid gray so it
+   reads as guidance rather than as a value, and only spans the
+   width of the input field below it (not the Spec: label or the
+   Browse... button to either side, since it lives inside
+   `.auto-spec-input-col`). */
+.auto-flow-spec-help {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+/* ▶ / ■ icon buttons. Sized like other action buttons but with a
+   larger, centered glyph and no extra padding around the symbol. */
+.auto-icon-btn {
+  flex: 0 0 auto;
+  min-width: 36px;
+  padding: 4px 12px;
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 700;
+  font-family: var(--vscode-font-family, system-ui, sans-serif);
+}
+
+.auto-run-btn {
+  flex: 0 0 auto;
+  font-weight: 600;
+}
+
+/* End-to-end fully-automated play. Red so it reads as "this is the
+   long, hands-off variant" -- distinct from the regular ▶ that
+   starts manual step-by-step. Hidden by default; the user opts in
+   via the Settings-tab checkbox. */
+.auto-fully-automated-btn {
+  background: var(--vscode-inputValidation-errorBackground, #c43c3c);
+  color: var(--vscode-inputValidation-errorForeground, #fff);
+  border: 1px solid var(--vscode-inputValidation-errorBorder, #8a2c2c);
+}
+.auto-fully-automated-btn:hover {
+  filter: brightness(1.1);
+}
+.auto-fully-automated-btn:disabled {
+  filter: brightness(0.85);
+}
+
+/* Step-axis mode toggle (Manual ⇄ Auto). Sits between Play and Stop
+   in the auto-flow row. The active option renders inset / disabled;
+   the inactive one is clickable and posts `set-step-mode`. The small
+   "live" / "setting" indicator tells the user whether the mode
+   reflects the orchestrator's truth (a session is attached) or just
+   the persisted setting (no session, used at next launch). */
+.step-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 4px;
+  background: var(--vscode-editor-background, transparent);
+}
+.step-mode-toggle-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 220px;
+}
+.step-mode-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.step-mode-help {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+  max-width: 320px;
+}
+.step-mode-toggle-label {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.step-mode-indicator {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 0 4px;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+.step-mode-indicator-live {
+  background: var(--vscode-charts-green, #2e8b57);
+  color: var(--vscode-editor-background, #fff);
+}
+.step-mode-indicator-setting {
+  background: var(--vscode-input-placeholderForeground, #888);
+  color: var(--vscode-editor-background, #fff);
+}
+.step-mode-option {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.2;
+  border-radius: 3px;
+  border: 1px solid var(--vscode-input-border, transparent);
+  background: var(--vscode-button-secondaryBackground, transparent);
+  color: var(--vscode-button-secondaryForeground, inherit);
+  cursor: pointer;
+}
+.step-mode-option:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+.step-mode-option-active {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border-color: var(--vscode-button-border, transparent);
+  cursor: default;
+}
+
+.auto-spec-label {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 120px;
+  padding-top: 2px;
+}
+
+.auto-spec-input {
+  /* Fill the parent column (`.auto-spec-input-col`); the column
+     itself is the flex child that grabs leftover row width. */
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--vscode-input-background, #fff);
+  color: var(--vscode-input-foreground, #111);
+  font: inherit;
+}
+
+.auto-spec-pick-btn {
+  flex: 0 0 auto;
+}
+
+.spec-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.spec-editor-help {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.spec-editor-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.spec-editor-detail {
+  margin-top: 2px;
+}
+
+.spec-editor-preconnect {
+  margin-top: 10px;
+}
+
+.verilog-simulator-path {
+  flex: 1 1 auto;
+  min-width: 320px;
+  padding: 4px 8px;
+  margin-left: 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--vscode-input-background, #fff);
+  color: var(--vscode-input-foreground, #111);
+  font: inherit;
+}
+
+/* When the user hasn't clicked Play yet, gray the step rail + per-
+   step detail so they can't accidentally drive the flow without
+   starting the automated driver. The spec row + Play / Stop
+   buttons stay live (they're outside `.flow-layout`). */
+.flow-layout.flow-locked {
+  /* Visual cue that the flow isn't currently being driven by an
+     orchestrator session: dimmed + desaturated. Mutate buttons
+     (Run Step / Run Critique / Run Gate / Advance / Reset) are
+     individually disabled via `applyButtonState` so they can't be
+     clicked; navigation (step-rail selection, document opens) and
+     non-mutating actions stay live so the user can browse an
+     existing project without first launching the orchestrator. */
+  opacity: 0.78;
+  filter: saturate(0.9);
+}
+
+.flow-layout.flow-readonly {
+  opacity: 1;
+  filter: none;
+}
+
+.flow-summary-banner {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: rgba(51, 102, 204, 0.08);
+}
+
+.flow-summary-banner strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.flow-summary-banner p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.inspect-only-banner {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(51, 102, 204, 0.22);
+  border-radius: 6px;
+  background: rgba(51, 102, 204, 0.06);
+}
+
+.inspect-only-banner strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.inspect-only-banner p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.preconnect-panel {
+  margin-top: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.preconnect-panel h2 {
+  margin-top: 0;
+}
+
+.preconnect-panel > p {
+  margin: 0 0 12px;
+  line-height: 1.45;
+}
+
+.preconnect-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.preconnect-card {
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--vscode-editor-background, #fff);
+}
+
+.preconnect-card h3 {
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.preconnect-card p,
+.preconnect-card ol {
+  margin: 8px 0 0;
+  line-height: 1.45;
+}
+
+@media (max-width: 640px) {
+  .preconnect-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.viewer-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: rgba(255, 217, 102, 0.2);
+  color: var(--vscode-editor-foreground, inherit);
+  border: 1px solid #d4b84e;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.flow-row-divider {
+  width: 100%;
+  border: none;
+  border-top: 1px solid var(--border-color);
+  margin: 4px 0 10px;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+
+h1 {
+  font-size: 18px;
+}
+h2 {
+  font-size: 14px;
+  margin-top: 20px;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 4px;
+}
+
+/* -----------------------------------------------------------------
+   Tabs
+   ----------------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  border-bottom: 1px solid var(--border-color);
+  margin: 16px 0 12px;
+}
+
+.block-diagram-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.block-diagram-svg {
+  width: 100%;
+  overflow: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 8px;
+  background: var(--vscode-editor-background, #fff);
+}
+
+.block-diagram-svg svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.tabs-separator {
+  width: 1px;
+  margin: 4px 8px;
+  background: var(--border-color);
+  align-self: stretch;
+}
+
+.tab {
+  padding: 6px 12px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--vscode-foreground);
+  border: none;
+  border-bottom: 2px solid transparent;
+  font: inherit;
+}
+
+.tab:hover {
+  color: var(--accent);
+}
+
+.tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+.tab-panel {
+  display: none;
+}
+.tab-panel.active {
+  display: block;
+}
+
+/* -----------------------------------------------------------------
+   Step rail
+   ----------------------------------------------------------------- */
+
+/* Two-column layout: vertical step rail on the left, action / gate
+   detail on the right. Wraps to a single column when the pane is
+   too narrow for both columns to be useful. */
+.flow-layout {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 16px;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.flow-rail-column {
+  flex: 0 0 auto;
+  min-width: 220px;
+  max-width: 320px;
+  overflow-y: auto;
+}
+
+.flow-detail-column {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+@media (max-width: 640px) {
+  .flow-layout {
+    flex-direction: column;
+  }
+  .flow-rail-column {
+    max-width: none;
+    width: 100%;
+  }
+}
+
+.step-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  /* Steps stack as plain rectangles separated by a small gap.
+     The earlier diamond-cutout geometry was retired in favor of
+     a simpler list -- gate state lives in the per-step detail
+     panel now, not as inline diamond glyphs. */
+  gap: 4px;
+  padding: 8px 0;
+  width: 100%;
+}
+
+.step {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 9px 10px;
+  background: var(--step-bg);
+  color: var(--step-fg);
+  cursor: pointer;
+  overflow: hidden;
+  min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  transition: transform 60ms ease-out;
+}
+
+.step:hover {
+  transform: translateY(-1px);
+}
+
+.step.passed {
+  background: var(--step-bg-passed);
+}
+.step.current {
+  background: var(--step-bg-current);
+  color: #fff;
+  border-color: rgba(51, 102, 204, 0.6);
+  box-shadow: 0 0 0 2px rgba(51, 102, 204, 0.4);
+}
+/* Steps ahead of `current_step` (or any step without a `passed` /
+   `current` class) appear dimmed so the rail visually communicates
+   "these aren't reachable yet". The `.step-locked` class is added
+   by the rail renderer when `isStepSelectableInRail` returns false;
+   the styles below cover the default-state path for other ahead
+   steps too -- everything that isn't passed or current falls
+   through to the disabled look. */
+.step:not(.passed):not(.current) {
+  background: var(--step-bg-disabled-ahead);
+  color: var(--step-fg-disabled-ahead);
+}
+.step.step-locked {
+  background: var(--step-bg-disabled-ahead);
+  color: var(--step-fg-disabled-ahead);
+  cursor: default;
+  opacity: 0.85;
+}
+.step.step-locked:hover {
+  /* Suppress the lift animation on locked rows so the user
+     doesn't get tactile feedback that suggests it's clickable. */
+  transform: none;
+}
+
+/* Selected = the rail row the user clicked. We override the base
+   border with a thicker accent ring so the selection reads even on
+   passed / current backgrounds. Stacks the base border underneath
+   so both edges trace the cut-outs. */
+.step.selected {
+  box-shadow:
+    inset 0 0 0 1px var(--border-color),
+    inset 0 0 0 2px var(--accent);
+}
+.step.current.selected {
+  box-shadow:
+    inset 0 0 0 1px var(--border-color),
+    inset 0 0 0 2px var(--accent);
+}
+
+.step[aria-disabled="true"] .step-label {
+  opacity: 0.72;
+}
+
+.step .step-id {
+  font-weight: 500;
+  font-size: 11px;
+  color: inherit;
+  opacity: 0.8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.step .step-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.step-status,
+.detail-step-status {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-top: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+}
+
+.step-status-current {
+  background: rgba(51, 102, 204, 0.16);
+  color: #234d99;
+  border-color: rgba(51, 102, 204, 0.28);
+}
+
+.step-status-complete {
+  background: rgba(102, 204, 102, 0.18);
+  color: #226622;
+  border-color: rgba(102, 204, 102, 0.32);
+}
+
+.step-status-attention {
+  background: rgba(204, 85, 85, 0.16);
+  color: #8f2f2f;
+  border-color: rgba(204, 85, 85, 0.28);
+}
+
+.step-status-review {
+  background: rgba(255, 217, 102, 0.22);
+  color: #7f5a00;
+  border-color: rgba(214, 166, 0, 0.28);
+}
+
+.step-status-ready {
+  background: rgba(140, 184, 255, 0.18);
+  color: #2d5ca8;
+  border-color: rgba(140, 184, 255, 0.32);
+}
+
+.step-status-upcoming {
+  background: rgba(128, 128, 128, 0.12);
+  color: var(--muted);
+  border-color: rgba(128, 128, 128, 0.2);
+}
+
+.step.current .step-status-current {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+/* Gate diamonds. Sit in the cut-outs between consecutive steps:
+   negative margins shrink the diamond's flex-allocated height to
+   roughly zero so the steps remain visually flush, and z-index
+   keeps the diamond on top of step backgrounds where the cut-outs
+   overlap. The dimensions match the `--cut-depth` / `--cut-half-width`
+   on `.step` -- if you change them there, change them here. */
+.gate {
+  align-self: center;
+  width: 12px;
+  height: 12px;
+  margin-top: -6px;
+  margin-bottom: -6px;
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: transparent;
+  font-size: 7px;
+  font-weight: 700;
+  transform: rotate(45deg);
+  background: var(--gate-bg);
+  border: 1px solid var(--border-color);
+}
+
+.gate > span {
+  transform: rotate(-45deg);
+  display: inline-block;
+}
+
+.gate.passed {
+  background: var(--gate-bg-passed);
+  color: #fff;
+}
+.gate.failed {
+  background: var(--gate-bg-failed);
+  color: #fff;
+}
+
+/* -----------------------------------------------------------------
+   Detail panel (per-step)
+   ----------------------------------------------------------------- */
+
+.detail {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.detail h3 {
+  margin-bottom: 4px;
+}
+
+.detail .actions {
+  margin: 10px 0;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* "Generate Verilog" sits at the right edge of the actions row,
+   separated from the per-step buttons. `margin-left: auto` pushes it
+   into the leftover flex space, which is the simplest way to get a
+   right-aligned trailing button without breaking the existing flow. */
+.detail .actions .generate-verilog-btn {
+  margin-left: auto;
+}
+
+.detail-step-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.detail-step-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.detail-step-id {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.detail-step-purpose {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.step-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.step-guide-row {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 10px;
+  align-items: start;
+  line-height: 1.4;
+}
+
+@media (max-width: 640px) {
+  .step-guide-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
+
+.detail-banner {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  line-height: 1.4;
+}
+
+.detail-banner-info {
+  background: rgba(51, 102, 204, 0.08);
+}
+
+.detail-banner-warning {
+  background: rgba(255, 217, 102, 0.18);
+  border-color: rgba(214, 166, 0, 0.28);
+}
+
+/* -----------------------------------------------------------------
+   Prompts tab
+   ----------------------------------------------------------------- */
+
+.prompts-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 12px;
+}
+
+.prompts-table th,
+.prompts-table td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: top;
+}
+
+.prompts-table th {
+  font-weight: 600;
+  background: rgba(127, 127, 127, 0.08);
+}
+
+.prompts-table .scope {
+  font-weight: 600;
+}
+
+.prompts-table .scope.project {
+  color: var(--accent);
+}
+
+.prompts-table .scope.global {
+  color: #a06400;
+}
+
+.prompts-table .scope.default {
+  color: var(--muted);
+}
+
+.prompts-table .actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.prompt-editor {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
+.prompt-editor h3 {
+  margin-bottom: 8px;
+}
+
+.prompt-textarea {
+  width: 100%;
+  min-height: 320px;
+  resize: vertical;
+  padding: 8px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  background: var(--vscode-input-background, #fff);
+  color: var(--vscode-input-foreground, #111);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+.prompt-editor .actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+button {
+  padding: 4px 10px;
+  font: inherit;
+  border: 1px solid var(--border-color);
+  background: var(--vscode-button-background, #eee);
+  color: var(--vscode-button-foreground, #111);
+  border-radius: 4px;
+  cursor: pointer;
+}
+button:hover {
+  background: var(--vscode-button-hoverBackground, #dcdcdc);
+}
+button:disabled {
+  background: color-mix(in srgb, var(--vscode-button-background, #eee) 35%, transparent);
+  color: var(--vscode-disabledForeground, #8a8a8a);
+  border-color: color-mix(in srgb, var(--vscode-button-background, #eee) 45%, transparent);
+  cursor: default;
+  opacity: 1;
+  filter: none;
+}
+button:disabled:hover {
+  background: color-mix(in srgb, var(--vscode-button-background, #eee) 35%, transparent);
+}
+button.secondary {
+  background: transparent;
+}
+button.secondary:disabled {
+  background: color-mix(in srgb, var(--vscode-button-background, #eee) 35%, transparent);
+}
+
+.critique {
+  font-family: var(--vscode-editor-font-family, monospace);
+  white-space: pre-wrap;
+  background: var(--vscode-textBlockQuote-background, #1111);
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.finding {
+  margin-bottom: 4px;
+}
+.finding.resolved {
+  color: var(--vscode-gitDecoration-addedResourceForeground, #4ca84c);
+}
+.finding.unresolved {
+  color: var(--vscode-gitDecoration-modifiedResourceForeground, #c08f14);
+}
+.finding.blocker {
+  color: var(--vscode-errorForeground, #c43c3c);
+  font-weight: 600;
+}
+
+/* -----------------------------------------------------------------
+   Tables (runs, baselines, sweeps)
+   ----------------------------------------------------------------- */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+th {
+  background: transparent;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+tbody tr:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.empty {
+  color: var(--muted);
+  padding: 12px 0;
+  font-style: italic;
+}
+
+.error {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: 4px;
+  background: rgba(196, 60, 60, 0.1);
+  color: var(--vscode-errorForeground, #c43c3c);
+  border: 1px solid rgba(196, 60, 60, 0.3);
+  overflow-wrap: anywhere;
+}
+
+.error pre {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  font-size: 0.95em;
+}
+
+.error code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------
+ * Plan-execution progress (under the per-step buttons).
+ * Renders for DM2d / DM3c / DM4b only; other steps hide it.
+ *   gray   = milestone has no resolved rows
+ *   yellow = milestone is in progress
+ *   green  = every row resolved (done + deferred = total)
+ * ------------------------------------------------------------ */
+.plan-progress {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.02);
+}
+.plan-progress-heading {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.step-artifacts {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.02);
+}
+.step-artifacts-heading {
+  margin: 0 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.step-artifacts-summary {
+  margin: 0 0 4px;
+  font-size: 11px;
+}
+.step-artifacts-table {
+  margin-top: 2px;
+}
+.step-artifacts-table th,
+.step-artifacts-table td {
+  font-size: 11px;
+  padding: 2px 6px;
+  /* Drop the global `border-bottom: 1px solid var(--border-color)`
+     that bleeds out from under the right-aligned Open button as
+     a stray "underline" on the bottom-right corner. The table
+     reads cleaner without row separators at this size; if rows
+     ever need visual division they can come back as a subtle
+     alternating background. */
+  border-bottom: none;
+}
+.step-artifacts-table tbody tr:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+.step-artifacts-preview-row td {
+  background: rgba(0, 0, 0, 0.03);
+  padding: 0;
+  border-bottom: none;
+}
+.step-artifacts-preview {
+  margin: 0;
+  padding: 6px 10px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+  color: var(--vscode-editor-foreground, inherit);
+}
+/* Rendered-markdown / rendered-table previews land in a normal
+   block element rather than a <pre>; size them down to match the
+   compact step-artifacts feel and keep tables readable. */
+.step-artifacts-rendered {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.step-artifacts-rendered table {
+  border-collapse: collapse;
+  margin: 4px 0;
+  font-size: 11px;
+}
+.step-artifacts-rendered th,
+.step-artifacts-rendered td {
+  border: 1px solid var(--border-color);
+  padding: 2px 6px;
+  text-align: left;
+}
+.step-artifacts-rendered th {
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.step-artifacts-rendered h1,
+.step-artifacts-rendered h2,
+.step-artifacts-rendered h3,
+.step-artifacts-rendered h4 {
+  margin: 8px 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.step-artifacts-rendered ul,
+.step-artifacts-rendered ol {
+  margin: 4px 0 4px 16px;
+  padding: 0;
+}
+.step-artifacts-rendered li {
+  margin: 1px 0;
+}
+.step-artifacts-rendered code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.05);
+  padding: 0 3px;
+  border-radius: 2px;
+}
+.step-artifacts-rendered pre {
+  margin: 4px 0;
+  padding: 4px 6px;
+  background: rgba(0, 0, 0, 0.04);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  white-space: pre-wrap;
+  border-radius: 2px;
+}
+.step-artifacts-rendered p {
+  margin: 4px 0;
+}
+.critique-summary {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.02);
+}
+.critique-summary .critique-list {
+  margin: 4px 0 0;
+}
+.milestone-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.milestone-box {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 64px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--step-fg);
+  transition: filter 80ms ease;
+}
+.milestone-box:hover {
+  filter: brightness(0.96);
+}
+.milestone-id {
+  font-weight: 600;
+  font-size: 12px;
+}
+.milestone-pct {
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 2px;
+}
+.milestone-empty {
+  background: #ececec;
+}
+.milestone-in-progress {
+  background: #fff4c2; /* light yellow */
+  border-color: #e6c84a;
+}
+.milestone-done {
+  background: #d6f0d6; /* light green */
+  border-color: #66cc66;
+}
+.plan-progress-current {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+.plan-progress-current.muted {
+  color: var(--muted);
+  font-style: italic;
+}
+.plan-progress-current .linkish {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+}
+.plan-progress-current .linkish:hover {
+  filter: brightness(0.85);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
