@@ -480,16 +480,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   /**
-   * Open the native file-picker so the user can drop a path into
-   * the composer textarea. Used primarily for the DM0 spec ask but
-   * intentionally generic: any orchestrator `RequestUserInput` that
-   * wants a file path can be answered this way. The Spec / All
-   * files filters mirror the dashboard's existing spec picker.
+   * Open the native picker so the user can drop a path into the
+   * composer textarea. Accepts both files (spec docs, source files
+   * the user wants to reference) and directories (project paths,
+   * source trees) -- the orchestrator decides what to do with the
+   * string once it's in the prompt. The Spec / All-files filters
+   * are advisory and only apply to the files tab on platforms that
+   * show a filter dropdown; folder selection ignores them.
    */
   private async pickFile(): Promise<void> {
     const picked = await vscode.window.showOpenDialog({
       canSelectFiles: true,
-      canSelectFolders: false,
+      canSelectFolders: true,
       canSelectMany: false,
       openLabel: "Insert path",
       filters: {

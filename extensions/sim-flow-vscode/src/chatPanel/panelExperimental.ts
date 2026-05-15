@@ -537,7 +537,7 @@ function buildComposer(state: ChatPanelState): HTMLElement {
   browseBtn.className = "x-browse";
   browseBtn.textContent = "Browse…";
   browseBtn.title =
-    "Pick a file (e.g. a DM0 spec) and insert its absolute path into the message.";
+    "Pick a file or directory and insert its absolute path into the message.";
   browseBtn.disabled =
     state.isViewer || !state.supportsPromptEntry || state.isStreaming;
   browseBtn.addEventListener("click", () => {
