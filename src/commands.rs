@@ -9,8 +9,9 @@ use sim_flow::__internal::state::{Flow, State};
 use sim_flow::__internal::steps::registry_for;
 
 use crate::cli::{
-    BaselineAction, BugsAction, Cli, Command, ConfigAction, CoverageAction, KeysAction, NewKind,
-    PlanKindArg, PromptResetScope, PromptScopeArg, PromptsAction, SessionMode, WatchersAction,
+    BaselineAction, BugsAction, Cli, Command, ConfigAction, CoverageAction, DbAction, KeysAction,
+    NewKind, PlanKindArg, PromptResetScope, PromptScopeArg, PromptsAction, SessionMode,
+    WatchersAction,
 };
 
 pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
@@ -48,6 +49,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
         Command::ConvertSv { force } => convert_sv(&project_dir, *force),
         Command::Bugs { action } => bugs_cmd(&project_dir, action),
         Command::Config { action } => config_cmd(&project_dir, action),
+        Command::Db { action } => db_cmd(action),
         Command::New { kind } => new_cmd(cli, &project_dir, kind),
         Command::Runs {
             workload,
@@ -2253,6 +2255,120 @@ fn critiques_cmd(project: &Path, step: Option<&str>) -> sim_flow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// `sim-flow db <action>` -- introspection over the per-user global DB.
+fn db_cmd(action: &DbAction) -> sim_flow::Result<()> {
+    use sim_flow::__internal::global_db::{GlobalDb, default_db_path};
+    match action {
+        DbAction::Path => {
+            match default_db_path() {
+                Some(p) => println!("{}", p.display()),
+                None => {
+                    return Err(sim_flow::Error::State(
+                        "global DB path unavailable: directories::ProjectDirs returned None \
+                         (HOME unset?)"
+                            .to_string(),
+                    ));
+                }
+            }
+            Ok(())
+        }
+        DbAction::Stats { json } => {
+            let Some(path) = default_db_path() else {
+                return Err(sim_flow::Error::State(
+                    "global DB unavailable: directories::ProjectDirs returned None".to_string(),
+                ));
+            };
+            // `db stats` opens the DB read-only on its own connection so it
+            // doesn't fight the in-process singleton (which an active
+            // `sim-flow auto` session may already own).
+            let db = GlobalDb::open(&path)?;
+            let stats = collect_db_stats(&db)?;
+            if *json {
+                let value = serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "schema_version": stats.schema_version,
+                    "machine_id": stats.machine_id,
+                    "user_identity": stats.user_identity,
+                    "tables": stats.tables.iter().map(|t| {
+                        serde_json::json!({
+                            "table": t.name,
+                            "row_count": t.row_count,
+                            "last_write": t.last_write,
+                        })
+                    }).collect::<Vec<_>>(),
+                });
+                println!("{}", serde_json::to_string_pretty(&value).unwrap());
+            } else {
+                println!("path:           {}", path.display());
+                println!("schema_version: {}", stats.schema_version);
+                println!("machine_id:     {}", stats.machine_id);
+                println!("user_identity:  {}", stats.user_identity);
+                println!();
+                println!("{:<24}  {:>10}  last_write", "table", "rows");
+                println!("{:<24}  {:>10}  ----------", "----", "----");
+                for t in &stats.tables {
+                    let last = t.last_write.as_deref().unwrap_or("-");
+                    println!("{:<24}  {:>10}  {}", t.name, t.row_count, last);
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+struct DbStats {
+    schema_version: u32,
+    machine_id: String,
+    user_identity: String,
+    tables: Vec<DbTableStats>,
+}
+
+struct DbTableStats {
+    name: &'static str,
+    row_count: i64,
+    /// Latest non-null timestamp-like column value. `None` when the
+    /// table is empty or doesn't have a timestamp column we recognize.
+    last_write: Option<String>,
+}
+
+fn collect_db_stats(db: &sim_flow::__internal::global_db::GlobalDb) -> sim_flow::Result<DbStats> {
+    use sim_flow::__internal::global_db::user_identity;
+
+    // `(table, timestamp-column-name)` for the human-friendly last-write
+    // column. `None` -> we just report row count.
+    const TABLES: &[(&str, Option<&str>)] = &[
+        ("bugs", Some("opened_at")),
+        ("llm_metrics", Some("timestamp")),
+        ("tool_timings", Some("timestamp")),
+        ("experiment_runs", Some("timestamp")),
+        ("experiment_baselines", Some("timestamp")),
+        ("experiment_ppa_estimates", Some("timestamp")),
+    ];
+
+    let mut tables = Vec::with_capacity(TABLES.len());
+    for &(name, ts_col) in TABLES {
+        let row_count = db.count(name)?;
+        let last_write = if let Some(col) = ts_col
+            && row_count > 0
+        {
+            db.latest_timestamp(name, col)?
+        } else {
+            None
+        };
+        tables.push(DbTableStats {
+            name,
+            row_count,
+            last_write,
+        });
+    }
+    Ok(DbStats {
+        schema_version: db.schema_version()?,
+        machine_id: db.machine_id().to_string(),
+        user_identity: user_identity(),
+        tables,
+    })
 }
 
 fn config_cmd(project: &Path, action: &ConfigAction) -> sim_flow::Result<()> {

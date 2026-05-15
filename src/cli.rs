@@ -97,6 +97,14 @@ pub(crate) enum Command {
         #[command(subcommand)]
         action: ConfigAction,
     },
+    /// Inspect the per-user global telemetry DB
+    /// (`~/Library/Application Support/sim-flow/sim-flow.db` on macOS).
+    /// Aggregates bugs, LLM metrics, tool timings, and experiments
+    /// across every project the developer has run on this machine.
+    Db {
+        #[command(subcommand)]
+        action: DbAction,
+    },
     /// Create a new project from a template.
     New {
         #[command(subcommand)]
@@ -682,6 +690,23 @@ pub(crate) enum PromptsAction {
         /// Limit to one scope; default returns the active scope.
         #[arg(long)]
         scope: Option<PromptScopeArg>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum DbAction {
+    /// Print the resolved path to the per-user global DB.
+    /// `sqlite3 $(sim-flow db path)` is always an option for ad-hoc
+    /// queries. Useful for confirming the data directory location
+    /// across platforms.
+    Path,
+    /// Per-table row counts, last-write timestamps, schema version,
+    /// and resolved machine identity / user identity for the live
+    /// global DB. Read-only; safe to run during an auto session.
+    Stats {
+        /// Emit machine-readable JSON instead of the human table.
+        #[arg(long)]
+        json: bool,
     },
 }
 

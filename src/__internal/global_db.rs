@@ -213,6 +213,36 @@ impl GlobalDb {
         &mut self.conn
     }
 
+    /// `SELECT count(*) FROM <table>`. Surfaced as a typed method so
+    /// the `sim-flow db stats` CLI doesn't need access to the raw
+    /// connection.
+    pub fn count(&self, table: &str) -> Result<i64> {
+        if !is_safe_table_name(table) {
+            return Err(Error::State(format!("unsafe table name {table:?}")));
+        }
+        self.conn
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .map_err(wrap_sqlite)
+    }
+
+    /// `SELECT MAX(<column>) FROM <table>` -- latest non-null
+    /// timestamp value, or `None` when the table is empty. Surfaced
+    /// as a typed method (same rationale as `count`).
+    pub fn latest_timestamp(&self, table: &str, column: &str) -> Result<Option<String>> {
+        if !is_safe_table_name(table) || !is_safe_table_name(column) {
+            return Err(Error::State(format!(
+                "unsafe identifier {table:?} / {column:?}"
+            )));
+        }
+        self.conn
+            .query_row(&format!("SELECT MAX({column}) FROM {table}"), [], |row| {
+                row.get::<_, Option<String>>(0)
+            })
+            .map_err(wrap_sqlite)
+    }
+
     /// Mirror one [`LlmMetricsRecord`] from a project's
     /// `logs/llm-metrics.jsonl` into the global ledger.
     ///
@@ -697,6 +727,15 @@ fn wrap_sqlite(source: rusqlite::Error) -> Error {
     Error::State(format!("global-db sqlite error: {source}"))
 }
 
+/// Defensive guard for the table / column names interpolated into
+/// `count()` / `latest_timestamp()` queries. Rusqlite's parameter
+/// binding doesn't cover identifiers, and the CLI passes them in from
+/// a closed allowlist anyway -- this is belt-and-suspenders so a typo
+/// in the allowlist can't produce a query-injection vector.
+fn is_safe_table_name(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 // ── Process-wide singleton ──────────────────────────────────────────────
 
 enum DbState {
@@ -1070,6 +1109,55 @@ mod tests {
             )
             .expect("metrics");
         assert_eq!(metrics.as_deref(), Some(r#"{"throughput":3.21}"#));
+    }
+
+    #[test]
+    fn count_and_latest_timestamp_match_row_state() {
+        use crate::__internal::bug_log::BugRecord;
+
+        let db = GlobalDb::open_in_memory().expect("open");
+        let project_dir = std::env::temp_dir();
+        assert_eq!(db.count("bugs").expect("count empty"), 0);
+        assert_eq!(
+            db.latest_timestamp("bugs", "opened_at").expect("ts empty"),
+            None
+        );
+
+        for (i, opened_at) in ["1700000000", "1700000010", "1700000005"]
+            .iter()
+            .enumerate()
+        {
+            db.record_bug(
+                &project_dir,
+                &BugRecord {
+                    id: format!("bug-{:03}", i + 1),
+                    opened_at: (*opened_at).to_string(),
+                    closed_at: None,
+                    step: "DM0".to_string(),
+                    milestone: None,
+                    category: "other".to_string(),
+                    issue: "test".to_string(),
+                    events: Vec::new(),
+                    resolution: None,
+                    status: "open".to_string(),
+                },
+            )
+            .expect("record_bug");
+        }
+        assert_eq!(db.count("bugs").expect("count 3"), 3);
+        assert_eq!(
+            db.latest_timestamp("bugs", "opened_at").expect("latest ts"),
+            Some("1700000010".to_string())
+        );
+    }
+
+    #[test]
+    fn count_rejects_unsafe_table_names() {
+        let db = GlobalDb::open_in_memory().expect("open");
+        let err = db
+            .count("bugs; DROP TABLE bugs;--")
+            .expect_err("should reject");
+        assert!(format!("{err}").contains("unsafe table name"));
     }
 
     #[test]
