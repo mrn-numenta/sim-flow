@@ -266,7 +266,7 @@ body {
  * by the orchestrator stripe rule below) renders fine. So we
  * standardise on the transparent variant for every bubble bg. */
 .x-bubble-user {
-  background: color-mix(in srgb, var(--x-palette-input) 35%, transparent);
+  background: color-mix(in srgb, var(--x-palette-input) 18%, transparent);
   color: var(--x-user-fg);
   border-left-color: var(--x-palette-input);
 }
@@ -275,7 +275,7 @@ body {
  * the typed-user bubble so the human's turn pops next to the
  * orchestrator's chatter. */
 .x-bubble-user.x-bubble-orchestrator {
-  background: color-mix(in srgb, var(--x-palette-input) 20%, transparent);
+  background: color-mix(in srgb, var(--x-palette-input) 10%, transparent);
   color: var(--x-orchestrator-fg);
   border-left-color: color-mix(
     in srgb,
@@ -288,13 +288,13 @@ body {
  * the most saturated colour in each palette) since the tool anchor
  * itself is a near-white cream that would disappear as a 3px line. */
 .x-bubble-user.x-bubble-orchestrator.x-bubble-tool {
-  background: color-mix(in srgb, var(--x-palette-tool) 30%, transparent);
+  background: color-mix(in srgb, var(--x-palette-tool) 15%, transparent);
   color: var(--x-tool-fg);
   border-left-color: var(--x-palette-accent);
 }
 
 .x-bubble-assistant {
-  background: color-mix(in srgb, var(--x-palette-output) 30%, transparent);
+  background: color-mix(in srgb, var(--x-palette-output) 15%, transparent);
   color: var(--x-assistant-fg);
   border-left-color: var(--x-palette-output);
 }
