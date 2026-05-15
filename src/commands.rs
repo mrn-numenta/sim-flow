@@ -2274,6 +2274,40 @@ fn db_cmd(cwd_project: &Path, action: &DbAction) -> sim_flow::Result<()> {
             }
             Ok(())
         }
+        DbAction::Report {
+            kind,
+            project,
+            step,
+            limit,
+            json,
+        } => {
+            let Some(db_path) = default_db_path() else {
+                return Err(sim_flow::Error::State(
+                    "global DB unavailable: directories::ProjectDirs returned None".to_string(),
+                ));
+            };
+            let mut db = GlobalDb::open(&db_path)?;
+            let library_kind: sim_flow::__internal::db_reports::ReportKind = (*kind).into();
+            let filters = sim_flow::__internal::db_reports::ReportFilters {
+                project: project.clone(),
+                step: step.clone(),
+                limit: *limit,
+            };
+            let (columns, rows) =
+                sim_flow::__internal::db_reports::run_report(&mut db, library_kind, &filters)?;
+            if *json {
+                let value = serde_json::json!({
+                    "report": library_kind.slug(),
+                    "columns": columns,
+                    "rows": rows,
+                });
+                println!("{}", serde_json::to_string_pretty(&value).unwrap());
+            } else {
+                println!("# {}", library_kind.slug());
+                render_text_table(&columns, &rows);
+            }
+            Ok(())
+        }
         DbAction::Query { sql, json } => {
             let Some(db_path) = default_db_path() else {
                 return Err(sim_flow::Error::State(

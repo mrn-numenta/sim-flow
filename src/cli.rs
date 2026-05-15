@@ -693,6 +693,63 @@ pub(crate) enum PromptsAction {
     },
 }
 
+/// Catalog of named reports the `sim-flow db report <kind>` CLI knows
+/// how to run. Each entry maps to one canned SQL query in
+/// `db_reports`; adding a report is a one-line addition there plus a
+/// new variant here.
+#[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
+pub(crate) enum DbReportKind {
+    /// Bugs grouped by step, with category breakdown and count.
+    /// Defaults to all projects; use `--project` to scope.
+    BugsByStep,
+    /// Bugs grouped by category, with per-category count.
+    BugsByCategory,
+    /// Most-recently-opened bugs across all projects. `--limit` to
+    /// cap (default 20).
+    BugsRecent,
+    /// All currently-open bugs (status `open` or `manual`).
+    BugsOpen,
+    /// LLM-turn wall time and turn count grouped by step.
+    LlmTimeByStep,
+    /// LLM-turn wall time and token totals grouped by backend +
+    /// model. Reveals "where the money goes" across backends.
+    LlmTimeByBackend,
+    /// LLM-turn wall time grouped by (step, kind) so the
+    /// work-vs-critique cost split is visible per step.
+    LlmTimeByKind,
+    /// Per-tool wall time + invocation count. `caller_kind` mixed.
+    /// Use the dedicated `gate-time-by-step` for gate-only.
+    ToolTimeByTool,
+    /// Wall time per (step, caller_kind) -- splits LLM-driven tool
+    /// time from gate-driven shell time per step.
+    ToolTimeByStep,
+    /// Wall time per gate-driven shell command per step. Surfaces
+    /// which step's gate is the slowest to evaluate.
+    GateTimeByStep,
+    /// Most-recently-recorded experiment runs across all projects.
+    /// `--limit` to cap (default 20).
+    ExperimentsRecent,
+}
+
+impl From<DbReportKind> for sim_flow::__internal::db_reports::ReportKind {
+    fn from(value: DbReportKind) -> Self {
+        use sim_flow::__internal::db_reports::ReportKind as L;
+        match value {
+            DbReportKind::BugsByStep => L::BugsByStep,
+            DbReportKind::BugsByCategory => L::BugsByCategory,
+            DbReportKind::BugsRecent => L::BugsRecent,
+            DbReportKind::BugsOpen => L::BugsOpen,
+            DbReportKind::LlmTimeByStep => L::LlmTimeByStep,
+            DbReportKind::LlmTimeByBackend => L::LlmTimeByBackend,
+            DbReportKind::LlmTimeByKind => L::LlmTimeByKind,
+            DbReportKind::ToolTimeByTool => L::ToolTimeByTool,
+            DbReportKind::ToolTimeByStep => L::ToolTimeByStep,
+            DbReportKind::GateTimeByStep => L::GateTimeByStep,
+            DbReportKind::ExperimentsRecent => L::ExperimentsRecent,
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum DbAction {
     /// Print the resolved path to the per-user global DB.
@@ -705,6 +762,33 @@ pub(crate) enum DbAction {
     /// global DB. Read-only; safe to run during an auto session.
     Stats {
         /// Emit machine-readable JSON instead of the human table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run a named cross-project report from the catalog against the
+    /// per-user global DB. The catalog covers common "where did time
+    /// go" / "what's flaky" / "what did I hit recently" questions;
+    /// for anything else, fall back to `sim-flow db query`. If a
+    /// query you've been writing repeatedly with `db query` becomes
+    /// routine, promote it to a named report here.
+    Report {
+        /// Which report to run. See the catalog comment on
+        /// `DbReportKind` for the full list of supported names.
+        kind: DbReportKind,
+        /// Restrict to rows whose `project_dir` contains this
+        /// substring. Useful for "just rgb_toy please" or
+        /// "everything under users/mneilly".
+        #[arg(long)]
+        project: Option<String>,
+        /// Restrict to a specific step (e.g. `DM3c`, `SV2`).
+        #[arg(long)]
+        step: Option<String>,
+        /// Max rows to emit for reports that support it
+        /// (`bugs-recent`, `experiments-recent`, ...). Defaults to
+        /// the report's own sensible cap.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Emit machine-readable JSON instead of the text table.
         #[arg(long)]
         json: bool,
     },
