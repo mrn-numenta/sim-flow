@@ -1417,21 +1417,21 @@ function panel(id: TabId, content: Node[]): HTMLElement {
 // --------------------------------------------------------------
 
 function renderFlowTab(data: DashboardState): Node[] {
-  const disconnected = !ui.autoRunning && !data.isViewer;
-  const inspectOnly = disconnected && hasWorkflowHistory(data);
-  if (disconnected && !inspectOnly) {
-    return [renderAutoFlowRow(), renderFlowSummary(data), renderPreConnectPanel(data)];
-  }
+  // Phase 3 of the controller migration: session launch + step-mode
+  // toggle moved into the chat panel. The dashboard is now purely
+  // informational. We always render the rail; the chat panel is
+  // responsible for launching a session when one isn't live.
+  const inspectOnly = !ui.autoRunning && hasWorkflowHistory(data) && !data.isViewer;
   const rail = el("div", { class: "step-rail" });
   const flowSteps = data.flow.flow === "direct-modeling" ? DM_STEPS : DS_STEPS;
   for (const step of flowSteps) {
     rail.appendChild(stepBox(data, step));
   }
-  // Grey out + disable interaction with the step rail and the
-  // per-step detail panel until the user has clicked Play. The Run
-  // / Resume / Stop controls stay live so the user can start the
-  // flow; everything that drives the flow forward (Run Step,
-  // Advance, Reset, etc.) is gated by `autoRunning`.
+  // Per-step buttons remain functional until phase 5 retires them.
+  // Their enabled / disabled state still follows `autoRunning`:
+  // a parked session can drive sub-sessions from the rail; with no
+  // session attached the rail is greyed out and the user opens the
+  // chat panel to start one.
   const guardClass = inspectOnly ? "flow-readonly" : ui.autoRunning ? "" : "flow-locked";
   const layout = el(
     "div",
@@ -1445,53 +1445,11 @@ function renderFlowTab(data: DashboardState): Node[] {
     el("div", { class: "flow-detail-column" }, renderSelectedStepDetail(data)),
   );
   return [
-    renderAutoFlowRow(),
     renderFlowSummary(data),
     ...(inspectOnly ? [renderInspectOnlyBanner()] : []),
     el("hr", { class: "flow-row-divider" }),
     layout,
   ];
-}
-
-function renderPreConnectPanel(data: DashboardState): HTMLElement {
-  return el(
-    "section",
-    { class: "preconnect-panel" },
-    el("h2", {}, "Workflow Setup"),
-    el(
-      "p",
-      {},
-      "The workflow steps stay hidden until you connect to a live sim-flow session. This keeps the pre-run state focused on setup instead of showing disabled controls.",
-    ),
-    el(
-      "div",
-      { class: "preconnect-grid" },
-      el(
-        "div",
-        { class: "preconnect-card" },
-        el("h3", {}, "DM0 input"),
-        el("strong", {}, `DM0 - ${lookupStepDef(data.flow.flow, "DM0")?.label ?? "Specification Intake"}`),
-        el(
-          "p",
-          {},
-          "Attach an input specification here if you want the workflow to start from an existing document.",
-        ),
-        renderSpecificationControls("preconnect"),
-      ),
-      el(
-        "div",
-        { class: "preconnect-card" },
-        el("h3", {}, "What to do now"),
-        el(
-          "ol",
-          {},
-          el("li", {}, "Attach a specification if DM0 should begin from a document."),
-          el("li", {}, "Pick Manual if you want to review every step, or Auto if you want sim-flow to keep moving."),
-          el("li", {}, "Click Connect Workflow to start the session and reveal the workflow steps."),
-        ),
-      ),
-    ),
-  );
 }
 
 function renderInspectOnlyBanner(): HTMLElement {
@@ -1502,79 +1460,8 @@ function renderInspectOnlyBanner(): HTMLElement {
     el(
       "p",
       {},
-      "This project already has saved workflow state, so the dashboard is showing a read-only view of steps, reviews, plans, and artifacts. Connect Workflow to run or advance steps.",
+      "This project already has saved workflow state, so the dashboard is showing a read-only view of steps, reviews, plans, and artifacts. Open the sim-flow Chat panel to start or resume a session.",
     ),
-  );
-}
-
-function renderAutoFlowRow(): HTMLElement {
-  const isViewer = ui.data?.isViewer ?? false;
-  const connectBtn = actionButton(
-    "Connect Workflow",
-    "run-auto",
-    () => {
-      ui.autoRunning = true;
-      send({ type: "run-auto", specPath: ui.specPath || undefined });
-      // Re-render so the rail / detail unlock immediately rather
-      // than waiting for the next state-update.
-      render();
-    },
-  );
-  connectBtn.title =
-    "Launch a sim-flow session for this project. Once connected, the step controls become active.";
-  connectBtn.classList.add("auto-run-btn");
-  applyButtonState(
-    connectBtn,
-    !ui.autoRunning && !isViewer,
-    isViewer
-      ? "Viewing a run driven by another host -- Connect is disabled. Detach first."
-      : ui.autoRunning
-        ? "Connect is disabled while a session is already attached."
-        : connectBtn.title,
-  );
-
-  const disconnectLabel = isViewer ? "Detach Viewer" : "Disconnect";
-  const disconnectBtn = actionButton(
-    disconnectLabel,
-    "stop-auto",
-    () => {
-      ui.autoRunning = false;
-      send({ type: "stop-auto" });
-      render();
-    },
-    "secondary",
-  );
-  disconnectBtn.title = isViewer
-    ? "Detach from the run you're observing. The orchestrator keeps running; only this dashboard's connection closes."
-    : "Disconnect from the sim-flow session. The orchestrator shuts down cleanly; " +
-      "after Disconnect the step rail re-locks until you Connect again.";
-  disconnectBtn.classList.add("auto-stop-btn");
-  applyButtonState(
-    disconnectBtn,
-    ui.autoRunning,
-    ui.autoRunning
-      ? disconnectBtn.title
-      : "Disconnect is disabled because there is no active session.",
-  );
-
-  const buttonRowChildren: HTMLElement[] = [];
-  if (isViewer) {
-    const badge = el("span", { class: "viewer-badge" }, "Viewing another host");
-    badge.setAttribute(
-      "title",
-      "Read-only viewer attached to another host's --watch-socket. The composer / per-step buttons are disabled while the other host drives.",
-    );
-    buttonRowChildren.push(badge);
-  } else {
-    buttonRowChildren.push(connectBtn);
-  }
-  buttonRowChildren.push(renderStepModeToggle());
-  buttonRowChildren.push(disconnectBtn);
-
-  return el(
-    "div",
-    { class: "auto-flow-row" },
-    ...buttonRowChildren,
   );
 }
 
@@ -1592,11 +1479,11 @@ function renderFlowSummary(data: DashboardState): HTMLElement {
   } else if (!ui.autoRunning && hasWorkflowHistory(data)) {
     headline = "Saved project state";
     detail =
-      "This project already contains workflow outputs. You can inspect step status, reviews, plans, and artifacts without connecting. Connect Workflow only when you want to continue running the flow.";
+      "This project already contains workflow outputs. You can inspect step status, reviews, plans, and artifacts here. Open the sim-flow Chat panel to start or resume a session.";
   } else if (!ui.autoRunning) {
-    headline = "Workflow not connected";
+    headline = "No session attached";
     detail =
-      "Choose a specification path if needed, then click Connect Workflow. Until a session is active, the workflow steps remain read-only.";
+      "Open the sim-flow Chat panel to start a session; until then the workflow steps remain read-only.";
   } else if (data.inSubSession) {
     detail =
       "sim-flow is currently working inside a sub-session. Wait for the current step activity to finish before issuing the next control action.";
@@ -1611,35 +1498,6 @@ function renderFlowSummary(data: DashboardState): HTMLElement {
   );
 }
 
-/**
- * Step-axis mode toggle (Manual ⇄ Auto). Two segmented buttons; the
- * active one is highlighted and disabled, the inactive one posts a
- * `set-step-mode` message on click. Tooltips on each option carry
- * the explanation; we don't render a separate label or live/setting
- * indicator since the visual state of the buttons already conveys
- * which mode is active.
- */
-function renderStepModeToggle(): HTMLElement {
-  const current = ui.data?.stepMode ?? "manual";
-  return el(
-    "div",
-    { class: "step-mode-toggle-wrap" },
-    el("div", { class: "step-mode-title" }, "Execution mode"),
-    el(
-      "div",
-      { class: "step-mode-toggle", role: "group", "aria-label": "Step mode" },
-      renderStepModeOption("manual", current),
-      renderStepModeOption("auto", current),
-    ),
-    el(
-      "p",
-      { class: "step-mode-help" },
-      current === "manual"
-        ? "Manual keeps each step under operator control: generate work, review it, check exit criteria, then advance."
-        : "Auto runs work, critique, and advance in sequence until the flow completes or the orchestrator stops for attention.",
-    ),
-  );
-}
 
 function renderStepGuide(step: StepDef | undefined): HTMLElement {
   if (!step) {
@@ -1723,34 +1581,6 @@ function renderStepExecutionBanner(input: {
     message = "A sub-session is still running. Wait for it to finish before starting the next step action.";
   }
   return el("div", { class: `detail-banner detail-banner-${kind}` }, message);
-}
-
-function renderStepModeOption(mode: "manual" | "auto", current: string): HTMLButtonElement {
-  const isActive = mode === current;
-  const btn = document.createElement("button");
-  btn.type = "button";
-  // Mode class lets CSS paint Auto-active in the warning palette
-  // (matches Reset's destructive cue) while Manual-active stays in
-  // the primary palette.
-  btn.className =
-    `step-mode-option step-mode-option-${mode}` + (isActive ? " step-mode-option-active" : "");
-  btn.textContent = mode === "manual" ? "Manual" : "Auto";
-  btn.setAttribute("aria-pressed", isActive ? "true" : "false");
-  btn.title =
-    mode === "manual"
-      ? "Manual: orchestrator parks between sub-sessions; per-step buttons drive the flow."
-      : "Auto: orchestrator walks current_step through end of flow without user input.";
-  if (isActive) {
-    btn.disabled = true;
-  } else {
-    btn.setAttribute(
-      "data-click-id",
-      bindClick(() => {
-        send({ type: "set-step-mode", mode });
-      }),
-    );
-  }
-  return btn;
 }
 
 function stepBox(data: DashboardState, step: StepDef): HTMLElement {
