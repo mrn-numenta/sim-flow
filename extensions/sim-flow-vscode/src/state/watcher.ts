@@ -64,6 +64,14 @@ export function createStateWatcher(projectDir: string): SimFlowStateWatcher {
   // by the agent (flipping `- [ ]` to `- [x]`) need to refresh the
   // dashboard so the milestone boxes + current-task line stay live.
   register("docs/plan/*.md", "plan");
+  // The single-session control socket. The orchestrator binds this
+  // ~1s after `sim-flow auto --session-mode single` starts; presence
+  // of the file is the dashboard's primary "session is live" signal
+  // for CLI backends (which don't register with AutoSessionManager).
+  // Without watching it, the dashboard wouldn't refresh until the
+  // next unrelated state.toml / critique / plan event, leaving the
+  // Connect button visually stuck in "connecting" up to 5 seconds.
+  register(".sim-flow/control.sock", "state-toml");
 
   return {
     onDidChange: emitter.event,

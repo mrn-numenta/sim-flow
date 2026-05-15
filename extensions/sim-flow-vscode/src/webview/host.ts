@@ -407,18 +407,30 @@ export class DashboardHost {
         // subcommand), but the dashboard surfaces it as Connect:
         // it just establishes the session. Driving steps is left
         // to the explicit step-rail buttons.
+
+        // Single-instance guard. If a sim-flow is already running for
+        // this project (pump registered OR control socket bound),
+        // refuse the launch and tell the dashboard. Without this
+        // guard, click-then-tab-back-then-click-again would spawn a
+        // second sim-flow because the dashboard had visually
+        // re-enabled Connect during the brief sessionActive=false
+        // window before the new orchestrator's signal arrived. The
+        // dashboard ALSO disables Connect while sessionActive is
+        // true; we re-check here as defense in depth (e.g. if the
+        // webview's view drifted out of sync with disk truth).
+        if (this.isSessionActive()) {
+          await this.post({
+            type: "error",
+            message: "sim-flow is already running for this project.",
+            detail:
+              "Click Disconnect (\u{23FB}) to stop the existing session before " +
+              "starting a new one.",
+          });
+          return;
+        }
         const config = vscode.workspace.getConfiguration("sim-flow");
         const source = (config.get<string>("llm.source") ?? "vscode") as LlmSourceTag;
         if (isTerminalLlmSource(source)) {
-          // Single-session mode: if a sim-flow auto process is
-          // already running and idle (the user typed `/exit` in
-          // claude and sim-flow is "Waiting for the next dashboard
-          // command"), don't spawn a second one and don't auto-run
-          // a step -- just acknowledge the existing connection. The
-          // user drives the next step explicitly from the rail.
-          if (controlSocketLikelyPresent(this.options.projectDir)) {
-            return;
-          }
           await vscode.commands.executeCommand(
             "sim-flow.runFlowTerminal",
             cliBackendArgFor(source),
@@ -1079,7 +1091,16 @@ export class DashboardHost {
     // even if the user changed the setting after launch.
     const session = this.activeSession();
     const stepMode: StepMode = session?.pump.stepMode ?? readStepModeSetting(cfg);
-    const sessionActive = !!session;
+    // sessionActive must reflect ANY backend that's currently running
+    // for this project, not just AutoSessionManager-registered pumps.
+    // CLI sources (claude-cli / codex-cli / gh-copilot-cli) run
+    // sim-flow auto in a VS Code terminal with no pump registration;
+    // their only signal is the single-session control socket at
+    // .sim-flow/control.sock. Without this OR, switching editor tabs
+    // back to the dashboard would always show "disconnected" for a
+    // live CLI single-session run, and the Connect button would
+    // re-enable -- letting the user spawn a duplicate sim-flow.
+    const sessionActive = this.isSessionActive();
     // True while the orchestrator is inside a sub-session (Work or
     // Critique). The pump tracks this from the
     // `sub-session-started` / `-ended` bracket events. When no pump
@@ -1125,6 +1146,25 @@ export class DashboardHost {
       return undefined;
     }
     return session;
+  }
+
+  /**
+   * Single source of truth for "is sim-flow currently running for this
+   * project". Returns true when EITHER an AutoSessionManager-registered
+   * pump is alive for this project (non-CLI backends) OR the
+   * single-session control socket file is present (CLI backends, which
+   * run in a terminal and don't register with the pump manager).
+   *
+   * Used both for the dashboard's `sessionActive` flag and for the
+   * single-instance guard in the `run-auto` message handler. Both
+   * call sites need the same definition; centralizing here keeps them
+   * from drifting.
+   */
+  private isSessionActive(): boolean {
+    return (
+      this.activeSession() !== undefined ||
+      controlSocketLikelyPresent(this.options.projectDir)
+    );
   }
 
   /**

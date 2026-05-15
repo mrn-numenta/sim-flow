@@ -3,8 +3,10 @@
 // ES2022 and emits a bare IIFE (no module syntax) so it can be loaded
 // with a <script> tag under a strict CSP.
 //
-// This file imports only *types* from sibling modules; nothing emits
-// at runtime beyond the IIFE itself.
+// `morphdom` is the only runtime import. Every other import is a
+// type-only import that erases at compile time.
+
+import morphdom from "morphdom";
 
 import type { DashboardState, HostMessage, WebviewMessage } from "./messages";
 import type { BaselineRecord, GateFailure, GateResult, RunRow } from "../cli/types";
@@ -151,7 +153,7 @@ window.addEventListener("message", (ev) => {
       ui.data = msg.state;
       ui.lastError = null;
       // Reconcile the local Connect/Disconnect flag with the host's
-      // truth. Two desync sources:
+      // truth. Three desync sources to defuse:
       //   (a) the orchestrator died on its own (transport-error,
       //       runaway-guard, child-exit) -- `autoRunning` would
       //       otherwise stay stuck `true` and Connect stay disabled
@@ -159,7 +161,16 @@ window.addEventListener("message", (ev) => {
       //   (b) the webview reloaded while a pump is alive --
       //       `autoRunning` resets to `false` and the per-step
       //       buttons render `flow-locked` despite a live session.
-      ui.autoRunning = msg.state.sessionActive;
+      //   (c) a state-update arrives in the launch window: we've
+      //       sent `run-auto` and the orchestrator hasn't bound its
+      //       control socket yet, so host-side `sessionActive` is
+      //       still false. Without the guard below, switching
+      //       editor tabs back to the dashboard during those ~1s
+      //       would flip the Connect button back to "enabled" and a
+      //       second click would spawn a duplicate sim-flow.
+      if (!ui.pendingActions.has("run-auto") || msg.state.sessionActive) {
+        ui.autoRunning = msg.state.sessionActive;
+      }
       // Discriminating pendingAction clears. Previously we cleared
       // every entry on every `state-update`, which clobbered the
       // optimistic disable from a freshly-clicked button whenever an
@@ -292,6 +303,18 @@ window.addEventListener("message", (ev) => {
       // failsafe in `actionButton` still releases anything that
       // never gets a discrete settled signal, so users aren't left
       // with permanently-disabled buttons.
+      //
+      // Exception: connect/disconnect. The Connect (`run-auto`) and
+      // Disconnect (`stop-auto`) handlers post an `error` HostMessage
+      // when they refuse the action (e.g. "already running" or "no
+      // session to disconnect"). Without clearing the pending entry,
+      // the button stayed disabled for the full 5s failsafe and the
+      // user couldn't immediately retry. Reset `autoRunning` to the
+      // host's truth here so a "launch refused" doesn't leave the UI
+      // optimistically claiming it's connected.
+      if (ui.pendingActions.delete("run-auto") || ui.pendingActions.delete("stop-auto")) {
+        ui.autoRunning = ui.data?.sessionActive ?? false;
+      }
       render();
       return;
   }
@@ -353,12 +376,76 @@ function render(): void {
   });
 }
 
+// Per-render click/keydown handler registries. Buttons and other
+// interactive nodes register a callback via `bindClick` /
+// `bindKeydown` which returns an opaque id; the node is rendered with
+// `data-click-id="<id>"` (and/or `data-keydown-id="<id>"`). A single
+// delegated listener on `document.body` looks up the id at event time
+// and invokes the handler. Because the listener is on the body, it
+// survives the per-frame `replaceChildren` rebuild: a mousedown on a
+// button followed by a renderNow() that replaces the button still
+// produces a click on the new button (or on a common ancestor), and
+// the registry has the fresh handler under a new id from the most
+// recent render. Without delegation, the original button's listener
+// was destroyed mid-click and the browser dropped the event entirely.
+let clickHandlers = new Map<string, () => void>();
+let keydownHandlers = new Map<string, (ev: KeyboardEvent) => void>();
+let nextHandlerId = 0;
+
+function bindClick(handler: () => void): string {
+  const id = `c${nextHandlerId++}`;
+  clickHandlers.set(id, handler);
+  return id;
+}
+
+function bindKeydown(handler: (ev: KeyboardEvent) => void): string {
+  const id = `k${nextHandlerId++}`;
+  keydownHandlers.set(id, handler);
+  return id;
+}
+
 function renderNow(): void {
   const root = document.getElementById("app");
   if (!root) {
     return;
   }
-  root.replaceChildren(...build());
+  // Drop the previous render's handlers before rebuilding. The new
+  // pass repopulates the maps with the freshly-bound callbacks; the
+  // delegated listener on document.body always reads the current map.
+  clickHandlers = new Map();
+  keydownHandlers = new Map();
+  nextHandlerId = 0;
+
+  // Build the next tree off-screen, then ask morphdom to patch the
+  // live tree to match it. `replaceChildren` used to be here and was
+  // the root cause of the dashboard's interaction bugs: it destroyed
+  // every DOM node on every state-update, which (a) restarted hover
+  // transitions on `.step` and `.tab` -- the "jumping" / "flicker"
+  // symptoms -- and (b) closed any open `<select>` dropdown because
+  // the browser closes the dropdown menu when its host element is
+  // removed from the DOM. morphdom keeps DOM identity by walking the
+  // two trees and only mutating differences; hover/focus/selection/
+  // open dropdowns all survive a refresh because the underlying
+  // element doesn't move.
+  const next = document.createElement("main");
+  next.id = "app";
+  for (const node of build()) {
+    next.appendChild(node);
+  }
+  morphdom(root, next, {
+    // Preserve focus and IME composition state on inputs even when
+    // their `value` attribute would otherwise be re-applied. The
+    // dashboard mirrors input values into `ui.*` on every keystroke,
+    // so the new tree's value == the user's current text; skipping
+    // the property write avoids any chance of a cursor-position
+    // glitch mid-typing.
+    onBeforeElUpdated(fromEl, toEl) {
+      if (fromEl.isEqualNode(toEl)) {
+        return false;
+      }
+      return true;
+    },
+  });
 }
 
 function build(): Node[] {
@@ -377,18 +464,37 @@ function build(): Node[] {
     );
   }
   children.push(tabs());
-  children.push(
-    panel("projects", renderProjectsTab(ui.data)),
-    panel("settings", renderSettingsTab()),
-    panel("flow", renderFlowTab(ui.data)),
-    panel("experiments", renderExperimentsTab(ui.data)),
-    panel("baselines", renderBaselinesTab(ui.data)),
-    panel("sweeps", renderSweepsTab(ui.data)),
-    panel("documents", renderDocumentsTab(ui.data)),
-    panel("block-diagram", renderBlockDiagramTab()),
-    panel("prompts", renderPromptsTab()),
-  );
+  // Render only the active tab's panel. The other eight panels used
+  // to be built on every state-update and hidden via CSS; with the
+  // dashboard pushing updates on every file watcher tick, that meant
+  // ~9x the DOM churn per refresh for content the user couldn't see.
+  // Switching tabs re-runs render() (see installTabDelegationOnce)
+  // so the newly-visible panel rebuilds on activation.
+  children.push(renderActivePanel(ui.data));
   return children;
+}
+
+function renderActivePanel(data: DashboardState): HTMLElement {
+  switch (ui.activeTab) {
+    case "projects":
+      return panel("projects", renderProjectsTab(data));
+    case "settings":
+      return panel("settings", renderSettingsTab());
+    case "flow":
+      return panel("flow", renderFlowTab(data));
+    case "experiments":
+      return panel("experiments", renderExperimentsTab(data));
+    case "baselines":
+      return panel("baselines", renderBaselinesTab(data));
+    case "sweeps":
+      return panel("sweeps", renderSweepsTab(data));
+    case "documents":
+      return panel("documents", renderDocumentsTab(data));
+    case "block-diagram":
+      return panel("block-diagram", renderBlockDiagramTab());
+    case "prompts":
+      return panel("prompts", renderPromptsTab());
+  }
 }
 
 function header(data: DashboardState): HTMLElement {
@@ -1093,15 +1199,18 @@ function renderLlmModelPicker(): HTMLElement {
   refresh.textContent = ui.llmModelListPending ? "..." : "⟳";
   refresh.title = "Re-query the active source for available models.";
   refresh.disabled = ui.llmModelListPending || ui.llmSource === null;
-  refresh.addEventListener("click", () => {
-    if (!ui.llmSource) {
-      return;
-    }
-    ui.llmModelListPending = true;
-    ui.llmModelListNote = null;
-    send({ type: "request-model-list", source: ui.llmSource });
-    render();
-  });
+  refresh.setAttribute(
+    "data-click-id",
+    bindClick(() => {
+      if (!ui.llmSource) {
+        return;
+      }
+      ui.llmModelListPending = true;
+      ui.llmModelListNote = null;
+      send({ type: "request-model-list", source: ui.llmSource });
+      render();
+    }),
+  );
   wrap.appendChild(refresh);
   return wrap;
 }
@@ -1206,7 +1315,9 @@ function tabs(): HTMLElement {
     // Tab click handling lives on `document.body` via event
     // delegation (see installTabDelegationOnce) so a click survives
     // the DOM rebuild that happens on every render. `data-tab` is
-    // the source of truth for which tab was clicked; per-button
+    // the source of truth for which tab was clicked. The same
+    // pattern (via `data-click-id` + the bindClick registry) covers
+    // every other interactive node in the dashboard -- per-button
     // addEventListener used to race with state-update redraws and
     // drop clicks intermittently when refreshes ran during the
     // mousedown -> mouseup window.
@@ -1219,26 +1330,74 @@ function tabs(): HTMLElement {
   return bar;
 }
 
-let tabDelegationInstalled = false;
+let delegationInstalled = false;
 
 function installTabDelegationOnce(): void {
-  if (tabDelegationInstalled) {
+  if (delegationInstalled) {
     return;
   }
-  tabDelegationInstalled = true;
+  delegationInstalled = true;
   document.body.addEventListener("click", (ev) => {
-    const target = (ev.target as HTMLElement | null)?.closest<HTMLElement>(
-      ".tab[data-tab]",
-    );
-    if (!target) {
+    const startEl = ev.target as HTMLElement | null;
+    if (!startEl) {
       return;
     }
-    const id = target.getAttribute("data-tab") as TabId | null;
+    // Tab clicks. `data-tab` lives on the tab button itself; the
+    // closest() walk handles clicks that land on a nested span / text
+    // node inside the tab.
+    const tabEl = startEl.closest<HTMLElement>(".tab[data-tab]");
+    if (tabEl) {
+      const id = tabEl.getAttribute("data-tab") as TabId | null;
+      if (id) {
+        ui.activeTab = id;
+        render();
+      }
+      return;
+    }
+    // Universal click delegation. Any rendered element can opt in by
+    // setting `data-click-id="<id>"` where `<id>` was returned by
+    // bindClick() during the same render pass. A disabled control
+    // intentionally drops the click on the floor so visual feedback
+    // and behavior agree.
+    const clickEl = startEl.closest<HTMLElement>("[data-click-id]");
+    if (!clickEl) {
+      return;
+    }
+    if (
+      clickEl instanceof HTMLButtonElement &&
+      clickEl.disabled
+    ) {
+      return;
+    }
+    if (clickEl.getAttribute("aria-disabled") === "true") {
+      return;
+    }
+    const id = clickEl.getAttribute("data-click-id");
     if (!id) {
       return;
     }
-    ui.activeTab = id;
-    render();
+    const handler = clickHandlers.get(id);
+    if (handler) {
+      handler();
+    }
+  });
+  document.body.addEventListener("keydown", (ev) => {
+    const startEl = ev.target as HTMLElement | null;
+    if (!startEl) {
+      return;
+    }
+    const node = startEl.closest<HTMLElement>("[data-keydown-id]");
+    if (!node) {
+      return;
+    }
+    const id = node.getAttribute("data-keydown-id");
+    if (!id) {
+      return;
+    }
+    const handler = keydownHandlers.get(id);
+    if (handler) {
+      handler(ev);
+    }
   });
 }
 
@@ -1437,9 +1596,12 @@ function renderStepModeOption(mode: "manual" | "auto", current: string): HTMLBut
   if (isActive) {
     btn.disabled = true;
   } else {
-    btn.addEventListener("click", () => {
-      send({ type: "set-step-mode", mode });
-    });
+    btn.setAttribute(
+      "data-click-id",
+      bindClick(() => {
+        send({ type: "set-step-mode", mode });
+      }),
+    );
   }
   return btn;
 }
@@ -1484,7 +1646,7 @@ function stepBox(data: DashboardState, step: StepDef): HTMLElement {
     el("span", { class: "step-id" }, step.id),
     el("span", { class: "step-label" }, step.label),
   );
-  box.addEventListener("click", () => {
+  const activate = (): void => {
     if (!selectable) {
       return;
     }
@@ -1492,14 +1654,18 @@ function stepBox(data: DashboardState, step: StepDef): HTMLElement {
     ui.gateReport = null;
     send({ type: "select-step", step: step.id });
     render();
-  });
-  box.addEventListener("keydown", (event) => {
-    if (!selectable || (event.key !== "Enter" && event.key !== " ")) {
-      return;
-    }
-    event.preventDefault();
-    box.click();
-  });
+  };
+  box.setAttribute("data-click-id", bindClick(activate));
+  box.setAttribute(
+    "data-keydown-id",
+    bindKeydown((event) => {
+      if (!selectable || (event.key !== "Enter" && event.key !== " ")) {
+        return;
+      }
+      event.preventDefault();
+      activate();
+    }),
+  );
   return box;
 }
 
@@ -2128,9 +2294,12 @@ function renderPlanProgress(progress: import("./messages").PlanProgress): HTMLEl
       el("span", { class: "milestone-id" }, m.id),
       el("span", { class: "milestone-pct" }, total === 0 ? "—" : `${pct}%`),
     ) as HTMLButtonElement;
-    box.addEventListener("click", () => {
-      send({ type: "open-document", path: m.filePath });
-    });
+    box.setAttribute(
+      "data-click-id",
+      bindClick(() => {
+        send({ type: "open-document", path: m.filePath });
+      }),
+    );
     row.appendChild(box);
   }
   wrap.appendChild(row);
@@ -2151,11 +2320,14 @@ function renderPlanProgress(progress: import("./messages").PlanProgress): HTMLEl
       },
       progress.currentTask,
     ) as HTMLButtonElement;
-    taskBtn.addEventListener("click", () => {
-      if (progress.currentTaskFilePath) {
-        send({ type: "open-document", path: progress.currentTaskFilePath });
-      }
-    });
+    taskBtn.setAttribute(
+      "data-click-id",
+      bindClick(() => {
+        if (progress.currentTaskFilePath) {
+          send({ type: "open-document", path: progress.currentTaskFilePath });
+        }
+      }),
+    );
     taskLine.appendChild(taskBtn);
     wrap.appendChild(taskLine);
   } else {
@@ -2694,7 +2866,7 @@ function actionButton(
   if (isPending) {
     b.disabled = true;
   }
-  b.addEventListener("click", () => {
+  const handlerId = bindClick(() => {
     if (ui.pendingActions.has(actionId)) {
       return;
     }
@@ -2713,6 +2885,7 @@ function actionButton(
       }
     }, 5000);
   });
+  b.setAttribute("data-click-id", handlerId);
   return b;
 }
 
