@@ -555,12 +555,11 @@ function buildComposer(state: ChatPanelState): HTMLElement {
 }
 
 /**
- * Composer footer holding the Manual/Auto step-mode toggle. The
- * orchestrator's current mode comes back via `state.currentStepMode`
- * (null when no pump is live); the toggle is disabled in that case
- * because there's nothing to drive. Mode change takes effect at the
- * orchestrator's next decision point, not mid-sub-session -- the
- * tooltip surfaces that caveat.
+ * Composer footer holding the Manual/Auto step-mode toggle and the
+ * Continue button. The mode toggle wires the orchestrator's
+ * `setStepMode` (auto/manual); Continue dispatches the host-computed
+ * `nextAction` so the user can advance the flow without leaving the
+ * chat panel. Both are disabled when no pump is live.
  */
 function buildComposerMeta(state: ChatPanelState): HTMLElement {
   const root = div("x-composer-meta");
@@ -599,6 +598,30 @@ function buildComposerMeta(state: ChatPanelState): HTMLElement {
     hint.textContent = "(no live session)";
     root.appendChild(hint);
   }
+
+  root.appendChild(div("x-composer-meta-spacer"));
+
+  // Continue button -- only meaningful when the host computed a
+  // next action (manual mode + parked + has a successor). We
+  // always render it so the user has a stable target; disabled
+  // state communicates "nothing to do right now".
+  const continueBtn = document.createElement("button");
+  continueBtn.type = "button";
+  continueBtn.className = "x-continue";
+  const action = state.nextAction;
+  continueBtn.textContent = action ? `Continue: ${action.label}` : "Continue";
+  continueBtn.disabled = !action || state.isStreaming || state.isViewer;
+  continueBtn.title = action
+    ? `Dispatches \`${action.kind}\` on \`${action.step}\` over the live session.`
+    : "Continue is available when the orchestrator parks between sub-sessions in manual mode.";
+  continueBtn.addEventListener("click", () => {
+    if (continueBtn.disabled) {
+      return;
+    }
+    send({ type: "continue-flow" });
+  });
+  root.appendChild(continueBtn);
+
   return root;
 }
 

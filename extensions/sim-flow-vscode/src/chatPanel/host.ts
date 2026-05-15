@@ -15,6 +15,7 @@ import type { LlmSource, SecretStorage } from "../llm";
 import { type PumpLlmConfig } from "../session/pump";
 import { SocketSessionPump } from "../session/socketPump";
 import { readFlowState } from "../state/flowState";
+import type { FlowState } from "../state/types";
 import {
   cliBackendArgFor,
   isTerminalLlmSource,
@@ -435,7 +436,45 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       case "pick-file":
         await this.pickFile();
         return;
+      case "continue-flow":
+        await this.continueFlow();
+        return;
       default:
+        return;
+    }
+  }
+
+  /**
+   * Dispatch the host-computed next manual-mode action over the
+   * active pump. The action shape lives in `ChatPanelState.nextAction`
+   * (computed by `computeNextAction`); the webview just signals
+   * intent. Sending over the live pump (rather than spawning a
+   * fresh step session) keeps the orchestrator's accumulated
+   * context intact.
+   */
+  private async continueFlow(): Promise<void> {
+    const session = this.activePump;
+    if (!session) {
+      return;
+    }
+    const context = await this.readPanelContext();
+    const action = computeNextAction(session, context);
+    if (!action) {
+      return;
+    }
+    const pump = session.pump;
+    switch (action.kind) {
+      case "work":
+        pump.runStep?.(action.step, "work");
+        return;
+      case "critique":
+        pump.runCritique?.(action.step);
+        return;
+      case "gate":
+        pump.runGate?.(action.step);
+        return;
+      case "advance":
+        pump.advance?.(action.step);
         return;
     }
   }
@@ -660,7 +699,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   private async readPanelContext(): Promise<PanelContext> {
     const projectDir = this.anchoredProjectDir() ?? (await resolveProjectDirForPanel());
     const settings = readPanelSettings();
-    const currentStep = projectDir ? await readCurrentStepSafe(projectDir) : null;
+    const flowState = projectDir ? await readFlowStateSafe(projectDir) : null;
+    const currentStep = flowState?.current_step ?? null;
+    const gates = flowState?.gates ?? {};
     const projectLabel =
       projectDir !== null
         ? path.basename(projectDir)
@@ -670,6 +711,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       projectLabel,
       projectDir,
       currentStep,
+      gates,
       source: settings.source,
       rawSource: settings.rawSource,
       baseUrl: settings.baseUrl,
@@ -1319,6 +1361,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         this.activePump?.projectDir === context.projectDir
           ? (this.activePump.pump.stepMode ?? null)
           : null,
+      nextAction:
+        this.activePump?.projectDir === context.projectDir
+          ? computeNextAction(this.activePump, context)
+          : null,
     };
   }
 
@@ -1684,12 +1730,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (base.projectDir === projectDir) {
       return base;
     }
-    const currentStep = await readCurrentStepSafe(projectDir);
+    const flowState = await readFlowStateSafe(projectDir);
+    const currentStep = flowState?.current_step ?? null;
+    const gates = flowState?.gates ?? {};
     return {
       ...base,
       projectDir,
       projectLabel: path.basename(projectDir),
       currentStep,
+      gates,
       ...describePanelSession(projectDir, currentStep, base.sourceLabel, this.activePump),
     };
   }
@@ -2029,6 +2078,12 @@ interface PanelContext {
   projectLabel: string;
   projectDir: string | null;
   currentStep: string | null;
+  /**
+   * Gate map from `state.toml`. Used by `buildState` to decide
+   * whether a critique has earned an advance (or still needs a
+   * gate run). Empty when no project is anchored.
+   */
+  gates: Record<string, { passed?: boolean }>;
   /** Resolved backend kind. `server:<name>` references already
    *  mapped to the entry's `kind`. */
   source: LlmSourceTag;
@@ -2185,10 +2240,105 @@ async function resolveProjectDirForPanel(): Promise<string | null> {
   return candidates[0] ?? null;
 }
 
-async function readCurrentStepSafe(projectDir: string): Promise<string | null> {
+/**
+ * Compute the manual-mode "next action" surfaced as the Continue
+ * button under the composer. Mirrors how the dashboard's per-step
+ * buttons gate themselves on session+gate state; produced once per
+ * `buildState` so the webview just renders a label.
+ *
+ * Returns null when there's nothing useful to dispatch:
+ *   - auto mode (no parking between sub-sessions),
+ *   - no live pump or it's busy (`!awaitingInput`),
+ *   - last sub-session was a Q&A turn (no semantic "continue").
+ *
+ * The state machine is the common path -- work → critique → gate
+ * → advance → next-step's work. Edge cases (gate refused, Reset,
+ * mid-flow `current_step` jumps from external CLI commands) the
+ * user can still drive from the dashboard's step rail.
+ */
+function computeNextAction(
+  session: ManagedAutoSessionState,
+  context: PanelContext,
+): {
+  kind: "work" | "critique" | "gate" | "advance";
+  step: string;
+  label: string;
+} | null {
+  if (session.pump.stepMode !== "manual") {
+    return null;
+  }
+  if (!session.awaitingInput) {
+    return null;
+  }
+  const last = session.pump.session;
+  const currentStep = context.currentStep;
+  const gates = context.gates;
+  // No prior sub-session info -- e.g. just attached, or just
+  // advanced past the previous step. Suggest running work on the
+  // orchestrator's current step.
+  if (!last) {
+    if (!currentStep) {
+      return null;
+    }
+    return {
+      kind: "work",
+      step: currentStep,
+      label: `Run work on ${currentStep}`,
+    };
+  }
+  // Q&A turns don't have a natural "continue" successor; the user
+  // tells the panel what to do next by typing or using the rail.
+  if (last.kind === "qa") {
+    return null;
+  }
+  // The orchestrator advanced past `last.step` -- gate passed AND
+  // current_step is no longer the step we just worked on. The next
+  // logical action is work on the new step.
+  if (
+    currentStep &&
+    currentStep !== last.step &&
+    gates[last.step]?.passed === true
+  ) {
+    return {
+      kind: "work",
+      step: currentStep,
+      label: `Run work on ${currentStep}`,
+    };
+  }
+  if (last.kind === "work") {
+    return {
+      kind: "critique",
+      step: last.step,
+      label: `Run critique on ${last.step}`,
+    };
+  }
+  if (last.kind === "critique") {
+    if (gates[last.step]?.passed === true) {
+      return {
+        kind: "advance",
+        step: last.step,
+        label: `Advance past ${last.step}`,
+      };
+    }
+    return {
+      kind: "gate",
+      step: last.step,
+      label: `Run gate on ${last.step}`,
+    };
+  }
+  return null;
+}
+
+/**
+ * Read the full FlowState for a project, swallowing IO/parse errors.
+ * Null on any failure so callers fall back to empty defaults rather
+ * than crashing the panel mid-render.
+ */
+async function readFlowStateSafe(
+  projectDir: string,
+): Promise<FlowState | null> {
   try {
-    const state = await readFlowState(projectDir);
-    return state.current_step;
+    return await readFlowState(projectDir);
   } catch {
     return null;
   }

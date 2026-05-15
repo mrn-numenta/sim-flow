@@ -98,6 +98,21 @@ export interface ChatPanelState {
    * `StepModeChanged` echo yet.
    */
   currentStepMode: StepMode | null;
+  /**
+   * Suggested next manual-mode action, computed by the host from
+   * the pump's last `SessionTag` plus the project's gate state.
+   * Drives the Continue button under the composer: when the
+   * orchestrator parks in manual mode, the button dispatches this
+   * action to the existing pump (no fresh session spawn).
+   * `null` when no action is computable -- e.g. auto mode, no live
+   * pump, the pump isn't parked, or the last sub-session was Q&A.
+   */
+  nextAction: {
+    kind: "work" | "critique" | "gate" | "advance";
+    step: string;
+    /** Pre-rendered label for the button ("Run critique on DM0"). */
+    label: string;
+  } | null;
 }
 
 export type ChatTranscriptEntry =
@@ -144,4 +159,11 @@ export type WebviewMessage =
    * (or any other file path) into the prompt when the orchestrator
    * asks for one.
    */
-  | { type: "pick-file" };
+  | { type: "pick-file" }
+  /**
+   * Continue button under the composer. The host has already
+   * computed the suggested next action and embedded it in
+   * `ChatPanelState.nextAction`; the webview just signals intent
+   * and the host dispatches the right host-event over the pump.
+   */
+  | { type: "continue-flow" };

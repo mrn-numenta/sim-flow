@@ -501,6 +501,31 @@ body {
   cursor: not-allowed;
 }
 
+.x-composer-meta-spacer {
+  flex: 1;
+}
+
+.x-continue {
+  border: 1px solid var(--x-accent);
+  background: color-mix(in srgb, var(--x-palette-output) 24%, var(--vscode-editor-background));
+  color: var(--vscode-foreground);
+  border-radius: 4px;
+  padding: 3px 12px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.x-continue:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--x-palette-output) 36%, var(--vscode-editor-background));
+}
+
+.x-continue:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .x-composer-input {
   flex: 1;
   min-height: 32px;
