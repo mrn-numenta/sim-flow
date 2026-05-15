@@ -1307,11 +1307,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
     const title = labelForLlmRole(args.role);
     const meta = `orchestrator-${args.role}`;
-    // Annotate non-user roles with a label so the bubble is
-    // self-describing even when the panel collapses titles. "User"
-    // messages render verbatim -- they look natural without a tag.
+    // Tool results render inside a collapsible <details> in the
+    // webview, with the role label as the <summary>; drop the inline
+    // prefix so the same text isn't shown twice. User-role messages
+    // already render verbatim. Other non-user roles keep the prefix
+    // because the webview shows them as a plain bubble.
     const body =
-      args.role === "user" ? args.content : `**${title}:**\n\n${args.content}`;
+      args.role === "user" || args.role === "tool"
+        ? args.content
+        : `**${title}:**\n\n${args.content}`;
     let conversation = this.readConversation(session.projectDir);
     const { state: next } = appendOrchestratorUserEntry(
       conversation,

@@ -88,6 +88,20 @@ function render(): void {
 
   morphdom(app, next, {
     onBeforeElUpdated(fromEl, toEl) {
+      // Preserve the user-toggled open state of tool-result <details>
+      // across re-renders. Without this, morphdom would overwrite the
+      // attribute with the freshly-built (collapsed) default each
+      // time another transcript entry arrives.
+      if (
+        fromEl instanceof HTMLDetailsElement &&
+        toEl instanceof HTMLDetailsElement
+      ) {
+        if (fromEl.open) {
+          toEl.setAttribute("open", "");
+        } else {
+          toEl.removeAttribute("open");
+        }
+      }
       // Skip nodes that are already structurally identical -- avoids
       // a wasted attribute / text-node sweep for every unchanged
       // bubble during a streaming update.
@@ -226,22 +240,68 @@ function messageBubble(
     entry.kind === "user" &&
     typeof entry.meta === "string" &&
     entry.meta.startsWith("orchestrator-");
+  const tool = entry.kind === "user" && entry.meta === "orchestrator-tool";
   const row = div(
-    `x-row x-row-${role}${orchestrator ? " x-row-orchestrator" : ""}`,
+    `x-row x-row-${role}${orchestrator ? " x-row-orchestrator" : ""}${
+      tool ? " x-row-tool" : ""
+    }`,
   );
   // Stable id so morphdom keeps DOM identity across renders -- this is
   // what makes streaming chunks patch in place instead of rebuilding.
   row.id = `entry-${entry.id}`;
   const bubble = div(
-    `x-bubble x-bubble-${role}${orchestrator ? " x-bubble-orchestrator" : ""}`,
+    `x-bubble x-bubble-${role}${orchestrator ? " x-bubble-orchestrator" : ""}${
+      tool ? " x-bubble-tool" : ""
+    }`,
   );
   if (body.length === 0 && entry.streaming) {
     bubble.appendChild(thinkingDots());
+  } else if (tool) {
+    bubble.appendChild(toolDetails(entry.title, body));
   } else {
     bubble.appendChild(markdownBody(body));
   }
   row.appendChild(bubble);
   return row;
+}
+
+/**
+ * Wrap a tool-result body in a <details> collapsed by default. The
+ * summary shows the role label ("Tool result") plus a short preview
+ * of the first non-empty line so the user can scan the transcript
+ * without expanding every entry. User toggles are preserved across
+ * morphdom diffs by the onBeforeElUpdated hook above.
+ */
+function toolDetails(title: string, body: string): HTMLElement {
+  const details = document.createElement("details");
+  details.className = "x-tool-details";
+  const summary = document.createElement("summary");
+  const label = document.createElement("span");
+  label.className = "x-tool-summary-label";
+  label.textContent = title.length > 0 ? title : "Tool result";
+  summary.appendChild(label);
+  const preview = firstNonEmptyLine(body);
+  if (preview.length > 0) {
+    const previewNode = document.createElement("span");
+    previewNode.className = "x-tool-summary-preview";
+    previewNode.textContent = preview;
+    summary.appendChild(previewNode);
+  }
+  details.appendChild(summary);
+  details.appendChild(markdownBody(body));
+  return details;
+}
+
+function firstNonEmptyLine(text: string): string {
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (line.length === 0) {
+      continue;
+    }
+    const max = 120;
+    return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+  }
+  return "";
 }
 
 function thinkingBubble(): HTMLElement {

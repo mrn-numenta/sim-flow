@@ -1,35 +1,49 @@
 :root {
-  --x-accent: #c96927;
+  /* Palette -- https://colorpalettedeck.com/mockup/69be6a1996a0e3e3790217ed.
+   * Four named anchors that the bubble backgrounds and accents derive
+   * from. Keep additions here so the palette stays auditable in one
+   * place. */
+  --x-palette-brown: #57290f;
+  --x-palette-terracotta: #bf6f40;
+  --x-palette-blue: #add4eb;
+  --x-palette-cream: #fcf6cf;
+
+  --x-accent: var(--x-palette-terracotta);
   --x-border: color-mix(in srgb, var(--vscode-panel-border) 60%, transparent);
   --x-muted: var(--vscode-descriptionForeground, #7a7a7a);
-  /* Typed-by-the-user bubble: button-background-tinted (blue in most
-   * themes) so a real human message stands out from the orchestrator's
-   * running prompt stack. All prompt-to-LLM bubbles share this blue
-   * family so the user can tell at a glance which messages are inputs. */
+  /* Typed-by-the-user bubble: soft blue at a strong mix so a real
+   * human message reads as the brightest "input" colour. */
   --x-user-bg: color-mix(
     in srgb,
-    var(--vscode-button-background) 35%,
+    var(--x-palette-blue) 30%,
     var(--vscode-editor-background)
   );
   --x-user-fg: var(--vscode-foreground);
-  /* Orchestrator-emitted prompt-stack message (system prompt fragments,
-   * tool results that the orchestrator is feeding back into the LLM).
-   * Same blue family as the typed user bubble but lighter, so it reads
-   * as the "input side" without overpowering the human's own message. */
+  /* Orchestrator-emitted prompt-stack User-role message (system prompt
+   * fragments and other text the orchestrator feeds the LLM). Same
+   * blue family as the typed user bubble but quieter, so it reads as
+   * the "input side" without overpowering the human's own message. */
   --x-orchestrator-bg: color-mix(
     in srgb,
-    var(--vscode-button-background) 18%,
+    var(--x-palette-blue) 14%,
     var(--vscode-editor-background)
   );
   --x-orchestrator-fg: var(--vscode-foreground);
-  /* Assistant (LLM response) bubble: accent-tinted (orange) so it's
-   * unambiguously distinct from the blue-family prompt bubbles above.
-   * Without a tint the LLM response collapses into the panel background
-   * and reads as the same color family as the faint orchestrator-input
-   * bubbles -- the explicit accent fixes that. */
+  /* Tool-result bubble: cream-tinted so tool plumbing (file reads,
+   * command output) is unambiguously distinct from the blue input
+   * family and the terracotta LLM-response family. Reads as
+   * "parchment / data" rather than competing for primary attention. */
+  --x-tool-bg: color-mix(
+    in srgb,
+    var(--x-palette-cream) 16%,
+    var(--vscode-editor-background)
+  );
+  --x-tool-fg: var(--vscode-foreground);
+  /* Assistant (LLM response) bubble: warm terracotta so it's
+   * unambiguously distinct from the blue-family prompt bubbles. */
   --x-assistant-bg: color-mix(
     in srgb,
-    var(--x-accent) 12%,
+    var(--x-palette-terracotta) 16%,
     var(--vscode-editor-background)
   );
   --x-assistant-fg: var(--vscode-foreground);
@@ -119,19 +133,79 @@ body {
   color: var(--x-user-fg);
 }
 
-/* Orchestrator-emitted prompt-stack messages (User/Tool roles surfaced
- * via the experimental llm-request event). Distinct background from
- * both the human-typed user bubble and the assistant bubble so the
- * three-way "human input / orchestrator input / LLM output" exchange
- * is visually unambiguous. */
+/* Orchestrator-emitted User-role prompt-stack messages surfaced via
+ * the experimental llm-request event. Quieter blue than the typed
+ * user bubble so the two read as the same input family without the
+ * orchestrator chatter overpowering a human turn. */
 .x-bubble-user.x-bubble-orchestrator {
   background: var(--x-orchestrator-bg);
   color: var(--x-orchestrator-fg);
 }
 
+/* Tool-result bubbles: cream-tinted, distinct from both the blue
+ * input family and the terracotta assistant bubble. Wins specificity
+ * over the .x-bubble-orchestrator rule via the doubled class so the
+ * Tool role bubble (which carries both classes) takes the tool bg. */
+.x-bubble-user.x-bubble-orchestrator.x-bubble-tool {
+  background: var(--x-tool-bg);
+  color: var(--x-tool-fg);
+}
+
 .x-bubble-assistant {
   background: var(--x-assistant-bg);
   color: var(--x-assistant-fg);
+}
+
+/* Collapsible body for tool-result bubbles. Collapsed by default so
+ * file dumps don't dominate the transcript; user clicks the summary
+ * to expand. The webview preserves the user's open state across
+ * morphdom-driven re-renders. */
+.x-tool-details {
+  margin: 0;
+}
+
+.x-tool-details > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--x-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+
+.x-tool-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.x-tool-details > summary::before {
+  content: "▸";
+  font-size: 10px;
+  transition: transform 0.12s ease-out;
+}
+
+.x-tool-details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.x-tool-details[open] > .x-body {
+  margin-top: 8px;
+}
+
+.x-tool-summary-preview {
+  color: var(--x-muted);
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: normal;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
 
 .x-bubble-thinking {
