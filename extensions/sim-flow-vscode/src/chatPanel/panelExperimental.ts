@@ -528,6 +528,7 @@ function buildComposer(state: ChatPanelState): HTMLElement {
   // the visual seam is one panel, not two.
   const area = document.createElement("textarea");
   area.className = "x-composer-input";
+  area.id = "x-composer-textarea";
   area.rows = 1;
   area.placeholder = state.isViewer
     ? "Read-only viewer — input disabled."
@@ -547,18 +548,21 @@ function buildComposer(state: ChatPanelState): HTMLElement {
     // Re-evaluate the send button's disabled state. canSend reads
     // `ui.draft.trim().length`, which only updates here -- not on
     // a host state-update -- so without this hook the click-target
-    // stays disabled until the next render even though the
-    // keyboard Enter shortcut already works (its keydown handler
-    // calls canSend at press time).
-    sendBtn.disabled = state.isStreaming
-      ? !state.canStop
-      : !canSend(state);
+    // stays disabled until the next render. Read from `ui.state`
+    // rather than the closure's `state` so the listener uses the
+    // latest values after morphdom carries it across renders.
+    const s = ui.state;
+    if (!s) {
+      return;
+    }
+    sendBtn.disabled = s.isStreaming ? !s.canStop : !canSend(s);
   });
   area.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.shiftKey) {
       return;
     }
-    if (!canSend(state)) {
+    const s = ui.state;
+    if (!s || !canSend(s)) {
       return;
     }
     event.preventDefault();
@@ -573,6 +577,13 @@ function buildComposer(state: ChatPanelState): HTMLElement {
   // the verbal action for screen readers and hover tooltips.
   const sendBtn = document.createElement("button");
   sendBtn.type = "button";
+  // Stable id so morphdom always matches a "send" slot to a previous
+  // "send" slot. Without it, when the input row's child count
+  // changes across renders (Browse appearing/disappearing on the
+  // DM0 boundary), morphdom matches positionally by tag and the
+  // visible Send icon can inherit the original Browse click
+  // handler -- so clicking Send opens the file picker.
+  sendBtn.id = "x-composer-send";
   sendBtn.className = state.isStreaming ? "x-send x-send-stop" : "x-send x-send-send";
   sendBtn.textContent = state.isStreaming ? "■" : "↑";
   sendBtn.setAttribute(
@@ -582,8 +593,17 @@ function buildComposer(state: ChatPanelState): HTMLElement {
   sendBtn.title = state.isStreaming ? "Stop" : "Send";
   sendBtn.disabled = state.isStreaming ? !state.canStop : !canSend(state);
   sendBtn.addEventListener("click", () => {
-    if (state.isStreaming) {
-      if (state.canStop) {
+    // Read from `ui.state` rather than the closure's `state` so we
+    // see the latest values even when morphdom keeps an older
+    // render's listener attached to the live DOM node. Otherwise
+    // `state.isStreaming` here would forever reflect the first
+    // render's snapshot and the Stop path would never fire.
+    const s = ui.state;
+    if (!s) {
+      return;
+    }
+    if (s.isStreaming) {
+      if (s.canStop) {
         send({ type: "stop-conversation" });
       }
       return;
@@ -600,6 +620,7 @@ function buildComposer(state: ChatPanelState): HTMLElement {
   if (state.currentStep === "DM0") {
     const browseBtn = document.createElement("button");
     browseBtn.type = "button";
+    browseBtn.id = "x-composer-browse";
     browseBtn.className = "x-browse";
     browseBtn.textContent = "Browse…";
     browseBtn.title =
@@ -638,6 +659,7 @@ function buildComposerMeta(state: ChatPanelState): HTMLElement {
   // we always render it so the user has a stable target.
   const continueBtn = document.createElement("button");
   continueBtn.type = "button";
+  continueBtn.id = "x-composer-continue";
   continueBtn.className = "x-continue";
   const action = state.nextAction;
   continueBtn.textContent = action ? `Continue: ${action.label}` : "Continue";
@@ -671,6 +693,7 @@ function buildComposerMeta(state: ChatPanelState): HTMLElement {
   const isAuto = state.currentStepMode === "auto";
   const modeBtn = document.createElement("button");
   modeBtn.type = "button";
+  modeBtn.id = "x-composer-mode";
   modeBtn.className = "x-mode-toggle";
   modeBtn.textContent = isAuto ? "Auto" : "Manual";
   modeBtn.disabled = disabled;
@@ -681,7 +704,12 @@ function buildComposerMeta(state: ChatPanelState): HTMLElement {
     if (modeBtn.disabled) {
       return;
     }
-    send({ type: "set-step-mode", mode: isAuto ? "manual" : "auto" });
+    // Read the live mode from `ui.state` so the click flips against
+    // the latest value rather than the closure's first-render
+    // snapshot (morphdom keeps the listener from render-1 attached
+    // to the live DOM node).
+    const live = ui.state?.currentStepMode;
+    send({ type: "set-step-mode", mode: live === "auto" ? "manual" : "auto" });
   });
   root.appendChild(modeBtn);
 
