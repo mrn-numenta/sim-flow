@@ -544,6 +544,15 @@ function buildComposer(state: ChatPanelState): HTMLElement {
     ui.draft = area.value;
     persist();
     autoResize(area);
+    // Re-evaluate the send button's disabled state. canSend reads
+    // `ui.draft.trim().length`, which only updates here -- not on
+    // a host state-update -- so without this hook the click-target
+    // stays disabled until the next render even though the
+    // keyboard Enter shortcut already works (its keydown handler
+    // calls canSend at press time).
+    sendBtn.disabled = state.isStreaming
+      ? !state.canStop
+      : !canSend(state);
   });
   area.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.shiftKey) {
