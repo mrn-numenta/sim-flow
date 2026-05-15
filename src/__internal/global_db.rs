@@ -267,8 +267,11 @@ impl GlobalDb {
             .map_err(wrap_sqlite)?;
         let result = (|| -> Result<(Vec<String>, Vec<Vec<serde_json::Value>>)> {
             let mut stmt = self.conn.prepare(sql).map_err(wrap_sqlite)?;
-            let columns: Vec<String> =
-                stmt.column_names().iter().map(|s| (*s).to_string()).collect();
+            let columns: Vec<String> = stmt
+                .column_names()
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect();
             let column_count = columns.len();
             let mut rows_iter = stmt.query([]).map_err(wrap_sqlite)?;
             let mut out_rows: Vec<Vec<serde_json::Value>> = Vec::new();
@@ -825,8 +828,7 @@ fn wrap_sqlite(source: rusqlite::Error) -> Error {
 /// the dependency surface unchanged -- pulling in a base64 crate just
 /// for this tiny case isn't worth it.
 fn base64_encode_bytes(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     let mut i = 0;
     while i + 3 <= bytes.len() {
@@ -1319,7 +1321,10 @@ mod tests {
             .expect("read query");
         assert_eq!(cols, vec!["category".to_string(), "count(*)".to_string()]);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0][0], serde_json::Value::String("compile_error".into()));
+        assert_eq!(
+            rows[0][0],
+            serde_json::Value::String("compile_error".into())
+        );
         assert_eq!(rows[0][1], serde_json::Value::Number(1i64.into()));
 
         // PRAGMA query_only blocks writes inside the closure.
