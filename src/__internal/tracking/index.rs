@@ -21,6 +21,19 @@ pub fn experiments_db_path(dot_sim_flow: &Path) -> PathBuf {
 
 pub struct ExperimentIndex {
     conn: Connection,
+    /// Owning project directory. Set when the index is opened via
+    /// [`ExperimentIndex::open`] (which receives a `.sim-flow/` path
+    /// whose parent is the project root); `None` when constructed via
+    /// [`ExperimentIndex::open_path`] or [`ExperimentIndex::open_in_memory`]
+    /// (no project context).
+    ///
+    /// When `Some`, every `insert_run` / `insert_baseline` /
+    /// `update_metrics_summary` call also mirrors the latest snapshot
+    /// to the per-user global DB via
+    /// [`crate::__internal::global_db::with_db`]. When `None`, the
+    /// mirror is skipped -- callers using `open_path` are typically
+    /// CLI tools that already query the global DB directly.
+    project_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -61,19 +74,29 @@ impl ExperimentIndex {
             source,
         })?;
         let path = experiments_db_path(dot_sim_flow);
-        Self::open_path(&path)
+        let project_dir = dot_sim_flow.parent().map(Path::to_path_buf);
+        let conn = Connection::open(&path).map_err(wrap_sqlite)?;
+        let index = Self { conn, project_dir };
+        index.apply_schema()?;
+        Ok(index)
     }
 
     pub fn open_path(path: &Path) -> Result<Self> {
         let conn = Connection::open(path).map_err(wrap_sqlite)?;
-        let index = Self { conn };
+        let index = Self {
+            conn,
+            project_dir: None,
+        };
         index.apply_schema()?;
         Ok(index)
     }
 
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory().map_err(wrap_sqlite)?;
-        let index = Self { conn };
+        let index = Self {
+            conn,
+            project_dir: None,
+        };
         index.apply_schema()?;
         Ok(index)
     }
@@ -206,7 +229,14 @@ impl ExperimentIndex {
                 ],
             )
             .map_err(wrap_sqlite)?;
-        Ok(self.conn.last_insert_rowid())
+        let inserted_id = self.conn.last_insert_rowid();
+        // Best-effort mirror to the per-user global DB.
+        if let Some(project_dir) = &self.project_dir {
+            let _ = crate::__internal::global_db::with_db(|db| {
+                db.record_experiment_run(project_dir, row)
+            });
+        }
+        Ok(inserted_id)
     }
 
     pub fn get_run(&self, run_id: &str) -> Result<Option<RunRow>> {
@@ -278,6 +308,15 @@ impl ExperimentIndex {
                 params![metrics_json, run_id],
             )
             .map_err(wrap_sqlite)?;
+        // Best-effort mirror: re-emit the updated row so the global DB
+        // carries the latest `metrics_summary` snapshot.
+        if let Some(project_dir) = &self.project_dir
+            && let Some(row) = self.get_run(run_id)?
+        {
+            let _ = crate::__internal::global_db::with_db(|db| {
+                db.record_experiment_run(project_dir, &row)
+            });
+        }
         Ok(())
     }
 
@@ -295,6 +334,12 @@ impl ExperimentIndex {
                 params![name, run_id, timestamp, notes],
             )
             .map_err(wrap_sqlite)?;
+        // Best-effort mirror to the per-user global DB.
+        if let Some(project_dir) = &self.project_dir {
+            let _ = crate::__internal::global_db::with_db(|db| {
+                db.record_experiment_baseline(project_dir, name, run_id, timestamp, notes)
+            });
+        }
         Ok(())
     }
 

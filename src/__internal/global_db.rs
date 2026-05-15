@@ -322,6 +322,140 @@ impl GlobalDb {
         Ok(())
     }
 
+    /// Mirror one experiment run from a project's `experiments.db`
+    /// `runs` table into the global ledger.
+    ///
+    /// `INSERT OR REPLACE` on `UNIQUE(project_dir, run_id)`. The
+    /// `metrics_summary` column on `runs` is populated *after* the row
+    /// is first inserted (the orchestrator updates it once the run
+    /// completes), so we re-mirror the row on every `update_metrics_summary`
+    /// call -- INSERT OR REPLACE keeps the latest snapshot per
+    /// project/run.
+    pub fn record_experiment_run(
+        &self,
+        project_dir: &Path,
+        row: &crate::__internal::tracking::index::RunRow,
+    ) -> Result<()> {
+        let project_dir = project_dir_key(project_dir);
+        let user = user_identity();
+        self.conn
+            .execute(
+                r#"INSERT OR REPLACE INTO experiment_runs
+                    (project_dir, run_id, timestamp, git_commit, git_branch,
+                     git_dirty, config_fingerprint, manifest_path, workload,
+                     candidate, study, metrics_summary, parent_run_id,
+                     sweep_parameter, sweep_value, tags, notes, lifecycle,
+                     user_identity, machine_id)
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                           ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)"#,
+                params![
+                    project_dir,
+                    row.run_id,
+                    row.timestamp,
+                    row.git_commit,
+                    row.git_branch,
+                    row.git_dirty as i64,
+                    row.config_fingerprint,
+                    row.manifest_path,
+                    row.workload,
+                    row.candidate,
+                    row.study,
+                    row.metrics_summary,
+                    row.parent_run_id,
+                    row.sweep_parameter,
+                    row.sweep_value,
+                    row.tags,
+                    row.notes,
+                    row.lifecycle,
+                    user,
+                    self.machine_id,
+                ],
+            )
+            .map_err(wrap_sqlite)?;
+        Ok(())
+    }
+
+    /// Mirror one experiment baseline from a project's `experiments.db`
+    /// `baselines` table. `INSERT OR REPLACE` on `UNIQUE(project_dir,
+    /// name)` so baseline-renaming / re-pointing on a fresh `insert`
+    /// (the project-local layer treats the name as a unique key)
+    /// replaces the row cleanly.
+    pub fn record_experiment_baseline(
+        &self,
+        project_dir: &Path,
+        name: &str,
+        run_id: &str,
+        timestamp: &str,
+        notes: Option<&str>,
+    ) -> Result<()> {
+        let project_dir = project_dir_key(project_dir);
+        let user = user_identity();
+        self.conn
+            .execute(
+                r#"INSERT OR REPLACE INTO experiment_baselines
+                    (project_dir, name, run_id, timestamp, notes,
+                     user_identity, machine_id)
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"#,
+                params![
+                    project_dir,
+                    name,
+                    run_id,
+                    timestamp,
+                    notes,
+                    user,
+                    self.machine_id,
+                ],
+            )
+            .map_err(wrap_sqlite)?;
+        Ok(())
+    }
+
+    /// Mirror one experiment PPA estimate row. `INSERT OR REPLACE` on
+    /// `UNIQUE(project_dir, run_id, level, technology_node, source)`.
+    /// No live writer exists for `ppa_estimates` yet (the schema is
+    /// reserved for the perf-plan pipeline); the global-DB column shape
+    /// lands here so the `db backfill` pass can hydrate it once data
+    /// starts flowing.
+    #[allow(clippy::too_many_arguments, dead_code)]
+    pub fn record_experiment_ppa_estimate(
+        &self,
+        project_dir: &Path,
+        run_id: &str,
+        level: i64,
+        technology_node: &str,
+        area_estimate: Option<f64>,
+        power_estimate: Option<f64>,
+        timing_met: Option<bool>,
+        source: Option<&str>,
+        timestamp: &str,
+    ) -> Result<()> {
+        let project_dir = project_dir_key(project_dir);
+        let user = user_identity();
+        self.conn
+            .execute(
+                r#"INSERT OR REPLACE INTO experiment_ppa_estimates
+                    (project_dir, run_id, level, technology_node,
+                     area_estimate, power_estimate, timing_met, source,
+                     timestamp, user_identity, machine_id)
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
+                params![
+                    project_dir,
+                    run_id,
+                    level,
+                    technology_node,
+                    area_estimate,
+                    power_estimate,
+                    timing_met.map(|b| b as i64),
+                    source,
+                    timestamp,
+                    user,
+                    self.machine_id,
+                ],
+            )
+            .map_err(wrap_sqlite)?;
+        Ok(())
+    }
+
     /// Mirror one [`BugRecord`] from a project's `bug-log.jsonl` into
     /// the global ledger. Idempotent: `INSERT OR REPLACE` on
     /// `UNIQUE(project_dir, bug_id)` so re-mirroring an updated record
@@ -453,6 +587,76 @@ fn apply_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_tool_timings_tool_name   ON tool_timings(tool_name);
         CREATE INDEX IF NOT EXISTS idx_tool_timings_timestamp   ON tool_timings(timestamp);
         CREATE INDEX IF NOT EXISTS idx_tool_timings_user        ON tool_timings(user_identity);
+
+        -- Experiments mirror: same shape as the per-project
+        -- `experiments.db` tables plus `project_dir`, `user_identity`,
+        -- `machine_id` so cross-project / cross-machine queries can
+        -- attribute rows.  Each table uses `INSERT OR REPLACE` on a
+        -- `(project_dir, natural-key)` so updates (e.g. when a run's
+        -- `metrics_summary` lands after the row was first inserted)
+        -- cleanly replace the prior snapshot.
+        CREATE TABLE IF NOT EXISTS experiment_runs (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_dir        TEXT NOT NULL,
+            run_id             TEXT NOT NULL,
+            timestamp          TEXT NOT NULL,
+            git_commit         TEXT NOT NULL,
+            git_branch         TEXT,
+            git_dirty          INTEGER NOT NULL DEFAULT 0,
+            config_fingerprint TEXT NOT NULL,
+            manifest_path      TEXT,
+            workload           TEXT,
+            candidate          TEXT,
+            study              TEXT,
+            metrics_summary    TEXT,
+            parent_run_id      TEXT,
+            sweep_parameter    TEXT,
+            sweep_value        TEXT,
+            tags               TEXT,
+            notes              TEXT,
+            lifecycle          TEXT NOT NULL DEFAULT 'active',
+            user_identity      TEXT NOT NULL DEFAULT '',
+            machine_id         TEXT NOT NULL DEFAULT '',
+            UNIQUE(project_dir, run_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_exp_runs_workload  ON experiment_runs(workload);
+        CREATE INDEX IF NOT EXISTS idx_exp_runs_candidate ON experiment_runs(candidate);
+        CREATE INDEX IF NOT EXISTS idx_exp_runs_study     ON experiment_runs(study);
+        CREATE INDEX IF NOT EXISTS idx_exp_runs_timestamp ON experiment_runs(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_exp_runs_user      ON experiment_runs(user_identity);
+
+        CREATE TABLE IF NOT EXISTS experiment_baselines (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_dir   TEXT NOT NULL,
+            name          TEXT NOT NULL,
+            run_id        TEXT NOT NULL,
+            timestamp     TEXT NOT NULL,
+            notes         TEXT,
+            user_identity TEXT NOT NULL DEFAULT '',
+            machine_id    TEXT NOT NULL DEFAULT '',
+            UNIQUE(project_dir, name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_exp_baselines_run  ON experiment_baselines(run_id);
+        CREATE INDEX IF NOT EXISTS idx_exp_baselines_user ON experiment_baselines(user_identity);
+
+        CREATE TABLE IF NOT EXISTS experiment_ppa_estimates (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_dir     TEXT NOT NULL,
+            run_id          TEXT NOT NULL,
+            level           INTEGER NOT NULL,
+            technology_node TEXT NOT NULL,
+            area_estimate   REAL,
+            power_estimate  REAL,
+            timing_met      INTEGER,
+            source          TEXT,
+            timestamp       TEXT NOT NULL,
+            user_identity   TEXT NOT NULL DEFAULT '',
+            machine_id      TEXT NOT NULL DEFAULT '',
+            UNIQUE(project_dir, run_id, level, technology_node, source)
+        );
+        CREATE INDEX IF NOT EXISTS idx_exp_ppa_run  ON experiment_ppa_estimates(run_id);
+        CREATE INDEX IF NOT EXISTS idx_exp_ppa_tech ON experiment_ppa_estimates(technology_node);
+        CREATE INDEX IF NOT EXISTS idx_exp_ppa_user ON experiment_ppa_estimates(user_identity);
         "#,
     )
     .map_err(wrap_sqlite)?;
@@ -811,6 +1015,94 @@ mod tests {
             )
             .expect("wall_ms");
         assert_eq!(wall_ms, 500, "first write's wall_ms must win");
+    }
+
+    #[test]
+    fn record_experiment_run_inserts_and_replaces_on_repeat() {
+        use crate::__internal::tracking::index::RunRow;
+
+        let db = GlobalDb::open_in_memory().expect("open");
+        let project_dir = std::env::temp_dir();
+        let mut row = RunRow {
+            id: 0,
+            run_id: "run-001-abc".to_string(),
+            timestamp: "1700000000".to_string(),
+            git_commit: "deadbeef".to_string(),
+            git_branch: Some("main".to_string()),
+            git_dirty: false,
+            config_fingerprint: "abc123".to_string(),
+            manifest_path: Some("manifests/cell1.json".to_string()),
+            workload: Some("synthetic".to_string()),
+            candidate: Some("rgb_toy".to_string()),
+            study: Some("baseline_sweep".to_string()),
+            metrics_summary: None,
+            parent_run_id: None,
+            sweep_parameter: None,
+            sweep_value: None,
+            tags: None,
+            notes: None,
+            lifecycle: "active".to_string(),
+        };
+        db.record_experiment_run(&project_dir, &row)
+            .expect("first run");
+
+        // INSERT OR REPLACE: re-mirroring with metrics_summary set
+        // replaces the row in place; row count stays at 1, the new
+        // summary wins.
+        row.metrics_summary = Some(r#"{"throughput":3.21}"#.to_string());
+        db.record_experiment_run(&project_dir, &row)
+            .expect("second run");
+        let count: i64 = db
+            .conn()
+            .query_row(
+                "SELECT count(*) FROM experiment_runs WHERE run_id = ?1",
+                params!["run-001-abc"],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(count, 1);
+        let metrics: Option<String> = db
+            .conn()
+            .query_row(
+                "SELECT metrics_summary FROM experiment_runs WHERE run_id = ?1",
+                params!["run-001-abc"],
+                |r| r.get(0),
+            )
+            .expect("metrics");
+        assert_eq!(metrics.as_deref(), Some(r#"{"throughput":3.21}"#));
+    }
+
+    #[test]
+    fn record_experiment_baseline_replaces_on_same_name() {
+        let db = GlobalDb::open_in_memory().expect("open");
+        let project_dir = std::env::temp_dir();
+        db.record_experiment_baseline(
+            &project_dir,
+            "best_known",
+            "run-001-abc",
+            "1700000000",
+            Some("initial pin"),
+        )
+        .expect("first");
+        db.record_experiment_baseline(
+            &project_dir,
+            "best_known",
+            "run-007-xyz",
+            "1700000999",
+            Some("re-pinned after sweep"),
+        )
+        .expect("second");
+
+        let (run_id, notes): (String, Option<String>) = db
+            .conn()
+            .query_row(
+                "SELECT run_id, notes FROM experiment_baselines WHERE name = ?1",
+                params!["best_known"],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("query");
+        assert_eq!(run_id, "run-007-xyz");
+        assert_eq!(notes.as_deref(), Some("re-pinned after sweep"));
     }
 
     #[test]
