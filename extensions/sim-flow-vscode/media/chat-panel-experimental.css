@@ -1,49 +1,73 @@
-:root {
-  /* Palette -- https://colorpalettedeck.com/mockup/69be6a1996a0e3e3790217ed.
-   * Four named anchors that the bubble backgrounds and accents derive
-   * from. Keep additions here so the palette stays auditable in one
-   * place. */
-  --x-palette-brown: #57290f;
-  --x-palette-terracotta: #bf6f40;
-  --x-palette-blue: #add4eb;
-  --x-palette-cream: #fcf6cf;
+/* Palette anchors are named by role (input / tool / output / accent)
+ * rather than by colour, so swapping the palette only swaps the four
+ * declarations below -- the derived bubble backgrounds further down
+ * stay the same. The webview sets `data-palette` on <body> to pick a
+ * palette; the no-attribute fallback matches `autumn`.
+ *
+ * Sources:
+ *   autumn -- https://colorpalettedeck.com/mockup/69be6a1996a0e3e3790217ed
+ *   olive  -- https://colorpalettedeck.com/mockup/69be6a1996a0e3e3790217f1
+ *   sage   -- https://www.color-hex.com/color-palette/1028990 (salmon dropped) */
 
-  --x-accent: var(--x-palette-terracotta);
+body,
+body[data-palette="autumn"] {
+  --x-palette-input: #add4eb; /* soft blue */
+  --x-palette-tool: #fcf6cf; /* pale cream */
+  --x-palette-output: #bf6f40; /* warm terracotta */
+  --x-palette-accent: #57290f; /* dark brown */
+}
+
+body[data-palette="olive"] {
+  --x-palette-input: #adaeeb; /* soft lavender */
+  --x-palette-tool: #e6fccf; /* pale yellow-green */
+  --x-palette-output: #bfbd40; /* muted gold */
+  --x-palette-accent: #57560f; /* dark olive */
+}
+
+body[data-palette="sage"] {
+  --x-palette-input: #baa5c3; /* dusty lavender */
+  --x-palette-tool: #f2efe3; /* warm cream */
+  --x-palette-output: #88a788; /* sage green */
+  --x-palette-accent: #3d704d; /* forest green */
+}
+
+:root {
+  --x-accent: var(--x-palette-accent);
   --x-border: color-mix(in srgb, var(--vscode-panel-border) 60%, transparent);
   --x-muted: var(--vscode-descriptionForeground, #7a7a7a);
-  /* Typed-by-the-user bubble: soft blue at a strong mix so a real
+  /* Typed-by-the-user bubble: input anchor at a strong mix so a real
    * human message reads as the brightest "input" colour. */
   --x-user-bg: color-mix(
     in srgb,
-    var(--x-palette-blue) 30%,
+    var(--x-palette-input) 30%,
     var(--vscode-editor-background)
   );
   --x-user-fg: var(--vscode-foreground);
   /* Orchestrator-emitted prompt-stack User-role message (system prompt
    * fragments and other text the orchestrator feeds the LLM). Same
-   * blue family as the typed user bubble but quieter, so it reads as
+   * input family as the typed user bubble but quieter, so it reads as
    * the "input side" without overpowering the human's own message. */
   --x-orchestrator-bg: color-mix(
     in srgb,
-    var(--x-palette-blue) 14%,
+    var(--x-palette-input) 14%,
     var(--vscode-editor-background)
   );
   --x-orchestrator-fg: var(--vscode-foreground);
-  /* Tool-result bubble: cream-tinted so tool plumbing (file reads,
-   * command output) is unambiguously distinct from the blue input
-   * family and the terracotta LLM-response family. Reads as
-   * "parchment / data" rather than competing for primary attention. */
+  /* Tool-result bubble: tool anchor (a neutral parchment-y tone in
+   * every palette) so tool plumbing (file reads, command output) is
+   * unambiguously distinct from both the input and output families. */
   --x-tool-bg: color-mix(
     in srgb,
-    var(--x-palette-cream) 16%,
+    var(--x-palette-tool) 16%,
     var(--vscode-editor-background)
   );
   --x-tool-fg: var(--vscode-foreground);
-  /* Assistant (LLM response) bubble: warm terracotta so it's
-   * unambiguously distinct from the blue-family prompt bubbles. */
+  /* Assistant (LLM response) bubble: output anchor (the warmest
+   * palette colour) so it's unambiguously distinct from the input
+   * family bubbles. */
   --x-assistant-bg: color-mix(
     in srgb,
-    var(--x-palette-terracotta) 16%,
+    var(--x-palette-output) 16%,
     var(--vscode-editor-background)
   );
   --x-assistant-fg: var(--vscode-foreground);
@@ -70,8 +94,49 @@ body {
 .x-shell {
   height: 100%;
   display: grid;
-  grid-template-rows: 1fr auto;
+  grid-template-rows: auto 1fr auto;
   min-height: 0;
+}
+
+.x-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--x-border);
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+
+.x-toolbar-label {
+  color: var(--x-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.x-toolbar-spacer {
+  flex: 1;
+}
+
+.x-toolbar select,
+.x-toolbar button {
+  font: inherit;
+  font-size: 11px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--x-border);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.x-toolbar button:hover,
+.x-toolbar select:hover {
+  background: color-mix(
+    in srgb,
+    var(--vscode-input-background) 70%,
+    var(--vscode-foreground)
+  );
 }
 
 .x-loading {
@@ -156,15 +221,16 @@ body {
   color: var(--x-assistant-fg);
 }
 
-/* Collapsible body for tool-result bubbles. Collapsed by default so
- * file dumps don't dominate the transcript; user clicks the summary
- * to expand. The webview preserves the user's open state across
- * morphdom-driven re-renders. */
-.x-tool-details {
+/* Collapsible body for every message bubble. Tool-result bubbles
+ * start collapsed (so file dumps don't dominate); other bubbles
+ * start open. The toolbar's expand-all / collapse-all buttons walk
+ * the live DOM to flip the state. The webview preserves whatever
+ * the user toggled across morphdom-driven re-renders. */
+.x-bubble-details {
   margin: 0;
 }
 
-.x-tool-details > summary {
+.x-bubble-details > summary {
   cursor: pointer;
   list-style: none;
   display: flex;
@@ -177,25 +243,25 @@ body {
   user-select: none;
 }
 
-.x-tool-details > summary::-webkit-details-marker {
+.x-bubble-details > summary::-webkit-details-marker {
   display: none;
 }
 
-.x-tool-details > summary::before {
+.x-bubble-details > summary::before {
   content: "▸";
   font-size: 10px;
   transition: transform 0.12s ease-out;
 }
 
-.x-tool-details[open] > summary::before {
+.x-bubble-details[open] > summary::before {
   transform: rotate(90deg);
 }
 
-.x-tool-details[open] > .x-body {
+.x-bubble-details[open] > .x-body {
   margin-top: 8px;
 }
 
-.x-tool-summary-preview {
+.x-bubble-summary-preview {
   color: var(--x-muted);
   font-size: 11px;
   text-transform: none;

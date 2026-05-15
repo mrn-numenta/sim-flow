@@ -28,15 +28,33 @@ declare function acquireVsCodeApi(): {
 
 const vscode = acquireVsCodeApi();
 
+type PaletteName = "autumn" | "olive" | "sage";
+
+const PALETTES: ReadonlyArray<{ value: PaletteName; label: string }> = [
+  { value: "autumn", label: "Autumn" },
+  { value: "olive", label: "Olive" },
+  { value: "sage", label: "Sage" },
+];
+
+const DEFAULT_PALETTE: PaletteName = "autumn";
+
+function isPaletteName(value: unknown): value is PaletteName {
+  return (
+    value === "autumn" || value === "olive" || value === "sage"
+  );
+}
+
 interface UiState {
   state: ChatPanelState | null;
   draft: string;
   pinnedToBottom: boolean;
   scrollTop: number;
+  palette: PaletteName;
 }
 
 interface PersistedState {
   draft?: string;
+  palette?: PaletteName;
 }
 
 const persisted = vscode.getState<PersistedState>();
@@ -45,7 +63,14 @@ const ui: UiState = {
   draft: persisted?.draft ?? "",
   pinnedToBottom: true,
   scrollTop: 0,
+  palette: isPaletteName(persisted?.palette) ? persisted.palette : DEFAULT_PALETTE,
 };
+
+applyPalette();
+
+function applyPalette(): void {
+  document.body.dataset.palette = ui.palette;
+}
 
 window.addEventListener("message", (event) => {
   const msg = event.data as HostMessage;
@@ -63,7 +88,7 @@ function send(message: WebviewMessage): void {
 }
 
 function persist(): void {
-  vscode.setState({ draft: ui.draft });
+  vscode.setState({ draft: ui.draft, palette: ui.palette });
 }
 
 function render(): void {
@@ -156,9 +181,77 @@ function buildShell(): Node[] {
     ];
   }
   const shell = div("x-shell");
+  shell.appendChild(buildToolbar());
   shell.appendChild(buildTranscript(ui.state));
   shell.appendChild(buildComposer(ui.state));
   return [shell];
+}
+
+function buildToolbar(): HTMLElement {
+  const root = div("x-toolbar");
+
+  const paletteLabel = document.createElement("span");
+  paletteLabel.className = "x-toolbar-label";
+  paletteLabel.textContent = "Palette";
+  root.appendChild(paletteLabel);
+
+  const select = document.createElement("select");
+  select.className = "x-toolbar-palette";
+  for (const entry of PALETTES) {
+    const option = document.createElement("option");
+    option.value = entry.value;
+    option.textContent = entry.label;
+    if (entry.value === ui.palette) {
+      option.selected = true;
+    }
+    select.appendChild(option);
+  }
+  select.addEventListener("change", () => {
+    if (isPaletteName(select.value)) {
+      ui.palette = select.value;
+      applyPalette();
+      persist();
+    }
+  });
+  root.appendChild(select);
+
+  root.appendChild(div("x-toolbar-spacer"));
+
+  const expand = document.createElement("button");
+  expand.type = "button";
+  expand.textContent = "Expand all";
+  expand.title = "Open every message bubble in the transcript.";
+  expand.addEventListener("click", () => setAllBubblesOpen(true));
+  root.appendChild(expand);
+
+  const collapse = document.createElement("button");
+  collapse.type = "button";
+  collapse.textContent = "Collapse all";
+  collapse.title = "Close every message bubble in the transcript.";
+  collapse.addEventListener("click", () => setAllBubblesOpen(false));
+  root.appendChild(collapse);
+
+  return root;
+}
+
+/**
+ * Toggle every transcript `<details>` to the given state. The
+ * morphdom-onBeforeElUpdated hook below preserves whatever state we
+ * apply here across subsequent re-renders, so the user's choice
+ * sticks. New entries that arrive after the click fall back to their
+ * per-kind default (tool collapsed, others open).
+ */
+function setAllBubblesOpen(open: boolean): void {
+  const transcript = document.querySelector<HTMLElement>(".x-transcript");
+  if (!transcript) {
+    return;
+  }
+  const details = transcript.querySelectorAll<HTMLDetailsElement>(
+    "details.x-bubble-details",
+  );
+  for (const node of Array.from(details)) {
+    node.open = open;
+  }
 }
 
 function buildTranscript(state: ChatPanelState): HTMLElement {
@@ -256,34 +349,43 @@ function messageBubble(
   );
   if (body.length === 0 && entry.streaming) {
     bubble.appendChild(thinkingDots());
-  } else if (tool) {
-    bubble.appendChild(toolDetails(entry.title, body));
   } else {
-    bubble.appendChild(markdownBody(body));
+    // Tool calls collapse by default (file dumps would otherwise dwarf
+    // the rest of the turn); everything else opens by default. The
+    // morphdom hook preserves whatever the user toggles.
+    bubble.appendChild(bubbleDetails(entry.title, body, !tool));
   }
   row.appendChild(bubble);
   return row;
 }
 
 /**
- * Wrap a tool-result body in a <details> collapsed by default. The
- * summary shows the role label ("Tool result") plus a short preview
- * of the first non-empty line so the user can scan the transcript
- * without expanding every entry. User toggles are preserved across
- * morphdom diffs by the onBeforeElUpdated hook above.
+ * Wrap a message body in a <details>. The summary shows the role
+ * label plus a short preview of the first non-empty line so the user
+ * can scan the transcript without expanding every entry. User toggles
+ * are preserved across morphdom diffs by the onBeforeElUpdated hook
+ * above. The expand-all / collapse-all toolbar buttons flip every
+ * existing <details> in place.
  */
-function toolDetails(title: string, body: string): HTMLElement {
+function bubbleDetails(
+  title: string,
+  body: string,
+  defaultOpen: boolean,
+): HTMLElement {
   const details = document.createElement("details");
-  details.className = "x-tool-details";
+  details.className = "x-bubble-details";
+  if (defaultOpen) {
+    details.setAttribute("open", "");
+  }
   const summary = document.createElement("summary");
   const label = document.createElement("span");
-  label.className = "x-tool-summary-label";
-  label.textContent = title.length > 0 ? title : "Tool result";
+  label.className = "x-bubble-summary-label";
+  label.textContent = title.length > 0 ? title : "Message";
   summary.appendChild(label);
   const preview = firstNonEmptyLine(body);
   if (preview.length > 0) {
     const previewNode = document.createElement("span");
-    previewNode.className = "x-tool-summary-preview";
+    previewNode.className = "x-bubble-summary-preview";
     previewNode.textContent = preview;
     summary.appendChild(previewNode);
   }
