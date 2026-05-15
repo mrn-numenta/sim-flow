@@ -156,8 +156,16 @@ taxonomy -- anything else is a tool error):
   the target file.
 - `gate_violation` -- a gate check rejected output (write-path,
   milestone deferral, schema).
-- `tool_misuse` -- you invoked a tool with wrong args / path / shape.
-- `framework_misuse` -- misunderstood a Foundation API.
+- `tool_misuse` -- you invoked a specific tool (`log_bug`,
+  `run_cargo`, `write_file`, ...) with wrong args / path / shape.
+- `framework_misuse` -- you misunderstood a Foundation API in
+  `sim-foundation/crates/*` (e.g. used `HasInstances` where
+  `HasLogic` was needed).
+- `flow_misuse` -- you misunderstood a sim-flow concept in
+  `sim-foundation/tools/sim-flow` -- step / milestone semantics,
+  the work/critique cycle, write-path allowlists, no-progress
+  classifier rules. NOT a specific tool call (that's `tool_misuse`)
+  and NOT a bug in sim-flow itself (that's `flow_logic`).
 - `prompt_ambiguity` -- the instruction was unclear; you took a
   defensible-but-wrong interpretation. Use this to flag prompts that
   need editing.
@@ -168,7 +176,9 @@ taxonomy -- anything else is a tool error):
   `test_failure` symptom).
 - `performance` -- correct output but missed a perf target.
 - `documentation` -- markdown / schema / formatting issue, not behavior.
-- `flow_logic` -- sim-flow itself misbehaved (not your fault).
+- `flow_logic` -- sim-flow code itself misbehaved (not your fault).
+  For misunderstanding sim-flow rather than sim-flow misbehaving,
+  use `flow_misuse`.
 - `other` -- escape hatch, use sparingly; critique flags `other`-
   heavy logs.
 

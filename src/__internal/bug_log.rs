@@ -103,13 +103,24 @@ pub enum BugCategory {
     /// A gate check rejected the agent's output (write-path allowlist,
     /// milestone deferral, schema validation, etc).
     GateViolation,
-    /// The agent invoked a tool with wrong args / wrong path / wrong
-    /// shape.
+    /// The agent invoked a specific tool (`log_bug`, `run_cargo`,
+    /// `write_file`, ...) with wrong args / wrong path / wrong shape.
+    /// For misunderstanding a sim-flow *concept* that isn't a tool
+    /// call (step / milestone semantics, critique cycle, etc.), use
+    /// [`FlowMisuse`] instead.
     ToolMisuse,
-    /// The agent misunderstood a Foundation API (used `HasInstances`
-    /// where `HasLogic` was needed, ConnectivityPlanBuilder when
-    /// inline `connect()` was wanted, etc.).
+    /// The agent misunderstood a Foundation API in
+    /// `sim-foundation/crates/*` (used `HasInstances` where `HasLogic`
+    /// was needed, ConnectivityPlanBuilder when inline `connect()`
+    /// was wanted, etc.).
     FrameworkMisuse,
+    /// The agent misunderstood a sim-flow *concept* in
+    /// `sim-foundation/tools/sim-flow` -- step / milestone semantics,
+    /// the work/critique cycle, write-path allowlists, no-progress
+    /// classifier rules, gate evaluation, etc. NOT a specific tool
+    /// call (that's [`ToolMisuse`]) and NOT a bug in sim-flow itself
+    /// (that's [`FlowLogic`]).
+    FlowMisuse,
     /// The instruction was unclear; the agent took a defensible-but-
     /// wrong interpretation. Distinguishes "agent error" from
     /// "prompt error" for downstream prompt edits.
@@ -125,8 +136,11 @@ pub enum BugCategory {
     Performance,
     /// Markdown / schema / formatting issue, not behavior.
     Documentation,
-    /// The orchestrator / sim-flow itself misbehaved (not the agent's
-    /// fault).
+    /// The orchestrator / sim-flow code itself misbehaved (not the
+    /// agent's fault) -- e.g. a panic in the auto loop, a wrong
+    /// gate-eval order, a session-end hook that dropped state. For
+    /// the agent *misunderstanding* sim-flow rather than sim-flow
+    /// *misbehaving*, use [`FlowMisuse`].
     FlowLogic,
     /// Escape hatch. Use sparingly; critique flags `other`-heavy logs.
     Other,
@@ -143,6 +157,7 @@ impl BugCategory {
             Self::GateViolation => "gate_violation",
             Self::ToolMisuse => "tool_misuse",
             Self::FrameworkMisuse => "framework_misuse",
+            Self::FlowMisuse => "flow_misuse",
             Self::PromptAmbiguity => "prompt_ambiguity",
             Self::MissingDependency => "missing_dependency",
             Self::Network => "network",
@@ -164,6 +179,7 @@ impl BugCategory {
         Self::GateViolation,
         Self::ToolMisuse,
         Self::FrameworkMisuse,
+        Self::FlowMisuse,
         Self::PromptAmbiguity,
         Self::MissingDependency,
         Self::Network,
