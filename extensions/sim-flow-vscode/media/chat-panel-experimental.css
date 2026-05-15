@@ -35,39 +35,32 @@ body[data-palette="sage"] {
   --x-accent: var(--x-palette-accent);
   --x-border: color-mix(in srgb, var(--vscode-panel-border) 60%, transparent);
   --x-muted: var(--vscode-descriptionForeground, #7a7a7a);
-  /* Typed-by-the-user bubble: input anchor at a strong mix so a real
-   * human message reads as the brightest "input" colour. */
+  /* Bubble background tints. Kept faint so the *stripe* on the
+   * bubble's left edge carries the role identity; the bg just
+   * provides enough separation that adjacent bubbles read as
+   * grouped per role. Higher mix on the typed-user bubble than the
+   * orchestrator-side variants so the human's turn pops slightly. */
   --x-user-bg: color-mix(
     in srgb,
-    var(--x-palette-input) 30%,
+    var(--x-palette-input) 22%,
     var(--vscode-editor-background)
   );
   --x-user-fg: var(--vscode-foreground);
-  /* Orchestrator-emitted prompt-stack User-role message (system prompt
-   * fragments and other text the orchestrator feeds the LLM). Same
-   * input family as the typed user bubble but quieter, so it reads as
-   * the "input side" without overpowering the human's own message. */
   --x-orchestrator-bg: color-mix(
     in srgb,
-    var(--x-palette-input) 14%,
+    var(--x-palette-input) 10%,
     var(--vscode-editor-background)
   );
   --x-orchestrator-fg: var(--vscode-foreground);
-  /* Tool-result bubble: tool anchor (a neutral parchment-y tone in
-   * every palette) so tool plumbing (file reads, command output) is
-   * unambiguously distinct from both the input and output families. */
   --x-tool-bg: color-mix(
     in srgb,
-    var(--x-palette-tool) 16%,
+    var(--x-palette-tool) 22%,
     var(--vscode-editor-background)
   );
   --x-tool-fg: var(--vscode-foreground);
-  /* Assistant (LLM response) bubble: output anchor (the warmest
-   * palette colour) so it's unambiguously distinct from the input
-   * family bubbles. */
   --x-assistant-bg: color-mix(
     in srgb,
-    var(--x-palette-output) 16%,
+    var(--x-palette-output) 22%,
     var(--vscode-editor-background)
   );
   --x-assistant-fg: var(--vscode-foreground);
@@ -275,41 +268,59 @@ body {
 .x-bubble {
   width: 100%;
   /* Generous horizontal padding so content doesn't crash into the
-   * panel edges, vertical padding for breathing room between turns. */
-  padding: 10px 14px;
+   * panel edges, vertical padding for breathing room between turns.
+   * Reduced left padding so the 3px accent stripe nudged the body
+   * content in by exactly that much -- visual indent stays
+   * consistent across role variants. */
+  padding: 10px 14px 10px 11px;
   border-radius: 0;
   line-height: 1.45;
   box-sizing: border-box;
   overflow-wrap: anywhere;
+  /* Left-edge accent stripe. Per-role colour set below; default
+   * transparent so unmatched bubbles don't render a stub. */
   border: none;
+  border-left: 3px solid transparent;
 }
 
+/* Role tinting. The left-edge stripe uses the palette anchor in
+ * its full saturation so the role reads at a glance; the bubble
+ * background uses a faint mix on top of the editor background so
+ * adjacent bubbles still feel grouped without competing with the
+ * stripe. */
 .x-bubble-user {
   background: var(--x-user-bg);
   color: var(--x-user-fg);
+  border-left-color: var(--x-palette-input);
 }
 
 /* Orchestrator-emitted User-role prompt-stack messages surfaced via
- * the experimental llm-request event. Quieter blue than the typed
- * user bubble so the two read as the same input family without the
- * orchestrator chatter overpowering a human turn. */
+ * the experimental llm-request event. Same input family as the
+ * typed user bubble, but with a paler stripe so the orchestrator
+ * chatter reads as a subordinate sibling of the human turn. */
 .x-bubble-user.x-bubble-orchestrator {
   background: var(--x-orchestrator-bg);
   color: var(--x-orchestrator-fg);
+  border-left-color: color-mix(
+    in srgb,
+    var(--x-palette-input) 55%,
+    transparent
+  );
 }
 
-/* Tool-result bubbles: cream-tinted, distinct from both the blue
- * input family and the terracotta assistant bubble. Wins specificity
- * over the .x-bubble-orchestrator rule via the doubled class so the
- * Tool role bubble (which carries both classes) takes the tool bg. */
+/* Tool-result bubbles: stripe drawn from the accent anchor (always
+ * the most saturated colour in each palette) since the tool anchor
+ * itself is a near-white cream that would disappear as a 3px line. */
 .x-bubble-user.x-bubble-orchestrator.x-bubble-tool {
   background: var(--x-tool-bg);
   color: var(--x-tool-fg);
+  border-left-color: var(--x-palette-accent);
 }
 
 .x-bubble-assistant {
   background: var(--x-assistant-bg);
   color: var(--x-assistant-fg);
+  border-left-color: var(--x-palette-output);
 }
 
 /* Collapsible body for every message bubble. Tool-result bubbles
