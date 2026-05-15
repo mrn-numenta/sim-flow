@@ -731,6 +731,38 @@ pub(crate) enum DbReportKind {
     ExperimentsRecent,
 }
 
+/// Catalog of named charts. Each renders as a horizontal Unicode-bar
+/// histogram in the terminal -- one bar per label, length scaled to
+/// the max value in the dataset. Future work will add an SVG renderer
+/// on top of the existing `ChartFamily` machinery; v1 keeps the
+/// surface terminal-only.
+#[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
+pub(crate) enum DbChartKind {
+    /// Bug count per step, one bar per step.
+    BugsByStep,
+    /// Bug count per category, one bar per category.
+    BugsByCategory,
+    /// Total LLM-turn wall time per step.
+    LlmTimeByStep,
+    /// Total LLM-turn wall time per backend + model.
+    LlmTimeByBackend,
+    /// Tool wall time per tool name.
+    ToolTimeByTool,
+}
+
+impl From<DbChartKind> for sim_flow::__internal::db_charts::ChartKind {
+    fn from(value: DbChartKind) -> Self {
+        use sim_flow::__internal::db_charts::ChartKind as L;
+        match value {
+            DbChartKind::BugsByStep => L::BugsByStep,
+            DbChartKind::BugsByCategory => L::BugsByCategory,
+            DbChartKind::LlmTimeByStep => L::LlmTimeByStep,
+            DbChartKind::LlmTimeByBackend => L::LlmTimeByBackend,
+            DbChartKind::ToolTimeByTool => L::ToolTimeByTool,
+        }
+    }
+}
+
 impl From<DbReportKind> for sim_flow::__internal::db_reports::ReportKind {
     fn from(value: DbReportKind) -> Self {
         use sim_flow::__internal::db_reports::ReportKind as L;
@@ -791,6 +823,28 @@ pub(crate) enum DbAction {
         /// Emit machine-readable JSON instead of the text table.
         #[arg(long)]
         json: bool,
+    },
+    /// Render a named chart from the catalog. Terminal output uses
+    /// Unicode block characters for the bars; one bar per label. Pass
+    /// the same filters as `db report` to scope the underlying query.
+    Chart {
+        /// Which chart to render. See `DbChartKind` for the catalog.
+        kind: DbChartKind,
+        /// Restrict to rows whose `project_dir` contains this
+        /// substring.
+        #[arg(long)]
+        project: Option<String>,
+        /// Restrict to a specific step.
+        #[arg(long)]
+        step: Option<String>,
+        /// Cap the number of bars (after sorting by value desc).
+        /// Defaults to 20.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Max width in characters of the longest bar. Defaults to
+        /// 60. Useful to set to a smaller value on a narrow terminal.
+        #[arg(long)]
+        bar_width: Option<usize>,
     },
     /// Read-only SQL escape hatch over the per-user global DB. Useful
     /// for ad-hoc trend questions the named-report catalog doesn't

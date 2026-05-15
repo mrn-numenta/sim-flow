@@ -4,6 +4,7 @@ pub mod client;
 pub mod clients;
 pub mod config;
 pub mod critique;
+pub mod db_charts;
 pub mod db_reports;
 pub mod documents;
 pub mod error;

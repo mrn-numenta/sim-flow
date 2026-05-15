@@ -2274,6 +2274,30 @@ fn db_cmd(cwd_project: &Path, action: &DbAction) -> sim_flow::Result<()> {
             }
             Ok(())
         }
+        DbAction::Chart {
+            kind,
+            project,
+            step,
+            limit,
+            bar_width,
+        } => {
+            let Some(db_path) = default_db_path() else {
+                return Err(sim_flow::Error::State(
+                    "global DB unavailable: directories::ProjectDirs returned None".to_string(),
+                ));
+            };
+            let mut db = GlobalDb::open(&db_path)?;
+            let library_kind: sim_flow::__internal::db_charts::ChartKind = (*kind).into();
+            let filters = sim_flow::__internal::db_reports::ReportFilters {
+                project: project.clone(),
+                step: step.clone(),
+                limit: *limit,
+            };
+            let data =
+                sim_flow::__internal::db_charts::build_chart(&mut db, library_kind, &filters)?;
+            render_terminal_chart(&data, bar_width.unwrap_or(60));
+            Ok(())
+        }
         DbAction::Report {
             kind,
             project,
@@ -2402,6 +2426,51 @@ fn db_cmd(cwd_project: &Path, action: &DbAction) -> sim_flow::Result<()> {
             }
             Ok(())
         }
+    }
+}
+
+/// Render a `ChartData` to stdout as a horizontal Unicode-bar
+/// histogram. One bar per row, max bar length `bar_width` characters,
+/// scaled to the row with the largest absolute value. Empty datasets
+/// print a "(no data)" line.
+fn render_terminal_chart(data: &sim_flow::__internal::db_charts::ChartData, bar_width: usize) {
+    println!("{}", data.title);
+    println!("{}", "─".repeat(data.title.chars().count()));
+    if data.rows.is_empty() {
+        println!("(no data)");
+        return;
+    }
+    let label_width = data
+        .rows
+        .iter()
+        .map(|r| r.label.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(5);
+    let max_value = data
+        .rows
+        .iter()
+        .map(|r| r.value.abs())
+        .fold(0.0_f64, f64::max);
+    let scale = if max_value > 0.0 {
+        bar_width as f64 / max_value
+    } else {
+        0.0
+    };
+    for row in &data.rows {
+        let bar_len = ((row.value.abs() * scale).round() as usize).min(bar_width);
+        let bar = "█".repeat(bar_len);
+        let value_label = if row.value.fract() == 0.0 {
+            format!("{:.0} {}", row.value, data.unit)
+        } else {
+            format!("{:.2} {}", row.value, data.unit)
+        };
+        println!(
+            "{:<label_width$}  {bar:<bar_width$}  {value_label}",
+            row.label,
+            label_width = label_width,
+            bar_width = bar_width,
+        );
     }
 }
 
