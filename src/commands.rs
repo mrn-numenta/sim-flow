@@ -49,7 +49,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
         Command::ConvertSv { force } => convert_sv(&project_dir, *force),
         Command::Bugs { action } => bugs_cmd(&project_dir, action),
         Command::Config { action } => config_cmd(&project_dir, action),
-        Command::Db { action } => db_cmd(action),
+        Command::Db { action } => db_cmd(&project_dir, action),
         Command::New { kind } => new_cmd(cli, &project_dir, kind),
         Command::Runs {
             workload,
@@ -2258,7 +2258,7 @@ fn critiques_cmd(project: &Path, step: Option<&str>) -> sim_flow::Result<()> {
 }
 
 /// `sim-flow db <action>` -- introspection over the per-user global DB.
-fn db_cmd(action: &DbAction) -> sim_flow::Result<()> {
+fn db_cmd(cwd_project: &Path, action: &DbAction) -> sim_flow::Result<()> {
     use sim_flow::__internal::global_db::{GlobalDb, default_db_path};
     match action {
         DbAction::Path => {
@@ -2271,6 +2271,40 @@ fn db_cmd(action: &DbAction) -> sim_flow::Result<()> {
                             .to_string(),
                     ));
                 }
+            }
+            Ok(())
+        }
+        DbAction::Backfill {
+            paths,
+            force_tool_timings,
+        } => {
+            let Some(db_path) = default_db_path() else {
+                return Err(sim_flow::Error::State(
+                    "global DB unavailable: directories::ProjectDirs returned None".to_string(),
+                ));
+            };
+            let db = GlobalDb::open(&db_path)?;
+            let resolved_paths: Vec<PathBuf> = if paths.is_empty() {
+                vec![cwd_project.to_path_buf()]
+            } else {
+                paths.clone()
+            };
+            for project in &resolved_paths {
+                if !project.join(".sim-flow").is_dir() {
+                    eprintln!("skip: {} has no `.sim-flow/` directory", project.display());
+                    continue;
+                }
+                let summary = db_backfill_project(&db, project, *force_tool_timings)?;
+                println!(
+                    "{}: bugs={} llm_metrics={} tool_timings={} experiment_runs={} \
+                     experiment_baselines={}",
+                    project.display(),
+                    summary.bugs,
+                    summary.llm_metrics,
+                    summary.tool_timings,
+                    summary.experiment_runs,
+                    summary.experiment_baselines,
+                );
             }
             Ok(())
         }
@@ -2314,6 +2348,147 @@ fn db_cmd(action: &DbAction) -> sim_flow::Result<()> {
                 }
             }
             Ok(())
+        }
+    }
+}
+
+#[derive(Default)]
+struct BackfillSummary {
+    bugs: usize,
+    llm_metrics: usize,
+    tool_timings: usize,
+    experiment_runs: usize,
+    experiment_baselines: usize,
+}
+
+fn db_backfill_project(
+    db: &sim_flow::__internal::global_db::GlobalDb,
+    project: &Path,
+    force_tool_timings: bool,
+) -> sim_flow::Result<BackfillSummary> {
+    use sim_flow::__internal::bug_log::BugRecord;
+    use sim_flow::__internal::session::llm_metrics::LlmMetricsRecord;
+    use sim_flow::__internal::session::tool_timings::ToolTimingRecord;
+    use sim_flow::__internal::tracking::index::{ExperimentIndex, RunFilter};
+
+    let mut summary = BackfillSummary::default();
+
+    // --- Bugs (JSONL) ----------------------------------------------------
+    let bugs_path = project.join(".sim-flow").join("bug-log.jsonl");
+    if bugs_path.is_file() {
+        for line in read_jsonl_lines(&bugs_path)? {
+            let Some(rec) = parse_jsonl_record::<BugRecord>(&line) else {
+                continue;
+            };
+            db.record_bug(project, &rec)?;
+            summary.bugs += 1;
+        }
+    }
+
+    // --- LLM metrics (JSONL) --------------------------------------------
+    let metrics_path = project
+        .join(".sim-flow")
+        .join("logs")
+        .join("llm-metrics.jsonl");
+    if metrics_path.is_file() {
+        for line in read_jsonl_lines(&metrics_path)? {
+            let Some(rec) = parse_jsonl_record::<LlmMetricsRecord>(&line) else {
+                continue;
+            };
+            db.record_llm_metric(project, &rec)?;
+            summary.llm_metrics += 1;
+        }
+    }
+
+    // --- Tool timings (JSONL, offset-tracked) ----------------------------
+    let timings_path = project
+        .join(".sim-flow")
+        .join("logs")
+        .join("tool-timings.jsonl");
+    if timings_path.is_file() {
+        let start_offset = if force_tool_timings {
+            0
+        } else {
+            db.backfill_offset(project, "tool_timings.jsonl")?
+        };
+        let file = std::fs::File::open(&timings_path).map_err(|source| sim_flow::Error::Io {
+            path: timings_path.clone(),
+            source,
+        })?;
+        let file_len = file
+            .metadata()
+            .map_err(|source| sim_flow::Error::Io {
+                path: timings_path.clone(),
+                source,
+            })?
+            .len();
+        if start_offset < file_len {
+            use std::io::{BufRead, BufReader, Seek, SeekFrom};
+            let mut reader = BufReader::new(file);
+            reader
+                .seek(SeekFrom::Start(start_offset))
+                .map_err(|source| sim_flow::Error::Io {
+                    path: timings_path.clone(),
+                    source,
+                })?;
+            let mut line = String::new();
+            loop {
+                line.clear();
+                let bytes = reader
+                    .read_line(&mut line)
+                    .map_err(|source| sim_flow::Error::Io {
+                        path: timings_path.clone(),
+                        source,
+                    })?;
+                if bytes == 0 {
+                    break;
+                }
+                if let Some(rec) = parse_jsonl_record::<ToolTimingRecord>(line.trim()) {
+                    db.record_tool_timing(project, &rec)?;
+                    summary.tool_timings += 1;
+                }
+            }
+            db.set_backfill_offset(project, "tool_timings.jsonl", file_len)?;
+        }
+    }
+
+    // --- experiments.db --------------------------------------------------
+    let experiments_path = project.join(".sim-flow").join("experiments.db");
+    if experiments_path.is_file() {
+        let index = ExperimentIndex::open_path(&experiments_path)?;
+        for run in index.list_runs(&RunFilter::default())? {
+            db.record_experiment_run(project, &run)?;
+            summary.experiment_runs += 1;
+        }
+        for (name, run_id, timestamp) in index.list_baselines()? {
+            db.record_experiment_baseline(project, &name, &run_id, &timestamp, None)?;
+            summary.experiment_baselines += 1;
+        }
+    }
+
+    Ok(summary)
+}
+
+fn read_jsonl_lines(path: &Path) -> sim_flow::Result<Vec<String>> {
+    let body = std::fs::read_to_string(path).map_err(|source| sim_flow::Error::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(body
+        .lines()
+        .filter_map(|s| {
+            let trimmed = s.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        })
+        .collect())
+}
+
+fn parse_jsonl_record<T: serde::de::DeserializeOwned>(line: &str) -> Option<T> {
+    match serde_json::from_str::<T>(line) {
+        Ok(rec) => Some(rec),
+        Err(err) => {
+            tracing::warn!(error = %err, "db backfill: skipping malformed JSONL line");
+            None
         }
     }
 }

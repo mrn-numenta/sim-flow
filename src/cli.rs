@@ -708,6 +708,33 @@ pub(crate) enum DbAction {
         #[arg(long)]
         json: bool,
     },
+    /// One-shot importer for projects that pre-date the live mirror.
+    /// Walks each given project's `.sim-flow/` directory and bulk-
+    /// inserts every JSONL row and every `experiments.db` row into
+    /// the global DB. Idempotent: re-running over a project that
+    /// was already imported is a no-op (live mirrors use the same
+    /// UNIQUE indexes; `tool_timings` deduplicates via a per-source
+    /// byte-offset tracker in `meta`).
+    ///
+    /// Not part of the steady-state flow -- the per-entry mirror
+    /// keeps the DB current with zero user action. Use this once
+    /// when first installing the global-DB mirror on a machine with
+    /// existing project history, or after restoring a project from
+    /// backup.
+    Backfill {
+        /// Project directory (or any path whose ancestor is a
+        /// project). Defaults to the current working directory.
+        /// Multiple paths can be given; each is imported in
+        /// sequence.
+        #[arg(value_name = "PROJECT_DIR")]
+        paths: Vec<PathBuf>,
+        /// Re-import tool_timings even if a prior `db backfill` for
+        /// the same project already covered them. Without this flag
+        /// the importer uses a per-source byte offset stored in
+        /// `meta` to skip already-imported lines.
+        #[arg(long)]
+        force_tool_timings: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]

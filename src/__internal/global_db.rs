@@ -243,6 +243,45 @@ impl GlobalDb {
             .map_err(wrap_sqlite)
     }
 
+    /// Persisted per-source byte offset for `db backfill`. Used by
+    /// the `tool_timings` import path (which can't dedup via a
+    /// UNIQUE index because gate-driven rows have no stable identity)
+    /// to skip already-imported lines on re-run.
+    ///
+    /// The key shape is `backfill_offset:<project_dir>:<source>` so a
+    /// future per-source tracker (bugs / metrics offsets, if we ever
+    /// want them for performance) can use the same `meta` slot.
+    pub fn backfill_offset(&self, project_dir: &Path, source: &str) -> Result<u64> {
+        let key = backfill_offset_key(project_dir, source);
+        let raw: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(wrap_sqlite)?;
+        Ok(raw.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0))
+    }
+
+    /// Persist the byte offset reached by a `db backfill` pass.
+    pub fn set_backfill_offset(
+        &self,
+        project_dir: &Path,
+        source: &str,
+        offset: u64,
+    ) -> Result<()> {
+        let key = backfill_offset_key(project_dir, source);
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO meta(key, value) VALUES (?1, ?2)",
+                params![key, offset.to_string()],
+            )
+            .map_err(wrap_sqlite)?;
+        Ok(())
+    }
+
     /// Mirror one [`LlmMetricsRecord`] from a project's
     /// `logs/llm-metrics.jsonl` into the global ledger.
     ///
@@ -732,6 +771,15 @@ fn wrap_sqlite(source: rusqlite::Error) -> Error {
 /// binding doesn't cover identifiers, and the CLI passes them in from
 /// a closed allowlist anyway -- this is belt-and-suspenders so a typo
 /// in the allowlist can't produce a query-injection vector.
+/// Compose the `meta` key for a per-source backfill offset.
+fn backfill_offset_key(project_dir: &Path, source: &str) -> String {
+    format!(
+        "backfill_offset:{}:{}",
+        project_dir_key(project_dir),
+        source
+    )
+}
+
 fn is_safe_table_name(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
