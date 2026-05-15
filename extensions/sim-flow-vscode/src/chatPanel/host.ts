@@ -1403,6 +1403,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         this.activePump?.projectDir === context.projectDir
           ? computeNextAction(this.activePump, context)
           : null,
+      sessionActive:
+        !!this.activePump && this.activePump.projectDir === context.projectDir,
     };
   }
 
@@ -2305,7 +2307,13 @@ function computeNextAction(
   if (session.pump.stepMode !== "manual") {
     return null;
   }
-  if (!session.awaitingInput) {
+  // In manual mode the orchestrator parks at `wait_for_command`
+  // (auto.rs) between sub-sessions WITHOUT emitting RequestUserInput,
+  // so `awaitingInput` stays false. The dashboard's per-step buttons
+  // gate on `!inSubSession` instead -- mirror that here so Continue
+  // is available the moment a parked manual-mode pump is ready to
+  // accept the next host event.
+  if (session.pump.inSubSession) {
     return null;
   }
   const last = session.pump.session;

@@ -151,6 +151,46 @@ body {
   font-weight: 600;
 }
 
+/* LLM connection indicator. Renders as a small status pill; the
+ * leading character (● / ○) is part of the textContent so the
+ * indicator stays legible if CSS fails to load. Three colour
+ * states track no-session / ready / working. */
+.x-toolbar-llm {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+
+.x-toolbar-llm.x-llm-offline {
+  color: var(--x-muted);
+  background: transparent;
+  border: 1px dashed var(--x-border);
+}
+
+.x-toolbar-llm.x-llm-ready {
+  color: color-mix(in srgb, var(--x-palette-output) 70%, var(--vscode-foreground));
+  background: color-mix(in srgb, var(--x-palette-output) 14%, var(--vscode-editor-background));
+  border: 1px solid color-mix(in srgb, var(--x-palette-output) 36%, transparent);
+}
+
+.x-toolbar-llm.x-llm-working {
+  color: var(--vscode-foreground);
+  background: color-mix(in srgb, var(--x-palette-output) 28%, var(--vscode-editor-background));
+  border: 1px solid var(--x-palette-output);
+  animation: x-llm-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes x-llm-pulse {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 1; }
+}
+
 .x-loading {
   align-items: center;
   justify-items: center;

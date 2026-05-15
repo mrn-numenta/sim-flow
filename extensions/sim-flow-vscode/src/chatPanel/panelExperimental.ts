@@ -244,6 +244,31 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   });
   root.appendChild(projectBtn);
 
+  // LLM connection indicator. Three visual states derived from
+  // `sessionActive` + `isStreaming`:
+  //   - no pump      -> hollow dot, "No session"
+  //   - pump idle    -> solid dot, "Ready · <sourceLabel>"
+  //   - pump working -> solid dot + working class, "Working · <sourceLabel>"
+  // We don't actively probe the LLM endpoint -- a live pump that's
+  // producing events is the strongest signal the user actually wants.
+  const llmStatus = document.createElement("span");
+  llmStatus.className = "x-toolbar-llm";
+  if (!state.sessionActive) {
+    llmStatus.classList.add("x-llm-offline");
+    llmStatus.textContent = "○ No session";
+    llmStatus.title =
+      "No sim-flow pump is anchored to this project. Click \"Project: ...\" to start one.";
+  } else if (state.isStreaming) {
+    llmStatus.classList.add("x-llm-working");
+    llmStatus.textContent = `● Working · ${state.sourceLabel}`;
+    llmStatus.title = `sim-flow is talking to ${state.sourceLabel} right now.`;
+  } else {
+    llmStatus.classList.add("x-llm-ready");
+    llmStatus.textContent = `● Ready · ${state.sourceLabel}`;
+    llmStatus.title = `Pump is connected; ${state.sourceLabel} will be called on the next sub-session.`;
+  }
+  root.appendChild(llmStatus);
+
   const paletteLabel = document.createElement("span");
   paletteLabel.className = "x-toolbar-label";
   paletteLabel.textContent = "Palette";

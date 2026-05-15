@@ -113,6 +113,13 @@ export interface ChatPanelState {
     /** Pre-rendered label for the button ("Run critique on DM0"). */
     label: string;
   } | null;
+  /**
+   * Whether a sim-flow pump is currently anchored to this project's
+   * chat panel. The toolbar LLM indicator uses this together with
+   * `isStreaming` to render three visual states: no-session,
+   * connected-and-idle, and connected-and-working.
+   */
+  sessionActive: boolean;
 }
 
 export type ChatTranscriptEntry =
