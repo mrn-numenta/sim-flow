@@ -170,7 +170,14 @@ function applyShikiHighlight(root: ParentNode): void {
   const theme: BundledTheme = isDark ? "github-dark" : "github-light";
   const blocks = root.querySelectorAll("pre > code");
   for (const code of Array.from(blocks)) {
-    const lang = inferLang(code as HTMLElement);
+    // Prefer an explicit `language-X` class on the <code> element
+    // (set by markdown-it for ```rust fences); fall back to a
+    // content-based guess for fences that arrived without a tag --
+    // this is the common case for tool-result dumps and for LLMs
+    // that emit bare ``` blocks.
+    const lang =
+      inferLang(code as HTMLElement) ??
+      inferLangFromContent(code.textContent ?? "");
     if (!lang || !SHIKI_LANGS.includes(lang as BundledLanguage)) {
       continue;
     }
@@ -208,6 +215,65 @@ function inferLang(code: HTMLElement): string | null {
     if (cls.startsWith("language-")) {
       return cls.slice("language-".length);
     }
+  }
+  return null;
+}
+
+/**
+ * Best-effort language guess for unlabeled code blocks. Looks at the
+ * first ~4KB of content for syntactic markers. Returns null when no
+ * pattern hits cleanly; callers should treat that as "leave plain".
+ * Order matters -- check the more specific markers (Verilog modules,
+ * Rust `fn`/`use::`) before the looser JS/TS patterns that would
+ * otherwise swallow them. Exported so the chat panel can label
+ * tool-result bodies that arrive as plain text.
+ */
+export function inferLangFromContent(text: string): string | null {
+  const sample = text.length > 4000 ? text.slice(0, 4000) : text;
+  if (
+    /\bfn\s+[\w_]+\s*[<(]/.test(sample) ||
+    /\buse\s+[\w:]+::/.test(sample) ||
+    /\bpub\s+(fn|struct|enum|mod|trait)\b/.test(sample) ||
+    /\bimpl\s+(<.+>\s+)?[\w_]+(\s+for\s+[\w_]+)?\s*\{/.test(sample)
+  ) {
+    return "rust";
+  }
+  if (
+    /^\s*module\s+[\w_]+\s*[#(]/m.test(sample) ||
+    /\bendmodule\b/.test(sample) ||
+    /^\s*always(_(ff|comb|latch))?\s*@/m.test(sample)
+  ) {
+    return "system-verilog";
+  }
+  if (
+    /^\s*def\s+[\w_]+\s*\(/m.test(sample) ||
+    /^\s*from\s+[\w.]+\s+import\b/m.test(sample) ||
+    /^\s*class\s+[\w_]+\s*[(:]/m.test(sample)
+  ) {
+    return "python";
+  }
+  if (
+    /\binterface\s+[\w_]+/.test(sample) ||
+    /\btype\s+[\w_]+\s*=\s*[\{<]/.test(sample) ||
+    /:\s*[\w_]+(\[\])?\s*[,;)]/.test(sample)
+  ) {
+    return "typescript";
+  }
+  if (
+    /\bfunction\s+[\w_]+\s*\(/.test(sample) ||
+    /\bconst\s+[\w_]+\s*=/.test(sample) ||
+    /=>\s*[\{\(]/.test(sample)
+  ) {
+    return "javascript";
+  }
+  if (/^#!\/.*\b(ba)?sh\b/.test(sample) || /\$\([^)]+\)/.test(sample)) {
+    return "bash";
+  }
+  if (/^\s*\{[\s\S]*"[\w-]+"\s*:/.test(sample)) {
+    return "json";
+  }
+  if (/^\[[\w.]+\]/m.test(sample) && /^[\w-]+\s*=\s*/m.test(sample)) {
+    return "toml";
   }
   return null;
 }

@@ -35,34 +35,9 @@ body[data-palette="sage"] {
   --x-accent: var(--x-palette-accent);
   --x-border: color-mix(in srgb, var(--vscode-panel-border) 60%, transparent);
   --x-muted: var(--vscode-descriptionForeground, #7a7a7a);
-  /* Bubble background tints. Kept faint so the *stripe* on the
-   * bubble's left edge carries the role identity; the bg just
-   * provides enough separation that adjacent bubbles read as
-   * grouped per role. Higher mix on the typed-user bubble than the
-   * orchestrator-side variants so the human's turn pops slightly. */
-  --x-user-bg: color-mix(
-    in srgb,
-    var(--x-palette-input) 22%,
-    var(--vscode-editor-background)
-  );
   --x-user-fg: var(--vscode-foreground);
-  --x-orchestrator-bg: color-mix(
-    in srgb,
-    var(--x-palette-input) 10%,
-    var(--vscode-editor-background)
-  );
   --x-orchestrator-fg: var(--vscode-foreground);
-  --x-tool-bg: color-mix(
-    in srgb,
-    var(--x-palette-tool) 22%,
-    var(--vscode-editor-background)
-  );
   --x-tool-fg: var(--vscode-foreground);
-  --x-assistant-bg: color-mix(
-    in srgb,
-    var(--x-palette-output) 22%,
-    var(--vscode-editor-background)
-  );
   --x-assistant-fg: var(--vscode-foreground);
 }
 
@@ -283,23 +258,26 @@ body {
   border-left: 3px solid transparent;
 }
 
-/* Role tinting. The left-edge stripe uses the palette anchor in
- * its full saturation so the role reads at a glance; the bubble
- * background uses a faint mix on top of the editor background so
- * adjacent bubbles still feel grouped without competing with the
- * stripe. */
+/* Role tinting. Stripe uses the full-saturation palette anchor;
+ * background uses the same anchor mixed against the editor bg.
+ * The color-mix is inlined here (rather than going through an
+ * intermediate `--x-user-bg` token defined on :root) because the
+ * indirection seems to defeat substitution in this Chromium build:
+ * the stripe -- which reads --x-palette-input directly -- renders,
+ * but the background -- which read it through a :root token -- did
+ * not. Defining the mix on the consuming rule guarantees the
+ * inheritance chain resolves at the consumer scope. */
 .x-bubble-user {
-  background: var(--x-user-bg);
+  background: color-mix(in srgb, var(--x-palette-input) 35%, var(--vscode-editor-background));
   color: var(--x-user-fg);
   border-left-color: var(--x-palette-input);
 }
 
-/* Orchestrator-emitted User-role prompt-stack messages surfaced via
- * the experimental llm-request event. Same input family as the
- * typed user bubble, but with a paler stripe so the orchestrator
- * chatter reads as a subordinate sibling of the human turn. */
+/* Orchestrator-emitted User-role prompt-stack messages. Paler than
+ * the typed-user bubble so the human's turn pops next to the
+ * orchestrator's chatter. */
 .x-bubble-user.x-bubble-orchestrator {
-  background: var(--x-orchestrator-bg);
+  background: color-mix(in srgb, var(--x-palette-input) 18%, var(--vscode-editor-background));
   color: var(--x-orchestrator-fg);
   border-left-color: color-mix(
     in srgb,
@@ -312,13 +290,13 @@ body {
  * the most saturated colour in each palette) since the tool anchor
  * itself is a near-white cream that would disappear as a 3px line. */
 .x-bubble-user.x-bubble-orchestrator.x-bubble-tool {
-  background: var(--x-tool-bg);
+  background: color-mix(in srgb, var(--x-palette-tool) 35%, var(--vscode-editor-background));
   color: var(--x-tool-fg);
   border-left-color: var(--x-palette-accent);
 }
 
 .x-bubble-assistant {
-  background: var(--x-assistant-bg);
+  background: color-mix(in srgb, var(--x-palette-output) 35%, var(--vscode-editor-background));
   color: var(--x-assistant-fg);
   border-left-color: var(--x-palette-output);
 }

@@ -17,7 +17,11 @@ import type {
   HostMessage,
   WebviewMessage,
 } from "./messages";
-import { initShiki, renderMarkdownFragment } from "./renderMarkdown";
+import {
+  inferLangFromContent,
+  initShiki,
+  renderMarkdownFragment,
+} from "./renderMarkdown";
 import { stripProtocolFences, stripToolCallFencesForDisplay } from "./state";
 
 declare function acquireVsCodeApi(): {
@@ -493,7 +497,7 @@ function messageBubble(
     // Tool calls collapse by default (file dumps would otherwise dwarf
     // the rest of the turn); everything else opens by default. The
     // morphdom hook preserves whatever the user toggles.
-    bubble.appendChild(bubbleDetails(entry.title, body, !tool));
+    bubble.appendChild(bubbleDetails(entry.title, body, !tool, tool));
   }
   row.appendChild(bubble);
   return row;
@@ -511,6 +515,7 @@ function bubbleDetails(
   title: string,
   body: string,
   defaultOpen: boolean,
+  forceCodeBlock = false,
 ): HTMLElement {
   const details = document.createElement("details");
   details.className = "x-bubble-details";
@@ -522,6 +527,8 @@ function bubbleDetails(
   label.className = "x-bubble-summary-label";
   label.textContent = title.length > 0 ? title : "Message";
   summary.appendChild(label);
+  // Preview is computed from the raw body (NOT the fenced wrap so it
+  // doesn't read as "```rust" for tool results).
   const preview = firstNonEmptyLine(body);
   if (preview.length > 0) {
     const previewNode = document.createElement("span");
@@ -530,8 +537,29 @@ function bubbleDetails(
     summary.appendChild(previewNode);
   }
   details.appendChild(summary);
-  details.appendChild(markdownBody(body));
+  // Tool-result bubbles (forceCodeBlock = true) are almost always
+  // code-like content: file dumps, command output, JSON, build
+  // logs. Wrapping in a fenced block with a guessed language gives
+  // them the same code-block treatment as inline ```...``` from the
+  // assistant, including Shiki syntax highlighting when the
+  // inference finds a match.
+  const renderText = forceCodeBlock ? wrapAsCodeBlock(body) : body;
+  details.appendChild(markdownBody(renderText));
   return details;
+}
+
+/**
+ * Wrap content in a fenced code block with a content-inferred
+ * language. Uses a long backtick fence so embedded shorter fences
+ * in the content don't close the wrapper prematurely. Falls back
+ * to `text` when no language guess hits cleanly -- the code block
+ * still picks up the bubble's CSS treatment even without syntax
+ * colours.
+ */
+function wrapAsCodeBlock(content: string): string {
+  const lang = inferLangFromContent(content) ?? "text";
+  const fence = "`".repeat(16);
+  return `${fence}${lang}\n${content}\n${fence}`;
 }
 
 function firstNonEmptyLine(text: string): string {
