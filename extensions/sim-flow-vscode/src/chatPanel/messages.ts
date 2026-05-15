@@ -180,4 +180,12 @@ export type WebviewMessage =
    * entry); if the user picks one, the active session is stopped
    * and a fresh session is launched against the chosen project.
    */
-  | { type: "switch-project" };
+  | { type: "switch-project" }
+  /**
+   * Start a sim-flow session for this panel. If a previous
+   * project is remembered and still on disk, the host launches
+   * it directly; otherwise it shows the QuickPick. Sent from
+   * the toolbar's "Start session" button when no session is
+   * active.
+   */
+  | { type: "start-session" };

@@ -225,22 +225,39 @@ function buildShell(): Node[] {
 function buildToolbar(state: ChatPanelState): HTMLElement {
   const root = div("x-toolbar");
 
-  // Project switcher: the currently-anchored project is the button
-  // label, so the user reads "what am I working on" at a glance.
-  // Clicking the button posts `switch-project`; the host shows the
-  // standard QuickPick and launches the chosen project.
+  // Project button: doubles as the Start-session affordance when
+  // no pump is anchored. Window reloads no longer auto-launch, so
+  // this button is how the user starts a fresh session -- and
+  // how they switch projects once one is running.
+  //
+  //   - No session  -> "Start session"      (sends `start-session`)
+  //   - Active pump -> "Project: <name>"    (sends `switch-project`)
   const projectBtn = document.createElement("button");
   projectBtn.type = "button";
   projectBtn.className = "x-toolbar-project";
-  const projectName =
-    state.projectLabel && state.projectLabel.length > 0
-      ? state.projectLabel
-      : "No project";
-  projectBtn.textContent = `Project: ${projectName}`;
-  projectBtn.title =
-    "Switch the chat panel to a different sim-flow project. Stops the active session and launches a fresh one on the chosen project.";
+  if (state.sessionActive) {
+    const projectName =
+      state.projectLabel && state.projectLabel.length > 0
+        ? state.projectLabel
+        : "No project";
+    projectBtn.textContent = `Project: ${projectName}`;
+    projectBtn.title =
+      "Switch the chat panel to a different sim-flow project. Stops the active session and launches a fresh one on the chosen project.";
+  } else {
+    projectBtn.textContent = "Start session";
+    projectBtn.classList.add("x-toolbar-project-start");
+    projectBtn.title =
+      "Launch a sim-flow session. Uses the last project you worked on; otherwise opens the project picker.";
+  }
   projectBtn.addEventListener("click", () => {
-    send({ type: "switch-project" });
+    // Read the live state so morphdom listener carryover doesn't
+    // route a stale message type when sessionActive flips.
+    const live = ui.state;
+    if (live?.sessionActive) {
+      send({ type: "switch-project" });
+    } else {
+      send({ type: "start-session" });
+    }
   });
   root.appendChild(projectBtn);
 

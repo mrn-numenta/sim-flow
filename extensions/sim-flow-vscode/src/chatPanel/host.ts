@@ -132,24 +132,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   private stepModeListenerDispose: (() => void) | null = null;
 
   /**
-   * Set once per ChatPanelHost lifetime once the first "ready"
-   * message arrives. Auto-launch fires from inside the ready handler,
-   * but `refresh()` (which also runs on every visibility change)
-   * must not retrigger it -- otherwise toggling away from and back
-   * to the chat panel would re-prompt the project picker repeatedly.
-   * Stays sticky across the panel's own webview reloads too; if the
-   * user cancels the picker, they restart the orchestrator from the
-   * dashboard's Connect button (which exists until phase 3) or by
-   * reloading the window.
-   */
-  private autoLaunchAttempted = false;
-
-  /**
    * workspaceState key for the most recently launched project dir.
-   * Auto-launch consults this on cold start so a user who closes
-   * and reopens VS Code lands in the same project they were working
-   * on, with no picker prompt. The value is replaced (not appended
-   * to) on every launch.
+   * `startSession` consults this so a user who closes and reopens
+   * VS Code can resume the same project with a single click on
+   * "Start session" -- no picker prompt unless the remembered
+   * dir is no longer in the candidate set. The value is replaced
+   * (not appended to) on every launch.
    */
   private static readonly LAST_PROJECT_KEY = "sim-flow.chatPanel.lastProjectDir";
 
@@ -403,12 +391,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     switch (msg.type) {
       case "ready":
         await this.refresh();
-        // Auto-launch fires on the first ready per host lifetime.
-        // Runs after refresh so `restoreActiveAutoSessionIfNeeded`
-        // has had a chance to re-attach to a previously persisted
-        // session; auto-launch is a no-op when a pump is already
-        // active.
-        void this.tryAutoLaunch();
+        // No auto-launch on ready. Window reloads re-mount the
+        // webview, which would otherwise re-fire the project
+        // picker every time. The user starts a session explicitly
+        // via the toolbar's "Start session" button (which sends
+        // the `start-session` message handled below).
         return;
       case "refresh":
         await this.refresh();
@@ -441,6 +428,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         return;
       case "switch-project":
         await this.switchProject();
+        return;
+      case "start-session":
+        await this.startSession();
         return;
       default:
         return;
@@ -772,29 +762,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   /**
-   * Auto-launch the orchestrator the first time the chat panel
-   * becomes ready and no session is already active. Uses VS Code's
-   * QuickPick to disambiguate when the workspace exposes more than
-   * one sim-flow project; if only one exists, launches it without
-   * any UI. Picking "+ New project..." dispatches the existing
-   * `sim-flow.newProject` command. The spec path is intentionally
-   * left undefined so the orchestrator's `--dm0-interactive` flag
-   * parks DM0 at a `RequestUserInput` and the chat panel surfaces
-   * the spec ask through the existing `currentPrompt` channel.
-   *
-   * Phase 1 of the controller-migration in CLAUDE/feedback notes:
-   * this lets the chat panel start its own session instead of
-   * relying on the dashboard's Connect button. The dashboard's
-   * Connect button still works until phase 3 strips it.
+   * Explicit "Start session" action from the chat panel toolbar.
+   * Fires only when the user clicks; window reload, tab focus,
+   * etc. no longer trigger it. If a previous project is remembered
+   * and still on disk, the orchestrator launches directly with no
+   * picker; otherwise the standard QuickPick appears (single-
+   * candidate cases also auto-resolve). Picking "+ New project..."
+   * dispatches the existing `sim-flow.newProject` command. The
+   * spec path is left undefined so DM0 parks at its
+   * `RequestUserInput` (the chat panel surfaces that through the
+   * existing `currentPrompt` channel).
    */
-  private async tryAutoLaunch(): Promise<void> {
-    if (this.autoLaunchAttempted) {
-      return;
-    }
+  private async startSession(): Promise<void> {
     if (this.activePump) {
+      // A session is already live for the chat panel -- the
+      // "Start session" button shouldn't have been clickable, but
+      // be defensive: don't double-launch.
       return;
     }
-    this.autoLaunchAttempted = true;
     const candidates = await findProjectCandidates();
     if (candidates.length === 0) {
       // No initialized projects in the workspace -- mirror
@@ -805,9 +790,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
     // If we previously remembered a project that's still on disk,
-    // skip the picker entirely so a window reload doesn't prompt
-    // every time. Stale entries (project deleted, renamed) fall
-    // through to the picker.
+    // skip the picker entirely so "Start session" is a single
+    // click. Stale entries (project deleted, renamed) fall through
+    // to the picker.
     const remembered = this.workspaceState.get<string>(
       ChatPanelProvider.LAST_PROJECT_KEY,
     );
@@ -817,8 +802,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
     const picked = await pickProject(candidates, { allowNew: true });
     if (picked === undefined) {
-      // User cancelled; honour that silently. Dashboard's Connect
-      // button or a window reload restarts the prompt.
+      // User cancelled the picker; honour silently.
       return;
     }
     if (picked === PICK_PROJECT_NEW) {

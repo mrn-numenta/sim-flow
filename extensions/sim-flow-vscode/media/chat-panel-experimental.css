@@ -151,6 +151,27 @@ body {
   font-weight: 600;
 }
 
+/* "Start session" variant of the project button. Tinted in the
+ * output palette so it reads as a primary action when the panel
+ * is otherwise idle. Reverts to the plain toolbar chrome once a
+ * session is live. */
+.x-toolbar-project-start {
+  border-color: var(--x-accent);
+  background: color-mix(
+    in srgb,
+    var(--x-palette-output) 18%,
+    var(--vscode-input-background)
+  );
+}
+
+.x-toolbar-project-start:hover {
+  background: color-mix(
+    in srgb,
+    var(--x-palette-output) 30%,
+    var(--vscode-input-background)
+  );
+}
+
 /* LLM connection indicator. Renders as a small status pill; the
  * leading character (● / ○) is part of the textContent so the
  * indicator stays legible if CSS fails to load. Three colour
