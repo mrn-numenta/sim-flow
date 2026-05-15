@@ -67,6 +67,35 @@ export interface StoredAutoSessionRecord {
 export interface AutoSessionDriveDelegate {
   markdown(session: ManagedAutoSessionState, text: string): void;
   requestTokensEstimate(session: ManagedAutoSessionState, tokens: number): void;
+  /**
+   * Experimental: structured prompt-stack message the orchestrator
+   * added before dispatching the next LLM turn. Surfaced as a user
+   * bubble in the experimental chat panel; ignored elsewhere.
+   */
+  llmRequest?(
+    session: ManagedAutoSessionState,
+    args: {
+      role: string;
+      content: string;
+      turnIndex: number;
+      requestId: string;
+    },
+  ): void;
+  /**
+   * Experimental: full assistant turn including the prose text and
+   * any native tool calls the LLM emitted. Lets the experimental
+   * chat panel render tool-only turns (where `text` is empty) and
+   * show the tool calls inline. When unset, the pump falls back to
+   * routing the prose through `markdown()`.
+   */
+  assistantTurn?(
+    session: ManagedAutoSessionState,
+    args: {
+      text: string;
+      finalChunk: boolean;
+      toolCalls: Array<{ id?: string; name: string; argumentsJson: string }>;
+    },
+  ): void;
   settled(
     session: ManagedAutoSessionState,
     result: PumpSettleResult,
@@ -396,6 +425,16 @@ export class AutoSessionManager implements vscode.Disposable {
       requestTokensEstimate: (tokens: number) => {
         delegate.requestTokensEstimate(session, tokens);
       },
+      llmRequest: delegate.llmRequest
+        ? (args) => {
+            delegate.llmRequest!(session, args);
+          }
+        : undefined,
+      assistantTurn: delegate.assistantTurn
+        ? (args) => {
+            delegate.assistantTurn!(session, args);
+          }
+        : undefined,
     };
     const result = await session.pump.settle(renderer);
     if (!this.isActive(session)) {

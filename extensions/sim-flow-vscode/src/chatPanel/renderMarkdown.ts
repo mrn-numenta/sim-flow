@@ -1,4 +1,25 @@
+// Markdown -> sanitized HTML -> DocumentFragment, with Shiki code
+// highlighting wired in on the browser side.
+//
+// Shape:
+//   - `renderMarkdownHtml(text)` returns the raw markdown-it output. Used
+//     by tests and any caller that wants the HTML string. No Shiki, no
+//     DOMPurify -- safe to call from Node.
+//   - `renderMarkdownFragment(text)` returns a sanitized DocumentFragment
+//     with Shiki-highlighted code blocks (if the highlighter is ready).
+//     Browser-only.
+//   - `initShiki()` kicks off the async highlighter init. The webview
+//     calls this on boot and re-renders when it resolves so previously-
+//     plain fences pick up colors.
+
+import DOMPurify from "dompurify";
 import MarkdownIt from "markdown-it";
+import {
+  createHighlighter,
+  type BundledLanguage,
+  type BundledTheme,
+  type Highlighter,
+} from "shiki";
 
 const markdown = MarkdownIt({
   html: false,
@@ -10,58 +31,185 @@ const markdown = MarkdownIt({
 markdown.renderer.rules.softbreak = () => "\n";
 markdown.renderer.rules.hardbreak = () => "<br>";
 
-markdown.renderer.rules.link_open = (tokens, index, options, _env, self) => {
-  const href = tokens[index]?.attrGet("href");
-  if (!href || !isSafeMarkdownHref(href)) {
-    tokens[index]?.attrSet("href", "#");
+const ALLOWED_TAGS = [
+  "a",
+  "blockquote",
+  "br",
+  "code",
+  "del",
+  "em",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "hr",
+  "li",
+  "ol",
+  "p",
+  "pre",
+  "span",
+  "strong",
+  "table",
+  "tbody",
+  "td",
+  "th",
+  "thead",
+  "tr",
+  "ul",
+];
+
+// `class` + `style` are allowed so Shiki's token spans survive
+// sanitization (Shiki paints colors via inline styles). DOMPurify's
+// CSS allow-list still scrubs `style` for javascript: / expression()
+// payloads, so this isn't a free pass.
+const ALLOWED_ATTR = ["href", "target", "rel", "class", "style", "tabindex"];
+
+let purifyHooksInstalled = false;
+function ensurePurifyHooks(): void {
+  if (purifyHooksInstalled) {
+    return;
   }
-  tokens[index]?.attrSet("target", "_blank");
-  tokens[index]?.attrSet("rel", "noreferrer noopener");
-  return self.renderToken(tokens, index, options);
-};
-
-const ALLOWED_TAGS = new Set([
-  "A",
-  "BLOCKQUOTE",
-  "BR",
-  "CODE",
-  "DEL",
-  "EM",
-  "H1",
-  "H2",
-  "H3",
-  "H4",
-  "H5",
-  "H6",
-  "HR",
-  "LI",
-  "OL",
-  "P",
-  "PRE",
-  "STRONG",
-  "TABLE",
-  "TBODY",
-  "TD",
-  "TH",
-  "THEAD",
-  "TR",
-  "UL",
-]);
-
-const ALLOWED_ATTRS = new Map<string, Set<string>>([
-  ["A", new Set(["href", "target", "rel"])],
-  ["CODE", new Set(["class"])],
-]);
+  purifyHooksInstalled = true;
+  DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+    if (!(node instanceof Element)) {
+      return;
+    }
+    if (node.tagName !== "A") {
+      return;
+    }
+    const href = node.getAttribute("href");
+    if (!href || !isSafeMarkdownHref(href)) {
+      node.removeAttribute("href");
+      node.removeAttribute("target");
+      node.removeAttribute("rel");
+      return;
+    }
+    node.setAttribute("target", "_blank");
+    node.setAttribute("rel", "noreferrer noopener");
+  });
+}
 
 export function renderMarkdownHtml(text: string): string {
   return markdown.render(normalizeMarkdownInput(text));
 }
 
 export function renderMarkdownFragment(text: string): DocumentFragment {
-  const template = document.createElement("template");
-  template.innerHTML = renderMarkdownHtml(text);
-  sanitizeFragment(template.content);
-  return template.content;
+  ensurePurifyHooks();
+  const html = renderMarkdownHtml(text);
+  const sanitized = DOMPurify.sanitize(html, {
+    ALLOWED_TAGS,
+    ALLOWED_ATTR,
+    RETURN_DOM_FRAGMENT: true,
+  }) as unknown as DocumentFragment;
+  applyShikiHighlight(sanitized);
+  return sanitized;
+}
+
+// Pre-bundled language + theme set. Add languages here as they come up
+// in chat transcripts; each entry pulls a small grammar JSON into the
+// webview bundle.
+const SHIKI_LANGS: BundledLanguage[] = [
+  "bash",
+  "c",
+  "cpp",
+  "css",
+  "diff",
+  "dockerfile",
+  "go",
+  "html",
+  "java",
+  "javascript",
+  "json",
+  "make",
+  "markdown",
+  "python",
+  "rust",
+  "shellscript",
+  "sql",
+  "system-verilog",
+  "toml",
+  "tsx",
+  "typescript",
+  "verilog",
+  "yaml",
+];
+const SHIKI_THEMES: BundledTheme[] = ["github-dark", "github-light"];
+
+let highlighter: Highlighter | null = null;
+let highlighterPromise: Promise<Highlighter> | null = null;
+
+/**
+ * Kick off the Shiki highlighter once. Returns the same promise on
+ * subsequent calls. The webview awaits this at boot and triggers a
+ * re-render when it resolves so any code blocks rendered as plain
+ * `<pre><code>` get repainted with token colors.
+ */
+export function initShiki(): Promise<Highlighter> {
+  if (highlighterPromise) {
+    return highlighterPromise;
+  }
+  highlighterPromise = createHighlighter({
+    themes: SHIKI_THEMES,
+    langs: SHIKI_LANGS,
+  }).then((hl) => {
+    highlighter = hl;
+    return hl;
+  });
+  return highlighterPromise;
+}
+
+function applyShikiHighlight(root: ParentNode): void {
+  if (!highlighter) {
+    return;
+  }
+  const isDark =
+    document.body.classList.contains("vscode-dark") ||
+    document.body.classList.contains("vscode-high-contrast");
+  const theme: BundledTheme = isDark ? "github-dark" : "github-light";
+  const blocks = root.querySelectorAll("pre > code");
+  for (const code of Array.from(blocks)) {
+    const lang = inferLang(code as HTMLElement);
+    if (!lang || !SHIKI_LANGS.includes(lang as BundledLanguage)) {
+      continue;
+    }
+    const src = code.textContent ?? "";
+    let html: string;
+    try {
+      html = highlighter.codeToHtml(src, {
+        lang: lang as BundledLanguage,
+        theme,
+      });
+    } catch {
+      continue;
+    }
+    const pre = code.parentElement;
+    if (!pre) {
+      continue;
+    }
+    const tpl = document.createElement("template");
+    tpl.innerHTML = html;
+    const replacement = tpl.content.firstElementChild;
+    if (!replacement) {
+      continue;
+    }
+    // Shiki emits inline `background-color` + `color` on the <pre>
+    // that bakes in its own theme background. Drop those so the
+    // bubble's existing dark-on-light styling shows through; keep the
+    // per-token span colors, which carry the actual syntax info.
+    replacement.removeAttribute("style");
+    pre.replaceWith(replacement);
+  }
+}
+
+function inferLang(code: HTMLElement): string | null {
+  for (const cls of Array.from(code.classList)) {
+    if (cls.startsWith("language-")) {
+      return cls.slice("language-".length);
+    }
+  }
+  return null;
 }
 
 export function isSafeMarkdownHref(href: string): boolean {
@@ -81,40 +229,4 @@ export function isSafeMarkdownHref(href: string): boolean {
 
 function normalizeMarkdownInput(text: string): string {
   return text.replace(/\r\n?/g, "\n");
-}
-
-function sanitizeFragment(fragment: DocumentFragment): void {
-  const walker = document.createTreeWalker(fragment, NodeFilter.SHOW_ELEMENT);
-  const elements: Element[] = [];
-  let current = walker.nextNode();
-  while (current) {
-    elements.push(current as Element);
-    current = walker.nextNode();
-  }
-
-  for (const element of elements) {
-    if (!ALLOWED_TAGS.has(element.tagName)) {
-      const replacement = document.createTextNode(element.textContent ?? "");
-      element.replaceWith(replacement);
-      continue;
-    }
-    sanitizeAttributes(element);
-  }
-}
-
-function sanitizeAttributes(element: Element): void {
-  const allowedAttrs = ALLOWED_ATTRS.get(element.tagName) ?? new Set<string>();
-  for (const attr of Array.from(element.attributes)) {
-    if (!allowedAttrs.has(attr.name)) {
-      element.removeAttribute(attr.name);
-    }
-  }
-  if (element.tagName === "A") {
-    const href = element.getAttribute("href");
-    if (!href || !isSafeMarkdownHref(href)) {
-      element.removeAttribute("href");
-      element.removeAttribute("target");
-      element.removeAttribute("rel");
-    }
-  }
 }

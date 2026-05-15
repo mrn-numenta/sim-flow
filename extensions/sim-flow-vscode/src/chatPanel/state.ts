@@ -110,6 +110,72 @@ export function appendUserPrompt(
   };
 }
 
+/**
+ * Experimental-only: append a user-role entry without creating a
+ * paired assistant placeholder. Used to surface each
+ * orchestrator-emitted `llm-request` message (system / user / tool
+ * role) as its own bubble in the chat panel transcript. The assistant
+ * turn that follows is appended separately when the LLM responds.
+ */
+export function appendOrchestratorUserEntry(
+  state: ChatConversationState,
+  body: string,
+  title: string,
+  meta: string,
+): { state: ChatConversationState; userId: string } {
+  const userId = entryId(state.nextId);
+  return {
+    userId,
+    state: {
+      transcript: [
+        ...state.transcript,
+        {
+          id: userId,
+          kind: "user",
+          title,
+          body,
+          meta,
+        },
+      ],
+      nextId: state.nextId + 1,
+    },
+  };
+}
+
+/**
+ * Experimental-only: append a completed assistant entry carrying the
+ * full turn body in one shot (prose + any inline tool-call markdown
+ * already merged). Unlike `appendAssistantPlaceholder + chunk`, this
+ * yields a non-streaming entry immediately, which matches how
+ * orchestrator turns arrive (one `assistant-text` event per turn with
+ * `final_chunk = true`).
+ */
+export function appendAssistantTurnEntry(
+  state: ChatConversationState,
+  body: string,
+  meta: string,
+): { state: ChatConversationState; assistantId: string } {
+  const assistantId = entryId(state.nextId);
+  return {
+    assistantId,
+    state: {
+      transcript: [
+        ...state.transcript,
+        {
+          id: assistantId,
+          kind: "assistant",
+          title: "Assistant",
+          body,
+          meta,
+          streaming: false,
+          responseTokensEstimate: estimateTextTokens(body),
+        },
+      ],
+      nextId: state.nextId + 1,
+    },
+  };
+}
+
 export function appendAssistantPlaceholder(
   state: ChatConversationState,
   title: string,

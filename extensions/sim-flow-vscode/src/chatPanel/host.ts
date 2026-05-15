@@ -33,7 +33,9 @@ import {
 import {
   appendAssistantChunk,
   appendAssistantPlaceholder,
+  appendAssistantTurnEntry,
   appendNote,
+  appendOrchestratorUserEntry,
   appendUserPrompt,
   clearConversationState,
   completeAssistantTurn,
@@ -121,14 +123,35 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   ) {
     this.disposables.push(
       vscode.workspace.onDidChangeConfiguration((event) => {
-        if (
+        if (event.affectsConfiguration("sim-flow.dashboard.experimentalUi")) {
+          // Swap the webview HTML so the experimental / standard
+          // chat assets are reloaded. The full state-update fires
+          // afterwards via refresh().
+          if (this.view) {
+            this.view.webview.html = this.renderHtml(this.view.webview);
+          }
+          void this.refresh();
+          return;
+        }
+        const llmSettingChanged =
           event.affectsConfiguration("sim-flow.llm.source") ||
           event.affectsConfiguration("sim-flow.llm.model") ||
+          event.affectsConfiguration("sim-flow.llm.modelFamily") ||
+          event.affectsConfiguration("sim-flow.llm.runtimeProfile") ||
+          event.affectsConfiguration("sim-flow.llm.servers") ||
           event.affectsConfiguration("sim-flow.llm.verbose") ||
           event.affectsConfiguration("sim-flow.llm.ollama.baseUrl") ||
-          event.affectsConfiguration("sim-flow.llm.lmstudio.baseUrl")
-        ) {
+          event.affectsConfiguration("sim-flow.llm.lmstudio.baseUrl");
+        if (llmSettingChanged) {
           void this.refresh();
+          // The orchestrator child was spawned with the old CLI argv
+          // and stays bound to it -- changing the setting in the
+          // dashboard won't reach the live process. Prompt the user
+          // to reconnect so a fresh orchestrator picks up the new
+          // value. No-op when nothing's connected.
+          void this.promptReconnectIfLive(
+            "LLM settings changed.",
+          );
         }
       }),
       vscode.window.onDidChangeActiveTextEditor(() => {
@@ -428,20 +451,66 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     const context = await this.readPanelContext();
     let conversation = this.readConversation(context.projectDir);
 
-    if (this.activePump?.projectDir === context.projectDir) {
-      if (this.activePump.stopRequested) {
-        return;
-      }
-      this.activePump.stopRequested = true;
-      conversation = appendNote(
-        conversation,
-        "Stopping session",
-        "Cancellation requested for the running sim-flow session.",
-      );
-      await this.persistConversation(context.projectDir, conversation);
-      await this.postState(context, conversation);
-      await this.autoSessions.cancel(this.activePump);
+    if (this.activePump?.projectDir !== context.projectDir) {
+      return;
     }
+    if (this.activePump.stopRequested) {
+      return;
+    }
+    const session = this.activePump;
+    session.stopRequested = true;
+    session.awaitingInput = false;
+    conversation = appendNote(
+      conversation,
+      "Stopping session",
+      "Cancellation requested for the running sim-flow session.",
+    );
+    await this.persistConversation(context.projectDir, conversation);
+    await this.postState(context, conversation);
+
+    // Send `cancel` first so the orchestrator can finish cleanly if
+    // it's parked at request-user-input. Then escalate to
+    // shutdown -> SIGTERM -> SIGKILL via `disconnectWithEscalation`
+    // -- the soft cancel doesn't reach a child that's blocked inside
+    // a synchronous LLM dispatch (the wire reader only services
+    // events between turns), so the only reliable way to interrupt
+    // a mid-LLM-call run is to terminate the process.
+    session.pump.cancel();
+    let outcome: "clean" | "sigterm" | "sigkill" | "already-gone" | undefined;
+    try {
+      // Tight timeouts: when the orchestrator is mid-LLM-call the
+      // socket reader can't service `shutdown`, so the default 5s
+      // clean wait is dead time the user is staring at. 1s is enough
+      // for the in-between-turns case and keeps the worst-case stop
+      // latency to ~2s (1s soft + 1s SIGTERM + immediate SIGKILL).
+      outcome = await session.pump.disconnectWithEscalation?.(1_000, 1_000);
+    } catch (err) {
+      console.error(
+        `sim-flow: chat-panel stop escalation failed: ${(err as Error).message ?? String(err)}`,
+      );
+    }
+    // The normal teardown path: when the orchestrator settles cleanly
+    // (clean exit OR SIGTERM-induced exit), the drive loop's
+    // `delegate.settled(...)` fires `onManagedSessionSettled`, which
+    // appends "Stopped the running sim-flow session." and clears the
+    // active session. We only need to step in when that path didn't
+    // run -- typically a SIGKILL where the child dies without emitting
+    // a final settle event. Test for that by checking whether the
+    // session is still pinned as the active pump.
+    if (this.activePump !== session) {
+      return;
+    }
+    await this.autoSessions.clearIfActive(session);
+    let finalConversation = this.readConversation(context.projectDir);
+    finalConversation = appendNote(
+      finalConversation,
+      "Session stopped",
+      outcome === "sigkill"
+        ? "The orchestrator did not exit after shutdown / SIGTERM and was killed (SIGKILL)."
+        : "Stopped the running sim-flow session.",
+    );
+    await this.persistConversation(context.projectDir, finalConversation);
+    await this.postState(context, finalConversation);
   }
 
   /**
@@ -782,6 +851,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (llmConfig.model) {
       args.push("--llm-model", llmConfig.model);
     }
+    if (llmConfig.baseUrl) {
+      // Custom `server:<name>` entries from `sim-flow.llm.servers`
+      // set this -- without forwarding, the orchestrator falls back
+      // to the backend's conventional default port (e.g. vLLM 8000)
+      // even though the user picked a different host:port row in the
+      // dashboard's Source dropdown.
+      args.push("--llm-base-url", llmConfig.baseUrl);
+    }
     args.push("--max-auto-iters", String(maxWorkIters));
     args.push("--max-critique-iters", String(maxCritiqueIters));
     args.push(
@@ -895,6 +972,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     args.push("--llm-backend", llmConfig.source);
     if (llmConfig.model) {
       args.push("--llm-model", llmConfig.model);
+    }
+    if (llmConfig.baseUrl) {
+      args.push("--llm-base-url", llmConfig.baseUrl);
     }
 
     const context = await this.readPanelContextForProject(ctx.projectDir);
@@ -1183,10 +1263,101 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       requestTokensEstimate: (session, tokens) => {
         this.recordPumpRequestTokensEstimate(session, tokens);
       },
+      llmRequest: (session, args) => {
+        if (!isExperimentalChatPanel()) {
+          // Standard panel doesn't render the running prompt stack;
+          // drop the event so we don't pollute its transcript.
+          return;
+        }
+        this.appendOrchestratorLlmRequest(session, args);
+      },
+      assistantTurn: (session, args) => {
+        if (!isExperimentalChatPanel()) {
+          // Standard panel relies on the legacy markdown chunking
+          // path; route the prose back through it so behavior is
+          // unchanged for users who haven't opted into the
+          // experimental UI. Tool-only turns (text === "") fall on
+          // the floor here -- the standard panel never showed them
+          // either.
+          if (args.text.length > 0) {
+            this.appendPumpMarkdown(session, args.text);
+          }
+          return;
+        }
+        this.appendOrchestratorAssistantTurn(session, args);
+      },
       settled: async (session, result) => {
         await this.onManagedSessionSettled(session, result);
       },
     };
+  }
+
+  /**
+   * Experimental: render each orchestrator-emitted prompt-stack
+   * message as its own user-role bubble in the transcript. The
+   * orchestrator filters out System messages on its end, so we
+   * receive User and Tool roles here.
+   */
+  private appendOrchestratorLlmRequest(
+    session: ManagedAutoSessionState,
+    args: { role: string; content: string; turnIndex: number; requestId: string },
+  ): void {
+    if (!this.activePump || this.activePump !== session) {
+      return;
+    }
+    const title = labelForLlmRole(args.role);
+    const meta = `orchestrator-${args.role}`;
+    // Annotate non-user roles with a label so the bubble is
+    // self-describing even when the panel collapses titles. "User"
+    // messages render verbatim -- they look natural without a tag.
+    const body =
+      args.role === "user" ? args.content : `**${title}:**\n\n${args.content}`;
+    let conversation = this.readConversation(session.projectDir);
+    const { state: next } = appendOrchestratorUserEntry(
+      conversation,
+      body,
+      title,
+      meta,
+    );
+    conversation = next;
+    this.rememberConversation(session.projectDir, conversation);
+    void this.postStateForProject(session.projectDir, conversation);
+  }
+
+  /**
+   * Experimental: render a single LLM turn (prose + native tool
+   * calls) as one completed assistant bubble. The orchestrator emits
+   * one `assistant-text` per turn with `final_chunk = true`, so we
+   * commit the entry immediately instead of chunking.
+   */
+  private appendOrchestratorAssistantTurn(
+    session: ManagedAutoSessionState,
+    args: {
+      text: string;
+      finalChunk: boolean;
+      toolCalls: Array<{ id?: string; name: string; argumentsJson: string }>;
+    },
+  ): void {
+    if (!this.activePump || this.activePump !== session) {
+      return;
+    }
+    if (args.text.length === 0 && args.toolCalls.length === 0) {
+      return;
+    }
+    const body = formatAssistantTurnBody(args.text, args.toolCalls);
+    let conversation = this.readConversation(session.projectDir);
+    // A new turn arrived; any in-flight legacy placeholder is stale.
+    // Drop the session's assistantId cursor so subsequent calls don't
+    // accidentally chunk into the now-finalised entry.
+    session.assistantId = null;
+    const { state: next } = appendAssistantTurnEntry(
+      conversation,
+      body,
+      "orchestrator",
+    );
+    conversation = next;
+    this.rememberConversation(session.projectDir, conversation);
+    void this.postStateForProject(session.projectDir, conversation);
   }
 
   private appendPumpMarkdown(
@@ -1513,6 +1684,84 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     await this.persistConversation(session.projectDir, conversation);
   }
 
+  /**
+   * Coalescing guard for the reconnect prompt: the user can change
+   * several settings in quick succession (or save a JSON edit that
+   * touches multiple keys at once), each of which fires its own
+   * `onDidChangeConfiguration` event. Without this guard we'd queue a
+   * dialog per event and the user would get an avalanche of identical
+   * prompts. The flag clears once the current prompt is dismissed.
+   */
+  private reconnectPromptInFlight = false;
+
+  /**
+   * When the user edits an LLM-related setting while an orchestrator
+   * is running, the live child process keeps its old argv and stays
+   * bound to the previous values. Surface a one-click "Reconnect"
+   * prompt so the new settings actually take effect. No-op when
+   * nothing's connected, when the current session is a read-only
+   * viewer (we don't own it), or when a previous prompt is still on
+   * screen.
+   */
+  private async promptReconnectIfLive(reason: string): Promise<void> {
+    if (this.reconnectPromptInFlight) {
+      return;
+    }
+    const active = this.autoSessions.getActiveSession();
+    if (!active || active.pump.isViewer) {
+      return;
+    }
+    this.reconnectPromptInFlight = true;
+    try {
+      const choice = await vscode.window.showInformationMessage(
+        `sim-flow: ${reason} Reconnect to apply the new settings.`,
+        { modal: false },
+        "Reconnect",
+      );
+      // Re-check `active` under the same project -- the user may
+      // have disconnected manually between the change firing and
+      // their click.
+      const stillActive = this.autoSessions.getActiveSession();
+      if (
+        choice !== "Reconnect" ||
+        !stillActive ||
+        stillActive.projectDir !== active.projectDir
+      ) {
+        return;
+      }
+      await this.reconnectActivePump(stillActive);
+    } finally {
+      this.reconnectPromptInFlight = false;
+    }
+  }
+
+  /**
+   * Stop the running orchestrator and re-launch it with the same
+   * session shape (auto / step) and the same launch parameters
+   * (spec path / step ref). The fresh process reads the now-current
+   * `sim-flow.llm.*` configuration via `buildPumpLlmConfig`.
+   */
+  private async reconnectActivePump(
+    session: ManagedAutoSessionState,
+  ): Promise<void> {
+    const projectDir = session.projectDir;
+    const sessionMode = session.sessionMode;
+    const stepRef = session.stepRef;
+    const launchSpecPath = session.launchSpecPath;
+    await this.stopActivePumpSession(
+      session,
+      "Reconnecting",
+      "Stopped the running sim-flow session to apply the updated LLM settings.",
+    );
+    if (sessionMode === "auto") {
+      await this.launchAutoSession(launchSpecPath, projectDir);
+      return;
+    }
+    if (sessionMode === "step" && stepRef) {
+      await this.launchStepSession(stepRef.step, stepRef.kind, projectDir);
+    }
+  }
+
   private async enqueuePost(task: () => Promise<void>): Promise<void> {
     const next = this.postChain.catch(() => undefined).then(async () => {
       if (this.disposed || !this.view) {
@@ -1526,11 +1775,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private renderHtml(webview: vscode.Webview): string {
     const nonce = randomNonce();
+    const experimental =
+      vscode.workspace
+        .getConfiguration("sim-flow")
+        .get<boolean>("dashboard.experimentalUi") === true;
     const scriptUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.extensionUri, "dist", "webview", "chatPanel", "panel.js"),
+      vscode.Uri.joinPath(
+        this.extensionUri,
+        "dist",
+        "webview",
+        "chatPanel",
+        experimental ? "panelExperimental.js" : "panel.js",
+      ),
     );
     const styleUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.extensionUri, "media", "chat-panel.css"),
+      vscode.Uri.joinPath(
+        this.extensionUri,
+        "media",
+        experimental ? "chat-panel-experimental.css" : "chat-panel.css",
+      ),
     );
     const csp = [
       "default-src 'none'",
@@ -1903,11 +2166,16 @@ function buildPumpLlmConfig(
   config: vscode.WorkspaceConfiguration,
 ): PumpLlmConfig {
   const settings = readPanelSettings();
+  // Pass the RAW source ("server:<name>" when applicable) so the
+  // inner resolver actually looks up the entry's host/port/model.
+  // `settings.source` is already the resolved tag (e.g. "vllm"),
+  // which would make the inner `resolveLlmSource` a no-op and silently
+  // drop the user's custom baseUrl + per-server model overrides.
   return buildResolvedPumpLlmConfig(
     ctx,
     secrets,
     config,
-    settings.source as LlmSource,
+    settings.rawSource as LlmSource,
     settings.model.trim() || undefined,
   );
 }
@@ -1998,4 +2266,158 @@ function mapBackendToSourceTag(backend: string): LlmSourceTag {
     default:
       return "openai";
   }
+}
+
+/** True when the user has opted into the experimental chat panel. */
+function isExperimentalChatPanel(): boolean {
+  return (
+    vscode.workspace
+      .getConfiguration("sim-flow")
+      .get<boolean>("dashboard.experimentalUi") === true
+  );
+}
+
+/** Human-readable label for an orchestrator-emitted prompt's role. */
+function labelForLlmRole(role: string): string {
+  switch (role) {
+    case "user":
+      return "User";
+    case "tool":
+      return "Tool result";
+    case "system":
+      return "System";
+    case "assistant":
+      return "Assistant (replay)";
+    default:
+      return role.length > 0
+        ? role.slice(0, 1).toUpperCase() + role.slice(1)
+        : "Prompt";
+  }
+}
+
+/**
+ * Format an LLM turn's prose + native tool calls into a single
+ * markdown body for the experimental chat panel. Prose renders
+ * as-is. Tool calls render as a bulleted list of human-readable
+ * actions ("Read docs/spec.md") rather than the raw `name` + JSON
+ * args block -- the verb form makes a turn's intent legible at a
+ * glance, even on tool-heavy turns where there's no prose.
+ */
+function formatAssistantTurnBody(
+  text: string,
+  toolCalls: Array<{ id?: string; name: string; argumentsJson: string }>,
+): string {
+  const parts: string[] = [];
+  if (text.length > 0) {
+    parts.push(text);
+  }
+  if (toolCalls.length > 0) {
+    const lines = toolCalls.map(
+      (c) => `- ${describeToolCall(c.name, c.argumentsJson)}`,
+    );
+    parts.push(lines.join("\n"));
+  }
+  return parts.join("\n\n");
+}
+
+/**
+ * Map a single tool call onto a one-line, verb-first description of
+ * what the LLM is asking the orchestrator to do. The arg shapes are
+ * pinned to the orchestrator's tool catalog at
+ * `tools/sim-flow/src/__internal/session/tools/`; if the wire shape
+ * changes, the matching arm below needs an update.
+ *
+ * Unknown tools fall back to `` `name` `` so the user still sees a
+ * marker for the call even when we don't have a pretty form -- better
+ * than swallowing it silently.
+ */
+function describeToolCall(name: string, argumentsJson: string): string {
+  const args = parseToolArgs(argumentsJson);
+  const path = stringArg(args, "path");
+  switch (name) {
+    case "read_file":
+      return path ? `Read \`${path}\`` : "Read file";
+    case "write_file":
+      return path ? `Write \`${path}\`` : "Write file";
+    case "edit_file":
+      return path ? `Edit \`${path}\`` : "Edit file";
+    case "delete_file":
+      return path ? `Delete \`${path}\`` : "Delete file";
+    case "list_dir":
+      return path ? `List \`${path}\`` : "List directory";
+    case "search": {
+      const pattern = stringArg(args, "pattern");
+      if (pattern && path) {
+        return `Search for \`${pattern}\` in \`${path}\``;
+      }
+      if (pattern) {
+        return `Search for \`${pattern}\``;
+      }
+      return "Search";
+    }
+    case "run_cargo": {
+      const command = stringArg(args, "command");
+      return command ? `Run \`cargo ${command}\`` : "Run cargo";
+    }
+    case "declare_hypothesis": {
+      const rationale = stringArg(args, "rationale");
+      return rationale
+        ? `Declare hypothesis: ${truncate(rationale, 200)}`
+        : "Declare hypothesis";
+    }
+    case "declare_fix": {
+      const rationale = stringArg(args, "rationale");
+      return rationale
+        ? `Declare fix: ${truncate(rationale, 200)}`
+        : "Declare fix";
+    }
+    case "log_bug": {
+      const issue = stringArg(args, "issue");
+      const category = stringArg(args, "category");
+      if (issue && category) {
+        return `Log bug (${category}): ${truncate(issue, 200)}`;
+      }
+      if (issue) {
+        return `Log bug: ${truncate(issue, 200)}`;
+      }
+      return "Log bug";
+    }
+    case "resolve_bug": {
+      const resolution = stringArg(args, "resolution");
+      return resolution
+        ? `Resolve bug: ${truncate(resolution, 200)}`
+        : "Resolve bug";
+    }
+    case "record_run": {
+      const description = stringArg(args, "description");
+      return description ? `Record run \`${description}\`` : "Record run";
+    }
+    default:
+      return `\`${name}\``;
+  }
+}
+
+function parseToolArgs(argumentsJson: string): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(argumentsJson);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // ignore -- treat as empty so callers fall back to the generic
+    // "no path / no args" branches below.
+  }
+  return {};
+}
+
+function stringArg(args: Record<string, unknown>, key: string): string | null {
+  const value = args[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function truncate(text: string, max: number): string {
+  if (text.length <= max) {
+    return text;
+  }
+  return `${text.slice(0, max - 1)}…`;
 }

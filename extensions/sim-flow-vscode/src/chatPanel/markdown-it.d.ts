@@ -24,6 +24,13 @@ declare module "markdown-it" {
     breaks?: boolean;
     linkify?: boolean;
     typographer?: boolean;
+    /**
+     * Custom code-block highlighter. Returns highlighted HTML or an
+     * empty string to let markdown-it emit its default `<pre><code>`
+     * wrapper. Returning a string that starts with `<pre` tells
+     * markdown-it to skip its own wrapper.
+     */
+    highlight?: (str: string, lang: string, attrs: string) => string;
   }
 
   export interface MarkdownItInstance {
