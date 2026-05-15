@@ -708,6 +708,22 @@ pub(crate) enum DbAction {
         #[arg(long)]
         json: bool,
     },
+    /// Read-only SQL escape hatch over the per-user global DB. Useful
+    /// for ad-hoc trend questions the named-report catalog doesn't
+    /// cover yet -- if a query becomes routine, promote it.
+    ///
+    /// `PRAGMA query_only=ON` is set on the connection before the SQL
+    /// runs, so INSERT / UPDATE / DELETE / DDL are rejected with a
+    /// readonly-database error. Results print as a left-aligned text
+    /// table by default; `--json` for machine-readable.
+    Query {
+        /// SQL to run. Single statement; multi-statement scripts are
+        /// not supported. Wrap in single quotes for the shell.
+        sql: String,
+        /// Emit machine-readable JSON instead of the text table.
+        #[arg(long)]
+        json: bool,
+    },
     /// One-shot importer for projects that pre-date the live mirror.
     /// Walks each given project's `.sim-flow/` directory and bulk-
     /// inserts every JSONL row and every `experiments.db` row into

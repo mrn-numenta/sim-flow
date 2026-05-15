@@ -2274,6 +2274,25 @@ fn db_cmd(cwd_project: &Path, action: &DbAction) -> sim_flow::Result<()> {
             }
             Ok(())
         }
+        DbAction::Query { sql, json } => {
+            let Some(db_path) = default_db_path() else {
+                return Err(sim_flow::Error::State(
+                    "global DB unavailable: directories::ProjectDirs returned None".to_string(),
+                ));
+            };
+            let mut db = GlobalDb::open(&db_path)?;
+            let (columns, rows) = db.query_read_only(sql)?;
+            if *json {
+                let value = serde_json::json!({
+                    "columns": columns,
+                    "rows": rows,
+                });
+                println!("{}", serde_json::to_string_pretty(&value).unwrap());
+            } else {
+                render_text_table(&columns, &rows);
+            }
+            Ok(())
+        }
         DbAction::Backfill {
             paths,
             force_tool_timings,
@@ -2350,6 +2369,69 @@ fn db_cmd(cwd_project: &Path, action: &DbAction) -> sim_flow::Result<()> {
             Ok(())
         }
     }
+}
+
+/// Render a 2-D string-cell table to stdout with auto-sized columns.
+/// Used by `db query` and (later) `db report` for tabular output.
+fn render_text_table(columns: &[String], rows: &[Vec<serde_json::Value>]) {
+    if columns.is_empty() {
+        println!("(no columns)");
+        return;
+    }
+    let stringify = |v: &serde_json::Value| -> String {
+        match v {
+            serde_json::Value::Null => "NULL".to_string(),
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        }
+    };
+    let mut widths: Vec<usize> = columns.iter().map(|c| c.chars().count()).collect();
+    let mut formatted: Vec<Vec<String>> = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut cells: Vec<String> = Vec::with_capacity(columns.len());
+        for (i, cell) in row.iter().enumerate() {
+            let s = stringify(cell);
+            if i < widths.len() {
+                widths[i] = widths[i].max(s.chars().count());
+            }
+            cells.push(s);
+        }
+        formatted.push(cells);
+    }
+    // Cap any single column at 72 chars to keep wide TEXT cells from
+    // wrecking the layout; truncation is marked with an ellipsis.
+    let max_col_width = 72;
+    for w in &mut widths {
+        if *w > max_col_width {
+            *w = max_col_width;
+        }
+    }
+    let print_row = |cells: &[String]| {
+        let mut line = String::new();
+        for (i, cell) in cells.iter().enumerate() {
+            let mut display = cell.clone();
+            if display.chars().count() > widths[i] {
+                let head: String = display.chars().take(widths[i].saturating_sub(1)).collect();
+                display = format!("{head}…");
+            }
+            line.push_str(&format!("{display:<width$}", width = widths[i]));
+            if i + 1 < cells.len() {
+                line.push_str("  ");
+            }
+        }
+        println!("{}", line.trim_end());
+    };
+    print_row(columns);
+    let separators: Vec<String> = widths.iter().map(|w| "-".repeat(*w)).collect();
+    print_row(&separators);
+    for row in &formatted {
+        print_row(row);
+    }
+    println!(
+        "({} row{})",
+        rows.len(),
+        if rows.len() == 1 { "" } else { "s" }
+    );
 }
 
 #[derive(Default)]

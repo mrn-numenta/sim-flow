@@ -243,6 +243,66 @@ impl GlobalDb {
             .map_err(wrap_sqlite)
     }
 
+    /// Execute a read-only SQL query and return the columns + rows as
+    /// JSON values. Used by the `sim-flow db query` CLI.
+    ///
+    /// Sets `PRAGMA query_only=ON` on the connection before preparing
+    /// the statement; INSERT / UPDATE / DELETE / DDL are rejected by
+    /// SQLite with a readonly-database error. The pragma is reset on
+    /// return so subsequent writers on the same `GlobalDb` (e.g. when
+    /// the singleton itself is queried) aren't accidentally locked
+    /// out.
+    ///
+    /// SQLite values are mapped to JSON types: NULL -> `null`,
+    /// INTEGER -> `Number`, REAL -> `Number`, TEXT -> `String`, BLOB ->
+    /// base64-encoded `String` prefixed with `"base64:"` so the
+    /// caller can detect it.
+    pub fn query_read_only(
+        &mut self,
+        sql: &str,
+    ) -> Result<(Vec<String>, Vec<Vec<serde_json::Value>>)> {
+        use rusqlite::types::ValueRef;
+        self.conn
+            .pragma_update(None, "query_only", "ON")
+            .map_err(wrap_sqlite)?;
+        let result = (|| -> Result<(Vec<String>, Vec<Vec<serde_json::Value>>)> {
+            let mut stmt = self.conn.prepare(sql).map_err(wrap_sqlite)?;
+            let columns: Vec<String> =
+                stmt.column_names().iter().map(|s| (*s).to_string()).collect();
+            let column_count = columns.len();
+            let mut rows_iter = stmt.query([]).map_err(wrap_sqlite)?;
+            let mut out_rows: Vec<Vec<serde_json::Value>> = Vec::new();
+            while let Some(row) = rows_iter.next().map_err(wrap_sqlite)? {
+                let mut cells: Vec<serde_json::Value> = Vec::with_capacity(column_count);
+                for i in 0..column_count {
+                    let value_ref = row.get_ref(i).map_err(wrap_sqlite)?;
+                    let json = match value_ref {
+                        ValueRef::Null => serde_json::Value::Null,
+                        ValueRef::Integer(n) => serde_json::Value::Number(n.into()),
+                        ValueRef::Real(f) => serde_json::Number::from_f64(f)
+                            .map(serde_json::Value::Number)
+                            .unwrap_or(serde_json::Value::Null),
+                        ValueRef::Text(bytes) => {
+                            serde_json::Value::String(String::from_utf8_lossy(bytes).into_owned())
+                        }
+                        ValueRef::Blob(bytes) => serde_json::Value::String(format!(
+                            "base64:{}",
+                            base64_encode_bytes(bytes)
+                        )),
+                    };
+                    cells.push(json);
+                }
+                out_rows.push(cells);
+            }
+            Ok((columns, out_rows))
+        })();
+        // Reset the pragma so subsequent writes via this connection
+        // aren't blocked. Errors here are non-fatal -- the connection
+        // will be dropped at end of CLI invocation anyway.
+        let _ = self.conn.pragma_update(None, "query_only", "OFF");
+        result
+    }
+
     /// Persisted per-source byte offset for `db backfill`. Used by
     /// the `tool_timings` import path (which can't dedup via a
     /// UNIQUE index because gate-driven rows have no stable identity)
@@ -266,12 +326,7 @@ impl GlobalDb {
     }
 
     /// Persist the byte offset reached by a `db backfill` pass.
-    pub fn set_backfill_offset(
-        &self,
-        project_dir: &Path,
-        source: &str,
-        offset: u64,
-    ) -> Result<()> {
+    pub fn set_backfill_offset(&self, project_dir: &Path, source: &str, offset: u64) -> Result<()> {
         let key = backfill_offset_key(project_dir, source);
         self.conn
             .execute(
@@ -766,6 +821,43 @@ fn wrap_sqlite(source: rusqlite::Error) -> Error {
     Error::State(format!("global-db sqlite error: {source}"))
 }
 
+/// Minimal base64 encoder for BLOB cells in `query_read_only`. Keeps
+/// the dependency surface unchanged -- pulling in a base64 crate just
+/// for this tiny case isn't worth it.
+fn base64_encode_bytes(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    let mut i = 0;
+    while i + 3 <= bytes.len() {
+        let b0 = bytes[i] as u32;
+        let b1 = bytes[i + 1] as u32;
+        let b2 = bytes[i + 2] as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHABET[((triple >> 18) & 0x3f) as usize] as char);
+        out.push(ALPHABET[((triple >> 12) & 0x3f) as usize] as char);
+        out.push(ALPHABET[((triple >> 6) & 0x3f) as usize] as char);
+        out.push(ALPHABET[(triple & 0x3f) as usize] as char);
+        i += 3;
+    }
+    let rem = bytes.len() - i;
+    if rem == 1 {
+        let b0 = bytes[i] as u32;
+        out.push(ALPHABET[((b0 >> 2) & 0x3f) as usize] as char);
+        out.push(ALPHABET[((b0 << 4) & 0x3f) as usize] as char);
+        out.push('=');
+        out.push('=');
+    } else if rem == 2 {
+        let b0 = bytes[i] as u32;
+        let b1 = bytes[i + 1] as u32;
+        out.push(ALPHABET[((b0 >> 2) & 0x3f) as usize] as char);
+        out.push(ALPHABET[(((b0 << 4) | (b1 >> 4)) & 0x3f) as usize] as char);
+        out.push(ALPHABET[((b1 << 2) & 0x3f) as usize] as char);
+        out.push('=');
+    }
+    out
+}
+
 /// Defensive guard for the table / column names interpolated into
 /// `count()` / `latest_timestamp()` queries. Rusqlite's parameter
 /// binding doesn't cover identifiers, and the CLI passes them in from
@@ -1197,6 +1289,66 @@ mod tests {
             db.latest_timestamp("bugs", "opened_at").expect("latest ts"),
             Some("1700000010".to_string())
         );
+    }
+
+    #[test]
+    fn query_read_only_returns_rows_and_rejects_writes() {
+        use crate::__internal::bug_log::BugRecord;
+
+        let mut db = GlobalDb::open_in_memory().expect("open");
+        let project_dir = std::env::temp_dir();
+        db.record_bug(
+            &project_dir,
+            &BugRecord {
+                id: "bug-001".into(),
+                opened_at: "1700000000".into(),
+                closed_at: None,
+                step: "DM0".into(),
+                milestone: None,
+                category: "compile_error".into(),
+                issue: "x".into(),
+                events: Vec::new(),
+                resolution: None,
+                status: "open".into(),
+            },
+        )
+        .expect("record_bug");
+
+        let (cols, rows) = db
+            .query_read_only("SELECT category, count(*) FROM bugs GROUP BY category")
+            .expect("read query");
+        assert_eq!(cols, vec!["category".to_string(), "count(*)".to_string()]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0], serde_json::Value::String("compile_error".into()));
+        assert_eq!(rows[0][1], serde_json::Value::Number(1i64.into()));
+
+        // PRAGMA query_only blocks writes inside the closure.
+        let err = db
+            .query_read_only("DELETE FROM bugs")
+            .expect_err("write should be rejected");
+        assert!(
+            format!("{err}").contains("readonly"),
+            "expected readonly-rejection, got: {err}"
+        );
+
+        // After the closure the connection is back to read-write so
+        // subsequent writers on the singleton aren't locked out.
+        db.record_bug(
+            &project_dir,
+            &BugRecord {
+                id: "bug-002".into(),
+                opened_at: "1700000010".into(),
+                closed_at: None,
+                step: "DM0".into(),
+                milestone: None,
+                category: "compile_error".into(),
+                issue: "y".into(),
+                events: Vec::new(),
+                resolution: None,
+                status: "open".into(),
+            },
+        )
+        .expect("post-query write should succeed");
     }
 
     #[test]
