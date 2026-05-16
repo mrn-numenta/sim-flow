@@ -241,6 +241,20 @@ fn evaluate_one(project_dir: &Path, check: &GateCheck) -> Result<Option<GateFail
             args,
             description,
         } => {
+            // Safety contract: `cmd` is NOT validated here. It is
+            // safe today because every `GateCheck::Shell` value in
+            // existence is constructed from compile-time string
+            // literals in `steps/{dm,ds,sv}.rs` -- the
+            // StepDescriptor::gate_checks fields are populated
+            // exclusively from the Rust source step registry, not
+            // from any project-controlled file. Do NOT change that
+            // without adding a cmd allowlist: shells out via
+            // Command::new + args (not `sh -c`), so the
+            // command-injection surface is the `cmd` string
+            // itself, and an LLM-authored milestone or
+            // `state.toml` value as `cmd` would let the agent run
+            // arbitrary binaries. See orchestrator audit #19
+            // (2026-05-16).
             // Record per-gate-shell wall-clock timing alongside the
             // existing pass/fail outcome. The timing row lands in the
             // project-local `tool-timings.jsonl` and (best-effort) the
