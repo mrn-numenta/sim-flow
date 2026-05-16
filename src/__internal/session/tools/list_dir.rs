@@ -100,3 +100,95 @@ fn list_framework_roots(ctx: &ToolContext) -> ToolResult {
     rows.sort();
     ToolResult::ok(format!("[list_dir `fw:`]\n\n{}", rows.join("\n")))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn ctx_with_project(project: &std::path::Path) -> ToolContext<'_> {
+        ToolContext::new(project, None, None, None)
+    }
+
+    #[test]
+    fn list_dir_missing_path_arg_returns_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_project(tmp.path());
+        let r = ListDirTool.invoke(&ctx, &json!({})).unwrap();
+        assert!(!r.ok);
+        assert!(r.display.contains("missing"));
+    }
+
+    #[test]
+    fn list_dir_at_project_root_lists_top_level_entries_sorted_with_kind() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("subdir")).unwrap();
+        std::fs::write(tmp.path().join("file_a.txt"), "a").unwrap();
+        std::fs::write(tmp.path().join("file_b.md"), "b").unwrap();
+        let ctx = ctx_with_project(tmp.path());
+        let r = ListDirTool.invoke(&ctx, &json!({ "path": "." })).unwrap();
+        assert!(r.ok);
+        assert!(r.display.contains("[dir] subdir"));
+        assert!(r.display.contains("[file] file_a.txt"));
+        assert!(r.display.contains("[file] file_b.md"));
+        // Sorted: file_a < file_b < subdir (asc).
+        let a = r.display.find("file_a.txt").unwrap();
+        let b = r.display.find("file_b.md").unwrap();
+        assert!(a < b, "sorted alphabetically");
+    }
+
+    #[test]
+    fn list_dir_unreadable_path_returns_err_with_path_in_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_project(tmp.path());
+        let r = ListDirTool
+            .invoke(&ctx, &json!({ "path": "no/such/dir" }))
+            .unwrap();
+        assert!(!r.ok);
+        assert!(r.display.contains("no/such/dir"));
+    }
+
+    #[test]
+    fn list_dir_fw_with_no_framework_root_or_docs_returns_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_project(tmp.path()); // framework_root=None, docs=None
+        let r = ListDirTool.invoke(&ctx, &json!({ "path": "fw:" })).unwrap();
+        assert!(!r.ok);
+        assert!(r.display.contains("fw:"));
+    }
+
+    #[test]
+    fn list_dir_fw_with_framework_root_lists_src_and_optional_cargo_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fw_root = tmp.path().join("fw-root");
+        std::fs::create_dir(&fw_root).unwrap();
+        std::fs::write(fw_root.join("Cargo.toml"), "[workspace]\n").unwrap();
+        let ctx = ToolContext::new(tmp.path(), None, Some(&fw_root), None);
+        let r = ListDirTool.invoke(&ctx, &json!({ "path": "fw:" })).unwrap();
+        assert!(r.ok);
+        assert!(r.display.contains("[dir] src"));
+        assert!(r.display.contains("[file] Cargo.toml"));
+    }
+
+    #[test]
+    fn list_dir_fw_with_docs_root_includes_api_dir_in_listing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let docs_root = tmp.path().join("docs-root");
+        std::fs::create_dir(&docs_root).unwrap();
+        let ctx = ToolContext::new(tmp.path(), None, None, Some(&docs_root));
+        let r = ListDirTool.invoke(&ctx, &json!({ "path": "fw:" })).unwrap();
+        assert!(r.ok);
+        assert!(r.display.contains("[dir] api"));
+    }
+
+    #[test]
+    fn list_dir_lib_prefix_with_unconfigured_library_root_returns_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_project(tmp.path()); // library_root=None
+        let r = ListDirTool
+            .invoke(&ctx, &json!({ "path": "lib:" }))
+            .unwrap();
+        assert!(!r.ok);
+        assert!(r.display.contains("lib:") || r.display.contains("not configured"));
+    }
+}
