@@ -45,7 +45,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             true,
             *json,
         ),
-        Command::Reset { step } => reset(&project_dir, step),
+        Command::Reset { step, force } => reset(&project_dir, step, *force),
         Command::ConvertSv { force } => convert_sv(&project_dir, *force),
         Command::Bugs { action } => bugs_cmd(&project_dir, action),
         Command::Config { action } => config_cmd(&project_dir, action),
@@ -1883,7 +1883,7 @@ fn bugs_cmd(project: &Path, action: &BugsAction) -> sim_flow::Result<()> {
     }
 }
 
-fn reset(project: &Path, step_id: &str) -> sim_flow::Result<()> {
+fn reset(project: &Path, step_id: &str, force: bool) -> sim_flow::Result<()> {
     let dot = dot_dir(project);
     let mut state = State::load(&dot)?;
     let registry = registry_for(state.flow);
@@ -1894,6 +1894,17 @@ fn reset(project: &Path, step_id: &str) -> sim_flow::Result<()> {
             state.flow.as_str()
         )));
     };
+    // Gate the destructive cleanup behind --force. Resetting `DM2a`
+    // from `DM4b` deletes every downstream artifact (the entire
+    // model + testbench + perf body of work) with no opportunity to
+    // abort. A misclick from the dashboard's Reset button hit the
+    // same path. See orchestrator audit #15 (2026-05-16).
+    if !force {
+        let cleared = order.len() - idx;
+        return Err(sim_flow::Error::InvalidStep(format!(
+            "reset: refusing to delete {cleared} step(s) of artifacts from `{step_id}` forward without `--force`. Re-run with `sim-flow reset {step_id} --force` to confirm."
+        )));
+    }
     // Delete every step's work artifacts AND critique file for the
     // reset target and downstream steps BEFORE we rewind state, so a
     // failure mid-cleanup leaves the gate flags intact (the user can

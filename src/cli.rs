@@ -65,10 +65,20 @@ pub(crate) enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Reset a step and cascade to downstream gates.
+    /// Reset a step and cascade to downstream gates. Deletes every
+    /// artifact and critique from the target step forward, which is
+    /// not reversible -- a misclick on `DM2a` from `DM4b` wipes the
+    /// entire model + testbench + perf work in between. Requires
+    /// an explicit `--force` to confirm. See orchestrator audit #15
+    /// (2026-05-16).
     Reset {
         /// Step id to reset.
         step: String,
+        /// Confirm the destructive reset. Required: without this
+        /// flag the command exits with a usage error instead of
+        /// deleting forward state.
+        #[arg(long)]
+        force: bool,
     },
     /// Flip a DirectModeling-completed project into the
     /// SystemVerilog Convert flow. Archives the DM gate history
