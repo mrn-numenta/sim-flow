@@ -187,7 +187,23 @@ impl Critique {
     /// `Critique::load` which handles JSON-first resolution.
     pub fn parse(text: &str) -> Self {
         let mut findings = Vec::new();
+        let mut in_fence = false;
         for raw in text.lines() {
+            // Track fenced code blocks so a `- BLOCKER:` inside a
+            // sample (the critique author quoting placeholder text
+            // back at the reader, etc.) doesn't fire as a real
+            // finding and dirty the gate. Per CommonMark: a line
+            // whose first non-whitespace run is ``` (or more) opens
+            // or closes a fenced code block. We accept ``` or ~~~,
+            // any leading whitespace, and optional info string.
+            // See orchestrator audit #4 (2026-05-16).
+            if is_fence_delimiter(raw) {
+                in_fence = !in_fence;
+                continue;
+            }
+            if in_fence {
+                continue;
+            }
             let Some(caps) = FINDING_MARKER_RE.captures(raw) else {
                 continue;
             };
@@ -448,13 +464,36 @@ fn finding_kind_for(kind: FindingKind) -> DashboardFindingKind {
     }
 }
 
+/// `true` if `raw` is a CommonMark fenced-code-block opener or
+/// closer (``` or ~~~, with any leading whitespace and an
+/// optional info string). Used to gate finding-marker matching
+/// so `- BLOCKER: example` quoted inside a code block doesn't
+/// fire as a real finding.
+fn is_fence_delimiter(raw: &str) -> bool {
+    let trimmed = raw.trim_start();
+    let bytes = trimmed.as_bytes();
+    if bytes.starts_with(b"```") || bytes.starts_with(b"~~~") {
+        return true;
+    }
+    false
+}
+
 /// Parse the markdown body line-by-line and emit findings with
 /// 1-based line numbers. Mirrors the per-line scan in
 /// `Critique::parse`; kept separate so the existing API stays
 /// line-oblivious (the gate / auto loop don't need lines).
 fn parse_with_lines(text: &str) -> Vec<DashboardFinding> {
     let mut out = Vec::new();
+    let mut in_fence = false;
     for (idx, raw) in text.lines().enumerate() {
+        // Skip fenced code blocks; see Critique::parse for rationale.
+        if is_fence_delimiter(raw) {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
         let Some(caps) = FINDING_MARKER_RE.captures(raw) else {
             continue;
         };
