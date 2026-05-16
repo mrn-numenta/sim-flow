@@ -714,4 +714,31 @@ mod tests {
         assert_eq!(KeySource::Env.as_str(), SOURCE_CODE_ENV);
         assert_eq!(KeySource::ConfigFile.as_str(), SOURCE_CODE_CONFIG_FILE);
     }
+
+    #[test]
+    fn provider_env_var_matches_documented_names() {
+        assert_eq!(Provider::Anthropic.env_var(), "ANTHROPIC_API_KEY");
+        assert_eq!(Provider::Openai.env_var(), "OPENAI_API_KEY");
+        assert_eq!(Provider::Ollama.env_var(), "OLLAMA_API_KEY");
+        assert_eq!(Provider::Lmstudio.env_var(), "LMSTUDIO_API_KEY");
+    }
+
+    #[test]
+    fn provider_config_key_round_trips_through_from_str_ci() {
+        for p in Provider::ALL {
+            let key = p.config_key();
+            assert_eq!(Provider::from_str_ci(key), Some(*p));
+            // Display matches config_key.
+            assert_eq!(format!("{p}"), key);
+        }
+    }
+
+    #[test]
+    fn provider_from_str_ci_trims_and_ignores_case() {
+        assert_eq!(Provider::from_str_ci("  Openai  "), Some(Provider::Openai));
+        assert_eq!(Provider::from_str_ci("OLLAMA"), Some(Provider::Ollama));
+        assert_eq!(Provider::from_str_ci("LM-Studio"), Some(Provider::Lmstudio));
+        assert_eq!(Provider::from_str_ci(""), None);
+        assert_eq!(Provider::from_str_ci("vertex"), None);
+    }
 }
