@@ -46,3 +46,148 @@ pub fn register(reg: &mut StepRegistry) {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::steps::StepRegistry;
+
+    #[test]
+    fn register_populates_all_ds_steps_in_order() {
+        let mut reg = StepRegistry::new();
+        register(&mut reg);
+        let ids: Vec<&str> = reg.order_for(Flow::DesignStudy);
+        assert_eq!(
+            ids,
+            vec![
+                "DS0", "DS1", "DS2", "DS3", "DS4", "DS5a", "DS5b", "DS6", "DS7", "DS8", "DS9",
+            ]
+        );
+    }
+
+    #[test]
+    fn register_chains_prerequisites_into_ordered_walk() {
+        let mut reg = StepRegistry::new();
+        register(&mut reg);
+        // Every step except DS0 must point at its immediate
+        // predecessor; DS0 is the head of the flow.
+        let ds0 = reg.get("DS0").expect("DS0 registered");
+        assert_eq!(ds0.prerequisite, None);
+        let chain = [
+            ("DS1", "DS0"),
+            ("DS2", "DS1"),
+            ("DS3", "DS2"),
+            ("DS4", "DS3"),
+            ("DS5a", "DS4"),
+            ("DS5b", "DS5a"),
+            ("DS6", "DS5b"),
+            ("DS7", "DS6"),
+            ("DS8", "DS7"),
+            ("DS9", "DS8"),
+        ];
+        for (id, expected_prereq) in chain {
+            let step = reg.get(id).unwrap_or_else(|| panic!("{id} registered"));
+            assert_eq!(step.prerequisite, Some(expected_prereq), "{id} prereq");
+        }
+    }
+
+    #[test]
+    fn register_marks_only_the_candidate_pair_per_candidate() {
+        let mut reg = StepRegistry::new();
+        register(&mut reg);
+        // DS5a + DS5b are the per-candidate prototype/validation
+        // pair; every other DS step is flat.
+        for step in reg.steps() {
+            let expected = matches!(step.id, "DS5a" | "DS5b");
+            assert_eq!(
+                step.per_candidate, expected,
+                "{} per_candidate mismatch",
+                step.id
+            );
+        }
+    }
+
+    #[test]
+    fn register_attaches_default_critique_clean_gate_to_each_step() {
+        let mut reg = StepRegistry::new();
+        register(&mut reg);
+        for step in reg.steps() {
+            assert_eq!(
+                step.gate_checks.len(),
+                1,
+                "{} should have exactly one gate check (CritiqueClean)",
+                step.id,
+            );
+            match &step.gate_checks[0] {
+                GateCheck::CritiqueClean { path, description } => {
+                    assert!(
+                        path.to_string_lossy()
+                            .ends_with(&format!("{}-critique.md", step.id)),
+                        "{} critique path mismatch: {:?}",
+                        step.id,
+                        path,
+                    );
+                    assert!(
+                        description.contains(step.id),
+                        "{} description should mention step id; got {description}",
+                        step.id,
+                    );
+                }
+                other => panic!("{} unexpected gate-check variant: {:?}", step.id, other),
+            }
+        }
+    }
+
+    #[test]
+    fn register_uses_design_study_flow_for_every_step() {
+        let mut reg = StepRegistry::new();
+        register(&mut reg);
+        for step in reg.steps() {
+            assert_eq!(
+                step.flow,
+                Flow::DesignStudy,
+                "{} should be tagged DesignStudy",
+                step.id,
+            );
+        }
+    }
+
+    #[test]
+    fn register_uses_phase1_phase_pipeline_placeholders() {
+        let mut reg = StepRegistry::new();
+        register(&mut reg);
+        for step in reg.steps() {
+            assert_eq!(step.work_phases, &["chat"], "{} work_phases", step.id);
+            assert_eq!(
+                step.critique_phases,
+                &["chat"],
+                "{} critique_phases",
+                step.id
+            );
+            assert_eq!(step.work_write_paths, &["docs/"], "{} write_paths", step.id);
+            assert!(step.work_artifacts.is_empty(), "{} work_artifacts", step.id);
+            assert!(
+                step.predecessor_inputs.is_empty(),
+                "{} predecessor_inputs",
+                step.id
+            );
+            assert!(step.milestone_walk.is_none(), "{} milestone_walk", step.id);
+            assert!(
+                step.walk_gate_checks.is_empty(),
+                "{} walk_gate_checks",
+                step.id
+            );
+        }
+        // Concrete slug spot-check: the slug is `<id-lower>-<topic>`
+        // where topic is registry-defined free-form text.
+        assert_eq!(
+            reg.get("DS0").unwrap().instruction_slug,
+            "ds0-specification"
+        );
+        assert_eq!(
+            reg.get("DS5a").unwrap().instruction_slug,
+            "ds5a-candidate-prototyping"
+        );
+        assert_eq!(reg.get("DS9").unwrap().instruction_slug, "ds9-formalize");
+    }
+}
