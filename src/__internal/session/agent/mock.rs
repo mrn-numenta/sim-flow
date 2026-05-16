@@ -15,16 +15,32 @@ use crate::session::protocol::LlmMessage;
 /// `Send + Sync` bound -- the parallel plan-detail walk dispatcher
 /// shares one adapter across worker threads, and MockAgent has to
 /// fit that contract too so the parallel path is testable.
+///
+/// # Threading caveat for `seen` and `seen_tools`
+///
+/// Both vectors record dispatches in the order the mutex grants
+/// them. Under the parallel-walk dispatcher, multiple worker
+/// threads call `dispatch` concurrently and **the recording order
+/// is non-deterministic** -- whichever worker wins the lock first
+/// occupies the next slot. Tests that drive parallel sessions
+/// MUST NOT assert positional equality (e.g. `seen[0] ==
+/// "milestone-01 prompt"`); use a set-based assertion or tag the
+/// prompt content with the milestone name and assert the SET of
+/// recorded prompts matches. Single-threaded tests retain FIFO
+/// ordering and may keep positional asserts.
 pub struct MockAgent {
     label: String,
     responses: Mutex<VecDeque<MockResponse>>,
     /// Records every messages-vector passed in so tests can assert
-    /// what the orchestrator sent.
+    /// what the orchestrator sent. **Non-deterministic order under
+    /// parallel dispatch** -- see the type-level docs.
     pub seen: Mutex<Vec<Vec<LlmMessage>>>,
     /// Records every tool catalog passed to dispatch_with_tools so
     /// tests can assert native-mode dispatch was actually used (vs
     /// the trait's default fall-through that silently drops the
     /// catalog -- the bug fixed in commit 12956e6).
+    /// **Non-deterministic order under parallel dispatch** -- see
+    /// the type-level docs.
     pub seen_tools: Mutex<Vec<Vec<ToolAdvertise>>>,
 }
 
