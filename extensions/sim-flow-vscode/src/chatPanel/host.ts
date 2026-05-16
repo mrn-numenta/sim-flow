@@ -1266,6 +1266,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (!remembered) {
       return;
     }
+    // If the auto-session record for `remembered` is still on disk,
+    // restoreActiveAutoSessionIfNeeded inside `refresh()` will attach
+    // to that pump. tryAutoResume runs AFTER `await refresh()` returns,
+    // but the attach delegate's `activePump` mutation may not yet be
+    // visible -- attach is observer-driven via onActiveSessionChanged,
+    // and the change might land a microtask after refresh resolves.
+    // Skip launching a fresh pump in that case so we don't race a
+    // second pump alongside the restored one. See chat-panel audit #7
+    // (2026-05-16).
+    const existingRecord = this.autoSessions.readStoredRecord(remembered);
+    if (existingRecord && !isTerminalLlmSource(existingRecord.sourceTag)) {
+      return;
+    }
     const candidates = await findProjectCandidates();
     if (!candidates.includes(remembered)) {
       return;
