@@ -59,8 +59,13 @@ internal priors):
 
 {{ critique_kinds }}
 
-1. Does the `ConnectivityPlan` topology match
-   `docs/analysis/pipeline-mapping.md`?
+1. Does the elaborated topology match
+   `docs/analysis/pipeline-mapping.md`? Verify that every parent
+   module's `HasInstances::instances()` registers the expected
+   children and that `connect()` binds the ports
+   `pipeline-mapping.md` names. The work prompt forbids the
+   `ConnectivityPlanBuilder` recipe path; flag any use of
+   `ConnectivityPlanBuilder` as a `BLOCKER:`.
 2. Does each module's `evaluate()` implement the operation(s)
    assigned to that stage in `decomposition.md`?
 3. Are payload types consistent with the data widths, types, and
