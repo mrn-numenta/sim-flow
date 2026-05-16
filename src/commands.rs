@@ -1978,6 +1978,15 @@ mod tests {
     }
 
     #[test]
+    fn watchers_cmd_list_with_no_watchers_returns_ok_in_both_modes() {
+        // Without an active sim-flow auto session, the watch registry
+        // is empty -- list prints the (no live watchers) note in
+        // text mode and an empty array in JSON mode.
+        assert!(watchers_cmd(&crate::cli::WatchersAction::List { json: false }).is_ok());
+        assert!(watchers_cmd(&crate::cli::WatchersAction::List { json: true }).is_ok());
+    }
+
+    #[test]
     fn sweep_results_cmd_with_no_runs_returns_ok() {
         let tmp = tempfile::tempdir().unwrap();
         init(tmp.path(), Flow::DirectModeling).unwrap();
