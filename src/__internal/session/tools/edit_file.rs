@@ -97,6 +97,18 @@ impl Tool for EditFileTool {
             Ok(p) => p,
             Err(e) => return Ok(ToolResult::err(format!("{e}"))),
         };
+        // Refuse to edit through a symlink. read_to_string +
+        // fs::write would otherwise follow it transparently and
+        // overwrite the symlink target (potentially outside the
+        // project directory). See orchestrator audit #6
+        // (2026-05-16).
+        if let Ok(meta) = std::fs::symlink_metadata(&abs)
+            && meta.file_type().is_symlink()
+        {
+            return Ok(ToolResult::err(format!(
+                "edit_file: refusing to edit through symlink `{path}` -- resolve the link manually if you intend to edit the target",
+            )));
+        }
         let body = match std::fs::read_to_string(&abs) {
             Ok(s) => s,
             Err(err) => {

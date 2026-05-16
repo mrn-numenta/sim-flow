@@ -149,6 +149,25 @@ impl Tool for WriteFileTool {
             Ok(p) => p,
             Err(e) => return Ok(ToolResult::err(format!("{e}"))),
         };
+        // Refuse to follow symlinks. is_safe_relative_path already
+        // rejects `..` traversal in the requested string, but
+        // project_dir.join(rel) follows any pre-existing symlink
+        // on disk -- a malicious file the LLM was asked to read
+        // first and then re-creates (or a symlink in node_modules
+        // pointing at /etc/hosts) would let write_file overwrite
+        // files the user has access to. Check the IMMEDIATE
+        // destination (symlink_metadata, not metadata): if it's a
+        // symlink, refuse. If it doesn't exist yet, the parent
+        // walk still has to be cleared, but rejecting the
+        // destination is the main blast-radius reduction. See
+        // orchestrator audit #6 (2026-05-16).
+        if let Ok(meta) = std::fs::symlink_metadata(&abs)
+            && meta.file_type().is_symlink()
+        {
+            return Ok(ToolResult::err(format!(
+                "write_file: refusing to write through symlink `{path}` -- delete the symlink first if you intended to replace it with a regular file",
+            )));
+        }
         if let Some(parent) = abs.parent()
             && let Err(err) = std::fs::create_dir_all(parent)
         {
