@@ -97,6 +97,10 @@ export type Event =
       kind: SessionKindOut;
       outcome: string;
       step: string;
+    }
+  | {
+      event: "next-action-hint";
+      label?: string | null;
     };
 /**
  * Mirror of `client::SessionKind` exposed in the protocol. Kept independent of the internal type so the wire format stays stable even if the internal representation changes.
@@ -207,6 +211,9 @@ export type HostEvent =
     }
   | {
       event: "shutdown";
+    }
+  | {
+      event: "continue-flow";
     };
 
 export interface HostInfo {

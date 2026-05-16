@@ -65,6 +65,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
+use crate::__internal::critique::read_critique_entry;
 use crate::Result;
 use crate::session::llm_adapter::LlmAdapter;
 use crate::session::orchestrator::{
@@ -250,6 +251,12 @@ where
     // invocation so a follow-up question after a Run Step still
     // has the prior context.
     let mut qa_history: Vec<LlmMessage> = Vec::new();
+    // Track the most recent sub-session this run dispatched in
+    // manual mode (None after fresh start, after Reset, or after
+    // an Advance moved current_step). `compute_next_manual_action`
+    // reads this to pick the right successor (work -> critique,
+    // critique -> advance|work, etc.).
+    let mut last_subsession: Option<(String, SessionKindOut)> = None;
 
     let outcome = loop {
         if auto_host.shutdown_requested {
@@ -269,21 +276,26 @@ where
             }
             StepMode::Manual => {
                 debug!("dispatching to wait_for_command (manual mode)");
-                // Signal the host that we're parked before blocking
-                // on `recv`. Without this the panel-side pump has no
-                // event to interpret as "drive settled, awaiting
-                // input" -- it keeps the drive promise pending, and
-                // any subsequent host action that gates on
-                // `waitForDrive` (most notably `sendPumpPrompt`)
-                // hangs forever, so a user-typed prompt clears the
-                // composer but never actually reaches the wire.
-                // Empty prompt + placeholder is harmless: the chat
-                // panel treats `currentPrompt == null` as "no banner".
+                // Emit a `RequestUserInput` *and* a `NextActionHint`
+                // before blocking on `recv`. The RequestUserInput
+                // settles the panel-side pump's drive promise; the
+                // hint tells the chat panel's Continue button what
+                // it would do next. Both are cheap and idempotent
+                // -- emitting them on every loop iteration also
+                // keeps the hint accurate between sub-sessions.
                 auto_host.send(&Event::RequestUserInput {
                     prompt: None,
                     placeholder: None,
                 })?;
-                match wait_for_command(&opts, &mut auto_host, &mut qa_history, llm)? {
+                let last_snapshot = last_subsession.as_ref().map(|(s, k)| (s.as_str(), *k));
+                emit_next_action_hint(&opts, &mut auto_host, last_snapshot)?;
+                match wait_for_command(
+                    &opts,
+                    &mut auto_host,
+                    &mut qa_history,
+                    llm,
+                    &mut last_subsession,
+                )? {
                     ManualOutcome::Continue => continue,
                     ManualOutcome::Shutdown => break RunOutcome::Shutdown,
                     ManualOutcome::HostClosed => break RunOutcome::HostClosed,
@@ -1347,11 +1359,141 @@ fn try_advance<P: Presenter + ?Sized>(
 // Manual command dispatcher.
 // ---------------------------------------------------------------------
 
+/// Action the manual loop should run next for the user's current
+/// step. Lives on the orchestrator side so the chat panel doesn't
+/// have to duplicate the state machine -- the orchestrator has
+/// every input it needs (state.toml, critique file, the last
+/// sub-session it just ran).
+#[derive(Debug, Clone)]
+enum NextManualAction {
+    /// Run the step's work sub-session.
+    Work { step: String },
+    /// Run the step's critique sub-session.
+    Critique { step: String },
+    /// Attempt to advance past the step (runs the gate internally).
+    Advance { step: String },
+}
+
+impl NextManualAction {
+    /// Pre-rendered label the chat panel surfaces on the Continue
+    /// button so the user knows what's about to happen.
+    fn label(&self) -> String {
+        match self {
+            NextManualAction::Work { step } => format!("Run work on {step}"),
+            NextManualAction::Critique { step } => format!("Run critique on {step}"),
+            NextManualAction::Advance { step } => format!("Advance past {step}"),
+        }
+    }
+}
+
+/// Pick the next manual-mode action. `last_subsession` is the
+/// most recent sub-session this `run_auto` invocation ran (None
+/// after fresh start, after Reset, or after an Advance bumped
+/// current_step). Selection rules:
+/// - last was work on the current step    → Critique
+/// - last was critique on the current step → check critique file:
+///   hasBlocking → Work (iterate); else → Advance (gate inside)
+/// - last sub-session belongs to a different step OR is None
+///   → Work (we're at the start of a step, or the user just
+///   advanced)
+fn compute_next_manual_action(
+    opts: &AutoOptions,
+    last_subsession: Option<(&str, SessionKindOut)>,
+) -> Option<NextManualAction> {
+    let state = State::load(&opts.project_dir.join(".sim-flow")).ok()?;
+    let step = state.current_step.clone();
+    let mid_step = last_subsession.is_some_and(|(s, _)| s == step.as_str());
+    if !mid_step {
+        return Some(NextManualAction::Work { step });
+    }
+    match last_subsession.map(|(_, k)| k) {
+        Some(SessionKindOut::Work) => Some(NextManualAction::Critique { step }),
+        Some(SessionKindOut::Critique) => {
+            let critique = read_critique_entry(&opts.project_dir, &step).ok().flatten();
+            match critique {
+                Some(entry) if entry.has_blocking => Some(NextManualAction::Work { step }),
+                Some(_) => Some(NextManualAction::Advance { step }),
+                // No critique on disk despite a Critique sub-session
+                // ending: edge case (e.g. the orchestrator crashed
+                // mid-write). Suggest Work to recover.
+                None => Some(NextManualAction::Work { step }),
+            }
+        }
+        // Q&A turns don't change the work/critique cycle.
+        Some(SessionKindOut::Qa) | None => Some(NextManualAction::Work { step }),
+    }
+}
+
+/// Emit a `NextActionHint` for the orchestrator's current state.
+fn emit_next_action_hint<P: Presenter + ?Sized>(
+    opts: &AutoOptions,
+    auto_host: &mut AutoPresenter<P>,
+    last_subsession: Option<(&str, SessionKindOut)>,
+) -> Result<()> {
+    let hint = compute_next_manual_action(opts, last_subsession).map(|a| a.label());
+    auto_host.send(&Event::NextActionHint { label: hint })
+}
+
+/// Dispatch the host-computed next manual action inline. Updates
+/// `last_subsession` in place so subsequent `compute_next_manual_action`
+/// calls see the new tail.
+fn dispatch_continue_flow<P, L>(
+    opts: &AutoOptions,
+    auto_host: &mut AutoPresenter<P>,
+    llm: &mut L,
+    last_subsession: &mut Option<(String, SessionKindOut)>,
+) -> Result<ManualOutcome>
+where
+    P: Presenter + ?Sized,
+    L: LlmAdapter + ?Sized,
+{
+    let snapshot = last_subsession.as_ref().map(|(s, k)| (s.as_str(), *k));
+    let Some(action) = compute_next_manual_action(opts, snapshot) else {
+        auto_host.send(&Event::Diagnostic {
+            level: DiagnosticLevel::Warning,
+            message: "ContinueFlow with no current step; nothing to do.".into(),
+        })?;
+        return Ok(ManualOutcome::Continue);
+    };
+    match action {
+        NextManualAction::Work { step } => {
+            run_manual_subsession(
+                opts,
+                &step,
+                crate::client::SessionKind::Work,
+                auto_host,
+                llm,
+            )?;
+            *last_subsession = Some((step, SessionKindOut::Work));
+        }
+        NextManualAction::Critique { step } => {
+            run_manual_subsession(
+                opts,
+                &step,
+                crate::client::SessionKind::Critique,
+                auto_host,
+                llm,
+            )?;
+            *last_subsession = Some((step, SessionKindOut::Critique));
+        }
+        NextManualAction::Advance { step } => {
+            run_manual_advance(opts, &step, auto_host, llm)?;
+            // After advance succeeds current_step moved past `step`;
+            // after refusal it didn't. Either way the next tick
+            // should re-evaluate from a clean slate (no in-step
+            // sub-session yet), so clear the tracker.
+            *last_subsession = None;
+        }
+    }
+    Ok(ManualOutcome::Continue)
+}
+
 fn wait_for_command<P, L>(
     opts: &AutoOptions,
     auto_host: &mut AutoPresenter<P>,
     qa_history: &mut Vec<LlmMessage>,
     llm: &mut L,
+    last_subsession: &mut Option<(String, SessionKindOut)>,
 ) -> Result<ManualOutcome>
 where
     P: Presenter + ?Sized,
@@ -1361,9 +1503,12 @@ where
         None => Ok(ManualOutcome::HostClosed),
         Some(HostEvent::Shutdown) => Ok(ManualOutcome::Shutdown),
         Some(HostEvent::RunStep { step, kind }) => {
-            let session_kind = match kind {
-                SessionKindOut::Work => crate::client::SessionKind::Work,
-                SessionKindOut::Critique => crate::client::SessionKind::Critique,
+            let (session_kind, tracker_kind) = match kind {
+                SessionKindOut::Work => (crate::client::SessionKind::Work, SessionKindOut::Work),
+                SessionKindOut::Critique => (
+                    crate::client::SessionKind::Critique,
+                    SessionKindOut::Critique,
+                ),
                 SessionKindOut::Qa => {
                     // RunStep is the user's "run a sub-session"
                     // command; Q&A is its own thing (triggered by
@@ -1381,6 +1526,7 @@ where
                 }
             };
             run_manual_subsession(opts, &step, session_kind, auto_host, llm)?;
+            *last_subsession = Some((step, tracker_kind));
             Ok(ManualOutcome::Continue)
         }
         Some(HostEvent::RunCritique { step }) => {
@@ -1391,6 +1537,7 @@ where
                 auto_host,
                 llm,
             )?;
+            *last_subsession = Some((step, SessionKindOut::Critique));
             Ok(ManualOutcome::Continue)
         }
         Some(HostEvent::RunGate { step }) => {
@@ -1425,10 +1572,16 @@ where
                     placeholder: None,
                 })?;
             }
+            // Either advance succeeded (new step, no sub-session
+            // yet) or it refused (next tick should re-evaluate
+            // from the critique state). In both cases the in-step
+            // tracker is no longer relevant.
+            *last_subsession = None;
             Ok(ManualOutcome::Continue)
         }
         Some(HostEvent::Reset { step }) => {
             run_manual_reset(opts, &step, auto_host)?;
+            *last_subsession = None;
             Ok(ManualOutcome::Continue)
         }
         Some(HostEvent::UserMessage { text }) => {
@@ -1444,6 +1597,9 @@ where
             // Run Step retains its earlier context.
             run_manual_qa_turn(opts, &text, qa_history, auto_host, llm)?;
             Ok(ManualOutcome::Continue)
+        }
+        Some(HostEvent::ContinueFlow) => {
+            dispatch_continue_flow(opts, auto_host, llm, last_subsession)
         }
         Some(other) => {
             // Stray events while parked. Most aren't meaningful here
@@ -2435,6 +2591,7 @@ fn host_event_label(event: &HostEvent) -> &'static str {
         HostEvent::Reset { .. } => "Reset",
         HostEvent::SetStepMode { .. } => "SetStepMode",
         HostEvent::Shutdown => "Shutdown",
+        HostEvent::ContinueFlow => "ContinueFlow",
     }
 }
 

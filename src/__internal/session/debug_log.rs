@@ -218,6 +218,7 @@ fn event_kind(event: &Event) -> &'static str {
         Event::SubSessionStarted { .. } => "SubSessionStarted",
         Event::SubSessionEnded { .. } => "SubSessionEnded",
         Event::LlmRequest { .. } => "LlmRequest",
+        Event::NextActionHint { .. } => "NextActionHint",
     }
 }
 
@@ -234,6 +235,7 @@ fn host_event_kind(event: &HostEvent) -> &'static str {
         HostEvent::Reset { .. } => "Reset",
         HostEvent::SetStepMode { .. } => "SetStepMode",
         HostEvent::Shutdown => "Shutdown",
+        HostEvent::ContinueFlow => "ContinueFlow",
     }
 }
 

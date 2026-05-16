@@ -666,6 +666,27 @@
               "step"
             ],
             "type": "object"
+          },
+          {
+            "description": "Suggested next manual-mode action, computed by the orchestrator from the current step + critique resolution + gate state. Emitted every time the orchestrator parks at `wait_for_command` so the chat panel's Continue button can show \"Run critique on DM2d\" / \"Advance past DM0\" / etc. without duplicating the state machine on the host side. `label` is `None` when the orchestrator has nothing useful to suggest (e.g. the flow has completed); hosts render that as a disabled Continue button.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "next-action-hint"
+                ],
+                "type": "string"
+              },
+              "label": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "event"
+            ],
+            "type": "object"
           }
         ],
         "title": "Event"
@@ -939,6 +960,21 @@
               "event": {
                 "enum": [
                   "shutdown"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "event"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Manual-mode shortcut: run the next logical action for the current step (work → critique → advance → work-on-new-step). The orchestrator picks the action from its own knowledge of the flow (critique resolution, gate state) so hosts don't have to duplicate the state machine. Equivalent to the host dispatching one of `RunStep` / `RunCritique` / `Advance` directly, but with the choice deferred to the orchestrator.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "continue-flow"
                 ],
                 "type": "string"
               }

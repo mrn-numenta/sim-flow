@@ -152,6 +152,18 @@ pub enum Event {
         kind: SessionKindOut,
         outcome: String,
     },
+    /// Suggested next manual-mode action, computed by the orchestrator
+    /// from the current step + critique resolution + gate state.
+    /// Emitted every time the orchestrator parks at `wait_for_command`
+    /// so the chat panel's Continue button can show "Run critique on
+    /// DM2d" / "Advance past DM0" / etc. without duplicating the
+    /// state machine on the host side. `label` is `None` when the
+    /// orchestrator has nothing useful to suggest (e.g. the flow has
+    /// completed); hosts render that as a disabled Continue button.
+    NextActionHint {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+    },
 }
 
 /// Event direction: host -> orchestrator.
@@ -204,6 +216,14 @@ pub enum HostEvent {
     /// Tear the orchestrator down. Cancels any in-flight sub-session
     /// at the next safe boundary, emits `SessionEnd`, and exits.
     Shutdown,
+    /// Manual-mode shortcut: run the next logical action for the
+    /// current step (work → critique → advance → work-on-new-step).
+    /// The orchestrator picks the action from its own knowledge of
+    /// the flow (critique resolution, gate state) so hosts don't
+    /// have to duplicate the state machine. Equivalent to the host
+    /// dispatching one of `RunStep` / `RunCritique` / `Advance`
+    /// directly, but with the choice deferred to the orchestrator.
+    ContinueFlow,
 }
 
 /// Terminal state of a `SessionEnd` event. Closed-set enum so hosts

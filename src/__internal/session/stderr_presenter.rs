@@ -236,6 +236,10 @@ where
                 // intentionally stays out of the way -- printing each
                 // LLM-bound message would dominate terminal sessions.
             }
+            Event::NextActionHint { .. } => {
+                // Display hint for chat-panel hosts; not useful in a
+                // raw terminal session.
+            }
         }
         Ok(())
     }
