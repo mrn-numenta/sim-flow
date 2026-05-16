@@ -1648,21 +1648,35 @@ function buildComposerControls(state: ChatPanelState): HTMLElement {
     passedSet.has("DM4b") &&
     !state.isStreaming &&
     !state.isViewer;
+  // The hint label is informational only. The orchestrator's
+  // `ContinueFlow` handler decides what to run based on `state.toml`
+  // + critique -- the chat panel doesn't need the hint to dispatch.
+  // Gating on the hint also misses the cold-start race where the
+  // orchestrator parks (emitting NextActionHint) BEFORE the chat
+  // panel's listener attaches: the bus event is dropped and the
+  // button stays disabled even though Continue is perfectly safe.
+  // So we let the button enable whenever the session is live and
+  // in manual mode; the hint, when present, just sharpens the label.
   const hintLabel = state.nextActionHint?.label ?? null;
+  const continueReady =
+    state.sessionActive &&
+    state.currentStepMode === "manual" &&
+    !state.isStreaming &&
+    !state.isViewer;
   if (dm4bConvertReady) {
     playBtn.disabled = false;
     playBtn.setAttribute("aria-label", "Convert to SystemVerilog");
     playBtn.title =
       "Convert to SystemVerilog -- runs `sim-flow convert-sv` to flip the project into the SV flow at SV0, then reconnects the pump.";
   } else {
-    playBtn.disabled = !hintLabel || state.isStreaming || state.isViewer;
+    playBtn.disabled = !continueReady;
     playBtn.setAttribute(
       "aria-label",
       hintLabel ? `Continue: ${hintLabel}` : "Continue",
     );
     playBtn.title = hintLabel
       ? `Continue: ${hintLabel}`
-      : "Continue the flow from its current position. Available when the orchestrator is parked in Manual mode between sub-sessions.";
+      : "Continue the flow from its current position. The orchestrator decides the next action based on state.toml.";
   }
   playBtn.addEventListener("click", () => {
     if (playBtn.disabled) {
