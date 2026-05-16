@@ -2002,6 +2002,43 @@ mod tests {
     }
 
     #[test]
+    fn record_run_cmd_writes_a_row_to_the_experiments_db() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        let r = record_run_cmd(
+            tmp.path(),
+            "baseline",
+            Some("throughput"),
+            Some("mesh"),
+            Some("noc"),
+            None,
+            Some("first run"),
+        );
+        assert!(r.is_ok());
+        // Now `runs list` should report 1 row.
+        let dot = dot_dir(tmp.path());
+        let index = sim_flow::__internal::tracking::index::ExperimentIndex::open(&dot).unwrap();
+        assert_eq!(index.count_runs().unwrap(), 1);
+    }
+
+    #[test]
+    fn diff_cmd_with_two_unknown_run_ids_returns_config_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        // No runs in the index -> both lhs and rhs lookups fail.
+        let r = diff_cmd(tmp.path(), "no-such-a", "no-such-b");
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn sweep_cmd_with_missing_toml_returns_io_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        let r = sweep_cmd(tmp.path(), &tmp.path().join("no-such.toml"));
+        assert!(r.is_err());
+    }
+
+    #[test]
     fn advance_unknown_step_returns_invalid_step_error() {
         let tmp = tempfile::tempdir().unwrap();
         init(tmp.path(), Flow::DirectModeling).unwrap();
