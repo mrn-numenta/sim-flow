@@ -501,6 +501,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       case "reset-from-step":
         await this.resetFromStepId(msg.step);
         return;
+      case "open-file":
+        await this.openFileInEditor(msg.path);
+        return;
       default:
         return;
     }
@@ -534,6 +537,46 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       step,
       data,
     });
+  }
+
+  /**
+   * Open a file in a VS Code editor tab. The path comes from the
+   * chat panel's transcript linkifier; resolve relative paths
+   * against the anchored project (or workspace folder if no
+   * project is anchored). Errors -- a stale path from old
+   * transcript text, an unreadable file, no project to anchor
+   * against -- surface as a non-modal warning so a misclick
+   * doesn't crash the panel.
+   */
+  private async openFileInEditor(rawPath: string): Promise<void> {
+    const path = rawPath.trim();
+    if (path.length === 0) {
+      return;
+    }
+    const anchor =
+      this.activePump?.projectDir ?? this.anchoredProjectDir();
+    let uri: vscode.Uri;
+    if (path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)) {
+      // Absolute path on POSIX or Windows.
+      uri = vscode.Uri.file(path);
+    } else if (anchor) {
+      uri = vscode.Uri.file(`${anchor}/${path}`);
+    } else {
+      void vscode.window.showWarningMessage(
+        `sim-flow: cannot open ${path} -- no project anchored to resolve the relative path.`,
+      );
+      return;
+    }
+    try {
+      const doc = await vscode.workspace.openTextDocument(uri);
+      await vscode.window.showTextDocument(doc, { preview: true });
+    } catch (err) {
+      void vscode.window.showWarningMessage(
+        `sim-flow: failed to open ${uri.fsPath}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   /**

@@ -269,4 +269,13 @@ export type WebviewMessage =
    * host shows a modal confirmation listing every step that will
    * be discarded before any artifact is deleted.
    */
-  | { type: "reset-from-step"; step: string };
+  | { type: "reset-from-step"; step: string }
+  /**
+   * Open a file mentioned in the chat transcript in a VS Code
+   * editor tab. The path is whatever string the linkifier
+   * detected (relative to the anchored project, or an absolute
+   * path); the host resolves it and opens the doc, swallowing
+   * errors so a stale path in old transcript text doesn't crash
+   * the panel.
+   */
+  | { type: "open-file"; path: string };

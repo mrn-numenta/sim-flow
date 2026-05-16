@@ -124,9 +124,50 @@ const ui: UiState = {
 };
 
 applyPalette();
+installFileLinkDelegation();
 
 function applyPalette(): void {
   document.body.dataset.palette = ui.palette;
+}
+
+/**
+ * One delegated click listener on the document catches every
+ * click + keyboard activation on a `.x-file-link` node (those are
+ * tagged by `linkifyFilePaths` after each markdown render). The
+ * listener survives morphdom rebuilds because it's bound to
+ * `document`, not to any node morphdom owns.
+ */
+function installFileLinkDelegation(): void {
+  const activate = (target: EventTarget | null): boolean => {
+    if (!(target instanceof Element)) {
+      return false;
+    }
+    const link = target.closest<HTMLElement>(".x-file-link");
+    if (!link) {
+      return false;
+    }
+    const path = link.getAttribute("data-file-path");
+    if (!path) {
+      return false;
+    }
+    send({ type: "open-file", path });
+    return true;
+  };
+  document.addEventListener("click", (event) => {
+    if (activate(event.target)) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    if (activate(event.target)) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  });
 }
 
 window.addEventListener("message", (event) => {
@@ -921,7 +962,9 @@ function markdownBody(text: string): HTMLElement {
     root.textContent = text;
     return root;
   }
-  root.appendChild(renderMarkdownFragment(text));
+  const fragment = renderMarkdownFragment(text);
+  linkifyFilePaths(fragment);
+  root.appendChild(fragment);
   return root;
 }
 
@@ -929,6 +972,91 @@ function looksLikeMarkdown(text: string): boolean {
   return /(^|\n)(#{1,6}\s|[-*]\s|\d+\.\s|>\s|```|\|.+\||\*\*|__|`|\[.+\]\(.+\))/.test(
     text,
   );
+}
+
+/**
+ * Recognised file extensions for the chat transcript linkifier.
+ * Anything outside this set is treated as prose -- prevents bogus
+ * "links" on things like `1.5GHz`, `v2.3`, `foo.bar.baz`.
+ */
+const FILE_EXT_RE =
+  /\.(?:md|markdown|txt|text|pdf|json|toml|yaml|yml|rs|ts|tsx|js|jsx|py|sv|svh|v|vh|c|h|cpp|hpp|cs|go|rb|sh|bash|css|html|xml|sql|lock|cfg|ini|conf)$/i;
+
+/**
+ * Test whether `text` looks like a file path we should turn into
+ * a clickable link. Conservative: requires either an absolute path
+ * or at least one slash, plus a recognised file extension. Skips
+ * web URLs (those are handled by the sanitizer's `<a target=_blank>`
+ * path) and bare words like "foo.md" with no slash (high false-
+ * positive rate -- agents say things like `README.md` in prose).
+ */
+function looksLikeFilePath(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length === 0 || trimmed.length > 512) {
+    return false;
+  }
+  if (/^(?:https?:|mailto:|file:|ftp:)/i.test(trimmed)) {
+    return false;
+  }
+  if (/\s/.test(trimmed)) {
+    return false;
+  }
+  if (!FILE_EXT_RE.test(trimmed)) {
+    return false;
+  }
+  return trimmed.startsWith("/") || trimmed.includes("/");
+}
+
+/**
+ * Walk the rendered markdown fragment and tag every node whose
+ * text looks like a file path with `.x-file-link` + a
+ * `data-file-path` attribute. The shell installs one delegated
+ * click listener that intercepts these and posts `open-file` to
+ * the host.
+ *
+ * Targets:
+ *   - `<code>` spans whose body is exactly a file path. Agents
+ *     wrap paths in backticks reliably, so this catches the
+ *     common case (`docs/spec.md`, `src/lib/foo.rs`).
+ *   - `<a>` anchors whose href was stripped by the sanitizer's
+ *     "no relative URLs" rule but whose text content is a file
+ *     path. Re-routes markdown-style `[label](docs/x.md)` links.
+ */
+function linkifyFilePaths(root: ParentNode): void {
+  // Inline `<code>` paths. Inside `<pre>` is a code block -- leave
+  // those alone; clicking a path inside a fenced block shouldn't
+  // navigate.
+  const codeNodes = root.querySelectorAll("code");
+  for (const code of Array.from(codeNodes)) {
+    if (code.closest("pre")) {
+      continue;
+    }
+    const text = code.textContent ?? "";
+    if (!looksLikeFilePath(text)) {
+      continue;
+    }
+    code.classList.add("x-file-link");
+    code.setAttribute("data-file-path", text.trim());
+    code.setAttribute("role", "link");
+    code.setAttribute("tabindex", "0");
+    code.setAttribute("title", `Open ${text.trim()} in the editor`);
+  }
+  // Anchors the sanitizer stripped because the href was relative.
+  const anchors = root.querySelectorAll("a");
+  for (const a of Array.from(anchors)) {
+    if (a.getAttribute("href")) {
+      continue;
+    }
+    const text = a.textContent ?? "";
+    if (!looksLikeFilePath(text)) {
+      continue;
+    }
+    a.classList.add("x-file-link");
+    a.setAttribute("data-file-path", text.trim());
+    a.setAttribute("role", "link");
+    a.setAttribute("tabindex", "0");
+    a.setAttribute("title", `Open ${text.trim()} in the editor`);
+  }
 }
 
 function buildComposer(state: ChatPanelState): HTMLElement {

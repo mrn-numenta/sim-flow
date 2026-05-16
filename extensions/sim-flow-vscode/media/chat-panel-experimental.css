@@ -1245,3 +1245,22 @@ body {
   color: var(--vscode-menu-selectionForeground, var(--vscode-foreground));
   outline: none;
 }
+
+/* File-path links inside chat bodies. `code.x-file-link` keeps the
+ * monospace style the markdown renderer applied; the textLink
+ * colour + underline-on-hover differentiates clickable paths from
+ * prose code spans. */
+.x-file-link {
+  color: var(--vscode-textLink-foreground, var(--vscode-foreground));
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.x-file-link:hover {
+  text-decoration: underline;
+}
+
+.x-file-link:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, var(--x-accent));
+  outline-offset: 1px;
+}
