@@ -1174,21 +1174,21 @@ where
 
 /// `Presenter` shim used by `run_plan_detail_walk_parallel`'s worker
 /// threads. Forwards every outgoing event into an `mpsc::Sender`
-/// (drained by the coordinator on the main thread) and supplies a
-/// single synthetic Hello before reporting clean close on subsequent
-/// `recv()` calls. Auto-mode work sessions never park for user
-/// input, so the "one Hello then None" contract is sufficient.
+/// (drained by the coordinator on the main thread) and reports
+/// clean channel close on every `recv()` -- the orchestrator's
+/// handshake Hello is supplied by `AutoPresenter::queue_synthetic_hello`
+/// (the OUTER presenter wrapping this one). Auto-mode work
+/// sessions never call recv mid-session today; if any future
+/// feature does, returning None here correctly signals "host
+/// channel closed" without injecting a phantom Hello on top of
+/// the handshake one.
 struct ChannelPresenter {
     tx: std::sync::mpsc::Sender<Event>,
-    hello_queued: bool,
 }
 
 impl ChannelPresenter {
     fn new(tx: std::sync::mpsc::Sender<Event>) -> Self {
-        Self {
-            tx,
-            hello_queued: false,
-        }
+        Self { tx }
     }
 }
 
@@ -1202,17 +1202,10 @@ impl Presenter for ChannelPresenter {
     }
 
     fn recv(&mut self) -> Result<Option<HostEvent>> {
-        if !self.hello_queued {
-            self.hello_queued = true;
-            return Ok(Some(HostEvent::Hello {
-                protocol_version: PROTOCOL_VERSION.into(),
-                host: HostInfo {
-                    name: "sim-flow-parallel-worker".into(),
-                    version: env!("CARGO_PKG_VERSION").into(),
-                },
-                capabilities: vec!["text".into(), "user-input".into(), "llm-request".into()],
-            }));
-        }
+        // No real host on the other end of the channel; the only
+        // Hello the orchestrator ever sees here is the one
+        // AutoPresenter queues synthetically. Subsequent recvs
+        // returning None correctly signal "host channel closed".
         Ok(None)
     }
 }
@@ -3267,27 +3260,22 @@ mod tests {
     }
 
     #[test]
-    fn channel_presenter_recv_emits_one_hello_then_closes() {
-        // The orchestrator's handshake requires a Hello as the
-        // first host event. AutoPresenter::queue_synthetic_hello
-        // covers the AutoPresenter layer; for the inner
-        // ChannelPresenter (called only after AutoPresenter
-        // exhausts pending_reads) we still need a hello so any
-        // residual handshake recv inside run_session resolves
-        // cleanly. After the hello we return None, which the
-        // auto-mode session treats as "host channel closed" --
-        // fine for a worker that's already exited its main loop.
+    fn channel_presenter_recv_always_returns_none() {
+        // After the parallel-walk #3 fix, ChannelPresenter never
+        // emits its own Hello. The orchestrator's handshake Hello
+        // is supplied by AutoPresenter::queue_synthetic_hello (the
+        // outer presenter layer that wraps this one). Returning
+        // Some(Hello) here would land a second, phantom Hello in
+        // the orchestrator any time pending_reads was exhausted
+        // and recv fell through to the inner presenter -- a
+        // footgun if any future feature adds a recv to the auto
+        // path. None on every recv is the correct contract:
+        // "this channel has no real host on the other end."
         let (tx, _rx) = std::sync::mpsc::channel::<Event>();
         let mut pres = ChannelPresenter::new(tx);
-        match pres.recv().unwrap() {
-            Some(HostEvent::Hello { .. }) => {}
-            other => panic!("expected Hello on first recv, got {other:?}"),
-        }
-        assert!(pres.recv().unwrap().is_none(), "second recv must close");
-        assert!(
-            pres.recv().unwrap().is_none(),
-            "subsequent recv stays closed"
-        );
+        assert!(pres.recv().unwrap().is_none(), "first recv must be None");
+        assert!(pres.recv().unwrap().is_none(), "second recv stays None");
+        assert!(pres.recv().unwrap().is_none(), "subsequent recv stays None");
     }
 
     #[test]
