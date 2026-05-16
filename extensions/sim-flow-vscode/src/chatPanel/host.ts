@@ -707,8 +707,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (session) {
       // Reuse the standard reconnect helper so the pump re-reads
       // state.toml and picks up `flow = systemverilog-convert,
-      // current_step = SV0`.
-      await this.reconnectActivePump(session);
+      // current_step = SV0`. Force manual mode: convert-sv flips
+      // the project into a new flow and the user should review
+      // SV0 before any auto turns fire. Without this override the
+      // reconnect picked up the workspace's `sim-flow.flow.stepMode`
+      // setting, so users running on "auto" would skip into SV0
+      // work unattended. See chat-panel audit #10 (2026-05-16).
+      await this.reconnectActivePump(session, { forceStepMode: "manual" });
     } else {
       void this.refresh();
     }
@@ -2635,6 +2640,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
    */
   private async reconnectActivePump(
     session: ManagedAutoSessionState,
+    options: { forceStepMode?: "auto" | "manual" } = {},
   ): Promise<void> {
     const projectDir = session.projectDir;
     const sessionMode = session.sessionMode;
@@ -2646,7 +2652,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       "Stopped the running sim-flow session to apply the updated LLM settings.",
     );
     if (sessionMode === "auto") {
-      await this.launchAutoSession(launchSpecPath, projectDir);
+      await this.launchAutoSession(launchSpecPath, projectDir, {
+        forceStepMode: options.forceStepMode,
+      });
       return;
     }
     if (sessionMode === "step" && stepRef) {
