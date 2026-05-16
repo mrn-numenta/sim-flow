@@ -708,6 +708,22 @@ body {
   font-style: italic;
 }
 
+/* Context-window usage indicator, anchored next to the step state
+ * in the centre of the composer-meta row. Same muted treatment so
+ * neither metric outshouts the other. The warning variant
+ * (>= 80% used) flips to the error palette so the user notices
+ * approaching saturation before the LLM starts truncating. */
+.x-composer-context-used {
+  color: var(--x-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.x-composer-context-used-warning {
+  color: var(--vscode-errorForeground, #d2522d);
+}
+
 /* Reset Step: split button. The main half resets the current
  * step; the trailing ▾ half opens a picker of earlier completed
  * steps. Hover on either half tints the *whole* split in the
@@ -876,34 +892,12 @@ body {
   cursor: not-allowed;
 }
 
-/* Stop button in the composer-meta row (to the right of the
- * Auto/Manual toggle). Outline-only, neutral white box -- the
- * red treatment didn't fit the new "cancel current activity"
- * semantic; that gesture isn't destructive enough to deserve a
- * warning palette. Only rendered while streaming. */
-.x-stop-meta {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  color: #fff;
-  border: 1px solid #fff;
-  border-radius: 4px;
-  padding: 0;
-  width: 22px;
-  height: 22px;
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.x-stop-meta:hover:not(:disabled) {
-  background: color-mix(in srgb, #fff 12%, transparent);
-}
-
-.x-stop-meta:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+/* Stop variant of the composer Send button: same outline-only
+ * white treatment, the class swap is reserved for any future
+ * tweaks (e.g. an animated pulse) without re-styling the base. */
+.x-send-stop {
+  /* Inherits everything from .x-send; class kept as an anchor for
+   * later differentiation. */
 }
 
 .x-browse {

@@ -47,6 +47,17 @@ const PALETTES: ReadonlyArray<{ value: PaletteName; label: string }> = [
 // settings popover.
 const DEFAULT_PALETTE: PaletteName = "default";
 
+/**
+ * Reference context window for the "% context used" indicator
+ * under the composer. Most current frontier models support at
+ * least this much (GPT-4 family, Claude 3.x/4, Llama 3 70B-Instruct
+ * etc.). Local Ollama / vLLM models often run smaller, in which
+ * case the indicator under-reports usage -- still informative as a
+ * trend, just not absolute. Could be promoted to a workspace
+ * setting if per-source accuracy matters.
+ */
+const LLM_CONTEXT_WINDOW = 128_000;
+
 function isPaletteName(value: unknown): value is PaletteName {
   return (
     value === "default" ||
@@ -776,7 +787,7 @@ function buildComposer(state: ChatPanelState): HTMLElement {
     if (!s) {
       return;
     }
-    sendBtn.disabled = !canSend(s);
+    sendBtn.disabled = s.isStreaming ? !s.canStop : !canSend(s);
   });
   area.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.shiftKey) {
@@ -790,24 +801,37 @@ function buildComposer(state: ChatPanelState): HTMLElement {
     submitPrompt();
   });
 
-  // Send button: always renders the ↑ glyph. Disabled while
-  // streaming or when the draft is empty. The Stop affordance
-  // moved out of this button into the composer-meta row, to the
-  // right of the Auto/Manual toggle, so the send/stop modes don't
-  // share a click target.
+  // Send / Stop button. One click target whose glyph + behaviour
+  // swap on `state.isStreaming`: ↑ when idle (submits the draft),
+  // ■ when streaming (cancels the current activity, drops to
+  // Manual park -- not session-end; that's the toolbar's ⏻).
+  // Both variants share the white-outline / transparent-fill
+  // treatment so the swap doesn't visually relocate the control.
   const sendBtn = document.createElement("button");
   sendBtn.type = "button";
-  // Stable id keeps morphdom matching a "send" slot to a previous
-  // "send" slot regardless of input-row child count changes.
   sendBtn.id = "x-composer-send";
-  sendBtn.className = "x-send";
-  sendBtn.textContent = "↑";
-  sendBtn.setAttribute("aria-label", "Send message");
-  sendBtn.title = "Send";
-  sendBtn.disabled = !canSend(state);
+  sendBtn.className = state.isStreaming ? "x-send x-send-stop" : "x-send";
+  sendBtn.textContent = state.isStreaming ? "■" : "↑";
+  sendBtn.setAttribute(
+    "aria-label",
+    state.isStreaming ? "Stop the current activity" : "Send message",
+  );
+  sendBtn.title = state.isStreaming
+    ? "Stop the current activity and drop to Manual mode. The session stays attached -- this is not End session."
+    : "Send";
+  sendBtn.disabled = state.isStreaming ? !state.canStop : !canSend(state);
   sendBtn.addEventListener("click", () => {
     const s = ui.state;
-    if (!s || !canSend(s)) {
+    if (!s) {
+      return;
+    }
+    if (s.isStreaming) {
+      if (s.canStop) {
+        send({ type: "stop-conversation" });
+      }
+      return;
+    }
+    if (!canSend(s)) {
       return;
     }
     submitPrompt();
@@ -947,6 +971,29 @@ function buildComposerMeta(state: ChatPanelState): HTMLElement {
   }
   centerZone.appendChild(stateText);
 
+  // Context-window usage indicator. Sums the cumulative input +
+  // output token estimates and divides by a reference window size.
+  // The orchestrator's actual prompt size on the latest turn is
+  // close to this cumulative count (every previous user / tool /
+  // assistant message is re-sent each turn), so the ratio is a
+  // decent at-a-glance "how full is the model getting" signal.
+  // Hidden when no session is anchored.
+  if (state.sessionActive) {
+    const usedTokens =
+      state.totalInputTokensEstimate + state.totalOutputTokensEstimate;
+    const pct = Math.min(100, Math.round((usedTokens / LLM_CONTEXT_WINDOW) * 100));
+    const contextText = document.createElement("span");
+    contextText.className = "x-composer-context-used";
+    if (pct >= 80) {
+      contextText.classList.add("x-composer-context-used-warning");
+    }
+    contextText.textContent = `${pct}% context used`;
+    contextText.title =
+      `Approximate context usage: ${usedTokens} tokens estimated against a ${formatTokens(LLM_CONTEXT_WINDOW)} reference window. ` +
+      "Cumulative across the whole conversation; actual usage per LLM call depends on the model's context size.";
+    centerZone.appendChild(contextText);
+  }
+
   // Right: mode toggle. Text-only button that flips between Auto
   // and Manual on click; label always names the *current* mode.
   const isAuto = state.currentStepMode === "auto";
@@ -967,31 +1014,6 @@ function buildComposerMeta(state: ChatPanelState): HTMLElement {
     send({ type: "set-step-mode", mode: live === "auto" ? "manual" : "auto" });
   });
   rightZone.appendChild(modeBtn);
-
-  // Stop button sits to the right of the Mode toggle. Visible only
-  // while the orchestrator is streaming -- it's the cancel-current-
-  // activity gesture, not a session terminator (that lives on the
-  // toolbar's ⏻). Disabled when `canStop` is false (a stop is
-  // already in flight).
-  if (state.isStreaming) {
-    const stopBtn = document.createElement("button");
-    stopBtn.type = "button";
-    stopBtn.id = "x-composer-stop";
-    stopBtn.className = "x-stop-meta";
-    stopBtn.textContent = "■";
-    stopBtn.setAttribute("aria-label", "Stop the current activity");
-    stopBtn.title =
-      "Stop the current activity and drop to Manual mode. The session stays attached -- this is not End session.";
-    stopBtn.disabled = !state.canStop;
-    stopBtn.addEventListener("click", () => {
-      const s = ui.state;
-      if (!s?.canStop) {
-        return;
-      }
-      send({ type: "stop-conversation" });
-    });
-    rightZone.appendChild(stopBtn);
-  }
 
   root.append(leftZone, centerZone, rightZone);
   return root;
