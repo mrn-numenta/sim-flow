@@ -1903,6 +1903,66 @@ mod tests {
     }
 
     #[test]
+    fn runs_cmd_on_empty_index_returns_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        // No runs recorded -- prints "(no runs match the filter)" and ok.
+        assert!(runs_cmd(tmp.path(), None, None, None, None, 100, false).is_ok());
+        // Also via JSON.
+        assert!(runs_cmd(tmp.path(), None, None, None, None, 100, true).is_ok());
+    }
+
+    #[test]
+    fn runs_cmd_with_filters_on_empty_index_is_still_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        assert!(
+            runs_cmd(
+                tmp.path(),
+                Some("throughput"),
+                Some("mesh"),
+                Some("noc"),
+                Some("001-parent"),
+                5,
+                false,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn baseline_cmd_list_on_empty_index_returns_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        // No baselines pinned -- prints nothing and returns ok.
+        assert!(
+            baseline_cmd(
+                tmp.path(),
+                &crate::cli::BaselineAction::List { json: false }
+            )
+            .is_ok()
+        );
+        assert!(baseline_cmd(tmp.path(), &crate::cli::BaselineAction::List { json: true }).is_ok());
+    }
+
+    #[test]
+    fn baseline_cmd_create_without_any_runs_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        // No runs in the index to pin against.
+        let r = baseline_cmd(
+            tmp.path(),
+            &crate::cli::BaselineAction::Create {
+                name: "v1".to_string(),
+                run: None,
+                notes: None,
+                json: false,
+            },
+        );
+        assert!(r.is_err());
+    }
+
+    #[test]
     fn init_overwrites_existing_state_toml() {
         // Current contract: `sim-flow init` is unconditional --
         // running it on an existing project resets state.toml to
