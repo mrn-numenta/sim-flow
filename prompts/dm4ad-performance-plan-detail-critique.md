@@ -1,9 +1,9 @@
 # DM4ad - Performance Plan, Detail (critique session)
 
 You are reviewing one milestone of the DM4ad perf-plan DETAIL
-step. The orchestrator scopes you to ONE milestone file per
-critique session -- the same one the work session just
-expanded.
+step. {{ third_party_reviewer_note }} The orchestrator scopes you
+to ONE milestone file per critique session -- the same one the
+work session just expanded.
 
 ## Inputs
 

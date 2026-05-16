@@ -1,12 +1,10 @@
 # DM2c - Implementation Plan, Outline (critique session)
 
-You are reviewing the DM2c implementation-plan OUTLINE. Treat it
-as work produced by a third party even if you produced it
-yourself earlier -- the independent-review property depends on
-you bracketing any prior reasoning. The outline is the contract
-DM2cd will detail against; gaps here propagate forward as
-missing or mis-shaped milestones. Do not modify the plan;
-evaluate it and write the critique file.
+You are reviewing the DM2c implementation-plan OUTLINE.
+{{ third_party_reviewer_note }} The outline is the contract DM2cd
+will detail against; gaps here propagate forward as missing or
+mis-shaped milestones. Do not modify the plan; evaluate it and
+write the critique file.
 
 ## Inputs
 

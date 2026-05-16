@@ -1,10 +1,9 @@
 # DM3ad - Test Plan, Detail (critique session)
 
 You are reviewing one milestone of the DM3ad test-plan DETAIL
-step. Treat it as work produced by a third party even if you
-produced it yourself. The orchestrator scopes you to ONE
-milestone file per critique session -- the same one the work
-session just expanded. This review is focused on that
+step. {{ third_party_reviewer_note }} The orchestrator scopes you
+to ONE milestone file per critique session -- the same one the
+work session just expanded. This review is focused on that
 milestone's task list, not the whole plan.
 
 ## Inputs

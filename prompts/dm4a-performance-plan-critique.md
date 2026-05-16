@@ -1,8 +1,9 @@
 # DM4a - Performance Plan, Outline (critique session)
 
-You are reviewing the DM4a performance-plan OUTLINE. The outline
-is the contract DM4ad will detail against; gaps here propagate
-as missing or mis-shaped milestones.
+You are reviewing the DM4a performance-plan OUTLINE.
+{{ third_party_reviewer_note }} The outline is the contract DM4ad
+will detail against; gaps here propagate as missing or mis-shaped
+milestones.
 
 ## Inputs
 

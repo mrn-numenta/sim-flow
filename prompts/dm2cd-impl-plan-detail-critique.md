@@ -1,11 +1,10 @@
 # DM2cd - Implementation Plan, Detail (critique session)
 
 You are reviewing one milestone of the DM2cd implementation-plan
-DETAIL step. Treat it as work produced by a third party even if
-you produced it yourself earlier. The orchestrator scopes you to
-ONE milestone file per critique session -- the same one the
-detail-step Work session just expanded -- so this review is
-focused on that milestone's task list, not the whole plan.
+DETAIL step. {{ third_party_reviewer_note }} The orchestrator
+scopes you to ONE milestone file per critique session -- the same
+one the detail-step Work session just expanded -- so this review
+is focused on that milestone's task list, not the whole plan.
 
 ## Inputs
 

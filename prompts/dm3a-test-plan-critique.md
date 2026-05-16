@@ -1,9 +1,9 @@
 # DM3a - Test Plan, Outline (critique session)
 
-You are reviewing the DM3a test-plan OUTLINE. Treat it as work
-produced by a third party even if you produced it yourself
-earlier. The outline is the contract DM3ad will detail against;
-gaps here propagate as missing or mis-shaped milestones.
+You are reviewing the DM3a test-plan OUTLINE.
+{{ third_party_reviewer_note }} The outline is the contract DM3ad
+will detail against; gaps here propagate as missing or mis-shaped
+milestones.
 
 ## Inputs
 
