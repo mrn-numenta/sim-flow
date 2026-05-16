@@ -1396,7 +1396,21 @@ where
                         // flight complete on their own.
                         break;
                     }
-                    let stub = queue_w.lock().unwrap().pop();
+                    // Tolerate a poisoned mutex (another worker
+                    // panicked while holding the lock). The
+                    // queue's contents are just a Vec<String> being
+                    // popped from -- no invariants a panic could
+                    // have left half-written -- so recover via
+                    // into_inner() and keep working. Without this,
+                    // one worker's panic in (say) a write_file
+                    // unwrap propagates to every other worker on
+                    // their next pop, even though the queue state
+                    // is intact. See orchestrator audit #10
+                    // (2026-05-16).
+                    let stub = match queue_w.lock() {
+                        Ok(mut guard) => guard.pop(),
+                        Err(poisoned) => poisoned.into_inner().pop(),
+                    };
                     let Some(milestone_rel) = stub else { break };
                     let bare_name = std::path::Path::new(&milestone_rel)
                         .file_name()
