@@ -582,6 +582,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (!action) {
       return;
     }
+    // Track advance dispatches in a single-shot flag so the next
+    // `computeNextAction` call can branch on the outcome (succeeded
+    // -> work on new step; refused -> re-run work on same step).
+    // Any other dispatch clears the flag.
+    session.lastAdvanceAttemptFor =
+      action.kind === "advance" ? action.step : null;
     const pump = session.pump;
     switch (action.kind) {
       case "work":
@@ -2492,21 +2498,39 @@ function computeNextAction(
   if (session.pump.stepMode !== "manual") {
     return null;
   }
-  // In manual mode the orchestrator parks at `wait_for_command`
-  // (auto.rs) between sub-sessions WITHOUT emitting RequestUserInput,
-  // so `awaitingInput` stays false. The dashboard's per-step buttons
-  // gate on `!inSubSession` instead -- mirror that here so Continue
-  // is available the moment a parked manual-mode pump is ready to
-  // accept the next host event.
   if (session.pump.inSubSession) {
     return null;
   }
   const last = session.pump.session;
   const currentStep = context.currentStep;
-  const gates = context.gates;
-  // No prior sub-session info -- e.g. just attached, or just
-  // advanced past the previous step. Suggest running work on the
-  // orchestrator's current step.
+
+  // Post-advance branch. When the chat panel most recently dispatched
+  // `advance` for some step, the next click should react to the
+  // outcome rather than re-suggest advance:
+  //   - current_step moved past it  → advance succeeded, run work on
+  //     the new step.
+  //   - current_step is still the same → advance refused (the gate
+  //     ran inside advance and failed -- typically due to unresolved
+  //     critique findings -- or the orchestrator declined for
+  //     milestone / cap reasons). Re-run work on the same step so
+  //     the model gets another swing.
+  // The flag is single-shot -- `continueFlow` clears it on the next
+  // non-advance dispatch.
+  if (session.lastAdvanceAttemptFor && currentStep) {
+    const advancedFrom = session.lastAdvanceAttemptFor;
+    const advanced = currentStep !== advancedFrom;
+    const target = advanced ? currentStep : advancedFrom;
+    return {
+      kind: "work",
+      step: target,
+      label: advanced
+        ? `Run work on ${target}`
+        : `Re-run work on ${target} (advance was refused)`,
+    };
+  }
+
+  // No prior sub-session info -- e.g. just attached. Suggest
+  // running work on the orchestrator's current step.
   if (!last) {
     if (!currentStep) {
       return null;
@@ -2522,20 +2546,6 @@ function computeNextAction(
   if (last.kind === "qa") {
     return null;
   }
-  // The orchestrator advanced past `last.step` -- gate passed AND
-  // current_step is no longer the step we just worked on. The next
-  // logical action is work on the new step.
-  if (
-    currentStep &&
-    currentStep !== last.step &&
-    gates[last.step]?.passed === true
-  ) {
-    return {
-      kind: "work",
-      step: currentStep,
-      label: `Run work on ${currentStep}`,
-    };
-  }
   if (last.kind === "work") {
     return {
       kind: "critique",
@@ -2544,17 +2554,17 @@ function computeNextAction(
     };
   }
   if (last.kind === "critique") {
-    if (gates[last.step]?.passed === true) {
-      return {
-        kind: "advance",
-        step: last.step,
-        label: `Advance past ${last.step}`,
-      };
-    }
+    // After critique, always try advance. Advance runs the gate
+    // internally; if the critique is unresolved the gate fails and
+    // advance refuses (state.toml unchanged). The next Continue
+    // hits the `lastAdvanceAttemptFor` branch above and suggests
+    // re-running work. So we skip the explicit "gate" click
+    // entirely -- gate happens inside advance.
+    const targetStep = currentStep ?? last.step;
     return {
-      kind: "gate",
-      step: last.step,
-      label: `Run gate on ${last.step}`,
+      kind: "advance",
+      step: targetStep,
+      label: `Advance past ${targetStep}`,
     };
   }
   return null;

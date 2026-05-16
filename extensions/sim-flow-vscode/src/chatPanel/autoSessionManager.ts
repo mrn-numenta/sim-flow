@@ -49,6 +49,16 @@ export interface ManagedAutoSessionState {
   sessionMode: "auto" | "step";
   stepRef: ManagedStepRef | null;
   launchSpecPath: string | undefined;
+  /**
+   * Step ID for which the chat panel most recently dispatched
+   * `pump.advance()`. Used by `computeNextAction` to detect whether
+   * the orchestrator's advance succeeded (current_step moved past
+   * this step) or refused (current_step still equals this step).
+   * Cleared the next time `continueFlow` dispatches a non-advance
+   * action -- single-shot tracking, not a queue. Persisted only in
+   * memory; a fresh session restart resets it.
+   */
+  lastAdvanceAttemptFor: string | null;
 }
 
 export interface StoredAutoSessionRecord {
@@ -201,6 +211,7 @@ export class AutoSessionManager implements vscode.Disposable {
       sessionMode: options.sessionMode,
       stepRef: options.stepRef,
       launchSpecPath: options.launchSpecPath,
+      lastAdvanceAttemptFor: null,
     };
     this.activeSession = session;
     this.notifyActiveSessionChanged();
@@ -377,6 +388,7 @@ export class AutoSessionManager implements vscode.Disposable {
       sessionMode: record.sessionMode,
       stepRef: record.stepRef,
       launchSpecPath: record.launchSpecPath,
+      lastAdvanceAttemptFor: null,
     };
     this.activeSession = session;
     this.notifyActiveSessionChanged();
