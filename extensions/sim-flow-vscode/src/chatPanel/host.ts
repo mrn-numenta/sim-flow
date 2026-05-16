@@ -14,7 +14,9 @@ import {
 import type { LlmSource, SecretStorage } from "../llm";
 import { type PumpLlmConfig } from "../session/pump";
 import { SocketSessionPump } from "../session/socketPump";
+import { readCritique } from "../state/critiques";
 import { readFlowState } from "../state/flowState";
+import { readPlanProgress } from "../state/planProgress";
 import { stepOrderFor, stepsFromOnward } from "../state/stepOrder";
 import type { FlowState } from "../state/types";
 import {
@@ -483,9 +485,42 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       case "reset-step-pick":
         await this.resetFromEarlierStep();
         return;
+      case "open-critique-popup":
+        await this.openCritiquePopup(msg.step);
+        return;
       default:
         return;
     }
+  }
+
+  /**
+   * Read the latest critique file for `step` and post a
+   * `critique-data` HostMessage back to the webview so its popup can
+   * render. Lazy: the file is only read on click, not preloaded into
+   * `ChatPanelState`. Errors and missing files resolve to `data: null`
+   * (popup shows an empty state).
+   */
+  private async openCritiquePopup(step: string): Promise<void> {
+    if (!this.view || this.disposed) {
+      return;
+    }
+    const projectDir = this.activePump?.projectDir ?? this.anchoredProjectDir();
+    let data: { findings: import("../state/types").Finding[]; hasBlocking: boolean } | null = null;
+    if (projectDir) {
+      try {
+        const file = await readCritique(projectDir, step);
+        if (file) {
+          data = { findings: file.findings, hasBlocking: file.hasBlocking };
+        }
+      } catch {
+        data = null;
+      }
+    }
+    await this.view.webview.postMessage({
+      type: "critique-data",
+      step,
+      data,
+    });
   }
 
   /**
@@ -892,6 +927,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     const flowState = projectDir ? await readFlowStateSafe(projectDir) : null;
     const currentStep = flowState?.current_step ?? null;
     const gates = flowState?.gates ?? {};
+    const flow = flowState?.flow ?? null;
+    const currentMilestone =
+      projectDir && currentStep
+        ? await readCurrentMilestoneSafe(projectDir, currentStep)
+        : null;
     const projectLabel =
       projectDir !== null
         ? path.basename(projectDir)
@@ -901,7 +941,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       projectLabel,
       projectDir,
       currentStep,
+      flow,
       gates,
+      currentMilestone,
       source: settings.source,
       rawSource: settings.rawSource,
       baseUrl: settings.baseUrl,
@@ -1525,6 +1567,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       mode: "live",
       projectLabel: context.projectLabel,
       projectDir: context.projectDir,
+      flow: context.flow,
+      passedSteps: Object.entries(context.gates)
+        .filter(([, gate]) => gate?.passed === true)
+        .map(([step]) => step),
       currentStep: context.currentStep,
       currentPhase:
         this.activePump?.projectDir === context.projectDir
@@ -1603,6 +1649,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           : null,
       sessionActive:
         !!this.activePump && this.activePump.projectDir === context.projectDir,
+      currentMilestone: context.currentMilestone,
     };
   }
 
@@ -2325,11 +2372,23 @@ interface PanelContext {
   projectDir: string | null;
   currentStep: string | null;
   /**
+   * Flow declared by the anchored project's `state.toml`. `null` when
+   * no project is anchored or its state file is missing. Surfaced to
+   * the webview so the step rail can pick the correct ordering.
+   */
+  flow: import("../cli/types").Flow | null;
+  /**
    * Gate map from `state.toml`. Used by `buildState` to decide
    * whether a critique has earned an advance (or still needs a
    * gate run). Empty when no project is anchored.
    */
   gates: Record<string, { passed?: boolean }>;
+  /**
+   * Milestone the orchestrator is presently working on, plus the
+   * specific pending task within it. Null when the current step
+   * has no plan (DM0/DM1/DM2a/DM2b) or no pending task remains.
+   */
+  currentMilestone: { title: string; task: string } | null;
   /** Resolved backend kind. `server:<name>` references already
    *  mapped to the entry's `kind`. */
   source: LlmSourceTag;
@@ -2524,6 +2583,34 @@ async function readFlowStateSafe(
 ): Promise<FlowState | null> {
   try {
     return await readFlowState(projectDir);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Find the milestone the orchestrator is presently working on plus
+ * the first pending task within it, for the line under the step rail.
+ * Returns null when the step has no plan, the plan directory hasn't
+ * been built yet, or every milestone is complete. IO/parse failures
+ * also resolve to null so a missing plan doesn't crash the chat panel.
+ */
+async function readCurrentMilestoneSafe(
+  projectDir: string,
+  currentStep: string,
+): Promise<{ title: string; task: string } | null> {
+  try {
+    const progress = await readPlanProgress(projectDir, currentStep);
+    if (progress.kind === "none" || progress.currentTask === null) {
+      return null;
+    }
+    const owner = progress.milestones.find(
+      (m) => m.filePath === progress.currentTaskFilePath,
+    );
+    if (!owner) {
+      return null;
+    }
+    return { title: owner.title, task: progress.currentTask };
   } catch {
     return null;
   }

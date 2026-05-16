@@ -75,7 +75,10 @@ body {
 .x-shell {
   height: 100%;
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  /* Rows: toolbar | transcript | composer | step-rail. The fourth
+   * row is `auto`, collapses to 0 if `buildStepRail` returned null
+   * (no flow anchored). */
+  grid-template-rows: auto 1fr auto auto;
   min-height: 0;
 }
 
@@ -981,4 +984,238 @@ body {
 .x-browse:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* ---------------------------------------------------------------
+ * Step rail
+ * ---------------------------------------------------------------
+ * Horizontal rail under the composer. Each tile is half the height
+ * of the 32px Send/Stop button (16px) and ~36px wide -- enough for
+ * any DM2x / DM3x / DM4x label. A passed step is filled with the
+ * second-brightest palette colour; the current step is filled with
+ * the brightest; pending steps are outline-only.
+ */
+
+.x-step-rail-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 6px 12px 8px;
+  border-top: 1px solid var(--x-border);
+}
+
+.x-step-rail {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  overflow-x: auto;
+}
+
+.x-step-rail-step {
+  flex: 0 0 auto;
+  min-width: 36px;
+  height: 16px;
+  padding: 0 4px;
+  border: 1px solid var(--x-palette-accent);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--vscode-foreground);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Pending step (default): outline + transparent fill already
+ * declared above. Hover paints a very faint tint so the click
+ * target is clearly interactive. */
+.x-step-rail-step-pending:hover {
+  background: color-mix(in srgb, var(--x-palette-tool) 18%, transparent);
+}
+
+.x-step-rail-step-passed {
+  background: var(--x-palette-tool);
+  border-color: var(--x-palette-tool);
+  /* Dark text on the lighter palette colours stays readable in
+   * both light and dark editor themes. */
+  color: var(--x-palette-accent);
+}
+
+.x-step-rail-step-current {
+  background: var(--x-palette-input);
+  border-color: var(--x-palette-input);
+  color: var(--x-palette-accent);
+  /* Slight bump so the active step reads as the focal point
+   * even when the rail is wide. */
+  box-shadow: 0 0 0 1px var(--x-palette-accent);
+}
+
+.x-step-rail-step:focus-visible {
+  outline: 2px solid var(--x-palette-output);
+  outline-offset: 1px;
+}
+
+.x-step-rail-substep {
+  font-size: 11px;
+  color: var(--x-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------
+ * Help + critique popups
+ * ---------------------------------------------------------------
+ * Fixed-position overlays anchored over the chat panel. The
+ * backdrop covers the panel and dims it; clicking outside the
+ * inner card closes. The inner card is a single column with a
+ * close-button header and a scrollable body.
+ */
+
+.x-popup-backdrop {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, #000 35%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 24px;
+}
+
+.x-popup-panel {
+  width: min(560px, 100%);
+  max-height: calc(100% - 0px);
+  display: flex;
+  flex-direction: column;
+  background: var(--vscode-editor-background);
+  border: 1px solid var(--x-palette-accent);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px color-mix(in srgb, #000 50%, transparent);
+  overflow: hidden;
+}
+
+.x-popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--x-border);
+}
+
+.x-popup-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--vscode-foreground);
+}
+
+.x-popup-close {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--vscode-foreground);
+  font: inherit;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.x-popup-close:hover {
+  background: color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
+}
+
+.x-popup-body {
+  padding: 12px 16px 16px;
+  overflow-y: auto;
+}
+
+.x-popup-empty {
+  color: var(--x-muted);
+  font-style: italic;
+  padding: 12px 0;
+  text-align: center;
+}
+
+.x-popup-step {
+  margin-bottom: 14px;
+}
+
+.x-popup-step:last-child {
+  margin-bottom: 0;
+}
+
+.x-popup-step-title {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--vscode-foreground);
+}
+
+.x-popup-step-body {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--vscode-foreground);
+}
+
+.x-popup-finding-section {
+  margin-bottom: 12px;
+}
+
+.x-popup-finding-section:last-child {
+  margin-bottom: 0;
+}
+
+.x-popup-finding-heading {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--x-muted);
+}
+
+.x-popup-finding-list {
+  margin: 0;
+  padding: 0 0 0 18px;
+  list-style: disc;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.x-popup-finding-blocker {
+  color: var(--vscode-errorForeground, #d2522d);
+}
+
+.x-popup-finding-unresolved {
+  color: var(--vscode-editorWarning-foreground, #c79c40);
+}
+
+.x-popup-finding-resolved {
+  color: var(--x-muted);
+  text-decoration: line-through;
+}
+
+/* Help-icon button in the toolbar inherits the existing
+ * `.x-toolbar button` reset from earlier in this file; only the
+ * icon-button sizing needs a nudge so the codicon centres on the
+ * 28px-tall toolbar buttons. */
+.x-toolbar-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 6px;
 }

@@ -11,6 +11,8 @@
 
 import morphdom from "morphdom";
 
+import { stepOrderFor } from "../state/stepOrder";
+import type { Finding } from "../state/types";
 import type {
   ChatPanelState,
   ChatTranscriptEntry,
@@ -67,6 +69,11 @@ function isPaletteName(value: unknown): value is PaletteName {
   );
 }
 
+type OpenPopup =
+  | null
+  | { kind: "help" }
+  | { kind: "critique"; step: string };
+
 interface UiState {
   state: ChatPanelState | null;
   draft: string;
@@ -81,6 +88,25 @@ interface UiState {
    * (tool results closed, everything else open).
    */
   bubblesExpanded: boolean;
+  /**
+   * Which overlay popup is currently visible above the chat panel,
+   * if any. `help` covers the per-step help icon in the header;
+   * `critique` covers a click on any step rail tile. Persisted
+   * across renders so morphdom keeps the popup mounted while the
+   * transcript continues to update underneath.
+   */
+  openPopup: OpenPopup;
+  /**
+   * Per-step critique data cached after a `critique-data` reply
+   * lands. Cleared when the user closes / switches popups, so a
+   * stale entry doesn't pre-fill the next opening with the wrong
+   * step's findings. `undefined` for "not yet fetched";
+   * `null` for "fetched and no critique on disk".
+   */
+  critiqueData: Map<
+    string,
+    { findings: Finding[]; hasBlocking: boolean } | null
+  >;
 }
 
 interface PersistedState {
@@ -96,6 +122,8 @@ const ui: UiState = {
   scrollTop: 0,
   palette: isPaletteName(persisted?.palette) ? persisted.palette : DEFAULT_PALETTE,
   bubblesExpanded: true,
+  openPopup: null,
+  critiqueData: new Map(),
 };
 
 applyPalette();
@@ -116,6 +144,20 @@ window.addEventListener("message", (event) => {
   }
   if (msg.type === "file-picked") {
     insertIntoDraft(msg.path);
+    return;
+  }
+  if (msg.type === "critique-data") {
+    // Stale-reply guard: a fast user could have already closed the
+    // popup or clicked a different step. Drop the result unless
+    // they're still looking at the matching critique popup.
+    ui.critiqueData.set(msg.step, msg.data);
+    if (
+      ui.openPopup &&
+      ui.openPopup.kind === "critique" &&
+      ui.openPopup.step === msg.step
+    ) {
+      render();
+    }
     return;
   }
 });
@@ -251,7 +293,19 @@ function buildShell(): Node[] {
   shell.appendChild(buildToolbar(ui.state));
   shell.appendChild(buildTranscript(ui.state));
   shell.appendChild(buildComposer(ui.state));
-  return [shell];
+  const rail = buildStepRail(ui.state);
+  if (rail) {
+    shell.appendChild(rail);
+  }
+  const nodes: Node[] = [shell];
+  // Overlay popups live as siblings of the shell so their fixed
+  // positioning can cover the toolbar + transcript + composer
+  // without inheriting the grid's row tracks.
+  const popup = buildPopup(ui.state);
+  if (popup) {
+    nodes.push(popup);
+  }
+  return nodes;
 }
 
 // Codicon markup for the toolbar icons. The codicon stylesheet
@@ -379,7 +433,24 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   llmGroup.appendChild(llmStatus);
   centerZone.appendChild(llmGroup);
 
-  // ---- RIGHT: dashboard + settings + total tokens ----
+  // ---- RIGHT: help + dashboard + settings + total tokens ----
+
+  // Help button: opens a popup that describes every step in the
+  // step rail. Lives next to the dashboard button so the user
+  // reads them as a help/navigation pair.
+  const helpBtn = document.createElement("button");
+  helpBtn.type = "button";
+  helpBtn.className = "x-toolbar-help";
+  helpBtn.innerHTML = `<i class="codicon codicon-question" aria-hidden="true"></i>`;
+  helpBtn.setAttribute("aria-label", "Help");
+  helpBtn.title = "Open the per-step help guide.";
+  helpBtn.addEventListener("click", () => {
+    // Toggle: a second click on the same icon closes the popup so
+    // the user can dismiss without moving the mouse.
+    ui.openPopup = ui.openPopup?.kind === "help" ? null : { kind: "help" };
+    render();
+  });
+  rightZone.appendChild(helpBtn);
 
   // Dashboard button: opens the sim-flow dashboard for the chat
   // panel's current project (no picker; host reads the same
@@ -1095,6 +1166,304 @@ function div(
     node.append(child);
   }
   return node;
+}
+
+// ---------------------------------------------------------------
+// Step rail
+// ---------------------------------------------------------------
+
+/**
+ * Short title shown on hover when the step rail can't fit the
+ * full descriptive label. Source: the dashboard's DM_STEPS array.
+ */
+const STEP_LABELS: Record<string, string> = {
+  DM0: "Spec",
+  DM1: "Setup",
+  DM2a: "Decomp",
+  DM2b: "Pipeline",
+  DM2c: "ImplPlan",
+  DM2d: "Model",
+  DM3a: "TestPlan",
+  DM3b: "Bench",
+  DM3c: "Tests",
+  DM4a: "PerfPlan",
+  DM4b: "Perf",
+  DS0: "Spec",
+  DS1: "Setup",
+  DS2: "Decomp",
+  DS3a: "Outline",
+  DS3b: "Bench",
+  DS3c: "Tests",
+  DS4: "Screen",
+  DS5: "Compare",
+};
+
+/**
+ * One-paragraph help text per step. Authored to be readable as a
+ * standalone description; the help popup renders all entries in
+ * the order returned by `stepOrderFor(flow)`. Keep these short --
+ * the popup is a quick reference, not the canonical docs.
+ */
+const STEP_DESCRIPTIONS: Record<string, { title: string; body: string }> = {
+  DM0: {
+    title: "DM0 — Specification",
+    body:
+      "Ingest the user-supplied spec (markdown or PDF) into `docs/spec.md` / `docs/spec/`. The agent asks clarifying questions until the spec declares a clock frequency and an explicit gates-per-cycle budget. Critique gate passes when no blockers remain.",
+  },
+  DM1: {
+    title: "DM1 — Modeling Setup",
+    body:
+      "Translate the spec into engineering targets and pick a UVM-lite testbench shape. Outputs `docs/targets.md` (quantitative targets) and `docs/testbench.md` (sequencer / driver / monitor / scoreboard plus a `lib:examples/<NN-name>` baseline DM3b will mirror).",
+  },
+  DM2a: {
+    title: "DM2a — Decomposition",
+    body:
+      "Break the design into named operations under `docs/analysis/decomposition.md` and characterize each with a data-movement summary in `docs/analysis/data-movement.md`. Every operation that DM2b will map to pipeline stages must appear here.",
+  },
+  DM2b: {
+    title: "DM2b — Pipeline Mapping",
+    body:
+      "Assign each operation to a pipeline stage in `docs/analysis/pipeline-mapping.md`. Defines the in-order shape DM2c's implementation plan and DM2d's model will follow.",
+  },
+  DM2c: {
+    title: "DM2c — Implementation Plan",
+    body:
+      "Break the modeling work into milestones under `docs/impl-plan/milestone-NN-*.md`, each with a checklist that DM2d will tick off as the model is implemented. The milestone files are this step's only output.",
+  },
+  DM2d: {
+    title: "DM2d — Model Execution",
+    body:
+      "Implement the SystemVerilog model milestone-by-milestone, ticking off `- [x]` entries in each `milestone-NN-*.md` as code lands. Critique runs between milestones; the gate clears once every milestone is fully resolved.",
+  },
+  DM3a: {
+    title: "DM3a — Test Plan",
+    body:
+      "Outline testbench scaffolding (`tb-milestone-NN-*.md`) and per-operation test sequences (`test-milestone-NN-*.md`) under `docs/test-plan/`. Both prefixes feed one pipeline that DM3b and DM3c walk in order.",
+  },
+  DM3b: {
+    title: "DM3b — Testbench Build",
+    body:
+      "Implement the UVM-lite testbench components named in DM1's `docs/testbench.md`, ticking off the `tb-milestone-NN-*.md` rows. Lands the agents, scoreboard, and `SimEnvBuilder` wiring DM3c's tests will exercise.",
+  },
+  DM3c: {
+    title: "DM3c — Test Execution",
+    body:
+      "Run the per-operation tests scaffolded in DM3a's `test-milestone-NN-*.md`. Failures route back through critique; the gate clears once every test milestone is resolved.",
+  },
+  DM4a: {
+    title: "DM4a — Performance Plan",
+    body:
+      "Plan the perf experiments under `docs/perf-plan/perf-milestone-NN-*.md`. Each stub names the workload, the metric of interest, and how a run should be invoked.",
+  },
+  DM4b: {
+    title: "DM4b — Performance Execution",
+    body:
+      "Execute each perf milestone, recording at least one run in `experiments.db`. The gate inspects experiment artifacts and clears once the perf plan is fully covered.",
+  },
+};
+
+/**
+ * Render the horizontal step rail under the composer. Each tile
+ * is half the height of the Send button and just wide enough for
+ * a four-character step id. Returns null when there's no anchored
+ * project (no flow declared yet -> nothing meaningful to show).
+ *
+ * Visual rules:
+ *   - current step  -> filled, brightest palette colour
+ *   - passed step   -> filled, second-brightest palette colour
+ *   - pending step  -> outline-only, transparent fill
+ */
+function buildStepRail(state: ChatPanelState): HTMLElement | null {
+  if (!state.flow) {
+    return null;
+  }
+  const order = stepOrderFor(state.flow);
+  const passed = new Set(state.passedSteps);
+  const wrap = div("x-step-rail-wrap");
+  const rail = div("x-step-rail");
+  rail.setAttribute("role", "tablist");
+  rail.setAttribute("aria-label", "Flow step rail");
+  for (const stepId of order) {
+    const tile = document.createElement("button");
+    tile.type = "button";
+    let cls = "x-step-rail-step";
+    let title: string;
+    if (stepId === state.currentStep) {
+      cls += " x-step-rail-step-current";
+      title = `${STEP_LABELS[stepId] ?? stepId}: current step. Click for the latest critique findings.`;
+    } else if (passed.has(stepId)) {
+      cls += " x-step-rail-step-passed";
+      title = `${STEP_LABELS[stepId] ?? stepId}: gate passed. Click for that step's critique findings.`;
+    } else {
+      cls += " x-step-rail-step-pending";
+      title = `${STEP_LABELS[stepId] ?? stepId}: not yet completed. Click for any critique findings on disk.`;
+    }
+    tile.className = cls;
+    tile.textContent = stepId;
+    tile.title = title;
+    tile.setAttribute("aria-label", title);
+    tile.addEventListener("click", () => {
+      // Same-tile second click closes; otherwise switch which
+      // step's critique is shown.
+      if (
+        ui.openPopup &&
+        ui.openPopup.kind === "critique" &&
+        ui.openPopup.step === stepId
+      ) {
+        ui.openPopup = null;
+      } else {
+        ui.openPopup = { kind: "critique", step: stepId };
+        if (!ui.critiqueData.has(stepId)) {
+          send({ type: "open-critique-popup", step: stepId });
+        }
+      }
+      render();
+    });
+    rail.appendChild(tile);
+  }
+  wrap.appendChild(rail);
+  // Milestone + task sub-row: single line, only when the
+  // orchestrator is inside a milestone-driven step (DM2d, DM3c,
+  // DM4b) AND a pending task remains.
+  if (state.currentMilestone) {
+    const sub = div("x-step-rail-substep");
+    sub.textContent = `${state.currentMilestone.title}: ${state.currentMilestone.task}`;
+    sub.title = sub.textContent;
+    wrap.appendChild(sub);
+  }
+  return wrap;
+}
+
+// ---------------------------------------------------------------
+// Popups (help + critique)
+// ---------------------------------------------------------------
+
+function buildPopup(state: ChatPanelState): HTMLElement | null {
+  const open = ui.openPopup;
+  if (!open) {
+    return null;
+  }
+  const root = div("x-popup-backdrop");
+  // Click outside the panel closes the popup. The inner panel
+  // stops propagation so clicks on its content don't dismiss.
+  root.addEventListener("click", () => {
+    ui.openPopup = null;
+    render();
+  });
+  const panel = div("x-popup-panel");
+  panel.addEventListener("click", (e) => e.stopPropagation());
+  const header = div("x-popup-header");
+  const title = document.createElement("h2");
+  title.className = "x-popup-title";
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "x-popup-close";
+  closeBtn.innerHTML = `<i class="codicon codicon-close" aria-hidden="true"></i>`;
+  closeBtn.setAttribute("aria-label", "Close");
+  closeBtn.title = "Close";
+  closeBtn.addEventListener("click", () => {
+    ui.openPopup = null;
+    render();
+  });
+  if (open.kind === "help") {
+    title.textContent = "Step guide";
+    header.append(title, closeBtn);
+    panel.appendChild(header);
+    panel.appendChild(buildHelpBody(state));
+  } else {
+    title.textContent = `${open.step} — critique`;
+    header.append(title, closeBtn);
+    panel.appendChild(header);
+    panel.appendChild(buildCritiqueBody(open.step));
+  }
+  root.appendChild(panel);
+  return root;
+}
+
+function buildHelpBody(state: ChatPanelState): HTMLElement {
+  const body = div("x-popup-body");
+  // Render descriptions in flow order so DM and DS users get the
+  // canonical ordering of their pipeline. Falls back to every
+  // known DM step when no flow is anchored yet -- the user can
+  // still read the help up-front before launching a session.
+  const order = state.flow
+    ? stepOrderFor(state.flow)
+    : Object.keys(STEP_DESCRIPTIONS);
+  for (const stepId of order) {
+    const entry = STEP_DESCRIPTIONS[stepId];
+    if (!entry) {
+      continue;
+    }
+    const row = div("x-popup-step");
+    const heading = document.createElement("h3");
+    heading.className = "x-popup-step-title";
+    heading.textContent = entry.title;
+    const para = document.createElement("p");
+    para.className = "x-popup-step-body";
+    para.textContent = entry.body;
+    row.append(heading, para);
+    body.appendChild(row);
+  }
+  return body;
+}
+
+function buildCritiqueBody(step: string): HTMLElement {
+  const body = div("x-popup-body");
+  const cached = ui.critiqueData.get(step);
+  if (cached === undefined) {
+    // Request is still in flight (or the popup mounted before the
+    // first reply landed). Show a brief loading state; the next
+    // render will replace this once `critique-data` arrives.
+    body.appendChild(div("x-popup-empty", "Loading critique…"));
+    return body;
+  }
+  if (cached === null || cached.findings.length === 0) {
+    body.appendChild(
+      div(
+        "x-popup-empty",
+        `No critique findings on disk for ${step} yet. Run the critique sub-session to generate one.`,
+      ),
+    );
+    return body;
+  }
+  const blockers = cached.findings.filter((f) => f.kind === "blocker");
+  const unresolved = cached.findings.filter((f) => f.kind === "unresolved");
+  const resolved = cached.findings.filter((f) => f.kind === "resolved");
+  appendFindingSection(body, "Blockers", blockers, "x-popup-finding-blocker");
+  appendFindingSection(
+    body,
+    "Unresolved",
+    unresolved,
+    "x-popup-finding-unresolved",
+  );
+  appendFindingSection(body, "Resolved", resolved, "x-popup-finding-resolved");
+  return body;
+}
+
+function appendFindingSection(
+  body: HTMLElement,
+  label: string,
+  findings: Finding[],
+  cls: string,
+): void {
+  if (findings.length === 0) {
+    return;
+  }
+  const section = div("x-popup-finding-section");
+  const heading = document.createElement("h3");
+  heading.className = "x-popup-finding-heading";
+  heading.textContent = `${label} (${findings.length})`;
+  section.appendChild(heading);
+  const list = document.createElement("ul");
+  list.className = "x-popup-finding-list";
+  for (const f of findings) {
+    const item = document.createElement("li");
+    item.className = cls;
+    item.textContent = f.text.length > 0 ? f.text : "(no description)";
+    list.appendChild(item);
+  }
+  section.appendChild(list);
+  body.appendChild(section);
 }
 
 // Kick off the Shiki highlighter in the background. When it's ready we

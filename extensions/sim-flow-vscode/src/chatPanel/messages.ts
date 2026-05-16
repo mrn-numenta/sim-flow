@@ -1,9 +1,25 @@
+import type { Flow } from "../cli/types";
 import type { LlmSourceTag, StepMode } from "../webview/messages";
+import type { Finding } from "../state/types";
 
 export interface ChatPanelState {
   mode: "live";
   projectLabel: string;
   projectDir: string | null;
+  /**
+   * Flow declared in the anchored project's `state.toml`
+   * (`direct-modeling` / `design-study`). Drives the step rail's
+   * canonical step list via `stepOrderFor`. Null when no project is
+   * anchored.
+   */
+  flow: Flow | null;
+  /**
+   * Gate map for the anchored project (step id -> passed flag).
+   * Populated from `FlowState.gates`. The step rail uses this to
+   * paint completed-vs-pending tiles. Empty when no project is
+   * anchored.
+   */
+  passedSteps: string[];
   currentStep: string | null;
   currentPhase: string | null;
   currentTool: string | null;
@@ -115,6 +131,16 @@ export interface ChatPanelState {
    * connected-and-idle, and connected-and-working.
    */
   sessionActive: boolean;
+  /**
+   * Milestone the orchestrator is presently working on, plus the
+   * specific pending task within it. Only populated when the
+   * current step drives a plan (DM2c/DM2d, DM3a-c, DM4a/DM4b) and
+   * a pending task remains. Null in every other case (including
+   * milestone-less steps like DM0/DM1/DM2a/DM2b). The chat panel
+   * renders this as a single line under the step rail; when null,
+   * the line is hidden entirely.
+   */
+  currentMilestone: { title: string; task: string } | null;
 }
 
 export type ChatTranscriptEntry =
@@ -144,7 +170,21 @@ export type HostMessage =
    * draft. The host only posts this message when the user actually
    * selected a file (cancel + dismiss are silent).
    */
-  | { type: "file-picked"; path: string };
+  | { type: "file-picked"; path: string }
+  /**
+   * Reply to an `open-critique-popup` request. Carries the parsed
+   * findings for the requested step (or `null` when no critique
+   * file exists on disk yet). The webview renders the popup with
+   * blockers + unresolved + resolved sections; `null` shows an
+   * empty-state ("No critique yet for <step>"). `step` echoes the
+   * request so the webview can ignore stale replies after the user
+   * clicked a different step in quick succession.
+   */
+  | {
+      type: "critique-data";
+      step: string;
+      data: { findings: Finding[]; hasBlocking: boolean } | null;
+    };
 
 export type WebviewMessage =
   | { type: "ready" }
@@ -214,4 +254,11 @@ export type WebviewMessage =
    * flow's canonical order. Confirmation dialog precedes the
    * destructive action.
    */
-  | { type: "reset-step-pick" };
+  | { type: "reset-step-pick" }
+  /**
+   * Open the per-step critique popup. The host reads the latest
+   * critique file for `step` and replies with a `critique-data`
+   * HostMessage carrying the parsed findings (or null when no
+   * critique exists yet).
+   */
+  | { type: "open-critique-popup"; step: string };
