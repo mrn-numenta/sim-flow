@@ -917,19 +917,23 @@ body {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  /* Hide overflow so a hovered tile expanding to its full label
-   * forces neighbours to shrink instead of letting the rail
-   * scroll. */
-  overflow: hidden;
+  /* `overflow: visible` so a hovered tile's expanded label overlay
+   * (positioned absolutely below) can render outside the rail's
+   * box without being clipped. */
+  overflow: visible;
 }
 
 .x-step-rail-step {
-  /* `flex-shrink: 1` plus `min-width: 0` lets neighbours give up
-   * width when a sibling expands on hover. `flex-basis: 36px`
-   * keeps the default tile wide enough for any DMx / DSx label. */
-  flex: 1 1 36px;
-  min-width: 0;
-  max-width: 36px;
+  /* Fixed width on every tile. Previously the tile flex-grew on
+   * hover, which forced neighbours to shrink and caused a layout
+   * reflow under the cursor: by the time the user's cursor reached
+   * tile B from tile A, the still-animating shrink of A had shifted
+   * B leftward, and the next tile (C) ended up under the cursor.
+   * The expanded label now renders as an absolutely-positioned
+   * overlay (below) so the tile widths never change and the cursor
+   * always lands on the tile it crossed into. */
+  flex: 0 0 36px;
+  width: 36px;
   height: 16px;
   padding: 0 4px;
   border: 1px solid var(--x-palette-accent);
@@ -945,41 +949,47 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
   white-space: nowrap;
-  transition: max-width 120ms ease, padding 120ms ease;
+  position: relative;
 }
 
-/* Short / full label spans. Default: short visible, full hidden.
- * Hover swaps them so the tile reveals "DM0: Specification Intake"
- * while the tile itself widens via the rule below. */
+/* Short label fills the tile by default. The full label is a
+ * separate node that overlays the tile (and extends past its
+ * edges) when hovered. The overlay inherits the tile's bg/border
+ * via the per-state rules below so it reads as the same control
+ * just bigger. */
 .x-step-rail-step-short {
   display: inline;
 }
 
 .x-step-rail-step-full {
   display: none;
-}
-
-.x-step-rail-step:hover,
-.x-step-rail-step:focus-visible {
-  /* `max-width: none` + `flex-grow: 0` lets the tile size to its
-   * content (the longer label). `flex-shrink: 0` keeps it from
-   * being squashed when neighbours are still trying to claim
-   * space. */
-  flex: 0 0 auto;
-  max-width: none;
+  position: absolute;
+  /* Tooltip-style label rendered ABOVE the tile, anchored
+   * horizontally to the tile's centre. Vertical positioning is
+   * deliberate: a horizontal "expand the tile" overlay would
+   * either reflow neighbours (causing the reflow off-by-one bug
+   * the previous design hit) or cover horizontally-adjacent
+   * tiles (causing a different off-by-one: leaving the wide
+   * overlay edge drops the cursor on a non-adjacent tile). A
+   * tooltip above the tile dodges both. */
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  height: 16px;
   padding: 0 8px;
-}
-
-.x-step-rail-step:hover .x-step-rail-step-short,
-.x-step-rail-step:focus-visible .x-step-rail-step-short {
-  display: none;
+  border: 1px solid var(--x-palette-accent);
+  border-radius: 4px;
+  white-space: nowrap;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+  pointer-events: none;
 }
 
 .x-step-rail-step:hover .x-step-rail-step-full,
 .x-step-rail-step:focus-visible .x-step-rail-step-full {
-  display: inline;
+  display: inline-flex;
 }
 
 /* Pending step (default): outline + transparent fill already
@@ -989,7 +999,16 @@ body {
   background: color-mix(in srgb, var(--x-palette-tool) 18%, transparent);
 }
 
-.x-step-rail-step-passed {
+/* Pending overlay needs an opaque editor-bg fill so the expanded
+ * label can be read against any tiles it overlaps. */
+.x-step-rail-step-pending .x-step-rail-step-full {
+  background: var(--vscode-editor-background);
+  border-color: var(--x-palette-accent);
+  color: var(--vscode-foreground);
+}
+
+.x-step-rail-step-passed,
+.x-step-rail-step-passed .x-step-rail-step-full {
   background: var(--x-palette-tool);
   border-color: var(--x-palette-tool);
   /* Dark text on the lighter palette colours stays readable in
@@ -997,10 +1016,14 @@ body {
   color: var(--x-palette-accent);
 }
 
-.x-step-rail-step-current {
+.x-step-rail-step-current,
+.x-step-rail-step-current .x-step-rail-step-full {
   background: var(--x-palette-input);
   border-color: var(--x-palette-input);
   color: var(--x-palette-accent);
+}
+
+.x-step-rail-step-current {
   /* Slight bump so the active step reads as the focal point
    * even when the rail is wide. */
   box-shadow: 0 0 0 1px var(--x-palette-accent);
