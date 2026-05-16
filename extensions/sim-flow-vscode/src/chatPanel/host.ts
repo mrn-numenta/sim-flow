@@ -600,21 +600,49 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
    * doesn't crash the panel.
    */
   private async openFileInEditor(rawPath: string): Promise<void> {
-    const path = rawPath.trim();
-    if (path.length === 0) {
+    const rel = rawPath.trim();
+    if (rel.length === 0) {
+      return;
+    }
+    // Refuse `..` traversal anywhere in the path. The file-path
+    // linkifier scans LLM output and the LLM is untrusted: a
+    // transcript like `../../../etc/passwd` would otherwise let a
+    // single misclick open a file far outside the anchored project.
+    // Also refuse UNC prefixes on Windows (`\\server\share`) which
+    // vscode.Uri.file accepts but the relative-path branch below
+    // doesn't gate. See chat-panel audit #9 (2026-05-16).
+    if (rel.includes("..") || rel.startsWith("\\\\") || rel.startsWith("//")) {
+      void vscode.window.showWarningMessage(
+        `sim-flow: refusing to open ${rel} -- path traversal or network shares are blocked from transcript links.`,
+      );
       return;
     }
     const anchor =
       this.activePump?.projectDir ?? this.anchoredProjectDir();
     let uri: vscode.Uri;
-    if (path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)) {
+    if (rel.startsWith("/") || /^[A-Za-z]:[\\/]/.test(rel)) {
       // Absolute path on POSIX or Windows.
-      uri = vscode.Uri.file(path);
+      uri = vscode.Uri.file(rel);
     } else if (anchor) {
-      uri = vscode.Uri.file(`${anchor}/${path}`);
+      const joined = path.normalize(path.join(anchor, rel));
+      // After normalize, joined must still be inside `anchor` (a
+      // crafted path like `foo/../../etc/passwd` would have escaped
+      // before normalization; the `..` check above already rejected
+      // those, but this is defense in depth).
+      const anchorNorm = path.normalize(anchor);
+      const anchorWithSep = anchorNorm.endsWith(path.sep)
+        ? anchorNorm
+        : anchorNorm + path.sep;
+      if (!joined.startsWith(anchorWithSep) && joined !== anchorNorm) {
+        void vscode.window.showWarningMessage(
+          `sim-flow: refusing to open ${rel} -- resolves outside the anchored project.`,
+        );
+        return;
+      }
+      uri = vscode.Uri.file(joined);
     } else {
       void vscode.window.showWarningMessage(
-        `sim-flow: cannot open ${path} -- no project anchored to resolve the relative path.`,
+        `sim-flow: cannot open ${rel} -- no project anchored to resolve the relative path.`,
       );
       return;
     }
