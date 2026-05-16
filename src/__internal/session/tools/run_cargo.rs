@@ -290,6 +290,23 @@ mod tests {
     }
 
     #[test]
+    fn tail_passes_through_when_under_limit() {
+        assert_eq!(tail("hello", 100), "hello");
+        assert_eq!(tail("", 100), "");
+    }
+
+    #[test]
+    fn tail_truncates_to_last_n_bytes_with_marker() {
+        let body = "abcdefghij"; // 10 bytes
+        let out = tail(body, 4);
+        // Last 4 bytes are "ghij"; marker mentions 4-byte cap.
+        assert!(out.contains("ghij"));
+        assert!(out.contains("(truncated, last 4 bytes)"));
+        // Original prefix should NOT appear.
+        assert!(!out.contains("abcdef"));
+    }
+
+    #[test]
     fn empty_binary_args_array_on_non_run_is_ok_to_reach_spawn() {
         // An empty array shouldn't be flagged -- it's the
         // not-empty case that matters. The spawn will then fail
