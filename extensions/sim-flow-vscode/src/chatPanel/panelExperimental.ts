@@ -32,19 +32,27 @@ declare function acquireVsCodeApi(): {
 
 const vscode = acquireVsCodeApi();
 
-type PaletteName = "autumn" | "olive" | "sage";
+type PaletteName = "default" | "autumn" | "olive" | "sage";
 
 const PALETTES: ReadonlyArray<{ value: PaletteName; label: string }> = [
+  { value: "default", label: "Default" },
   { value: "autumn", label: "Autumn" },
   { value: "olive", label: "Olive" },
   { value: "sage", label: "Sage" },
 ];
 
-const DEFAULT_PALETTE: PaletteName = "autumn";
+// "default" disables role tinting entirely (no stripe, no bg) so
+// the chat panel inherits the editor theme verbatim. New webviews
+// start there; users opt in to a tinted palette via the gear-icon
+// settings popover.
+const DEFAULT_PALETTE: PaletteName = "default";
 
 function isPaletteName(value: unknown): value is PaletteName {
   return (
-    value === "autumn" || value === "olive" || value === "sage"
+    value === "default" ||
+    value === "autumn" ||
+    value === "olive" ||
+    value === "sage"
   );
 }
 
@@ -938,8 +946,14 @@ function div(
 
 // Kick off the Shiki highlighter in the background. When it's ready we
 // re-render so code blocks that were emitted as plain `<pre><code>` get
-// repainted with token colors.
-void initShiki().then(() => render());
+// repainted with token colors. Failures are logged to the webview's
+// devtools console so a regression (CSP change, bundle drift) shows up
+// instead of silently disabling highlighting.
+void initShiki()
+  .then(() => render())
+  .catch((err) => {
+    console.error("sim-flow chat panel: Shiki init failed", err);
+  });
 
 send({ type: "ready" });
 render();

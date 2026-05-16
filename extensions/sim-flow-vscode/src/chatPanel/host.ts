@@ -2091,7 +2091,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       "default-src 'none'",
       `img-src ${webview.cspSource} data:`,
       `style-src ${webview.cspSource} 'unsafe-inline'`,
-      `script-src 'nonce-${nonce}'`,
+      // `'wasm-unsafe-eval'` lets Shiki instantiate its oniguruma
+      // WebAssembly regex engine. Without it, `createHighlighter`
+      // rejects and code blocks render without syntax colours.
+      `script-src 'nonce-${nonce}' 'wasm-unsafe-eval'`,
       `font-src ${webview.cspSource}`,
     ].join("; ");
 

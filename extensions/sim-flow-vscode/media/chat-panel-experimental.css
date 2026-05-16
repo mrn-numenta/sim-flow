@@ -10,11 +10,24 @@
  *   sage   -- https://www.color-hex.com/color-palette/1028990 (salmon dropped) */
 
 body,
-body[data-palette="autumn"] {
+body[data-palette="autumn"],
+body[data-palette="default"] {
   --x-palette-input: #add4eb; /* soft blue */
   --x-palette-tool: #fcf6cf; /* pale cream */
   --x-palette-output: #bf6f40; /* warm terracotta */
   --x-palette-accent: #57290f; /* dark brown */
+}
+
+/* "Default" palette specifically suppresses the bubble bg + left
+ * stripe (the user-facing role tinting) without touching the rest
+ * of the chrome that uses the palette anchors -- the LLM pill,
+ * Start-session button, and link/focus accents stay coloured. */
+body[data-palette="default"] .x-bubble-user,
+body[data-palette="default"] .x-bubble-user.x-bubble-orchestrator,
+body[data-palette="default"] .x-bubble-user.x-bubble-orchestrator.x-bubble-tool,
+body[data-palette="default"] .x-bubble-assistant {
+  background: transparent;
+  border-left-color: transparent;
 }
 
 body[data-palette="olive"] {
