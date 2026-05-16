@@ -2266,6 +2266,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         experimental ? "chat-panel-experimental.css" : "chat-panel.css",
       ),
     );
+    const codiconUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "codicons", "codicon.css"),
+    );
     const csp = [
       "default-src 'none'",
       `img-src ${webview.cspSource} data:`,
@@ -2283,6 +2286,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy" content="${csp}" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="${codiconUri}" />
     <link rel="stylesheet" href="${styleUri}" />
     <title>sim-flow Chat</title>
   </head>

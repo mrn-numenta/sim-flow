@@ -243,36 +243,13 @@ function buildShell(): Node[] {
   return [shell];
 }
 
-/**
- * Inline SVGs that approximate VS Code's `expand-all` / `collapse-all`
- * codicons (two overlapping squares with a +/- in the front one).
- * Embedding the SVG avoids depending on the codicon font file, which
- * the chat panel webview doesn't currently load.
- */
-const TOGGLE_BUBBLES_COLLAPSE_SVG = `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1" stroke-linejoin="round">
-  <rect x="1.5" y="1.5" width="9" height="9"/>
-  <rect x="5.5" y="5.5" width="9" height="9" fill="var(--vscode-editor-background)"/>
-  <line x1="7.5" y1="10" x2="12.5" y2="10"/>
-</svg>`;
+// Codicon markup for the toolbar icons. The codicon stylesheet
+// is loaded by the host HTML; `<i class="codicon codicon-X">`
+// renders the glyph from the bundled icon font.
+const TOGGLE_BUBBLES_COLLAPSE_ICON = `<i class="codicon codicon-collapse-all" aria-hidden="true"></i>`;
+const TOGGLE_BUBBLES_EXPAND_ICON = `<i class="codicon codicon-expand-all" aria-hidden="true"></i>`;
 
-const TOGGLE_BUBBLES_EXPAND_SVG = `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1" stroke-linejoin="round">
-  <rect x="1.5" y="1.5" width="9" height="9"/>
-  <rect x="5.5" y="5.5" width="9" height="9" fill="var(--vscode-editor-background)"/>
-  <line x1="7.5" y1="10" x2="12.5" y2="10"/>
-  <line x1="10" y1="7.5" x2="10" y2="12.5"/>
-</svg>`;
-
-/**
- * Settings gear icon. Approximates VS Code's `gear` codicon as
- * inline SVG so we don't need to load the codicon font.
- */
-const SETTINGS_GEAR_SVG = `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round">
-  <circle cx="8" cy="8" r="2.2"/>
-  <path d="M8 1.5v2 M8 12.5v2 M1.5 8h2 M12.5 8h2 M3.5 3.5l1.4 1.4 M11.1 11.1l1.4 1.4 M3.5 12.5l1.4-1.4 M11.1 4.9l1.4-1.4"/>
-</svg>`;
+const SETTINGS_GEAR_ICON = `<i class="codicon codicon-settings-gear" aria-hidden="true"></i>`;
 
 function buildToolbar(state: ChatPanelState): HTMLElement {
   const root = div("x-toolbar");
@@ -292,8 +269,8 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   toggleBtn.type = "button";
   toggleBtn.className = "x-toolbar-bubble-toggle";
   toggleBtn.innerHTML = ui.bubblesExpanded
-    ? TOGGLE_BUBBLES_COLLAPSE_SVG
-    : TOGGLE_BUBBLES_EXPAND_SVG;
+    ? TOGGLE_BUBBLES_COLLAPSE_ICON
+    : TOGGLE_BUBBLES_EXPAND_ICON;
   toggleBtn.setAttribute(
     "aria-label",
     ui.bubblesExpanded ? "Collapse all bubbles" : "Expand all bubbles",
@@ -395,7 +372,7 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   settings.className = "x-toolbar-settings";
   const settingsSummary = document.createElement("summary");
   settingsSummary.className = "x-toolbar-settings-summary";
-  settingsSummary.innerHTML = SETTINGS_GEAR_SVG;
+  settingsSummary.innerHTML = SETTINGS_GEAR_ICON;
   settingsSummary.setAttribute("aria-label", "Open chat panel settings");
   settingsSummary.title = "Settings";
   settings.appendChild(settingsSummary);
