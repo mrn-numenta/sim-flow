@@ -139,4 +139,37 @@ mod tests {
             .unwrap();
         assert!(!result.ok);
     }
+
+    #[test]
+    fn declare_fix_appends_event_to_open_bug_when_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".sim-flow")).unwrap();
+        let id =
+            crate::bug_log::open(tmp.path(), "DM3a", None, "test_failure", "x panics").unwrap();
+        let result = DeclareFixTool
+            .invoke(
+                &ctx(tmp.path()),
+                &json!({"rationale": "guard against negative index"}),
+            )
+            .unwrap();
+        assert!(result.ok);
+        assert!(result.display.contains(&id));
+        // The bug log should now carry a fix_attempt event.
+        let records = crate::bug_log::load_all(tmp.path());
+        let rec = records.iter().find(|r| r.id == id).expect("bug record");
+        assert!(rec.events.iter().any(|e| e.kind == "fix_attempt"));
+    }
+
+    #[test]
+    fn declare_fix_no_open_bug_omits_bug_id_in_display() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No open bugs.
+        let result = DeclareFixTool
+            .invoke(&ctx(tmp.path()), &json!({"rationale": "tried something"}))
+            .unwrap();
+        assert!(result.ok);
+        // Format is `[declare_fix] rationale` without a bug id prefix.
+        assert!(result.display.starts_with("[declare_fix] "));
+        assert!(!result.display.contains("->"));
+    }
 }
