@@ -601,12 +601,23 @@ fn trim_trailing_slash(s: &str) -> &str {
     s.trim_end_matches('/')
 }
 
+/// Return the last `<= max` bytes of `s`, walking forward to the
+/// nearest `char` boundary so we never split a multi-byte
+/// codepoint. The previous implementation used `&s[s.len() - max..]`
+/// which panics when the cut lands inside a UTF-8 char. Both call
+/// sites (lines 495, 519) pass LLM-controlled error bodies, so a
+/// non-ASCII byte from vLLM / LM Studio / a stray emoji could
+/// crash the orchestrator from the error path itself.
+/// See orchestrator audit #7 (2026-05-16).
 fn tail(s: &str, max: usize) -> &str {
     if s.len() <= max {
-        s
-    } else {
-        &s[s.len() - max..]
+        return s;
     }
+    let mut start = s.len() - max;
+    while start < s.len() && !s.is_char_boundary(start) {
+        start += 1;
+    }
+    &s[start..]
 }
 
 #[cfg(test)]
