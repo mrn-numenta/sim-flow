@@ -551,6 +551,15 @@ pub fn shutdown_client() {
 /// granularity. If the spawned client was rooted at a different
 /// workspace, returns an error -- one client per process for now.
 ///
+/// **Reentrancy contract:** `f` MUST NOT call `with_client`
+/// recursively (directly or transitively). The CLIENT mutex is
+/// held for the duration of `f`, so a nested call would deadlock
+/// on `CLIENT.lock()`. The mutex is `std::sync::Mutex`, not
+/// `parking_lot::ReentrantMutex` -- intentionally, because every
+/// `api_*` tool today makes one or more sequential requests on
+/// the client and never delegates back into the LSP layer.
+/// See LSP-discovery post-impl critique #7 (2026-05-16).
+///
 /// Both `workspace_root` arguments are canonicalized (symlinks
 /// resolved, `..` collapsed, trailing slashes normalized) before
 /// comparison; otherwise a caller passing `crates/framework/..`
