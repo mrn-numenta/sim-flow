@@ -75,10 +75,9 @@ body {
 .x-shell {
   height: 100%;
   display: grid;
-  /* Rows: toolbar | transcript | composer | step-rail. The fourth
-   * row is `auto`, collapses to 0 if `buildStepRail` returned null
-   * (no flow anchored). */
-  grid-template-rows: auto 1fr auto auto;
+  /* Rows: toolbar | transcript | composer. The step rail lives
+   * inside the composer's controls row, not as its own track. */
+  grid-template-rows: auto 1fr auto;
   min-height: 0;
 }
 
@@ -711,10 +710,9 @@ body {
   flex-direction: column;
   gap: 6px;
   /* Thin border wraps the whole bottom-controls section -- the
-   * textarea row + the meta row (Reset / Continue / step state /
-   * Mode) -- so the cluster reads as one unit visually separate
-   * from the transcript above it. Outer margin keeps a little air
-   * between the border and the panel edge. */
+   * textarea row + the consolidated controls row + the optional
+   * milestone hint -- so the cluster reads as one unit visually
+   * separate from the transcript above it. */
   margin: 0 8px 8px;
   padding: 8px 12px 10px;
   border: 1px solid var(--x-border);
@@ -728,123 +726,29 @@ body {
   align-items: flex-end;
 }
 
-.x-composer-meta {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 8px;
-  font-size: 11px;
-  color: var(--x-muted);
-}
-
-.x-composer-meta-left,
-.x-composer-meta-center,
-.x-composer-meta-right {
+/* Consolidated control row anchored at the bottom of the composer:
+ *   [▶ play] [step rail] [Manual/Auto] [Send/Stop]
+ * The rail flex-grows into the middle, neighbours stay fixed at
+ * their natural button widths. */
+.x-composer-controls {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  min-width: 0;
 }
 
-.x-composer-meta-center {
-  justify-self: center;
+.x-composer-controls-spacer {
+  flex: 1 1 auto;
 }
 
-.x-composer-meta-right {
-  justify-self: end;
-}
-
-/* Current-step indicator in the centre. Reads as a passive status
- * label rather than a control -- no hover effect, no border. */
-.x-composer-step-state {
-  color: var(--vscode-foreground);
-  font-size: 11px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 260px;
-}
-
-.x-composer-step-state-empty {
-  color: var(--x-muted);
-  font-style: italic;
-}
-
-/* Context-window usage indicator, anchored next to the step state
- * in the centre of the composer-meta row. Same muted treatment so
- * neither metric outshouts the other. The warning variant
- * (>= 80% used) flips to the error palette so the user notices
- * approaching saturation before the LLM starts truncating. */
-.x-composer-context-used {
-  color: var(--x-muted);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.x-composer-context-used-warning {
-  color: var(--vscode-errorForeground, #d2522d);
-}
-
-/* Reset Step: split button. The main half resets the current
- * step; the trailing ▾ half opens a picker of earlier completed
- * steps. Hover on either half tints the *whole* split in the
- * error palette so the destructive intent is unmistakable, even
- * though the dropdown half is just a control affordance. */
-.x-reset-step-wrap {
-  display: inline-flex;
-  align-items: stretch;
-  border: 1px solid var(--x-border);
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.x-reset-step {
-  background: transparent;
-  color: var(--vscode-foreground);
-  border: none;
-  padding: 3px 10px;
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.x-reset-step-main {
-  border-right: 1px solid var(--x-border);
-}
-
-.x-reset-step-pick {
-  padding: 3px 6px;
-  font-size: 10px;
-  line-height: 1;
-  color: var(--x-muted);
-}
-
-.x-reset-step-wrap:hover:not(:disabled) {
-  border-color: var(--vscode-errorForeground, #d2522d);
-}
-
-.x-reset-step:hover:not(:disabled) {
-  color: var(--vscode-errorForeground, #d2522d);
-  background: color-mix(
-    in srgb,
-    var(--vscode-errorForeground, #d2522d) 14%,
-    transparent
-  );
-}
-
-.x-reset-step-main:hover:not(:disabled) {
-  border-right-color: var(--vscode-errorForeground, #d2522d);
-}
-
-.x-reset-step:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+.x-composer-controls .x-step-rail {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /* Text-only mode toggle: reads as a plain label that happens to
  * be clickable. No background or border by default; hover paints
- * a subtle gray pill so the affordance is discoverable without
- * competing with the primary Continue button on the left. */
+ * a subtle gray pill so the affordance is discoverable. */
 .x-mode-toggle {
   background: none;
   border: none;
@@ -868,30 +772,39 @@ body {
   cursor: not-allowed;
 }
 
-
-/* Continue: text-only by default; hover paints a subtle gray
- * pill so the affordance is visible without the button competing
- * with the filled Send icon up in the input row. */
-.x-continue {
-  border: none;
+/* Play button (formerly Continue). Square icon-only button on
+ * the left edge of the controls row; matches the Send/Stop size
+ * so the row reads as a balanced left/right pair. */
+.x-play {
+  border: 1px solid var(--vscode-foreground);
   background: transparent;
   color: var(--vscode-foreground);
-  border-radius: 4px;
-  padding: 3px 12px;
+  border-radius: 8px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
   font: inherit;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 14px;
+  line-height: 1;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.x-continue:hover:not(:disabled) {
-  background: var(
-    --vscode-toolbar-hoverBackground,
-    color-mix(in srgb, var(--vscode-foreground) 12%, transparent)
+.x-play .codicon {
+  font-size: 16px;
+}
+
+.x-play:hover:not(:disabled) {
+  background: color-mix(
+    in srgb,
+    var(--vscode-foreground) 12%,
+    transparent
   );
 }
 
-.x-continue:disabled {
+.x-play:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
@@ -989,21 +902,13 @@ body {
 /* ---------------------------------------------------------------
  * Step rail
  * ---------------------------------------------------------------
- * Horizontal rail under the composer. Each tile is half the height
- * of the 32px Send/Stop button (16px) and ~36px wide -- enough for
- * any DM2x / DM3x / DM4x label. A passed step is filled with the
- * second-brightest palette colour; the current step is filled with
- * the brightest; pending steps are outline-only.
+ * Horizontal rail that lives in the composer's controls row (middle
+ * slot, flex-grow). Each tile is half the height of the 32px
+ * Send/Stop button (16px) and ~36px wide -- enough for any DMx /
+ * DSx label. A passed step is filled with the second-brightest
+ * palette colour; the current step is filled with the brightest;
+ * pending steps are outline-only.
  */
-
-.x-step-rail-wrap {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 4px;
-  padding: 6px 12px 8px;
-  border-top: 1px solid var(--x-border);
-}
 
 .x-step-rail {
   display: flex;

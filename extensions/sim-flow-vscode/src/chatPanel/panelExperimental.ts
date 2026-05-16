@@ -49,17 +49,6 @@ const PALETTES: ReadonlyArray<{ value: PaletteName; label: string }> = [
 // settings popover.
 const DEFAULT_PALETTE: PaletteName = "default";
 
-/**
- * Reference context window for the "% context used" indicator
- * under the composer. Most current frontier models support at
- * least this much (GPT-4 family, Claude 3.x/4, Llama 3 70B-Instruct
- * etc.). Local Ollama / vLLM models often run smaller, in which
- * case the indicator under-reports usage -- still informative as a
- * trend, just not absolute. Could be promoted to a workspace
- * setting if per-source accuracy matters.
- */
-const LLM_CONTEXT_WINDOW = 128_000;
-
 function isPaletteName(value: unknown): value is PaletteName {
   return (
     value === "default" ||
@@ -293,10 +282,6 @@ function buildShell(): Node[] {
   shell.appendChild(buildToolbar(ui.state));
   shell.appendChild(buildTranscript(ui.state));
   shell.appendChild(buildComposer(ui.state));
-  const rail = buildStepRail(ui.state);
-  if (rail) {
-    shell.appendChild(rail);
-  }
   const nodes: Node[] = [shell];
   // Overlay popups live as siblings of the shell so their fixed
   // positioning can cover the toolbar + transcript + composer
@@ -856,11 +841,12 @@ function looksLikeMarkdown(text: string): boolean {
 
 function buildComposer(state: ChatPanelState): HTMLElement {
   const root = div("x-composer");
-  // The composer wraps two stacked rows -- the input row (textarea +
-  // send) and the meta row (mode toggle, future continue button).
-  // Stack them via flex column rather than appending to the panel's
-  // grid; the meta row sits inside the same bordered container so
-  // the visual seam is one panel, not two.
+  // The composer stacks two (or three) rows inside one bordered
+  // container:
+  //   1. textarea (+ Browse on DM0)
+  //   2. controls: [▶ play | step rail | Manual/Auto | Send/Stop]
+  //   3. milestone+task hint (only when a milestone-driven step is
+  //      processing a pending task)
   const area = document.createElement("textarea");
   area.className = "x-composer-input";
   area.id = "x-composer-textarea";
@@ -883,14 +869,15 @@ function buildComposer(state: ChatPanelState): HTMLElement {
     // Re-evaluate the send button's disabled state. canSend reads
     // `ui.draft.trim().length`, which only updates here -- not on
     // a host state-update -- so without this hook the click-target
-    // stays disabled until the next render. Read from `ui.state`
-    // rather than the closure's `state` so the listener uses the
-    // latest values after morphdom carries it across renders.
+    // stays disabled until the next render.
     const s = ui.state;
     if (!s) {
       return;
     }
-    sendBtn.disabled = s.isStreaming ? !s.canStop : !canSend(s);
+    const live = document.querySelector<HTMLButtonElement>("#x-composer-send");
+    if (live) {
+      live.disabled = s.isStreaming ? !s.canStop : !canSend(s);
+    }
   });
   area.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.shiftKey) {
@@ -904,12 +891,111 @@ function buildComposer(state: ChatPanelState): HTMLElement {
     submitPrompt();
   });
 
-  // Send / Stop button. One click target whose glyph + behaviour
-  // swap on `state.isStreaming`: ↑ when idle (submits the draft),
-  // ■ when streaming (cancels the current activity, drops to
-  // Manual park -- not session-end; that's the toolbar's ⏻).
-  // Both variants share the white-outline / transparent-fill
-  // treatment so the swap doesn't visually relocate the control.
+  const inputRow = div("x-composer-input-row");
+  // Browse… is only meaningful while the orchestrator is in DM0
+  // (the spec-ingest step). Other steps don't take a file path as
+  // their primary input, so the button just adds clutter there.
+  if (state.currentStep === "DM0") {
+    const browseBtn = document.createElement("button");
+    browseBtn.type = "button";
+    browseBtn.id = "x-composer-browse";
+    browseBtn.className = "x-browse";
+    browseBtn.textContent = "Browse…";
+    browseBtn.title =
+      "Pick a file or directory and insert its absolute path into the message.";
+    browseBtn.disabled =
+      state.isViewer || !state.supportsPromptEntry || state.isStreaming;
+    browseBtn.addEventListener("click", () => {
+      if (browseBtn.disabled) {
+        return;
+      }
+      send({ type: "pick-file" });
+    });
+    inputRow.append(area, browseBtn);
+  } else {
+    inputRow.append(area);
+  }
+  root.appendChild(inputRow);
+  root.appendChild(buildComposerControls(state));
+  if (state.currentMilestone) {
+    const sub = div("x-step-rail-substep");
+    sub.textContent = `${state.currentMilestone.title}: ${state.currentMilestone.task}`;
+    sub.title = sub.textContent;
+    root.appendChild(sub);
+  }
+  return root;
+}
+
+/**
+ * Consolidated control row anchored at the bottom of the composer:
+ *   [▶ play] [step rail] [Manual/Auto] [Send/Stop]
+ * - Play forwards `ContinueFlow` to the orchestrator (icon only;
+ *   the orchestrator picks the next action, so a single glyph
+ *   suffices). Disabled when there's no next action.
+ * - Rail (built by `buildStepRail`) takes the flex middle slot
+ *   and shrinks neighbours when a tile is hovered open.
+ * - Manual/Auto toggles step mode.
+ * - Send/Stop submits the draft (or cancels the current activity).
+ */
+function buildComposerControls(state: ChatPanelState): HTMLElement {
+  const root = div("x-composer-controls");
+  const modeDisabled = state.currentStepMode === null;
+
+  // ---- Play (formerly the Continue text button) ----
+  const playBtn = document.createElement("button");
+  playBtn.type = "button";
+  playBtn.id = "x-composer-play";
+  playBtn.className = "x-play";
+  playBtn.innerHTML = `<i class="codicon codicon-play" aria-hidden="true"></i>`;
+  const hintLabel = state.nextActionHint?.label ?? null;
+  playBtn.disabled = !hintLabel || state.isStreaming || state.isViewer;
+  playBtn.setAttribute(
+    "aria-label",
+    hintLabel ? `Continue: ${hintLabel}` : "Continue",
+  );
+  playBtn.title = hintLabel
+    ? `Continue: ${hintLabel}`
+    : "Continue the flow from its current position. Available when the orchestrator is parked in Manual mode between sub-sessions.";
+  playBtn.addEventListener("click", () => {
+    if (playBtn.disabled) {
+      return;
+    }
+    send({ type: "continue-flow" });
+  });
+  root.appendChild(playBtn);
+
+  // ---- Step rail (middle, flex-grow) ----
+  const rail = buildStepRail(state);
+  if (rail) {
+    root.appendChild(rail);
+  } else {
+    // Spacer keeps the row's columns stable when no flow is
+    // anchored yet -- play stays on the left edge, mode + send
+    // stay on the right edge.
+    root.appendChild(div("x-composer-controls-spacer"));
+  }
+
+  // ---- Manual / Auto toggle ----
+  const isAuto = state.currentStepMode === "auto";
+  const modeBtn = document.createElement("button");
+  modeBtn.type = "button";
+  modeBtn.id = "x-composer-mode";
+  modeBtn.className = "x-mode-toggle";
+  modeBtn.textContent = isAuto ? "Auto" : "Manual";
+  modeBtn.disabled = modeDisabled;
+  modeBtn.title = isAuto
+    ? "Auto (orchestrator runs sub-sessions to completion). Click to switch to Manual."
+    : "Manual (orchestrator parks between sub-sessions; click Play to advance). Click to switch to Auto.";
+  modeBtn.addEventListener("click", () => {
+    if (modeBtn.disabled) {
+      return;
+    }
+    const live = ui.state?.currentStepMode;
+    send({ type: "set-step-mode", mode: live === "auto" ? "manual" : "auto" });
+  });
+  root.appendChild(modeBtn);
+
+  // ---- Send / Stop button ----
   const sendBtn = document.createElement("button");
   sendBtn.type = "button";
   sendBtn.id = "x-composer-send";
@@ -939,188 +1025,8 @@ function buildComposer(state: ChatPanelState): HTMLElement {
     }
     submitPrompt();
   });
+  root.appendChild(sendBtn);
 
-  const inputRow = div("x-composer-input-row");
-  // Browse… is only meaningful while the orchestrator is in DM0
-  // (the spec-ingest step). Other steps don't take a file path as
-  // their primary input, so the button just adds clutter there.
-  // When DM0 advances to DM1 the button disappears automatically
-  // because `state.currentStep` reflects state.toml.
-  if (state.currentStep === "DM0") {
-    const browseBtn = document.createElement("button");
-    browseBtn.type = "button";
-    browseBtn.id = "x-composer-browse";
-    browseBtn.className = "x-browse";
-    browseBtn.textContent = "Browse…";
-    browseBtn.title =
-      "Pick a file or directory and insert its absolute path into the message.";
-    browseBtn.disabled =
-      state.isViewer || !state.supportsPromptEntry || state.isStreaming;
-    browseBtn.addEventListener("click", () => {
-      if (browseBtn.disabled) {
-        return;
-      }
-      send({ type: "pick-file" });
-    });
-    inputRow.append(area, browseBtn, sendBtn);
-  } else {
-    inputRow.append(area, sendBtn);
-  }
-  root.appendChild(inputRow);
-  root.appendChild(buildComposerMeta(state));
-  return root;
-}
-
-/**
- * Composer footer holding the Manual/Auto step-mode toggle and the
- * Continue button. The mode toggle wires the orchestrator's
- * `setStepMode` (auto/manual); Continue forwards `ContinueFlow` to
- * the orchestrator, which owns the manual-mode state machine and
- * picks the next action. The button label comes from the
- * orchestrator's most recent `NextActionHint`. Both are disabled
- * when no pump is live.
- */
-function buildComposerMeta(state: ChatPanelState): HTMLElement {
-  const root = div("x-composer-meta");
-  const disabled = state.currentStepMode === null;
-
-  // Three zones via CSS grid `auto 1fr auto`:
-  //   [Reset Step | Continue]   [Step: DM2d]   [Manual]
-  // Left holds flow-driving actions; centre shows the
-  // orchestrator's current step as a passive label; right holds
-  // the mode toggle.
-  const leftZone = div("x-composer-meta-left");
-  const centerZone = div("x-composer-meta-center");
-  const rightZone = div("x-composer-meta-right");
-
-  // Reset Step: split button with a primary action (reset current
-  // step) plus a dropdown arrow that opens a picker of earlier
-  // completed steps to reset from. Either path goes through a
-  // modal confirm in the host before anything is discarded.
-  const resetWrap = div("x-reset-step-wrap");
-  const resetMainDisabled = disabled || state.isStreaming || state.isViewer;
-
-  const resetBtn = document.createElement("button");
-  resetBtn.type = "button";
-  resetBtn.id = "x-composer-reset";
-  resetBtn.className = "x-reset-step x-reset-step-main";
-  resetBtn.textContent = "Reset Step";
-  resetBtn.disabled = resetMainDisabled;
-  resetBtn.title = state.currentStep
-    ? `Reset \`${state.currentStep}\` -- discards its results and clears its gate flag. Click Continue to restart the step. A confirmation dialog spells out exactly what will be deleted before anything is touched.`
-    : "Reset the current step. A confirmation dialog spells out exactly what will be deleted before anything is touched.";
-  resetBtn.addEventListener("click", () => {
-    if (resetBtn.disabled) {
-      return;
-    }
-    send({ type: "reset-step" });
-  });
-
-  const resetPickBtn = document.createElement("button");
-  resetPickBtn.type = "button";
-  resetPickBtn.id = "x-composer-reset-pick";
-  resetPickBtn.className = "x-reset-step x-reset-step-pick";
-  resetPickBtn.textContent = "▾";
-  resetPickBtn.disabled = resetMainDisabled;
-  resetPickBtn.setAttribute("aria-label", "Reset an earlier step");
-  resetPickBtn.title =
-    "Reset an earlier completed step. Selecting a step returns to it and discards the results of every step after. A confirmation dialog lists every step that will be reset before anything is touched.";
-  resetPickBtn.addEventListener("click", () => {
-    if (resetPickBtn.disabled) {
-      return;
-    }
-    send({ type: "reset-step-pick" });
-  });
-
-  resetWrap.append(resetBtn, resetPickBtn);
-  leftZone.appendChild(resetWrap);
-
-  // Continue: primary flow-driving action. Disabled until the
-  // orchestrator advertises a next action via NextActionHint
-  // (typically: Manual mode parked between sub-sessions).
-  const continueBtn = document.createElement("button");
-  continueBtn.type = "button";
-  continueBtn.id = "x-composer-continue";
-  continueBtn.className = "x-continue";
-  const hintLabel = state.nextActionHint?.label ?? null;
-  continueBtn.textContent = hintLabel ? `Continue: ${hintLabel}` : "Continue";
-  continueBtn.disabled = !hintLabel || state.isStreaming || state.isViewer;
-  continueBtn.title = hintLabel
-    ? "Continue the flow from its current position. The orchestrator decides the next action."
-    : "Continue the flow from its current position. Available when the orchestrator is parked in Manual mode between sub-sessions.";
-  continueBtn.addEventListener("click", () => {
-    if (continueBtn.disabled) {
-      return;
-    }
-    send({ type: "continue-flow" });
-  });
-  leftZone.appendChild(continueBtn);
-
-  // Centre: current step indicator. Falls back to a no-session
-  // label when nothing is anchored so the row never reads as
-  // empty. Hover reveals the phase too if the orchestrator has
-  // reported one.
-  const stateText = document.createElement("span");
-  stateText.className = "x-composer-step-state";
-  if (state.currentStep) {
-    stateText.textContent = state.currentPhase
-      ? `Step: ${state.currentStep} · ${state.currentPhase}`
-      : `Step: ${state.currentStep}`;
-    stateText.title = state.currentPhase
-      ? `Orchestrator is on step \`${state.currentStep}\` in phase \`${state.currentPhase}\`.`
-      : `Orchestrator is on step \`${state.currentStep}\`.`;
-  } else {
-    stateText.textContent = "No step";
-    stateText.classList.add("x-composer-step-state-empty");
-    stateText.title = "No active sim-flow session.";
-  }
-  centerZone.appendChild(stateText);
-
-  // Context-window usage indicator. Sums the cumulative input +
-  // output token estimates and divides by a reference window size.
-  // The orchestrator's actual prompt size on the latest turn is
-  // close to this cumulative count (every previous user / tool /
-  // assistant message is re-sent each turn), so the ratio is a
-  // decent at-a-glance "how full is the model getting" signal.
-  // Hidden when no session is anchored.
-  if (state.sessionActive) {
-    const usedTokens =
-      state.totalInputTokensEstimate + state.totalOutputTokensEstimate;
-    const pct = Math.min(100, Math.round((usedTokens / LLM_CONTEXT_WINDOW) * 100));
-    const contextText = document.createElement("span");
-    contextText.className = "x-composer-context-used";
-    if (pct >= 80) {
-      contextText.classList.add("x-composer-context-used-warning");
-    }
-    contextText.textContent = `${pct}% context used`;
-    contextText.title =
-      `Approximate context usage: ${usedTokens} tokens estimated against a ${formatTokens(LLM_CONTEXT_WINDOW)} reference window. ` +
-      "Cumulative across the whole conversation; actual usage per LLM call depends on the model's context size.";
-    centerZone.appendChild(contextText);
-  }
-
-  // Right: mode toggle. Text-only button that flips between Auto
-  // and Manual on click; label always names the *current* mode.
-  const isAuto = state.currentStepMode === "auto";
-  const modeBtn = document.createElement("button");
-  modeBtn.type = "button";
-  modeBtn.id = "x-composer-mode";
-  modeBtn.className = "x-mode-toggle";
-  modeBtn.textContent = isAuto ? "Auto" : "Manual";
-  modeBtn.disabled = disabled;
-  modeBtn.title = isAuto
-    ? "Auto (orchestrator runs sub-sessions to completion). Click to switch to Manual."
-    : "Manual (orchestrator parks between sub-sessions; click Continue to advance). Click to switch to Auto.";
-  modeBtn.addEventListener("click", () => {
-    if (modeBtn.disabled) {
-      return;
-    }
-    const live = ui.state?.currentStepMode;
-    send({ type: "set-step-mode", mode: live === "auto" ? "manual" : "auto" });
-  });
-  rightZone.appendChild(modeBtn);
-
-  root.append(leftZone, centerZone, rightZone);
   return root;
 }
 
@@ -1283,10 +1189,12 @@ const STEP_DESCRIPTIONS: Record<string, { title: string; body: string }> = {
 };
 
 /**
- * Render the horizontal step rail under the composer. Each tile
- * is half the height of the Send button and just wide enough for
- * a four-character step id. Returns null when there's no anchored
- * project (no flow declared yet -> nothing meaningful to show).
+ * Render the horizontal step rail that lives in the composer's
+ * controls row. Each tile is half the height of the Send button
+ * and just wide enough for a four-character step id; on hover the
+ * tile expands to the full descriptive label and neighbours
+ * flex-shrink to give up width. Returns null when there's no
+ * anchored project (no flow declared yet -> nothing to show).
  *
  * Visual rules:
  *   - current step  -> filled, brightest palette colour
@@ -1299,7 +1207,6 @@ function buildStepRail(state: ChatPanelState): HTMLElement | null {
   }
   const order = stepOrderFor(state.flow);
   const passed = new Set(state.passedSteps);
-  const wrap = div("x-step-rail-wrap");
   const rail = div("x-step-rail");
   rail.setAttribute("role", "tablist");
   rail.setAttribute("aria-label", "Flow step rail");
@@ -1352,17 +1259,7 @@ function buildStepRail(state: ChatPanelState): HTMLElement | null {
     });
     rail.appendChild(tile);
   }
-  wrap.appendChild(rail);
-  // Milestone + task sub-row: single line, only when the
-  // orchestrator is inside a milestone-driven step (DM2d, DM3c,
-  // DM4b) AND a pending task remains.
-  if (state.currentMilestone) {
-    const sub = div("x-step-rail-substep");
-    sub.textContent = `${state.currentMilestone.title}: ${state.currentMilestone.task}`;
-    sub.title = sub.textContent;
-    wrap.appendChild(sub);
-  }
-  return wrap;
+  return rail;
 }
 
 // ---------------------------------------------------------------
