@@ -2806,6 +2806,21 @@ pub fn build_initial_messages(
     } else {
         "manual-mode notes"
     };
+    // The test-loop auto-mode addendum (declare_fix accounting +
+    // bug log) only applies to auto-mode sessions on steps that
+    // actually run cargo build / cargo test. Chat-only DMF steps
+    // (DM0/1/2a/2b/2c/2cd/3a/3ad/4a/4ad/4b) don't carry it.
+    let test_loop_addendum_name: Option<&'static str> = if opts.auto
+        && opts.kind == SessionKind::Work
+        && step
+            .work_phases
+            .iter()
+            .any(|p| *p == "test" || *p == "build")
+    {
+        Some("auto-mode-test-loop")
+    } else {
+        None
+    };
     let combined_system = if opts.agent_has_native_fs_tools {
         let mut directives = format!(
             "Before responding, read the conventions file at:\n\n  {}\n\n\
@@ -2819,6 +2834,13 @@ pub fn build_initial_messages(
             prompts::convention_path(&opts.foundation_root, mode_notes_name).display(),
             prompts::convention_path(&opts.foundation_root, "no-emojis").display(),
         );
+        if let Some(addendum) = test_loop_addendum_name {
+            directives.push_str(&format!(
+                "\n\nAlso read the test-loop addendum at:\n\n  {}\n\n\
+                 It covers cargo-test investigation / fix-attempt accounting and the bug log.",
+                prompts::convention_path(&opts.foundation_root, addendum).display(),
+            ));
+        }
         if opts.no_preamble {
             directives.push_str(&format!(
                 "\n\nAlso read the response-shape convention at:\n\n  {}\n\n\
@@ -2835,6 +2857,11 @@ pub fn build_initial_messages(
             "{}\n\n---\n\n{}\n\n---\n\n{}\n\n---\n\n",
             convention, mode_notes, no_emojis,
         );
+        if let Some(addendum) = test_loop_addendum_name {
+            let test_loop_notes = prompts::load_convention(&opts.foundation_root, addendum)?;
+            combined.push_str(&test_loop_notes);
+            combined.push_str("\n\n---\n\n");
+        }
         if opts.no_preamble {
             let no_preamble = prompts::load_convention(&opts.foundation_root, "no-preamble")?;
             combined.push_str(&no_preamble);
