@@ -233,25 +233,36 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     );
     // Re-subscribe to the active pump's bracket transitions whenever
     // the active session rotates (Connect / Disconnect / step
-    // session swap). The disposer is stored so the previous pump's
-    // listener doesn't outlive its session.
-    this.autoSessions.onActiveSessionChanged((session) => {
-      this.attachSubSessionListener(session);
-      this.attachRequestUserInputListener(session);
-      this.attachFollowupListener(session);
-      this.attachStepModeListener(session);
-      this.attachNextActionHintListener(session);
-      // A newly attached/replaced session changes the panel's anchor
-      // immediately; refresh so OFFLINE flips to VIEWING/STREAMING
-      // without waiting for the next pump event. We intentionally do
-      // NOT auto-refresh on clear: the settle/stop paths already post
-      // an explicit final state for the session's project, and a
-      // follow-up refresh here can snap the panel back to whichever
-      // project the editor currently points at.
-      if (session) {
-        void this.refresh();
-      }
-    });
+    // session swap). The inner attach* helpers manage their own
+    // disposers (each replaces the previous pump's listener so it
+    // doesn't outlive its session). The OUTER onActiveSessionChanged
+    // subscription also returns a disposer, which used to be
+    // discarded -- after ChatPanelProvider.dispose() ran, this
+    // closure would keep firing on every active-session change,
+    // calling attachSubSessionListener etc. on a disposed provider
+    // and pinning it via the closure. Capture the disposer in
+    // this.disposables so dispose() tears it down too. See
+    // chat-panel audit #2 (2026-05-16).
+    const activeSessionDisposer = this.autoSessions.onActiveSessionChanged(
+      (session) => {
+        this.attachSubSessionListener(session);
+        this.attachRequestUserInputListener(session);
+        this.attachFollowupListener(session);
+        this.attachStepModeListener(session);
+        this.attachNextActionHintListener(session);
+        // A newly attached/replaced session changes the panel's anchor
+        // immediately; refresh so OFFLINE flips to VIEWING/STREAMING
+        // without waiting for the next pump event. We intentionally do
+        // NOT auto-refresh on clear: the settle/stop paths already post
+        // an explicit final state for the session's project, and a
+        // follow-up refresh here can snap the panel back to whichever
+        // project the editor currently points at.
+        if (session) {
+          void this.refresh();
+        }
+      },
+    );
+    this.disposables.push({ dispose: () => activeSessionDisposer() });
   }
 
   private attachStepModeListener(
