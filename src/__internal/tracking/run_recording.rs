@@ -56,13 +56,6 @@ pub fn record_run(
 
     let config_fingerprint = fingerprint_config(dot_sim_flow)?;
     let artifact_dir = project_dir.join(EXPERIMENTS_DIR).join(&run_id);
-    std::fs::create_dir_all(&artifact_dir).map_err(|source| Error::Io {
-        path: artifact_dir.clone(),
-        source,
-    })?;
-
-    write_config_snapshot(dot_sim_flow, &artifact_dir)?;
-    write_placeholder_metrics(&artifact_dir)?;
 
     let manifest_path_string = options
         .manifest_path
@@ -95,7 +88,21 @@ pub fn record_run(
         notes: options.notes.clone(),
         lifecycle: "active".to_string(),
     };
+    // Insert the row FIRST, then create the artifact directory and
+    // write the snapshots. If the insert collides with a
+    // concurrent record_run on UNIQUE(run_id) -- the race noted in
+    // audit #5 -- we don't leave behind an orphan
+    // `.experiments/NNN-.../` directory that `runs list` never
+    // shows. Previously the dir was created BEFORE the insert, so
+    // every collision left a ghost dir on disk. See orchestrator
+    // audit #17 (2026-05-16).
     index.insert_run(&row)?;
+    std::fs::create_dir_all(&artifact_dir).map_err(|source| Error::Io {
+        path: artifact_dir.clone(),
+        source,
+    })?;
+    write_config_snapshot(dot_sim_flow, &artifact_dir)?;
+    write_placeholder_metrics(&artifact_dir)?;
 
     Ok(RecordedRun {
         run_id,
