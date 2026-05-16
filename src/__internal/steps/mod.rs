@@ -509,8 +509,35 @@ fn list_milestone_files(
         }
         files.push((name.to_string(), path));
     }
-    files.sort_by(|a, b| a.0.cmp(&b.0));
+    // Sort by (numeric prefix, full filename) so a 10th milestone
+    // doesn't lex-sort before the 9th. Previously
+    // `a.0.cmp(&b.0)` was pure string comparison, which gives
+    // `milestone-10 < milestone-9` whenever a project crosses the
+    // single-digit boundary. The walker then picked
+    // milestone-10 as "first pending" before milestone-9, running
+    // them out of intended order. Falling back to the filename
+    // string keeps the order deterministic when prefixes tie. See
+    // orchestrator audit #12 (2026-05-16).
+    files.sort_by(|a, b| {
+        milestone_numeric_key(&a.0, walk)
+            .cmp(&milestone_numeric_key(&b.0, walk))
+            .then_with(|| a.0.cmp(&b.0))
+    });
     Some(files)
+}
+
+/// Extract the numeric prefix run of `name` after stripping the
+/// configured `walk.file_prefixes` match. Returns `u64::MAX` when
+/// the file doesn't start with a recognized prefix + digits so
+/// such entries sort last; callers should already have filtered
+/// them out, but this keeps the sort total.
+fn milestone_numeric_key(name: &str, walk: &MilestoneWalkConfig) -> u64 {
+    let Some(prefix) = walk.file_prefixes.iter().find(|p| name.starts_with(**p)) else {
+        return u64::MAX;
+    };
+    let rest = &name[prefix.len()..];
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse::<u64>().unwrap_or(u64::MAX)
 }
 
 fn join_milestone_rel(walk: &MilestoneWalkConfig, name: &str) -> String {
