@@ -16,11 +16,14 @@ evaluate them and write the critique file.
 
 1. Does every target in `docs/targets.md` trace back to a specific line or
    section of `docs/spec.md`?
-2. Does `docs/targets.md` include a gate-budget-per-cycle target or
-   estimate, and is its basis clear?
-3. If the gate-budget-per-cycle value is not explicit in `docs/spec.md`,
-   is the derivation from frequency and technology target reasonable and
-   clearly explained?
+2. Does `docs/targets.md` include a gate-budget-per-cycle target,
+   and does it cite the source (explicit `docs/spec.md` line or
+   DM0 `## Auto-decisions` entry)?
+3. If `docs/targets.md`'s gate budget was derived from frequency +
+   technology by DM1 rather than copied from `docs/spec.md`, that's
+   a `BLOCKER:` -- DM0 forbids LLM-derived gate-budget estimates
+   and DM1 inherits that prohibition. Flag the upstream gap so DM0
+   can be revisited rather than papering over it here.
 4. Is anything in `docs/spec.md` that should have a target missing from
    `docs/targets.md`?
 5. Do the targets use appropriate status/provenance (`explicit`,

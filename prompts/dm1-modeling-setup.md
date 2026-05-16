@@ -51,19 +51,22 @@ plan and tests; DM4 will measure against the targets.
    - **source**: cite the relevant `docs/spec.md` section
    - **notes / rationale**: especially when the target is derived,
      inferred, unconstrained, or deferred
-5. `docs/targets.md` must include a gate-budget-per-cycle target or
-   estimate. This requirement is hard because DM2 uses it to reason
-   about functional decomposition and pipeline staging.
-   - If `docs/spec.md` gives an explicit gate budget per cycle, preserve
-     it as an explicit target.
-   - Otherwise, derive a reasonable gate-budget-per-cycle estimate from
-     the frequency and technology target in `docs/spec.md`.
-   - Record whether the value is explicit, derived, or inferred, and
-     explain the basis for the estimate.
-   - If `docs/spec.md` does not provide enough information to derive a
-     reasonable estimate, treat that as a blocker-level gap in the DM0
-     output and say so in your rationale rather than inventing false
-     precision.
+5. `docs/targets.md` must include a gate-budget-per-cycle target.
+   This requirement is hard because DM2 uses it to reason about
+   functional decomposition and pipeline staging. DM0 already
+   forbids LLM-derived gate-budget estimates; the budget MUST
+   come from the source spec, the user, or a DM0
+   `## Auto-decisions` entry that recorded the chosen value.
+   - If `docs/spec.md` gives an explicit gate budget per cycle,
+     preserve it verbatim as an explicit target.
+   - If `docs/spec.md` records the budget as a DM0
+     `## Auto-decisions` entry, preserve it as a `derived`
+     target and cite the auto-decision in the rationale.
+   - If `docs/spec.md` does NOT contain a gate budget at all,
+     treat that as an upstream DM0 gap and flag it in your
+     rationale; do NOT derive a budget from frequency +
+     technology yourself. DM1 is not allowed to invent the
+     number any more than DM0 is.
 6. `docs/targets.md` should capture the modeling strategy, not just raw
    numbers.
    - Prefer quantitative targets when the spec supports them.
