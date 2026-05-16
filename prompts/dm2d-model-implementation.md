@@ -156,8 +156,9 @@ scope and structure.
    `evaluate()`. External probes attach to the model by hierarchical
    path at perf-analysis time; they observe ports + struct fields, so
    anything you'd later want to measure must survive evaluate as
-   addressable state. Do NOT embed `LatencyProbe` / `StallProbe` /
-   `ThroughputProbe` / `OccupancyProbe` etc. by default -- DM4 owns
+   addressable state. Do NOT embed `LatencyProbe`, `StallProbe`,
+   `ThroughputProbe`, `UtilizationProbe`, `OccupancyProbe`,
+   `HazardProbe`, or `CongestionProbe` by default -- DM4 owns
    the probe-instantiation policy via `docs/perf-plan/probes.toml`,
    and embedded probes pay their hot-path cost on every run. Embed
    one only when an evaluate-local computation legitimately cannot
