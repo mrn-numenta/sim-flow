@@ -96,3 +96,93 @@ impl Tool for ReadFileTool {
 fn parse_path(args: &serde_json::Value) -> Option<String> {
     args.get("path").and_then(|v| v.as_str()).map(String::from)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn ctx(project: &std::path::Path) -> ToolContext<'_> {
+        ToolContext::new(project, None, None, None)
+    }
+
+    #[test]
+    fn read_file_missing_path_returns_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = ReadFileTool.invoke(&ctx(tmp.path()), &json!({})).unwrap();
+        assert!(!r.ok);
+        assert!(r.display.contains("missing"));
+    }
+
+    #[test]
+    fn read_file_path_with_dot_dot_is_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = ReadFileTool
+            .invoke(&ctx(tmp.path()), &json!({ "path": "../escape.txt" }))
+            .unwrap();
+        assert!(!r.ok);
+    }
+
+    #[test]
+    fn read_file_returns_full_body_under_the_truncation_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("note.md"), "hello\nworld\n").unwrap();
+        let r = ReadFileTool
+            .invoke(&ctx(tmp.path()), &json!({ "path": "note.md" }))
+            .unwrap();
+        assert!(r.ok);
+        assert!(r.display.contains("hello"));
+        assert!(r.display.contains("world"));
+        assert!(!r.display.contains("truncated"));
+    }
+
+    #[test]
+    fn read_file_truncates_bodies_past_the_max_bytes_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Write a body longer than MAX_BYTES (16K).
+        let body = "x".repeat(20_000);
+        std::fs::write(tmp.path().join("big.txt"), &body).unwrap();
+        let r = ReadFileTool
+            .invoke(&ctx(tmp.path()), &json!({ "path": "big.txt" }))
+            .unwrap();
+        assert!(r.ok);
+        assert!(r.display.contains("truncated"));
+        assert!(r.display.contains("20000 bytes"));
+    }
+
+    #[test]
+    fn read_file_missing_file_returns_an_error_referencing_the_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = ReadFileTool
+            .invoke(&ctx(tmp.path()), &json!({ "path": "no/such/file.md" }))
+            .unwrap();
+        assert!(!r.ok);
+        assert!(r.display.contains("no/such/file.md"));
+    }
+
+    #[test]
+    fn read_file_lib_prefix_with_unconfigured_library_root_returns_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = ReadFileTool
+            .invoke(&ctx(tmp.path()), &json!({ "path": "lib:something.md" }))
+            .unwrap();
+        assert!(!r.ok);
+        assert!(r.display.contains("not configured") || r.display.contains("lib:"));
+    }
+
+    #[test]
+    fn read_file_image_returns_attachment_with_byte_count_and_mime() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Minimal PNG header is enough to convince image_mime_from_path.
+        // Path extension is the actual probe -- just give it `.png`.
+        let png = tmp.path().join("pic.png");
+        std::fs::write(&png, b"\x89PNG\r\n\x1a\n").unwrap();
+        let r = ReadFileTool
+            .invoke(&ctx(tmp.path()), &json!({ "path": "pic.png" }))
+            .unwrap();
+        assert!(r.ok);
+        assert_eq!(r.attachments.len(), 1);
+        assert_eq!(r.attachments[0].mime, "image/png");
+        assert!(r.display.contains("inline image attachment"));
+    }
+}
