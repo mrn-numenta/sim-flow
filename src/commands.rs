@@ -1856,6 +1856,53 @@ mod tests {
     }
 
     #[test]
+    fn read_jsonl_lines_skips_blank_and_strips_whitespace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("log.jsonl");
+        std::fs::write(&path, "  {\"a\":1}\n\n {\"b\":2}  \n   \n{\"c\":3}\n").unwrap();
+        let lines = read_jsonl_lines(&path).unwrap();
+        assert_eq!(lines, vec!["{\"a\":1}", "{\"b\":2}", "{\"c\":3}"]);
+    }
+
+    #[test]
+    fn read_jsonl_lines_missing_path_returns_io_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("nope.jsonl");
+        let err = read_jsonl_lines(&path).unwrap_err();
+        assert!(matches!(err, sim_flow::Error::Io { .. }));
+    }
+
+    #[test]
+    fn parse_jsonl_record_returns_none_for_malformed_input() {
+        #[derive(serde::Deserialize)]
+        struct Tiny {
+            #[allow(dead_code)]
+            n: u32,
+        }
+        assert!(parse_jsonl_record::<Tiny>("{\"n\":7}").is_some());
+        // Missing required field -- returns None and logs a warn.
+        assert!(parse_jsonl_record::<Tiny>("{}").is_none());
+        // Not JSON at all.
+        assert!(parse_jsonl_record::<Tiny>("not json").is_none());
+    }
+
+    #[test]
+    fn config_cmd_show_prints_default_config_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        let r = config_cmd(tmp.path(), &crate::cli::ConfigAction::Show);
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn config_cmd_show_without_config_falls_back_to_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No .sim-flow/config.toml -- Config::load returns Ok(default).
+        let r = config_cmd(tmp.path(), &crate::cli::ConfigAction::Show);
+        assert!(r.is_ok());
+    }
+
+    #[test]
     fn init_overwrites_existing_state_toml() {
         // Current contract: `sim-flow init` is unconditional --
         // running it on an existing project resets state.toml to
