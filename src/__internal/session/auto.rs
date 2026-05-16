@@ -4420,4 +4420,165 @@ not a finding
         // Upstream manifest preserved.
         assert!(!manifest::step_paths(project, "DM2d").is_empty());
     }
+
+    #[test]
+    fn kind_label_for_manual_maps_session_kinds() {
+        assert_eq!(
+            kind_label_for_manual(crate::client::SessionKind::Work),
+            "RunStep"
+        );
+        assert_eq!(
+            kind_label_for_manual(crate::client::SessionKind::Critique),
+            "RunCritique"
+        );
+    }
+
+    #[test]
+    fn host_event_label_returns_a_stable_string_for_each_variant() {
+        let host_info = crate::__internal::session::protocol::HostInfo {
+            name: "test".into(),
+            version: "0".into(),
+        };
+        assert_eq!(
+            host_event_label(&HostEvent::Hello {
+                protocol_version: "1".into(),
+                host: host_info,
+                capabilities: vec![],
+            }),
+            "Hello"
+        );
+        assert_eq!(
+            host_event_label(&HostEvent::UserMessage { text: "x".into() }),
+            "UserMessage"
+        );
+        assert_eq!(
+            host_event_label(&HostEvent::FollowupSelected { action: "x".into() }),
+            "FollowupSelected"
+        );
+        assert_eq!(host_event_label(&HostEvent::Cancel), "Cancel");
+        assert_eq!(
+            host_event_label(&HostEvent::RunStep {
+                step: "DM0".into(),
+                kind: crate::__internal::session::protocol::SessionKindOut::Work,
+            }),
+            "RunStep"
+        );
+        assert_eq!(
+            host_event_label(&HostEvent::RunCritique { step: "DM0".into() }),
+            "RunCritique"
+        );
+        assert_eq!(
+            host_event_label(&HostEvent::RunGate { step: "DM0".into() }),
+            "RunGate"
+        );
+        assert_eq!(
+            host_event_label(&HostEvent::Advance { step: "DM0".into() }),
+            "Advance"
+        );
+        assert_eq!(
+            host_event_label(&HostEvent::Reset { step: "DM0".into() }),
+            "Reset"
+        );
+        assert_eq!(
+            host_event_label(&HostEvent::SetStepMode {
+                mode: StepMode::Auto,
+            }),
+            "SetStepMode"
+        );
+        assert_eq!(host_event_label(&HostEvent::Shutdown), "Shutdown");
+        assert_eq!(host_event_label(&HostEvent::ContinueFlow), "ContinueFlow");
+    }
+
+    #[test]
+    fn is_manual_command_only_accepts_step_axis_events() {
+        for ev in [
+            HostEvent::RunStep {
+                step: "DM0".into(),
+                kind: crate::__internal::session::protocol::SessionKindOut::Work,
+            },
+            HostEvent::RunCritique { step: "DM0".into() },
+            HostEvent::RunGate { step: "DM0".into() },
+            HostEvent::Advance { step: "DM0".into() },
+            HostEvent::Reset { step: "DM0".into() },
+        ] {
+            assert!(is_manual_command(&ev), "{ev:?} should be a manual command");
+        }
+        for ev in [
+            HostEvent::Cancel,
+            HostEvent::Shutdown,
+            HostEvent::ContinueFlow,
+            HostEvent::SetStepMode {
+                mode: StepMode::Auto,
+            },
+            HostEvent::UserMessage { text: "hi".into() },
+            HostEvent::FollowupSelected {
+                action: "/gate".into(),
+            },
+        ] {
+            assert!(
+                !is_manual_command(&ev),
+                "{ev:?} should NOT be a manual command"
+            );
+        }
+    }
+
+    #[test]
+    fn current_iso8601_returns_seconds_since_epoch_as_decimal_string() {
+        let s = current_iso8601();
+        assert!(!s.is_empty());
+        assert!(s.chars().all(|c| c.is_ascii_digit()), "got `{s}`");
+        // Sanity: the value parses as a u64 within the plausible range.
+        let n: u64 = s.parse().expect("current_iso8601 must parse as u64");
+        // After 2020-01-01 (rough sanity bound) -- catches a year-zero bug.
+        assert!(n > 1_577_836_800);
+    }
+
+    #[test]
+    fn is_reset_scaffolding_accepts_gitkeep_gitignore_and_tmpl() {
+        use std::path::Path;
+        assert!(is_reset_scaffolding(Path::new("docs/.gitkeep")));
+        assert!(is_reset_scaffolding(Path::new("docs/.gitignore")));
+        assert!(is_reset_scaffolding(Path::new("docs/foo.tmpl")));
+        assert!(!is_reset_scaffolding(Path::new("docs/foo.md")));
+        assert!(!is_reset_scaffolding(Path::new("src/lib.rs")));
+        // No filename at all (bare /) -> false.
+        assert!(!is_reset_scaffolding(Path::new("/")));
+    }
+
+    #[test]
+    fn dir_has_scaffolding_finds_scaffolding_nested_anywhere() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nested = tmp.path().join("a/b/c");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join(".gitkeep"), "").unwrap();
+        assert!(dir_has_scaffolding(tmp.path()));
+    }
+
+    #[test]
+    fn dir_has_scaffolding_returns_false_for_empty_or_non_scaffolding_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Empty dir -> no scaffolding.
+        assert!(!dir_has_scaffolding(tmp.path()));
+        // A non-scaffolding file -> still no scaffolding.
+        std::fs::write(tmp.path().join("real.txt"), "hi").unwrap();
+        assert!(!dir_has_scaffolding(tmp.path()));
+    }
+
+    #[test]
+    fn dir_has_scaffolding_returns_false_for_unreadable_path() {
+        // Non-existent path should not panic; just returns false.
+        assert!(!dir_has_scaffolding(std::path::Path::new(
+            "/no/such/dir/ever/exists"
+        )));
+    }
+
+    #[test]
+    fn step_mode_to_and_from_u8_round_trip_for_both_variants() {
+        for mode in [StepMode::Auto, StepMode::Manual] {
+            assert_eq!(step_mode_from_u8(step_mode_to_u8(mode)), mode);
+        }
+        // Unknown u8 falls back to Manual (the "safer" side: don't
+        // silently keep auto-driving on a corrupted flag).
+        assert_eq!(step_mode_from_u8(0xff), StepMode::Manual);
+    }
 }
