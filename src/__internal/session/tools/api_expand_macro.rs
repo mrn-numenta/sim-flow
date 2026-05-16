@@ -33,7 +33,7 @@ impl Tool for ApiExpandMacroTool {
         "api_expand_macro"
     }
     fn description(&self) -> &'static str {
-        "Expand the macro invocation at a given source position and return the generated code. Backed by rust-analyzer's `rust-analyzer/expandMacro` extension. The biggest single win over the static `fw:api/pages/...` docs for sim-foundation, since the docs cannot show what `#[derive(HasLogic)]`, `#[derive(ConfigModel)]`, etc. actually generate. Use `api_search` first to find a struct that derives the macro of interest, then point this tool at its `#[derive(...)]` line."
+        "Expand the macro invocation at a given source position and return the generated code. Backed by rust-analyzer's `rust-analyzer/expandMacro` extension. The biggest single win over the static `fw:api/pages/...` docs for sim-foundation, since the docs cannot show what `#[derive(HasLogic)]`, `#[derive(ConfigModel)]`, etc. actually generate. Use `api_search` first to find a struct that derives the macro of interest, then point this tool at its `#[derive(...)]` line. Only files INSIDE the foundation workspace (i.e. `fw:` paths under `crates/`) can be expanded -- rust-analyzer is rooted there and does not see `lib:` or project-relative sources."
     }
     fn args_schema(&self) -> Value {
         json!({
@@ -42,7 +42,7 @@ impl Tool for ApiExpandMacroTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "File containing the macro invocation. Accepts `fw:<rel>` (framework source), `lib:<rel>` (sim-models source), or a project-relative path. Use the same form `api_search` returns."
+                    "description": "File containing the macro invocation. MUST live inside the foundation workspace -- use the `fw:<rel>` form returned by `api_search`. `lib:` and project-relative paths point outside the workspace rust-analyzer is rooted at and will be rejected up front."
                 },
                 "line": {
                     "type": "integer",
@@ -92,10 +92,6 @@ impl Tool for ApiExpandMacroTool {
                 "api_expand_macro: `{path}` is not a file"
             )));
         }
-        let uri = match lsp::path_to_uri(&abs) {
-            Ok(u) => u,
-            Err(e) => return Ok(ToolResult::err(format!("api_expand_macro: {e}"))),
-        };
 
         let Some(framework_root) = ctx.framework_root else {
             return Ok(ToolResult::err(
@@ -106,6 +102,31 @@ impl Tool for ApiExpandMacroTool {
             return Ok(ToolResult::err(
                 "api_expand_macro: cannot derive foundation workspace root from framework_root",
             ));
+        };
+
+        // rust-analyzer is rooted at `workspace_root` (sim-foundation).
+        // It only sees workspace-member crates -- the framework crate
+        // and its siblings under `crates/`. Files outside that tree
+        // (lib: paths, project sources, bare paths into a sim-models
+        // project) are invisible to it and the request would return
+        // null with no actionable error. Reject up front so the agent
+        // sees a clear message instead of a misleading
+        // "(no macro at this position)".
+        let canon_abs = abs.canonicalize().unwrap_or_else(|_| abs.clone());
+        let canon_workspace = workspace_root
+            .canonicalize()
+            .unwrap_or_else(|_| workspace_root.to_path_buf());
+        if !canon_abs.starts_with(&canon_workspace) {
+            return Ok(ToolResult::err(format!(
+                "api_expand_macro: `{path}` resolves to `{}`, which is outside the foundation workspace at `{}`. rust-analyzer is rooted at the foundation workspace and cannot see this file; only `fw:` paths inside the foundation tree are supported.",
+                canon_abs.display(),
+                canon_workspace.display(),
+            )));
+        }
+
+        let uri = match lsp::path_to_uri(&abs) {
+            Ok(u) => u,
+            Err(e) => return Ok(ToolResult::err(format!("api_expand_macro: {e}"))),
         };
 
         let lsp_line = one_based_line - 1;
@@ -149,13 +170,32 @@ fn render(path: &str, line: u64, character: u64, resp: &Value) -> String {
     let body = if expansion.len() > MAX_DISPLAY_BYTES {
         format!(
             "{}\n... (truncated; expansion is {} bytes total)",
-            &expansion[..MAX_DISPLAY_BYTES],
+            truncate_at_char_boundary(expansion, MAX_DISPLAY_BYTES),
             expansion.len()
         )
     } else {
         expansion.to_string()
     };
     format!("{header}\n\nMacro `{name}` expands to:\n\n```rust\n{body}\n```")
+}
+
+/// Truncate `s` to at most `max_bytes`, walking back to the nearest
+/// `char` boundary so we never split a multi-byte codepoint. `&str`
+/// slicing panics when the index isn't on a boundary, so a naive
+/// `&s[..max_bytes]` against an expansion that contains a non-ASCII
+/// char straddling the cut point would crash the tool. Macro
+/// expansions for Rust code are usually ASCII, but anything that
+/// inlines a `#[doc = "..."]` string or stringifies a value can
+/// land non-ASCII inside the cut window.
+fn truncate_at_char_boundary(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut cut = max_bytes;
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    &s[..cut]
 }
 
 #[cfg(test)]
@@ -195,5 +235,56 @@ mod tests {
             out.contains(&format!("{} bytes total", MAX_DISPLAY_BYTES + 100)),
             "{out}"
         );
+    }
+
+    #[test]
+    fn truncate_at_char_boundary_no_panic_on_multibyte_cut() {
+        // Build a string of ASCII 'a's, then plant a 3-byte char
+        // ("…", U+2026) so it straddles the cut point. Naive
+        // `&s[..MAX_DISPLAY_BYTES]` would panic; the helper must not.
+        let mut s = "a".repeat(MAX_DISPLAY_BYTES - 1);
+        s.push('\u{2026}'); // 3 bytes: 0xE2 0x80 0xA6
+        s.push_str(&"b".repeat(100));
+        // Sanity: the multibyte char crosses MAX_DISPLAY_BYTES.
+        assert!(s.len() > MAX_DISPLAY_BYTES);
+        let out = truncate_at_char_boundary(&s, MAX_DISPLAY_BYTES);
+        // Walks back to before the multibyte char => length is
+        // MAX_DISPLAY_BYTES - 1 (the ASCII prefix).
+        assert_eq!(out.len(), MAX_DISPLAY_BYTES - 1);
+        // And the result is valid UTF-8 (else the slice itself
+        // would have panicked; this is belt-and-braces).
+        assert!(out.chars().all(|c| c == 'a'));
+    }
+
+    #[test]
+    fn truncate_at_char_boundary_returns_full_string_when_under_limit() {
+        let s = "hello";
+        assert_eq!(truncate_at_char_boundary(s, 100), "hello");
+    }
+
+    #[test]
+    fn truncate_at_char_boundary_handles_exact_boundary() {
+        // 3-byte char placed so its END lands exactly on the cut.
+        let mut s = String::new();
+        s.push('\u{2026}');
+        assert_eq!(s.len(), 3);
+        // Cut at 3 is on a boundary (end of the char); should keep
+        // the whole string.
+        assert_eq!(truncate_at_char_boundary(&s, 3), "\u{2026}");
+        // Cut at 1 is mid-char; walks back to 0.
+        assert_eq!(truncate_at_char_boundary(&s, 1), "");
+    }
+
+    #[test]
+    fn render_oversized_expansion_with_multibyte_does_not_panic() {
+        // End-to-end: an expansion long enough to trigger
+        // truncation, with a multibyte char straddling the cut.
+        let mut expansion = "x".repeat(MAX_DISPLAY_BYTES - 1);
+        expansion.push('\u{2026}');
+        expansion.push_str(&"y".repeat(50));
+        let resp = json!({ "name": "Macro", "expansion": expansion });
+        // Must not panic.
+        let out = render("fw:a.rs", 1, 1, &resp);
+        assert!(out.contains("(truncated;"), "{out}");
     }
 }

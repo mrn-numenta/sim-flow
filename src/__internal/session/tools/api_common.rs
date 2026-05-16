@@ -29,11 +29,18 @@ pub struct SymbolHit {
 /// We never look past the first 50 entries -- if the agent's
 /// query was so broad that the right answer is past #50, the
 /// right move is to refine via `api_search` first.
+///
+/// Items whose shape `extract_hit` can't parse are skipped rather
+/// than collapsing the whole response to `None` -- a single
+/// malformed entry mid-list must not hide the 49 valid hits next
+/// to it.
 pub fn pick_best_hit(raw: &Value, query: &str) -> Option<SymbolHit> {
     let items = raw.as_array()?;
     let mut first: Option<SymbolHit> = None;
     for item in items.iter().take(50) {
-        let hit = extract_hit(item)?;
+        let Some(hit) = extract_hit(item) else {
+            continue;
+        };
         if hit.name == query {
             return Some(hit);
         }
@@ -176,6 +183,36 @@ mod tests {
     #[test]
     fn falls_back_to_first_when_no_exact() {
         let raw = json!([sym("HasLogicFor", 12, "/abs/foundation/a.rs", 1),]);
+        let hit = pick_best_hit(&raw, "HasLogic").expect("hit");
+        assert_eq!(hit.name, "HasLogicFor");
+    }
+
+    #[test]
+    fn skips_malformed_entries_without_dropping_valid_ones() {
+        // A malformed entry in the middle (missing `kind`) must
+        // not erase the valid entries around it. Before the fix,
+        // `extract_hit`'s `?` propagated None out of pick_best_hit
+        // on the first bad item, swallowing the 49 valid hits next
+        // to it.
+        let raw = json!([
+            { "name": "MalformedNoKind", "location": { "uri": "file:///abs/foundation/x.rs", "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } } } },
+            sym("HasLogicFor", 12, "/abs/foundation/a.rs", 1),
+            { "name": "MalformedNoLocation", "kind": 12 },
+            sym("HasLogic", 11, "/abs/foundation/b.rs", 5),
+        ]);
+        let hit = pick_best_hit(&raw, "HasLogic").expect("hit");
+        // Exact match should still win even though malformed entries
+        // appear earlier in the list.
+        assert_eq!(hit.name, "HasLogic");
+        assert_eq!(hit.kind, 11);
+    }
+
+    #[test]
+    fn skips_leading_malformed_when_no_exact_match() {
+        let raw = json!([
+            { "name": "Malformed" },
+            sym("HasLogicFor", 12, "/abs/foundation/a.rs", 1),
+        ]);
         let hit = pick_best_hit(&raw, "HasLogic").expect("hit");
         assert_eq!(hit.name, "HasLogicFor");
     }
