@@ -555,25 +555,42 @@ pub fn read_critique_entry(
     let md_path = dir.join(format!("{step_id}-critique.md"));
     let json_text = read_if_exists(&json_path)?;
     let md_text = read_if_exists(&md_path)?;
-    if let Some(text) = &json_text
-        && let Ok(parsed) = serde_json::from_str::<CritiqueJson>(text)
-    {
-        let (findings, has_blocking) = json_to_findings(&parsed);
-        let surfaced_path = if md_text.is_some() {
-            md_path.to_string_lossy().into_owned()
-        } else {
-            json_path.to_string_lossy().into_owned()
-        };
-        let body = md_text.clone().unwrap_or_else(|| text.clone());
-        return Ok(Some(CritiqueDashboardEntry {
-            path: surfaced_path,
-            step: step_id.to_string(),
-            body,
-            findings,
-            has_blocking,
-        }));
+    if let Some(text) = &json_text {
+        match serde_json::from_str::<CritiqueJson>(text) {
+            Ok(parsed) => {
+                let (findings, has_blocking) = json_to_findings(&parsed);
+                let surfaced_path = if md_text.is_some() {
+                    md_path.to_string_lossy().into_owned()
+                } else {
+                    json_path.to_string_lossy().into_owned()
+                };
+                let body = md_text.clone().unwrap_or_else(|| text.clone());
+                return Ok(Some(CritiqueDashboardEntry {
+                    path: surfaced_path,
+                    step: step_id.to_string(),
+                    body,
+                    findings,
+                    has_blocking,
+                }));
+            }
+            Err(err) => {
+                // Match the gate's posture: the gate path
+                // (Critique::load -> from_json) refuses to advance
+                // on malformed JSON. Previously the dashboard fell
+                // through to parse the markdown body silently,
+                // which produced "Findings: 0, gate clean" on the
+                // dashboard while the gate kept refusing to
+                // advance -- the user couldn't see where the
+                // disagreement came from. Now we surface the parse
+                // error explicitly so the two paths agree on
+                // what's wrong. See orchestrator audit #18
+                // (2026-05-16).
+                return Err(Error::State(format!(
+                    "malformed critique JSON for {step_id}: {err}"
+                )));
+            }
+        }
     }
-    // (Malformed JSON falls through to the markdown parse below.)
     if let Some(body) = md_text {
         let findings = parse_with_lines(&body);
         let has_blocking = findings.iter().any(|f| {
