@@ -125,6 +125,28 @@ impl RustAnalyzerClient {
         )
     }
 
+    /// `textDocument/hover` request. `uri` should be a full
+    /// `file://` URI (call [`path_to_uri`] if you have a `&Path`);
+    /// `line` and `character` are zero-based per the LSP spec.
+    /// Returns the raw hover response: `{ contents, range? }` on a
+    /// hit, `Null` when rust-analyzer has nothing to say at that
+    /// position.
+    pub fn text_document_hover(
+        &mut self,
+        uri: &str,
+        line: u64,
+        character: u64,
+    ) -> LspResult<Value> {
+        self.request(
+            "textDocument/hover",
+            json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character },
+            }),
+            REQUEST_TIMEOUT,
+        )
+    }
+
     fn handshake(&mut self) -> LspResult<()> {
         let root_uri = path_to_uri(&self.workspace_root)?;
         let params = json!({
@@ -397,7 +419,58 @@ mod tests {
     /// sim-foundation workspace. `#[ignore]` because it spawns
     /// a heavy subprocess and waits 30-60s for indexing -- not
     /// suitable for the default test run. Invoke with:
-    /// `cargo test -p sim-flow -- --ignored live_workspace_symbol`.
+    /// `cargo test -p sim-flow -- --ignored live`.
+    ///
+    /// The hover variant piggybacks on the same client so we only
+    /// pay the indexing cost once when running both in the same
+    /// process.
+    #[test]
+    #[ignore]
+    fn live_workspace_symbol_and_hover() {
+        let here = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let workspace_root = here
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root above tools/sim-flow")
+            .to_path_buf();
+
+        let symbols = super::with_client(&workspace_root, |c| c.workspace_symbol("HasLogic"))
+            .expect("workspace_symbol HasLogic");
+        let arr = symbols.as_array().expect("array");
+        assert!(!arr.is_empty(), "expected at least one HasLogic hit");
+
+        let hit = arr
+            .iter()
+            .find(|item| item.get("name").and_then(|n| n.as_str()) == Some("HasLogic"))
+            .expect("an entry literally named HasLogic");
+        let uri = hit["location"]["uri"].as_str().unwrap().to_string();
+        let line = hit["location"]["range"]["start"]["line"].as_u64().unwrap();
+        let character = hit["location"]["range"]["start"]["character"]
+            .as_u64()
+            .unwrap();
+
+        let hover = super::with_client(&workspace_root, |c| {
+            c.text_document_hover(&uri, line, character)
+        })
+        .expect("hover");
+        let value = hover
+            .get("contents")
+            .and_then(|c| c.get("value"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        assert!(
+            value.contains("HasLogic"),
+            "hover content should mention HasLogic; got: {value}"
+        );
+        eprintln!(
+            "[live] hover head:\n{}",
+            value.lines().take(5).collect::<Vec<_>>().join("\n")
+        );
+    }
+
+    /// Older single-call live test, kept for diagnostic runs in
+    /// case `live_workspace_symbol_and_hover` is failing only on
+    /// the hover leg. Same invocation guard as above.
     #[test]
     #[ignore]
     fn live_workspace_symbol() {
