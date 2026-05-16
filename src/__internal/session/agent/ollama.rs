@@ -91,3 +91,63 @@ impl CliAgent for OllamaAgent {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_uses_default_base_url_and_model() {
+        let agent = OllamaAgent::new(None, None, None, None);
+        assert_eq!(agent.base_url(), DEFAULT_BASE_URL);
+        assert_eq!(agent.model(), DEFAULT_MODEL);
+        assert!(agent.model_family_id().is_none());
+    }
+
+    #[test]
+    fn new_respects_overrides() {
+        let agent = OllamaAgent::new(
+            Some("http://host:8080/v1".into()),
+            Some("qwen3.6:14b".into()),
+            Some("qwen3".into()),
+            None,
+        );
+        assert_eq!(agent.base_url(), "http://host:8080/v1");
+        assert_eq!(agent.model(), "qwen3.6:14b");
+        assert_eq!(agent.model_family_id(), Some("qwen3"));
+    }
+
+    #[test]
+    fn name_returns_ollama() {
+        let agent = OllamaAgent::new(None, None, None, None);
+        assert_eq!(agent.name(), "ollama");
+    }
+
+    #[test]
+    fn runtime_profile_defaults_to_generic() {
+        let agent = OllamaAgent::new(None, None, None, None);
+        let profile = agent.runtime_profile();
+        assert_eq!(
+            profile.id.as_str(),
+            OPENAI_COMPAT_GENERIC_RUNTIME.id.as_str()
+        );
+    }
+
+    #[test]
+    fn adaptation_summary_reports_ollama_as_backend() {
+        let agent = OllamaAgent::new(None, None, None, None);
+        let summary = agent.adaptation_summary().expect("summary");
+        assert_eq!(summary.backend, "ollama");
+        assert_eq!(summary.request_format, "openai_chat_completions");
+    }
+
+    #[test]
+    fn dispatch_errors_against_unreachable_host() {
+        // Local URL with no listener: dispatch should return an
+        // error rather than hanging. Exercises the routing into
+        // dispatch_chat without depending on a real server.
+        let agent = OllamaAgent::new(Some("http://127.0.0.1:0/v1".into()), None, None, None);
+        let result = agent.dispatch(&[]);
+        assert!(result.is_err());
+    }
+}
