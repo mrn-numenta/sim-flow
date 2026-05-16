@@ -681,4 +681,129 @@ mod tests {
         let names: Vec<_> = tools.iter().map(|t| t.name()).collect();
         assert_eq!(names, vec!["read_file", "search"]);
     }
+
+    #[test]
+    fn dispatcher_includes_every_known_tool() {
+        // Mirror the full match arm in build_dispatcher so every
+        // production tool name resolves to its struct.
+        let names = [
+            "read_file",
+            "list_dir",
+            "write_file",
+            "edit_file",
+            "delete_file",
+            "search",
+            "run_cargo",
+            "declare_fix",
+            "declare_hypothesis",
+            "log_bug",
+            "resolve_bug",
+            "record_run",
+            "api_search",
+            "api_hover",
+            "api_impls",
+            "api_references",
+            "api_expand_macro",
+        ];
+        let tools = build_dispatcher(&names);
+        let got: Vec<_> = tools.iter().map(|t| t.name()).collect();
+        assert_eq!(got, names);
+    }
+
+    #[test]
+    fn image_mime_from_path_covers_known_extensions_and_falls_back() {
+        use std::path::Path;
+        assert_eq!(image_mime_from_path(Path::new("a.png")), Some("image/png"));
+        assert_eq!(image_mime_from_path(Path::new("a.jpg")), Some("image/jpeg"));
+        assert_eq!(
+            image_mime_from_path(Path::new("a.jpeg")),
+            Some("image/jpeg")
+        );
+        assert_eq!(image_mime_from_path(Path::new("a.gif")), Some("image/gif"));
+        assert_eq!(
+            image_mime_from_path(Path::new("a.webp")),
+            Some("image/webp")
+        );
+        // Case-insensitive on extension.
+        assert_eq!(image_mime_from_path(Path::new("a.PNG")), Some("image/png"));
+        // Non-image -> None.
+        assert_eq!(image_mime_from_path(Path::new("a.txt")), None);
+        assert_eq!(image_mime_from_path(Path::new("noext")), None);
+    }
+
+    #[test]
+    fn is_safe_relative_path_rejects_meta_chars_and_control_bytes() {
+        // Windows meta chars.
+        for bad in ["a<b", "a>b", "a:b", "a\"b", "a|b", "a?b", "a*b"] {
+            assert!(!is_safe_relative_path(bad), "{bad}");
+        }
+        // Control byte.
+        assert!(!is_safe_relative_path("a\x01b"));
+        // Backslash absolute path (Windows-style).
+        assert!(!is_safe_relative_path("\\bad"));
+    }
+
+    #[test]
+    fn resolve_safe_path_rejects_unsafe_paths_but_returns_path_for_safe_ones() {
+        let p = std::path::Path::new("/tmp/proj");
+        assert_eq!(
+            resolve_safe_path(p, "src/lib.rs").unwrap(),
+            p.join("src/lib.rs")
+        );
+        assert!(resolve_safe_path(p, "../escape.rs").is_err());
+        assert!(resolve_safe_path(p, "/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn resolve_read_path_routes_lib_and_fw_prefixes_under_their_roots() {
+        let project = std::path::Path::new("/tmp/proj");
+        let lib_root = std::path::Path::new("/tmp/lib");
+        let fw_root = std::path::Path::new("/tmp/fw");
+        let docs_root = std::path::Path::new("/tmp/docs");
+        let ctx = ToolContext::new(project, Some(lib_root), Some(fw_root), Some(docs_root));
+        assert_eq!(
+            resolve_read_path(&ctx, "lib:foo.md").unwrap(),
+            Some(lib_root.join("foo.md")),
+        );
+        assert_eq!(
+            resolve_read_path(&ctx, "fw:src/lib.rs").unwrap(),
+            Some(fw_root.join("src/lib.rs")),
+        );
+        assert_eq!(
+            resolve_read_path(&ctx, "fw:api/toc.md").unwrap(),
+            Some(docs_root.join("toc.md")),
+        );
+        // Bare path -> under project_dir.
+        assert_eq!(
+            resolve_read_path(&ctx, "docs/spec.md").unwrap(),
+            Some(project.join("docs/spec.md")),
+        );
+    }
+
+    #[test]
+    fn resolve_read_path_returns_none_when_prefix_root_is_unconfigured() {
+        let project = std::path::Path::new("/tmp/proj");
+        let ctx = ToolContext::new(project, None, None, None);
+        // lib: with no library_root => Ok(None).
+        assert_eq!(resolve_read_path(&ctx, "lib:foo").unwrap(), None);
+        // fw:api with no docs root => Ok(None).
+        assert_eq!(resolve_read_path(&ctx, "fw:api/toc.md").unwrap(), None);
+    }
+
+    #[test]
+    fn preview_one_line_quotes_and_escapes_special_chars() {
+        // Always wrapped in JSON-style quotes.
+        assert_eq!(preview_one_line("hello", 10), "\"hello\"");
+        // Newline / tab / backslash / quote are escaped.
+        assert_eq!(preview_one_line("a\nb", 10), "\"a\\nb\"");
+        assert_eq!(preview_one_line("a\tb", 10), "\"a\\tb\"");
+        assert_eq!(preview_one_line("a\\b", 10), "\"a\\\\b\"");
+        assert_eq!(preview_one_line("a\"b", 10), "\"a\\\"b\"");
+        // Other control bytes hex-escape.
+        assert_eq!(preview_one_line("a\x01b", 10), "\"a\\x01b\"");
+        // Past max_chars: trailing `...` marker INSIDE the closing quote.
+        let out = preview_one_line("abcdefghij", 5);
+        assert!(out.ends_with("...\""), "{out}");
+        assert!(out.starts_with("\""), "{out}");
+    }
 }
