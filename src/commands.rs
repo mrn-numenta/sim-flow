@@ -1978,6 +1978,30 @@ mod tests {
     }
 
     #[test]
+    fn run_step_gate_only_unknown_step_returns_invalid_step_error() {
+        use clap::Parser;
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        let cli = crate::cli::Cli::try_parse_from(["sim-flow", "status"]).unwrap();
+        let err = run_step(&cli, tmp.path(), Some("DM-zzz"), None, true, false).unwrap_err();
+        assert!(format!("{err}").contains("not a"), "{err}");
+    }
+
+    #[test]
+    fn run_step_gate_only_failing_gate_surfaces_gate_error() {
+        use clap::Parser;
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        let cli = crate::cli::Cli::try_parse_from(["sim-flow", "status"]).unwrap();
+        // DM0 has critique-clean which fails (no critique present).
+        let err = run_step(&cli, tmp.path(), Some("DM0"), None, true, false).unwrap_err();
+        assert!(format!("{err}").contains("failed"), "{err}");
+        // Same in JSON mode.
+        let err = run_step(&cli, tmp.path(), Some("DM0"), None, true, true).unwrap_err();
+        assert!(format!("{err}").contains("failed"), "{err}");
+    }
+
+    #[test]
     fn advance_unknown_step_returns_invalid_step_error() {
         let tmp = tempfile::tempdir().unwrap();
         init(tmp.path(), Flow::DirectModeling).unwrap();
