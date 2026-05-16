@@ -1978,6 +1978,31 @@ mod tests {
     }
 
     #[test]
+    fn new_cmd_study_and_candidate_are_not_yet_implemented() {
+        // Phase 5 lands these; for now they return State errors so
+        // callers see "not yet implemented" rather than a panic.
+        use clap::Parser;
+        let tmp = tempfile::tempdir().unwrap();
+        let cli = crate::cli::Cli::try_parse_from(["sim-flow", "status"]).unwrap();
+        let r = new_cmd(
+            &cli,
+            tmp.path(),
+            &crate::cli::NewKind::Study {
+                name: "noc".to_string(),
+            },
+        );
+        assert!(r.is_err());
+        let r = new_cmd(
+            &cli,
+            tmp.path(),
+            &crate::cli::NewKind::Candidate {
+                name: "mesh".to_string(),
+            },
+        );
+        assert!(r.is_err());
+    }
+
+    #[test]
     fn watchers_cmd_list_with_no_watchers_returns_ok_in_both_modes() {
         // Without an active sim-flow auto session, the watch registry
         // is empty -- list prints the (no live watchers) note in
