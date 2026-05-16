@@ -972,4 +972,55 @@ mod tests {
         assert_eq!(report.failures.len(), 1);
         assert!(report.failures[0].reason.contains("no candidate files"));
     }
+
+    #[test]
+    fn marker_maps_each_finding_variant() {
+        use crate::critique::Finding;
+        assert_eq!(marker(&Finding::Resolved("x".into())), "RESOLVED");
+        assert_eq!(marker(&Finding::Unresolved("x".into())), "UNRESOLVED");
+        assert_eq!(marker(&Finding::Blocker("x".into())), "BLOCKER");
+    }
+
+    #[test]
+    fn expand_candidate_files_walks_dirs_and_skips_index_files() {
+        let tmp = tempdir().unwrap();
+        // Build a spec directory tree.
+        let dir = tmp.path().join("docs/spec");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("section-01.md"), "body").unwrap();
+        std::fs::write(dir.join("section-02.md"), "body").unwrap();
+        // Index files that must be skipped.
+        std::fs::write(dir.join("README.md"), "summary").unwrap();
+        std::fs::write(dir.join("_toc.md"), "toc").unwrap();
+        std::fs::write(dir.join("index.md"), "idx").unwrap();
+        std::fs::write(dir.join(".gitkeep"), "").unwrap();
+        // A direct file that should be included as-is.
+        std::fs::write(tmp.path().join("docs/extra.md"), "extra").unwrap();
+        let got = expand_candidate_files(
+            tmp.path(),
+            &[
+                PathBuf::from("docs/spec"),
+                PathBuf::from("docs/extra.md"),
+                PathBuf::from("docs/missing.md"),
+            ],
+        );
+        let names: Vec<String> = got
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(String::from))
+            .collect();
+        assert!(names.contains(&"section-01.md".to_string()));
+        assert!(names.contains(&"section-02.md".to_string()));
+        assert!(names.contains(&"extra.md".to_string()));
+        assert!(!names.contains(&"README.md".to_string()));
+        assert!(!names.contains(&"_toc.md".to_string()));
+        assert!(!names.contains(&"index.md".to_string()));
+        // Case-insensitive skip on the README spelling.
+        std::fs::write(dir.join("Readme.md"), "x").unwrap();
+        let got2 = expand_candidate_files(tmp.path(), &[PathBuf::from("docs/spec")]);
+        let names2: Vec<String> = got2
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(String::from))
+            .collect();
+        assert!(!names2.iter().any(|n| n.eq_ignore_ascii_case("readme.md")));
+    }
 }
