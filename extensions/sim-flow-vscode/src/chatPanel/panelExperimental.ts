@@ -776,7 +776,7 @@ function buildComposer(state: ChatPanelState): HTMLElement {
     if (!s) {
       return;
     }
-    sendBtn.disabled = s.isStreaming ? !s.canStop : !canSend(s);
+    sendBtn.disabled = !canSend(s);
   });
   area.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.shiftKey) {
@@ -790,43 +790,24 @@ function buildComposer(state: ChatPanelState): HTMLElement {
     submitPrompt();
   });
 
-  // Send / Stop button. Renders as an icon (↑ for send, ■ for stop)
-  // since both glyphs are universally understood and read at a
-  // glance. The button's class swaps between `x-send-send` and
-  // `x-send-stop` so CSS can recolour the stop state in the warning
-  // palette without changing the layout. aria-label + title carry
-  // the verbal action for screen readers and hover tooltips.
+  // Send button: always renders the ↑ glyph. Disabled while
+  // streaming or when the draft is empty. The Stop affordance
+  // moved out of this button into the composer-meta row, to the
+  // right of the Auto/Manual toggle, so the send/stop modes don't
+  // share a click target.
   const sendBtn = document.createElement("button");
   sendBtn.type = "button";
-  // Stable id so morphdom always matches a "send" slot to a previous
-  // "send" slot. Without it, when the input row's child count
-  // changes across renders (Browse appearing/disappearing on the
-  // DM0 boundary), morphdom matches positionally by tag and the
-  // visible Send icon can inherit the original Browse click
-  // handler -- so clicking Send opens the file picker.
+  // Stable id keeps morphdom matching a "send" slot to a previous
+  // "send" slot regardless of input-row child count changes.
   sendBtn.id = "x-composer-send";
-  sendBtn.className = state.isStreaming ? "x-send x-send-stop" : "x-send x-send-send";
-  sendBtn.textContent = state.isStreaming ? "■" : "↑";
-  sendBtn.setAttribute(
-    "aria-label",
-    state.isStreaming ? "Stop the current request" : "Send message",
-  );
-  sendBtn.title = state.isStreaming ? "Stop" : "Send";
-  sendBtn.disabled = state.isStreaming ? !state.canStop : !canSend(state);
+  sendBtn.className = "x-send";
+  sendBtn.textContent = "↑";
+  sendBtn.setAttribute("aria-label", "Send message");
+  sendBtn.title = "Send";
+  sendBtn.disabled = !canSend(state);
   sendBtn.addEventListener("click", () => {
-    // Read from `ui.state` rather than the closure's `state` so we
-    // see the latest values even when morphdom keeps an older
-    // render's listener attached to the live DOM node. Otherwise
-    // `state.isStreaming` here would forever reflect the first
-    // render's snapshot and the Stop path would never fire.
     const s = ui.state;
-    if (!s) {
-      return;
-    }
-    if (s.isStreaming) {
-      if (s.canStop) {
-        send({ type: "stop-conversation" });
-      }
+    if (!s || !canSend(s)) {
       return;
     }
     submitPrompt();
@@ -986,6 +967,31 @@ function buildComposerMeta(state: ChatPanelState): HTMLElement {
     send({ type: "set-step-mode", mode: live === "auto" ? "manual" : "auto" });
   });
   rightZone.appendChild(modeBtn);
+
+  // Stop button sits to the right of the Mode toggle. Visible only
+  // while the orchestrator is streaming -- it's the cancel-current-
+  // activity gesture, not a session terminator (that lives on the
+  // toolbar's ⏻). Disabled when `canStop` is false (a stop is
+  // already in flight).
+  if (state.isStreaming) {
+    const stopBtn = document.createElement("button");
+    stopBtn.type = "button";
+    stopBtn.id = "x-composer-stop";
+    stopBtn.className = "x-stop-meta";
+    stopBtn.textContent = "■";
+    stopBtn.setAttribute("aria-label", "Stop the current activity");
+    stopBtn.title =
+      "Stop the current activity and drop to Manual mode. The session stays attached -- this is not End session.";
+    stopBtn.disabled = !state.canStop;
+    stopBtn.addEventListener("click", () => {
+      const s = ui.state;
+      if (!s?.canStop) {
+        return;
+      }
+      send({ type: "stop-conversation" });
+    });
+    rightZone.appendChild(stopBtn);
+  }
 
   root.append(leftZone, centerZone, rightZone);
   return root;

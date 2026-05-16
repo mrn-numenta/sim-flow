@@ -846,15 +846,14 @@ body {
 }
 
 .x-send {
-  /* Transparent border on the base so the stop variant can swap
-   * to a coloured outline without nudging the layout by a pixel. */
-  border: 1px solid transparent;
-  background: var(--vscode-button-background);
-  color: var(--vscode-button-foreground);
+  /* Outline-only square button. White glyph + white border on a
+   * transparent fill; hover paints a faint white overlay. Matches
+   * the new Stop button treatment in the composer-meta row so the
+   * two gestures read as a consistent pair. */
+  border: 1px solid #fff;
+  background: transparent;
+  color: #fff;
   border-radius: 8px;
-  /* Square-ish so the glyph reads as an icon button rather than a
-   * text button. Fixed width keeps the layout stable as the icon
-   * swaps between ↑ (send) and ■ (stop). */
   min-width: 32px;
   min-height: 32px;
   padding: 0;
@@ -869,7 +868,7 @@ body {
 }
 
 .x-send:hover:not(:disabled) {
-  background: var(--vscode-button-hoverBackground, var(--vscode-button-background));
+  background: color-mix(in srgb, #fff 12%, transparent);
 }
 
 .x-send:disabled {
@@ -877,18 +876,34 @@ body {
   cursor: not-allowed;
 }
 
-/* Stop variant: outline-only, neutral white. The streaming cancel
- * was previously painted in the error palette, but the red read
- * as alarming for what's now a benign "drop to manual park"
- * gesture (per the chat-panel Stop semantics). */
-.x-send-stop {
+/* Stop button in the composer-meta row (to the right of the
+ * Auto/Manual toggle). Outline-only, neutral white box -- the
+ * red treatment didn't fit the new "cancel current activity"
+ * semantic; that gesture isn't destructive enough to deserve a
+ * warning palette. Only rendered while streaming. */
+.x-stop-meta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
   color: #fff;
-  border-color: #fff;
+  border: 1px solid #fff;
+  border-radius: 4px;
+  padding: 0;
+  width: 22px;
+  height: 22px;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
 }
 
-.x-send-stop:hover:not(:disabled) {
+.x-stop-meta:hover:not(:disabled) {
   background: color-mix(in srgb, #fff 12%, transparent);
+}
+
+.x-stop-meta:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .x-browse {
