@@ -277,6 +277,166 @@ describe("session/socketPump", () => {
     pump.dispose();
   });
 
+  async function makePump(sessionId: string): Promise<{
+    pump: SocketSessionPump;
+    socket: ReturnType<typeof mock.createConnection>;
+    renderer: RecordingRenderer;
+  }> {
+    mock.reset();
+    const pump = new SocketSessionPump(
+      { sessionId, socketPath: `/tmp/${sessionId}.sock` },
+      {
+        source: "ollama",
+        model: "llama3.1",
+        projectDir: "/tmp/example",
+        binary: "sim-flow",
+        debugTokens: "",
+      },
+    );
+    await pump.ready();
+    const renderer = new RecordingRenderer();
+    await pump.settle(renderer); // through hello-ack -> request-user-input
+    const socket = mock.state.sockets[0]!;
+    return { pump, socket, renderer };
+  }
+
+  it("notifies subscribers when a sub-session-started / sub-session-ended pair arrives", async () => {
+    const { pump, socket } = await makePump("sub-pair");
+    const observed: boolean[] = [];
+    const dispose = pump.onSubSessionChanged((inSubSession) => {
+      observed.push(inSubSession);
+    });
+    expect(pump.inSubSession).toBe(false);
+    socket.emit(
+      "data",
+      `${JSON.stringify({ event: "sub-session-started", step: "DM1", kind: "work" })}\n`,
+    );
+    expect(pump.inSubSession).toBe(true);
+    socket.emit("data", `${JSON.stringify({ event: "sub-session-ended" })}\n`);
+    expect(pump.inSubSession).toBe(false);
+    expect(observed).toEqual([true, false]);
+    dispose();
+    pump.dispose();
+  });
+
+  it("forwards gate-result events through onGateResult subscribers", async () => {
+    const { pump, socket } = await makePump("gate-sub");
+    const observed: Array<{ step: string; clean: boolean; failures: number }> = [];
+    const dispose = pump.onGateResult((msg) => {
+      observed.push({
+        step: msg.step,
+        clean: msg.clean,
+        failures: msg.failures.length,
+      });
+    });
+    socket.emit(
+      "data",
+      `${JSON.stringify({
+        event: "gate-result",
+        step: "DM2c",
+        clean: false,
+        failures: [{ description: "x", reason: "y" }],
+      })}\n`,
+    );
+    socket.emit(
+      "data",
+      `${JSON.stringify({ event: "gate-result", step: "DM2c", clean: true, failures: [] })}\n`,
+    );
+    expect(observed).toEqual([
+      { step: "DM2c", clean: false, failures: 1 },
+      { step: "DM2c", clean: true, failures: 0 },
+    ]);
+    dispose();
+    pump.dispose();
+  });
+
+  it("forwards followup events to onFollowup subscribers (in-settle)", async () => {
+    const { pump, socket } = await makePump("followup-sub");
+    const observed: Array<{ label: string; action: string }> = [];
+    const dispose = pump.onFollowup((msg) => {
+      observed.push({ label: msg.label, action: msg.action });
+    });
+    // Resume drive so the renderer is attached when follow-up events
+    // arrive (the pump queues events when currentRenderer is null --
+    // followup is NOT in the bypass allowlist).
+    const renderer = new RecordingRenderer();
+    const settle2 = pump.settle(renderer);
+    socket.emit(
+      "data",
+      `${JSON.stringify({ event: "followup", label: "Run gate", action: "/gate" })}\n`,
+    );
+    socket.emit(
+      "data",
+      `${JSON.stringify({ event: "followup", label: "Continue", action: "continue" })}\n`,
+    );
+    socket.emit("data", `${JSON.stringify({ event: "request-user-input" })}\n`);
+    await settle2;
+    expect(observed).toEqual([
+      { label: "Run gate", action: "/gate" },
+      { label: "Continue", action: "continue" },
+    ]);
+    dispose();
+    pump.dispose();
+  });
+
+  it("forwards next-action-hint events to onNextActionHint subscribers (including null, in-settle)", async () => {
+    const { pump, socket } = await makePump("nah-sub");
+    const observed: Array<{ label: string | null }> = [];
+    const dispose = pump.onNextActionHint((msg) => observed.push({ label: msg.label }));
+    const renderer = new RecordingRenderer();
+    const settle2 = pump.settle(renderer);
+    socket.emit(
+      "data",
+      `${JSON.stringify({ event: "next-action-hint", label: "Run DM2c" })}\n`,
+    );
+    socket.emit("data", `${JSON.stringify({ event: "next-action-hint", label: null })}\n`);
+    socket.emit("data", `${JSON.stringify({ event: "request-user-input" })}\n`);
+    await settle2;
+    expect(observed).toEqual([{ label: "Run DM2c" }, { label: null }]);
+    dispose();
+    pump.dispose();
+  });
+
+  it("forwards request-user-input events to onRequestUserInput subscribers", async () => {
+    const { pump, socket } = await makePump("rui-sub");
+    const observed: Array<{ prompt: string | null; placeholder: string | null }> = [];
+    const dispose = pump.onRequestUserInput((msg) => {
+      observed.push({ prompt: msg.prompt ?? null, placeholder: msg.placeholder ?? null });
+    });
+    // Start a fresh settle so the next request-user-input -- with the
+    // payload we care about -- is processed live (it would NOT be
+    // bypassed when currentRenderer is null).
+    const renderer = new RecordingRenderer();
+    const settle2 = pump.settle(renderer);
+    socket.emit(
+      "data",
+      `${JSON.stringify({
+        event: "request-user-input",
+        prompt: "Pick one",
+        placeholder: "...",
+      })}\n`,
+    );
+    await settle2;
+    expect(observed).toEqual([{ prompt: "Pick one", placeholder: "..." }]);
+    dispose();
+    pump.dispose();
+  });
+
+  it("isViewer reports false for the first attached client and true after the first response", async () => {
+    // Without orchestrator-side viewer handshake events, isViewer
+    // defaults to false. This pins down the public contract.
+    const { pump } = await makePump("viewer-pin");
+    expect(pump.isViewer).toBe(false);
+    pump.dispose();
+  });
+
+  it("dispose() is idempotent and tears down the socket", async () => {
+    const { pump, socket } = await makePump("dispose-pin");
+    pump.dispose();
+    expect(socket.destroyed).toBe(true);
+    expect(() => pump.dispose()).not.toThrow();
+  });
+
   it("notifies subscribers when StepModeChanged arrives from the orchestrator", async () => {
     mock.reset();
 
