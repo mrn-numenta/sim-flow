@@ -1397,6 +1397,132 @@ mod tests {
         );
     }
 
+    // --- status, advance, convert_sv, reset E2E against tempdir ---
+
+    #[test]
+    fn status_after_init_succeeds() {
+        // Smoke test: init then status without --json must not error.
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        status(tmp.path(), false).unwrap();
+    }
+
+    #[test]
+    fn status_json_after_init_succeeds() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        status(tmp.path(), true).unwrap();
+    }
+
+    #[test]
+    fn status_without_state_returns_io_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = status(tmp.path(), false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn convert_sv_without_dm4b_pass_requires_force() {
+        // DM4b unpassed -> convert-sv refuses without --force.
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        let err = convert_sv(tmp.path(), /*force=*/ false).unwrap_err();
+        assert!(format!("{err}").contains("DM4b has not passed"));
+    }
+
+    #[test]
+    fn convert_sv_no_op_when_already_in_sv_flow() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        // Mark DM4b passed and flip via convert-sv --force; then a
+        // re-invocation must short-circuit without error.
+        {
+            let dot = tmp.path().join(".sim-flow");
+            let mut state = State::load(&dot).unwrap();
+            state.mark_passed("DM4b", "1");
+            state.save(&dot).unwrap();
+        }
+        convert_sv(tmp.path(), /*force=*/ false).unwrap();
+        // Second call is a no-op (already in SV flow).
+        convert_sv(tmp.path(), /*force=*/ false).unwrap();
+        let body = std::fs::read_to_string(tmp.path().join(".sim-flow/state.toml")).unwrap();
+        // serde rename_all="kebab-case" turns SystemVerilogConvert
+        // into "system-verilog-convert" in the TOML (not the
+        // "systemverilog-convert" string Flow::as_str returns,
+        // which is a separate display label). Match the kebab
+        // form here.
+        assert!(body.contains("system-verilog-convert"), "{body}");
+        assert!(body.contains("SV0"));
+    }
+
+    #[test]
+    fn convert_sv_from_design_study_requires_force_then_succeeds_to_caller() {
+        // DS flow -> convert-sv refuses without --force.
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DesignStudy).unwrap();
+        let err = convert_sv(tmp.path(), /*force=*/ false).unwrap_err();
+        assert!(format!("{err}").contains("design-study flow"));
+
+        // Known issue: with --force we return Ok and print
+        // "flipped to systemverilog-convert", but the underlying
+        // `state.flip_to_sv_convert` helper has an internal guard
+        // that early-returns when state.flow != DirectModeling.
+        // So the on-disk state.toml stays as design-study even
+        // though the CLI reports success. Test asserts the caller-
+        // visible contract (Ok) and notes the disk mismatch via
+        // an inline TODO. Fixing requires either (a) relaxing the
+        // helper's guard so DSF -> SVC works under --force, or
+        // (b) erroring out of convert_sv when the helper would
+        // no-op. Either way it's a behavior change worth its own
+        // audit pass; out of scope for this coverage commit.
+        convert_sv(tmp.path(), /*force=*/ true).unwrap();
+        let body = std::fs::read_to_string(tmp.path().join(".sim-flow/state.toml")).unwrap();
+        // TODO: when convert_sv/flip_to_sv_convert is reconciled,
+        // flip this assertion to `assert!(body.contains("system-verilog-convert"))`.
+        assert!(
+            body.contains("design-study"),
+            "documented current (buggy) behavior: DSF + --force prints success but state stays as design-study; got:\n{body}"
+        );
+    }
+
+    #[test]
+    fn reset_without_force_refuses() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        let err = reset(tmp.path(), "DM0", /*force=*/ false).unwrap_err();
+        assert!(format!("{err}").contains("--force"));
+    }
+
+    #[test]
+    fn reset_rejects_unknown_step() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        let err = reset(tmp.path(), "NotARealStep", /*force=*/ true).unwrap_err();
+        assert!(format!("{err}").contains("not a"));
+    }
+
+    #[test]
+    fn reset_force_clears_downstream_gates() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        // Manually mark DM0, DM1, DM2a passed, then reset to DM1.
+        {
+            let dot = tmp.path().join(".sim-flow");
+            let mut state = State::load(&dot).unwrap();
+            state.mark_passed("DM0", "1");
+            state.mark_passed("DM1", "2");
+            state.mark_passed("DM2a", "3");
+            state.save(&dot).unwrap();
+        }
+        reset(tmp.path(), "DM1", /*force=*/ true).unwrap();
+        let state = State::load(&tmp.path().join(".sim-flow")).unwrap();
+        // DM0 (before the reset point) should still be passed;
+        // DM1 + DM2a (at/after) should be cleared.
+        assert!(state.gates.get("DM0").map(|g| g.passed).unwrap_or(false));
+        assert!(!state.gates.get("DM1").map(|g| g.passed).unwrap_or(false));
+        assert!(!state.gates.get("DM2a").map(|g| g.passed).unwrap_or(false));
+    }
+
     #[test]
     fn init_overwrites_existing_state_toml() {
         // Current contract: `sim-flow init` is unconditional --

@@ -2663,7 +2663,10 @@ pub fn build_initial_messages(
         prompts::load_template(&opts.foundation_root, "critique-json-schema")?;
     let critique_schema_rendered =
         prompts::render_prompt("critique-json-schema", &critique_schema_body, &fragment_ctx)?;
-    template_context.insert("critique_json_schema".into(), critique_schema_rendered.clone());
+    template_context.insert(
+        "critique_json_schema".into(),
+        critique_schema_rendered.clone(),
+    );
     // `{{ critique_output_block }}` — the shared "Write the
     // critique as JSON to docs/critiques/<step>-critique.json /
     // schema below" trailer every critique prompt ends with.
@@ -2674,10 +2677,12 @@ pub fn build_initial_messages(
     let mut output_block_ctx = prompts::PromptContext::new();
     output_block_ctx.insert("step_id".into(), step.id.to_string());
     output_block_ctx.insert("critique_json_schema".into(), critique_schema_rendered);
-    let output_block_body =
-        prompts::load_template(&opts.foundation_root, "critique-output-block")?;
-    let output_block_rendered =
-        prompts::render_prompt("critique-output-block", &output_block_body, &output_block_ctx)?;
+    let output_block_body = prompts::load_template(&opts.foundation_root, "critique-output-block")?;
+    let output_block_rendered = prompts::render_prompt(
+        "critique-output-block",
+        &output_block_body,
+        &output_block_ctx,
+    )?;
     template_context.insert("critique_output_block".into(), output_block_rendered);
     // `{{ third_party_reviewer_note }}` — the universal sentence
     // every critique prompt shares (independent-review framing).
