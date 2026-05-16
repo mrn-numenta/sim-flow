@@ -238,29 +238,86 @@ function normalizeWhitespacePreserveCode(value) {
 
 function buildToc(pageCount) {
   const lines = [];
-  lines.push("# Framework API TOC");
+  lines.push("# Framework API navigation");
   lines.push("");
   lines.push(
-    "These API docs were generated from rustdoc, then normalized into markdown-sized pages for LLM use.",
+    "Two routes are available. Prefer the LIVE `api_*` tools first; fall back to the static page snapshot only when a signature isn't covered there or rust-analyzer is unavailable.",
+  );
+  lines.push("");
+  lines.push("## Tool palette (prefer this)");
+  lines.push("");
+  lines.push(
+    "These talk to a `rust-analyzer` rooted at the foundation workspace, so results always match the current code -- no stale snapshots.",
+  );
+  lines.push("");
+  lines.push(
+    "- `api_search(query)` -- find symbols by name. First call when you don't know the exact spelling. Returns `kind  location  name`.",
   );
   lines.push(
-    "Read this TOC first, then fetch only the relevant pages under `fw:api/pages/...`. Do not read the entire API set at once.",
+    "- `api_hover(query)` -- signature + rustdoc for a named symbol. Direct replacement for reading individual `fw:api/pages/...md` files.",
+  );
+  lines.push(
+    "- `api_impls(query)` -- every `impl` of a trait, or every concrete instantiation of a generic. Answers questions the static docs cannot: \"who implements `HasLogic`?\"",
+  );
+  lines.push(
+    "- `api_references(query)` -- every usage site of a symbol. Use to see how a type is actually consumed by library models and examples.",
+  );
+  lines.push(
+    "- `api_expand_macro(path, line)` -- show what a derive (or any macro) expands to at a given source line. The static docs cannot answer this.",
+  );
+  lines.push("");
+  lines.push(
+    "First call per session spawns rust-analyzer (~2 min for the cold index of the full foundation workspace); subsequent calls are fast.",
+  );
+  lines.push("");
+  lines.push("## Recommended starting points");
+  lines.push("");
+  lines.push(
+    "For each area below, run `api_hover(<symbol>)` to see the live signature + docs. Use `api_search` if a name doesn't resolve.",
+  );
+  lines.push("");
+  lines.push(
+    "- `prelude` -- recommended model-author convenience imports.",
+  );
+  lines.push(
+    "- `model::dataflow` -- core modeling traits (`HasLogic`, `HasInstances`), ports, lane contexts.",
+  );
+  lines.push(
+    "- `model::hierarchy` -- structural modeling, hierarchy builders, elaboration, connectivity.",
+  );
+  lines.push("- `module_library` -- built-in reusable modules.");
+  lines.push(
+    "- `runtime` -- runtime construction, multi-clock specs, execution entry points (`Scheduler`).",
+  );
+  lines.push(
+    "- `integration` -- integration-facing APIs including testbench support.",
+  );
+  lines.push(
+    "- `uvm` -- simulation environment builders, drivers, sequencers, scoreboards.",
+  );
+  lines.push("- `topology` -- mesh / NoC topology helpers.");
+  lines.push(
+    "- `observability` -- signal tracing (`SignalTracePayload`, `SignalTraceState`), checkpoints (`CheckpointModel`, `ConfigModel`), readers/writers.",
+  );
+  lines.push(
+    "- Derive macros: `HasLogic`, `HasInstances`, `SignalTracePayload`, `SignalTraceState`, `CheckpointModel`, `ConfigModel`. Use `api_hover(<Name>)` for the derive's own docs, then `api_expand_macro(<derive-site-path>, <line>)` on a struct that uses it to see what it generates.",
+  );
+  lines.push("");
+  lines.push("## Static page snapshot (fallback)");
+  lines.push("");
+  lines.push(
+    "The full rustdoc corpus is mirrored under `fw:api/pages/...` for cases the tools don't cover or when rust-analyzer is unavailable. Use `read_file(path=\"fw:api/pages/...\")` or `list_dir(\"fw:api/pages/foundation_framework/<module>\")` to browse. The starting points above map one-to-one to `fw:api/pages/foundation_framework/<area>/index.md`.",
   );
   lines.push("");
   lines.push(`- Total normalized API pages: ${pageCount}`);
   lines.push("- TOC path: `fw:api/toc.md`");
   lines.push("- Page root: `fw:api/pages/`");
   lines.push("");
-  lines.push("## Recommended Starting Points");
+  lines.push("Curated page index (same areas as above):");
   lines.push("");
   for (const [path, desc] of curatedToc) {
     lines.push(`- \`fw:api/${path}\` -- ${desc}`);
   }
-  lines.push("");
-  lines.push("## Search Hints");
-  lines.push("");
-  lines.push('- `search(pattern=..., path="fw:api/pages")` -- regex across all normalized API pages');
-  lines.push('- `list_dir("fw:api/pages/foundation_framework/model/dataflow")` -- inspect nearby pages in a module');
   lines.push("");
   return `${lines.join("\n")}\n`;
 }

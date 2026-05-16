@@ -31,18 +31,32 @@ Reference material (read on demand; do NOT bulk-read upfront):
   worked examples, library models, prior user projects. These are
   the curated, opinionated answers to "how do I express this in the
   framework?". Always check here first.
-- **SECONDARY -- foundation framework public API** via the `fw:`
-  prefix. The framework is large; consult it on demand, NOT
-  upfront, and only when `lib:` doesn't answer your question. Start
-  with `fw:api/toc.md` to navigate, then read the one or two
-  `fw:api/pages/.../*.md` files you need. Use `fw:src/prelude.rs`
-  or other `fw:src/...` files only when you need an exact signature
-  or source-level example that's missing from `fw:api/`. Do not
-  browse internal helpers; treat anything outside the curated public
-  API surface as implementation detail. (Generated rustdoc from
-  `cargo doc --workspace --no-deps` is also available locally but
-  is verbose; prefer the curated `fw:api/pages/...` markdown unless
-  a signature is genuinely missing there.)
+- **SECONDARY -- foundation framework public API**. The framework
+  is large; consult it on demand, NOT upfront, and only when `lib:`
+  doesn't answer your question. Two routes, in order:
+    1. **`api_*` tools (preferred)** -- talk to a live
+       `rust-analyzer` rooted at the foundation workspace, so the
+       content always matches the current code. Read `fw:api/toc.md`
+       once for the tool palette and the curated starting-point
+       symbols, then use:
+         - `api_search(query)` to find symbols by name,
+         - `api_hover(query)` for a symbol's signature + rustdoc
+           (the live replacement for `fw:api/pages/.../*.md`),
+         - `api_impls(query)` to enumerate every `impl` of a trait,
+         - `api_references(query)` to see how a type is consumed,
+         - `api_expand_macro(path, line)` to see what a derive
+           (`HasLogic`, `ConfigModel`, ...) actually generates.
+       First call per session spawns rust-analyzer and waits for
+       initial indexing (~2 min on a cold workspace); subsequent
+       calls are fast.
+    2. **`fw:api/pages/.../*.md` snapshot (fallback)** -- a static
+       rustdoc mirror, still under `fw:api/pages/...`. Use it when
+       the live tools don't cover something or rust-analyzer is
+       unavailable. Use `fw:src/prelude.rs` or other `fw:src/...`
+       paths only when you need an exact signature missing from
+       both routes. Do not browse internal helpers; treat anything
+       outside the curated public API surface as implementation
+       detail.
 
 Each top-level `lib:` directory has a `README.md` that indexes its
 contents -- start there before diving into individual files. Consult
