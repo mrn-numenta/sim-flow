@@ -275,6 +275,55 @@ mod tests {
         assert_eq!(truncate_at_char_boundary(&s, 1), "");
     }
 
+    fn ctx(project: &std::path::Path) -> ToolContext<'_> {
+        ToolContext::new(project, None, None, None)
+    }
+
+    #[test]
+    fn invoke_missing_path_arg_returns_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = ApiExpandMacroTool
+            .invoke(&ctx(tmp.path()), &json!({"line": 1}))
+            .unwrap();
+        assert!(!r.ok);
+        assert!(r.display.contains("missing `path`"));
+    }
+
+    #[test]
+    fn invoke_empty_path_string_returns_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = ApiExpandMacroTool
+            .invoke(&ctx(tmp.path()), &json!({"path": "  ", "line": 1}))
+            .unwrap();
+        assert!(!r.ok);
+        assert!(r.display.contains("missing `path`"));
+    }
+
+    #[test]
+    fn invoke_zero_line_is_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = ApiExpandMacroTool
+            .invoke(&ctx(tmp.path()), &json!({"path": "src/a.rs", "line": 0}))
+            .unwrap();
+        assert!(!r.ok);
+        assert!(r.display.contains("`line` must be a 1-based"));
+    }
+
+    #[test]
+    fn invoke_with_unconfigured_framework_root_or_unreachable_path_returns_err() {
+        // No framework_root => path is project-relative and probably
+        // doesn't exist; the resolver hits the not-configured / not-a-file
+        // branch and we get an err before any LSP call.
+        let tmp = tempfile::tempdir().unwrap();
+        let r = ApiExpandMacroTool
+            .invoke(
+                &ctx(tmp.path()),
+                &json!({"path": "src/missing.rs", "line": 1}),
+            )
+            .unwrap();
+        assert!(!r.ok);
+    }
+
     #[test]
     fn render_oversized_expansion_with_multibyte_does_not_panic() {
         // End-to-end: an expansion long enough to trigger
