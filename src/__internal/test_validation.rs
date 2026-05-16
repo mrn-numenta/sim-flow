@@ -352,3 +352,82 @@ fn validate_milestone_walk(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_report_is_clean() {
+        let report = ValidationReport::default();
+        assert!(report.is_clean());
+        assert!(report.failures.is_empty());
+    }
+
+    #[test]
+    fn fail_appends_to_failures_and_marks_unclean() {
+        let mut report = ValidationReport::default();
+        report.fail("first failure");
+        report.fail(String::from("second failure"));
+        assert!(!report.is_clean());
+        assert_eq!(report.failures, vec!["first failure", "second failure"]);
+    }
+
+    #[test]
+    fn merge_appends_other_failures_after_own() {
+        let mut a = ValidationReport::default();
+        a.fail("a1");
+        a.fail("a2");
+        let mut b = ValidationReport::default();
+        b.fail("b1");
+        a.merge(b);
+        assert_eq!(a.failures, vec!["a1", "a2", "b1"]);
+    }
+
+    #[test]
+    fn merge_clean_into_clean_stays_clean() {
+        let mut a = ValidationReport::default();
+        a.merge(ValidationReport::default());
+        assert!(a.is_clean());
+    }
+
+    #[test]
+    fn merge_clean_into_dirty_preserves_dirty() {
+        let mut a = ValidationReport::default();
+        a.fail("only failure");
+        a.merge(ValidationReport::default());
+        assert_eq!(a.failures, vec!["only failure"]);
+    }
+
+    #[test]
+    fn print_does_not_panic_on_clean_or_dirty_reports() {
+        // We can't easily capture stdout from a unit test without
+        // pulling in a redirect crate, but at minimum the print
+        // path must not panic on either input shape.
+        let clean = ValidationReport::default();
+        clean.print("clean-label");
+        let mut dirty = ValidationReport::default();
+        dirty.fail("dirty failure 1");
+        dirty.fail("dirty failure 2");
+        dirty.print("dirty-label");
+    }
+
+    #[test]
+    fn validate_step_advanced_fails_when_state_toml_missing() {
+        // No `.sim-flow/state.toml` -> State::load errors -> the
+        // validator should record a failure and not panic.
+        let tmp = tempfile::tempdir().unwrap();
+        let report = validate_step_advanced(tmp.path(), "DM0");
+        assert!(
+            !report.is_clean(),
+            "missing state.toml should produce at least one failure"
+        );
+    }
+
+    #[test]
+    fn validate_full_state_fails_when_state_toml_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let report = validate_full_state(tmp.path());
+        assert!(!report.is_clean());
+    }
+}
