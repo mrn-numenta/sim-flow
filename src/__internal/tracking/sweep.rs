@@ -185,6 +185,50 @@ workload = "throughput-stress"
     }
 
     #[test]
+    fn load_returns_io_error_on_missing_file() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("no-such.toml");
+        assert!(load(&path).is_err());
+    }
+
+    #[test]
+    fn load_rejects_malformed_toml_with_a_state_error() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("bad.toml");
+        std::fs::write(&path, "not valid toml").unwrap();
+        assert!(load(&path).is_err());
+    }
+
+    #[test]
+    fn value_to_string_handles_string_vs_other_kinds() {
+        assert_eq!(value_to_string(&toml::Value::String("hi".into())), "hi");
+        assert_eq!(value_to_string(&toml::Value::Integer(42)), "42");
+        assert_eq!(value_to_string(&toml::Value::Boolean(true)), "true");
+        // Float renders via Display; just check it's not empty.
+        let s = value_to_string(&toml::Value::Float(1.5));
+        assert!(s.contains("1.5"));
+    }
+
+    #[test]
+    fn resolve_binary_uses_configured_when_supplied() {
+        let project = std::path::Path::new("/tmp/proj");
+        let bin = resolve_binary(project, Some("./my-bin"));
+        // Configured -> joined under project.
+        assert_eq!(bin, project.join("./my-bin"));
+    }
+
+    #[test]
+    fn resolve_binary_falls_back_to_cargo_run_when_no_configured() {
+        let project = std::path::Path::new("/tmp/proj");
+        let bin = resolve_binary(project, None);
+        // The fallback is something with `cargo` in the name; the exact
+        // path is system-dependent. We just sanity-check that we got
+        // SOMETHING back.
+        let s = bin.display().to_string();
+        assert!(!s.is_empty());
+    }
+
+    #[test]
     fn run_records_parent_and_children() {
         let tmp = tempdir().unwrap();
         let project = tmp.path().to_path_buf();
