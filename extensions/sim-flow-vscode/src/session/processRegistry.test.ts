@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   cleanupStalePids,
+  cleanupStalePidsAsync,
+  ensurePidsDir,
   isProcessAlive,
   pidsDir,
   readPidRecords,
@@ -124,6 +126,44 @@ describe("processRegistry: cleanupStalePids", () => {
     expect(summary.skipped).toBe(1);
     expect(summary.killed).toBe(0);
     expect(readPidRecords(projectDir)).toEqual([]);
+  });
+
+  it("cleanupStalePidsAsync mirrors the sync helper without blocking", async () => {
+    writePidRecord(projectDir, {
+      pid: 999_999_999,
+      sessionId: "definitely-dead",
+      binary: "/opt/sim-flow",
+      label: "auto",
+      spawnedAtMs: 1,
+    });
+    const summary = await cleanupStalePidsAsync(projectDir);
+    expect(summary.total).toBe(1);
+    expect(summary.stale).toBe(1);
+    expect(readPidRecords(projectDir)).toEqual([]);
+  });
+
+  it("ensurePidsDir creates the pids directory idempotently", async () => {
+    expect(fs.existsSync(pidsDir(projectDir))).toBe(false);
+    await ensurePidsDir(projectDir);
+    expect(fs.existsSync(pidsDir(projectDir))).toBe(true);
+    // Second call is a no-op (recursive mkdir).
+    await ensurePidsDir(projectDir);
+    expect(fs.existsSync(pidsDir(projectDir))).toBe(true);
+  });
+
+  it("cleanupStalePids reaps an empty pids directory after the last record clears", () => {
+    writePidRecord(projectDir, {
+      pid: 999_999_998,
+      sessionId: "last-dead",
+      binary: "/opt/sim-flow",
+      label: "auto",
+      spawnedAtMs: 1,
+    });
+    // Sanity: the dir exists with one entry now.
+    expect(fs.existsSync(pidsDir(projectDir))).toBe(true);
+    cleanupStalePids(projectDir);
+    // Empty-dir reaper kicks in -- the directory itself is gone.
+    expect(fs.existsSync(pidsDir(projectDir))).toBe(false);
   });
 
   it("kills records that match a currently-running sim-flow-shaped process", async () => {
