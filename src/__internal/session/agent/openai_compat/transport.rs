@@ -758,9 +758,97 @@ mod tests {
     }
 
     #[test]
+    fn tail_passes_short_strings_through() {
+        assert_eq!(tail("hello", 100), "hello");
+    }
+
+    #[test]
+    fn tail_walks_forward_to_char_boundary_on_multibyte_cut() {
+        // Build a string where the cut at `s.len() - max` lands inside
+        // a multibyte char. The helper walks FORWARD to the next char
+        // boundary so we never return an invalid slice.
+        let mut s = String::new();
+        s.push_str(&"a".repeat(10));
+        s.push('\u{2026}'); // 3 bytes
+        s.push_str(&"b".repeat(10));
+        // s.len() = 10 + 3 + 10 = 23. Pick max so the naive cut lands
+        // mid-char: 23 - max = 11 (byte 1 of the 3-byte char).
+        let out = tail(&s, 12);
+        // The walk-forward lands at byte 13 (end of the multibyte char),
+        // dropping the partial codepoint AND keeping 10 trailing 'b's.
+        assert_eq!(out, "bbbbbbbbbb");
+    }
+
+    #[test]
+    fn truthy_env_reads_canonical_truthy_values() {
+        let prior = std::env::var("SIM_FLOW_TEST_TRUTHY_VAR").ok();
+        for v in ["1", "true", "True", "TRUE", "yes", "YES"] {
+            // SAFETY: tests serialize env access already.
+            unsafe {
+                std::env::set_var("SIM_FLOW_TEST_TRUTHY_VAR", v);
+            }
+            assert!(truthy_env("SIM_FLOW_TEST_TRUTHY_VAR"), "{v}");
+        }
+        for v in ["0", "false", "no", "off", "FALSE", ""] {
+            unsafe {
+                std::env::set_var("SIM_FLOW_TEST_TRUTHY_VAR", v);
+            }
+            assert!(!truthy_env("SIM_FLOW_TEST_TRUTHY_VAR"), "{v}");
+        }
+        unsafe {
+            std::env::remove_var("SIM_FLOW_TEST_TRUTHY_VAR");
+        }
+        assert!(!truthy_env("SIM_FLOW_TEST_TRUTHY_VAR"));
+        // Restore.
+        unsafe {
+            match prior {
+                Some(v) => std::env::set_var("SIM_FLOW_TEST_TRUTHY_VAR", v),
+                None => std::env::remove_var("SIM_FLOW_TEST_TRUTHY_VAR"),
+            }
+        }
+    }
+
+    #[test]
+    fn float_env_and_uint_env_parse_or_return_none() {
+        let prior = std::env::var("SIM_FLOW_TEST_NUM_VAR").ok();
+        unsafe {
+            std::env::set_var("SIM_FLOW_TEST_NUM_VAR", "1.5");
+        }
+        assert_eq!(float_env("SIM_FLOW_TEST_NUM_VAR"), Some(1.5));
+        // Float string isn't a valid uint.
+        assert_eq!(uint_env("SIM_FLOW_TEST_NUM_VAR"), None);
+        unsafe {
+            std::env::set_var("SIM_FLOW_TEST_NUM_VAR", "42");
+        }
+        assert_eq!(uint_env("SIM_FLOW_TEST_NUM_VAR"), Some(42));
+        // Garbage -> None for both.
+        unsafe {
+            std::env::set_var("SIM_FLOW_TEST_NUM_VAR", "not a number");
+        }
+        assert!(float_env("SIM_FLOW_TEST_NUM_VAR").is_none());
+        assert!(uint_env("SIM_FLOW_TEST_NUM_VAR").is_none());
+        // Unset -> None.
+        unsafe {
+            std::env::remove_var("SIM_FLOW_TEST_NUM_VAR");
+        }
+        assert!(float_env("SIM_FLOW_TEST_NUM_VAR").is_none());
+        assert!(uint_env("SIM_FLOW_TEST_NUM_VAR").is_none());
+        // Restore.
+        unsafe {
+            match prior {
+                Some(v) => std::env::set_var("SIM_FLOW_TEST_NUM_VAR", v),
+                None => std::env::remove_var("SIM_FLOW_TEST_NUM_VAR"),
+            }
+        }
+    }
+
+    #[test]
     fn trim_trailing_slash_keeps_paths_intact() {
         assert_eq!(trim_trailing_slash("http://x/v1"), "http://x/v1");
         assert_eq!(trim_trailing_slash("http://x/v1/"), "http://x/v1");
+        // Repeated slashes are all stripped.
+        assert_eq!(trim_trailing_slash("http://x/v1///"), "http://x/v1");
+        assert_eq!(trim_trailing_slash(""), "");
     }
 
     fn msg(role: LlmRole, content: &str) -> LlmMessage {
