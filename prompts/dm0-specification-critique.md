@@ -90,9 +90,4 @@ not obvious -- the finding's `body` field is the right place for the
 
 {{ output_intro }}
 
-Write the critique as JSON to `docs/critiques/DM0-critique.json`.
-The orchestrator renders a human-readable
-`docs/critiques/DM0-critique.md` from that JSON automatically; do
-NOT write the markdown yourself.
-
-{{ critique_json_schema }}
+{{ critique_output_block }}

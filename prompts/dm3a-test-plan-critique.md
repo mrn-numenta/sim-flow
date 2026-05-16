@@ -107,9 +107,4 @@ themselves.
 
 {{ output_intro }}
 
-Write the critique as JSON to
-`docs/critiques/DM3a-critique.json`. The orchestrator renders a
-human-readable `docs/critiques/DM3a-critique.md` from that JSON
-automatically; do NOT write the markdown yourself.
-
-{{ critique_json_schema }}
+{{ critique_output_block }}

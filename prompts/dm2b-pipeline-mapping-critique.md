@@ -41,9 +41,4 @@ critique file.
 
 {{ output_intro }}
 
-Write the critique as JSON to
-`docs/critiques/DM2b-critique.json`. The orchestrator renders a
-human-readable `docs/critiques/DM2b-critique.md` from that JSON
-automatically; do NOT write the markdown yourself.
-
-{{ critique_json_schema }}
+{{ critique_output_block }}
