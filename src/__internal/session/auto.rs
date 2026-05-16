@@ -1406,12 +1406,21 @@ where
     work_result?;
 
     // PHASE 2: serial Critique for each (originally pending) stub.
-    // Critiques share the per-step JSON path so they cannot run
-    // concurrently. Each critique writes its findings and the
-    // orchestrator's gate evaluation between iterations decides
-    // whether to retry. We don't loop-retry on blockers here in V1
-    // -- if any stub's critique fires a BLOCKER, the step gate
-    // stays dirty and the outer auto loop reports halt.
+    //
+    // Critiques write to a single per-step `docs/critiques/<step>-critique.json`
+    // path (the critique prompts hard-code it). Running N critiques back
+    // to back means each one overwrites the previous; only the last
+    // critique's findings survive on disk for the caller to read. If
+    // milestone-1's critique fires a BLOCKER but milestone-N's is clean,
+    // the caller's `read_gate_findings` call would see an empty list and
+    // advance the step incorrectly.
+    //
+    // To keep the V1 "no auto-retry" contract while not losing findings:
+    // read the gate-findings file after each iteration, and break out of
+    // the loop on the first non-empty result. The blocking findings stay
+    // on disk for the caller's gate evaluation; the caller flips to
+    // manual on a dirty gate the same way it would for a single-critique
+    // path.
     for milestone_rel in &pending {
         let bare_name = std::path::Path::new(milestone_rel)
             .file_name()
@@ -1429,6 +1438,22 @@ where
             llm,
             Some(bare_name),
         )?;
+        let findings = read_gate_findings(&opts.project_dir, step_id_ref);
+        if !findings.is_empty() {
+            // Halt: this critique's findings survive on disk so the
+            // caller sees them. Continuing would let a clean
+            // milestone-K critique overwrite the blockers.
+            auto_host.send(&Event::Diagnostic {
+                level: DiagnosticLevel::Info,
+                message: format!(
+                    "auto: {step_id_ref} parallel plan-detail Phase 2 halted on \
+                     milestone `{milestone_rel}` with {n} gate finding(s); \
+                     remaining milestones' critiques deferred to manual",
+                    n = findings.len(),
+                ),
+            })?;
+            break;
+        }
     }
     Ok(true)
 }
