@@ -76,8 +76,6 @@ import {
 export const CHAT_PANEL_VIEW_ID = "simFlow.chatPanel";
 export const CHAT_PANEL_CONTAINER_ID = "sim-flow-chat-panel";
 
-let pendingConversationWrites: Promise<void> = Promise.resolve();
-
 interface PendingAutoLaunchState {
   projectDir: string;
   launchSpecPath: string | undefined;
@@ -95,6 +93,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   private refreshQueued = false;
   private reconcilePromise: Promise<void> | undefined;
   private postChain: Promise<void> = Promise.resolve();
+  /**
+   * Per-provider serialized chain of conversation-state writes.
+   * Previously module-scope; multiple ChatPanelProvider instances
+   * (the integration-test harness mostly, but also any future plugin-
+   * host scenario that constructs more than one provider) shared the
+   * same promise and waitForPendingConversationWrites() therefore
+   * blocked on unrelated writes from another panel. Per-instance
+   * here so writes for one panel don't fence writes for another.
+   * See chat-panel audit #12 (2026-05-16).
+   */
+  private pendingConversationWrites: Promise<void> = Promise.resolve();
   /**
    * Opening / revealing the panel also calls `refresh()`, but that is
    * not itself a project switch. We only want the expensive and
@@ -1006,7 +1015,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
     this.refreshing = true;
     try {
-      await waitForPendingConversationWrites();
+      await this.waitForPendingConversationWrites();
       if (!this.view || this.disposed) {
         return;
       }
@@ -1985,7 +1994,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     const key = conversationStorageKey(projectDir);
     const stored = toStoredConversation(conversation);
     this.conversations.set(key, conversation);
-    await queueConversationWrite(async () => {
+    await this.queueConversationWrite(async () => {
       await this.workspaceState.update(key, stored);
     });
   }
@@ -2675,6 +2684,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
   }
 
+  private queueConversationWrite(task: () => Promise<void>): Promise<void> {
+    const write = this.pendingConversationWrites
+      .catch(() => undefined)
+      .then(task);
+    this.pendingConversationWrites = write.catch(() => undefined);
+    return write;
+  }
+
+  private async waitForPendingConversationWrites(): Promise<void> {
+    await this.pendingConversationWrites;
+  }
+
   private async enqueuePost(task: () => Promise<void>): Promise<void> {
     const next = this.postChain.catch(() => undefined).then(async () => {
       if (this.disposed || !this.view) {
@@ -2902,16 +2923,6 @@ function readPanelSettings(): {
 function normalizeSpecPath(specPath: string | undefined): string | undefined {
   const trimmed = specPath?.trim() ?? "";
   return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function queueConversationWrite(task: () => Promise<void>): Promise<void> {
-  const write = pendingConversationWrites.catch(() => undefined).then(task);
-  pendingConversationWrites = write.catch(() => undefined);
-  return write;
-}
-
-async function waitForPendingConversationWrites(): Promise<void> {
-  await pendingConversationWrites;
 }
 
 async function resolveProjectDirForPanel(): Promise<string | null> {
