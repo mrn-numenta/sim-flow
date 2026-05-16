@@ -578,16 +578,26 @@ pub fn read_critique_entry(
                 // (Critique::load -> from_json) refuses to advance
                 // on malformed JSON. Previously the dashboard fell
                 // through to parse the markdown body silently,
-                // which produced "Findings: 0, gate clean" on the
-                // dashboard while the gate kept refusing to
-                // advance -- the user couldn't see where the
-                // disagreement came from. Now we surface the parse
-                // error explicitly so the two paths agree on
-                // what's wrong. See orchestrator audit #18
-                // (2026-05-16).
-                return Err(Error::State(format!(
-                    "malformed critique JSON for {step_id}: {err}"
-                )));
+                // which produced "Findings: 0, gate clean" while
+                // the gate kept refusing to advance -- the user
+                // couldn't see where the disagreement came from.
+                // Now surface a synthetic Blocker finding so the
+                // dashboard panel shows the actual parse error and
+                // has_blocking aligns with the gate's refusal.
+                // See orchestrator audit #18 (2026-05-16).
+                let surfaced_path = json_path.to_string_lossy().into_owned();
+                let body = md_text.clone().unwrap_or_else(|| text.clone());
+                return Ok(Some(CritiqueDashboardEntry {
+                    path: surfaced_path,
+                    step: step_id.to_string(),
+                    body,
+                    findings: vec![DashboardFinding {
+                        kind: DashboardFindingKind::Blocker,
+                        text: format!("malformed critique JSON: {err}"),
+                        line: 1,
+                    }],
+                    has_blocking: true,
+                }));
             }
         }
     }
@@ -1024,14 +1034,31 @@ BLOCKER: numeric threshold missing.
     }
 
     #[test]
-    fn list_critique_entries_falls_back_to_md_when_json_malformed() {
+    fn list_critique_entries_surfaces_malformed_json_as_blocker() {
+        // Behavior change for orchestrator audit #18: previously
+        // the dashboard silently fell through to parsing the md
+        // body when the JSON was malformed, producing "0 findings,
+        // gate clean" while the gate refused to advance. Now we
+        // synthesize a Blocker finding naming the parse error so
+        // the dashboard's view aligns with the gate's refusal.
         let tmp = tempfile::tempdir().unwrap();
         write_critique(tmp.path(), "DM0", "json", "{ this is not valid JSON");
-        write_critique(tmp.path(), "DM0", "md", "BLOCKER: still parsed\n");
+        write_critique(tmp.path(), "DM0", "md", "BLOCKER: not surfaced from md\n");
         let out = list_critique_entries(tmp.path()).expect("ok");
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].findings.len(), 1);
-        assert_eq!(out[0].findings[0].text, "still parsed");
+        assert!(matches!(
+            out[0].findings[0].kind,
+            DashboardFindingKind::Blocker
+        ));
+        assert!(
+            out[0].findings[0]
+                .text
+                .starts_with("malformed critique JSON:"),
+            "got: {}",
+            out[0].findings[0].text
+        );
+        assert!(out[0].has_blocking);
     }
 
     #[test]
