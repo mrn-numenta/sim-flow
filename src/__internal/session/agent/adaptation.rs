@@ -635,4 +635,99 @@ mod tests {
         assert!(prepared[0].content.contains("rules"));
         assert!(prepared[0].content.contains("tools"));
     }
+
+    #[test]
+    fn model_family_by_id_maps_each_known_family() {
+        assert!(model_family_by_id(Some("generic_chat")).is_some());
+        assert!(model_family_by_id(Some("gemma4")).is_some());
+        assert!(model_family_by_id(Some("qwen3_6")).is_some());
+        assert!(model_family_by_id(Some("kimi_vl_thinking")).is_some());
+        assert!(model_family_by_id(Some("claude_messages")).is_some());
+        // Unknown id and None both return None.
+        assert!(model_family_by_id(Some("not-a-family")).is_none());
+        assert!(model_family_by_id(None).is_none());
+    }
+
+    #[test]
+    fn infer_model_family_picks_specialized_profile_for_known_model_names() {
+        // Gemma-4 substring.
+        assert_eq!(
+            infer_model_family(Some("google/gemma-4-12b-it")).id,
+            GEMMA4_MODEL_FAMILY.id,
+        );
+        // qwen3.6 / qwen-3.6 / qwen3-6 all match.
+        for m in ["qwen3.6", "Qwen-3.6-72B", "qwen3-6-coder"] {
+            assert_eq!(
+                infer_model_family(Some(m)).id,
+                QWEN3_6_MODEL_FAMILY.id,
+                "{m}"
+            );
+        }
+        // kimi-vl substring.
+        assert_eq!(
+            infer_model_family(Some("kimi-vl-thinking")).id,
+            KIMI_VL_THINKING_MODEL_FAMILY.id,
+        );
+        // claude substring.
+        assert_eq!(
+            infer_model_family(Some("claude-opus-4-7")).id,
+            CLAUDE_MESSAGES_MODEL_FAMILY.id,
+        );
+        // Unknown model -> generic_chat.
+        assert_eq!(
+            infer_model_family(Some("mistral-large")).id,
+            GENERIC_CHAT_MODEL_FAMILY.id,
+        );
+        // Empty / whitespace / None all fall to generic.
+        for m in [Some(""), Some("   "), None] {
+            assert_eq!(infer_model_family(m).id, GENERIC_CHAT_MODEL_FAMILY.id);
+        }
+    }
+
+    #[test]
+    fn resolve_model_family_prefers_explicit_id_over_model_inference() {
+        // Explicit overrides the model-name inference.
+        let fam = resolve_model_family(Some("claude_messages"), Some("gemma-4-12b"));
+        assert_eq!(fam.id, CLAUDE_MESSAGES_MODEL_FAMILY.id);
+        // No explicit -> infer from model.
+        let fam2 = resolve_model_family(None, Some("gemma-4-12b"));
+        assert_eq!(fam2.id, GEMMA4_MODEL_FAMILY.id);
+        // Unknown explicit -> falls back to inference.
+        let fam3 = resolve_model_family(Some("not-a-family"), Some("claude-opus"));
+        assert_eq!(fam3.id, CLAUDE_MESSAGES_MODEL_FAMILY.id);
+    }
+
+    #[test]
+    fn resolve_runtime_profile_uses_fallback_when_explicit_is_blank() {
+        // None / empty / whitespace -> fallback.
+        for id in [None, Some(""), Some("   ")] {
+            let r = resolve_runtime_profile(
+                id,
+                OPENAI_COMPAT_GENERIC_RUNTIME,
+                &[OPENAI_COMPAT_GENERIC_RUNTIME.id.as_str()],
+            )
+            .unwrap();
+            assert_eq!(r.id, OPENAI_COMPAT_GENERIC_RUNTIME.id);
+        }
+    }
+
+    #[test]
+    fn resolve_runtime_profile_errors_on_unknown_or_incompatible_id() {
+        // Unknown id -> Client error.
+        let r = resolve_runtime_profile(
+            Some("not-a-real-profile"),
+            OPENAI_COMPAT_GENERIC_RUNTIME,
+            &[OPENAI_COMPAT_GENERIC_RUNTIME.id.as_str()],
+        );
+        assert!(r.is_err());
+        // Known but not in allowed_ids -> Client error.
+        let r = resolve_runtime_profile(
+            Some(CLAUDE_CLI_RUNTIME.id.as_str()),
+            OPENAI_COMPAT_GENERIC_RUNTIME,
+            &[OPENAI_COMPAT_GENERIC_RUNTIME.id.as_str()],
+        );
+        assert!(r.is_err());
+        let msg = format!("{}", r.unwrap_err());
+        assert!(msg.contains("not compatible"));
+    }
 }
