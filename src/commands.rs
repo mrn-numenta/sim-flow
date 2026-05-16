@@ -1946,6 +1946,53 @@ mod tests {
     }
 
     #[test]
+    fn coverage_cmd_show_uses_defaults_when_config_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = coverage_cmd(
+            tmp.path(),
+            &crate::cli::CoverageAction::Show { json: false },
+        );
+        assert!(r.is_ok());
+        let r = coverage_cmd(tmp.path(), &crate::cli::CoverageAction::Show { json: true });
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn coverage_cmd_set_writes_threshold_and_level_to_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        let r = coverage_cmd(
+            tmp.path(),
+            &crate::cli::CoverageAction::Set {
+                threshold_pct: Some(80.0),
+                level: Some(crate::cli::CoverageLevelArg::Total),
+            },
+        );
+        assert!(r.is_ok());
+        // Round-trip: the saved value should now appear under coverage.
+        let cfg =
+            sim_flow::__internal::config::Config::load(&tmp.path().join(".sim-flow")).unwrap();
+        assert!((cfg.coverage.threshold_pct - 80.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn coverage_cmd_set_clamps_threshold_above_one_hundred() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        let r = coverage_cmd(
+            tmp.path(),
+            &crate::cli::CoverageAction::Set {
+                threshold_pct: Some(9000.0),
+                level: None,
+            },
+        );
+        assert!(r.is_ok());
+        let cfg =
+            sim_flow::__internal::config::Config::load(&tmp.path().join(".sim-flow")).unwrap();
+        assert!(cfg.coverage.threshold_pct <= 100.0 + 0.01);
+    }
+
+    #[test]
     fn baseline_cmd_create_without_any_runs_returns_error() {
         let tmp = tempfile::tempdir().unwrap();
         init(tmp.path(), Flow::DirectModeling).unwrap();
