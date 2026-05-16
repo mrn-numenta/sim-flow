@@ -2685,6 +2685,24 @@ pub fn build_initial_messages(
         "critique_kinds".into(),
         prompts::load_template(&opts.foundation_root, "critique-kinds")?,
     );
+    // `{{ coding_requirements }}` — the 6-bullet Rust style block
+    // (idiomatic / data-oriented / functional / no magic literals /
+    // no emojis / 400-line cap) every code-authoring DMF step
+    // (DM2d, DM3b, DM3c, DM4b) inlines. Centralised so the rules
+    // drift in exactly one place.
+    template_context.insert(
+        "coding_requirements".into(),
+        prompts::load_template(&opts.foundation_root, "coding-requirements")?,
+    );
+    // `{{ coding_requirements_checks }}` — the critique-side
+    // counterpart: a 4-bullet sub-list (4-space indented to nest
+    // under a numbered evaluation row) covering idiomatic-Rust /
+    // magic-literals / emojis / file-size-cap checks every
+    // code-reviewing DMF critique (DM2d, DM3b, DM3c, DM4b) runs.
+    template_context.insert(
+        "coding_requirements_checks".into(),
+        prompts::load_template(&opts.foundation_root, "coding-requirements-checks")?,
+    );
     let instruction_body = prompts::load_for_project_with_context(
         &opts.foundation_root,
         &opts.project_dir,

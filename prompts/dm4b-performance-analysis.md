@@ -148,33 +148,14 @@ it as a `BLOCKER:`.
 
 DM4b's deliverables are mostly markdown reports under
 `docs/analysis/`, but any Rust helpers / sweep glue / scratch
-binaries it writes MUST follow these rules. Markdown files
-inherit the "no emojis" + "under 400 lines" rules; the rest are
-Rust-specific.
+binaries it writes follow the canonical Rust rules:
 
-- **Idiomatic Rust** (for any code DM4b authors). Prefer the
-  standard idioms (`?` for error propagation, `Result` /
-  `Option` over panics, iterators over manual loops, pattern
-  matching over nested `if let`). Boring code beats clever code.
-- **Data-oriented + memory-friendly**. Prefer concrete types
-  over trait objects, owned data over indirection, contiguous
-  storage over heap-of-heaps. Avoid premature
-  `Arc<Mutex<_>>` indirection.
-- **Functional where appropriate**. Small pure helpers,
-  immutable bindings by default, `iter().map().filter().collect()`
-  over mutable accumulators, exhaustive `match` for state
-  machines.
-- **No magic numbers or strings**. Workload names, run-id
-  patterns, threshold values -- all named (`const`, enum
-  variant, named struct field), not inlined.
-- **No emojis** in code, markdown reports, doc strings, or log
-  output. Reports rendered in dashboards rely on plain ASCII.
-- **File size cap: under 400 lines** for every Rust source AND
-  every report markdown under `docs/analysis/`. Split a long
-  report along its natural axes (per-workload sections, per-
-  topic files like `throughput.md` + `latency.md`) rather than
-  growing one mega-report. The critique flags any file at or
-  above 400 lines as `BLOCKER:`.
+{{ coding_requirements }}
+
+DM4b split axis: per-topic files under `docs/analysis/` (e.g.
+`throughput.md`, `latency.md`, `bottlenecks.md`) rather than one
+mega-report. The 400-line cap and the no-emojis rule extend to
+markdown reports under `docs/analysis/`, not just Rust code.
 
 ## Constraints
 

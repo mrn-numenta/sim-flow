@@ -122,21 +122,7 @@ earlier milestones.
 
 11. **Coding Requirements (per the work prompt)**. Inspect every
     Rust source file landed or modified in this milestone:
-    - **Idiomatic Rust**: any non-idiomatic patterns
-      (manual loops over iterators, `unwrap()` in non-test paths,
-      nested `if let` instead of `match`, `Box<dyn _>` where a
-      concrete type fits) -> `BLOCKER:` with the file/line.
-    - **Magic numbers / strings**: any inlined literal that
-      represents a port name, payload width, threshold, or
-      run-id pattern -> `BLOCKER:`. Reject "well, it's only
-      used once" exceptions.
-    - **Emojis**: any non-ASCII decorative glyph in code,
-      comments, doc strings, error messages, or string literals
-      -> `BLOCKER:`. Quote the offending line.
-    - **File size cap**: run a line count on every Rust file
-      authored or modified this milestone. Any file at or above
-      400 lines -> `BLOCKER:` with the line count and a
-      suggested split axis.
+{{ coding_requirements_checks }}
 
 12. **File Layout (per the work prompt)**. Verify the split:
     - The `SimEnvBuilder` wiring helper (`make_env`,

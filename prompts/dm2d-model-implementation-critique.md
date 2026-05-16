@@ -128,20 +128,7 @@ internal priors):
 14. **Coding Requirements (per the work prompt)**. Inspect every
     Rust source file under `src/` landed or modified in this
     milestone:
-    - **Idiomatic Rust**: any non-idiomatic patterns
-      (manual loops where iterators fit, `unwrap()` in non-test
-      paths, nested `if let` where `match` would read better,
-      `Box<dyn _>` where a concrete type fits) -> `BLOCKER:`.
-    - **Magic numbers / strings**: inlined port names, payload
-      widths, stage indices, threshold values, etc. -> `BLOCKER:`.
-      Reject "well, it's only used once" exceptions.
-    - **Emojis**: any non-ASCII decorative glyph in code,
-      comments, doc strings, error messages, or string literals
-      -> `BLOCKER:`.
-    - **File size cap**: line-count every Rust file authored
-      or modified this milestone. Any file at or above 400
-      lines -> `BLOCKER:` with a suggested split axis (typically
-      one module / one component class per file).
+{{ coding_requirements_checks }}
 
 ## Output
 

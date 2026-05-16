@@ -107,23 +107,10 @@ regress earlier milestones.
     end-to-end suite + coverage result without regression?
 
 11. **Coding Requirements (per the work prompt)**. Inspect every
-    Rust source file landed or modified in this milestone:
-    - **Idiomatic Rust**: manual loops where iterators fit,
-      `unwrap()` in non-test code paths, nested `if let` where
-      `match` would read better, `Box<dyn _>` where a concrete
-      type fits -> `BLOCKER:` with the file/line.
-    - **Magic numbers / strings**: any inlined port name,
-      payload value, threshold, seed (other than the
-      milestone-pinned seed in random tests), or invariant
-      constant -> `BLOCKER:`.
-    - **Emojis**: any non-ASCII decorative glyph in code,
-      comments, doc strings, error messages, or string literals
-      -> `BLOCKER:`.
-    - **File size cap**: line-count every Rust file authored
-      or modified this milestone. Any file at or above 400
-      lines -> `BLOCKER:` with the count and a suggested split
-      (typically: extract a helper into its own file, or split
-      a multi-test file into the per-test-per-file layout).
+    Rust source file landed or modified in this milestone.
+    Random-test seeds pinned in filenames are an exception to
+    the magic-literals rule; everything else applies:
+{{ coding_requirements_checks }}
 
 12. **File Layout (per the work prompt)**. Verify the per-
     category subdirectory split:
