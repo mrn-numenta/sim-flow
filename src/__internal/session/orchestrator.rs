@@ -292,10 +292,6 @@ where
     // but the milestone references `src/model/foo.rs`, the tool
     // moves the file and surfaces the redirect in the result.
     let current_milestone_path: Option<std::path::PathBuf> = step.milestone_walk.and_then(|walk| {
-        let pick_touched = match opts.kind {
-            SessionKind::Critique => true,
-            SessionKind::Work => work_retry_has_prior_blockers,
-        };
         let resolved = match &opts.milestone_name {
             // Pinned worker (parallel plan-detail dispatcher):
             // bypass the walker's first-pending / highest-touched
@@ -307,11 +303,20 @@ where
             Some(name) => {
                 crate::__internal::steps::find_milestone_by_name(&opts.project_dir, &walk, name)
             }
-            None => crate::__internal::steps::find_current_milestone(
-                &opts.project_dir,
-                &walk,
-                pick_touched,
-            ),
+            None => {
+                // pick_touched is only meaningful for
+                // find_current_milestone; computing it eagerly in
+                // the Some(...) branch was dead.
+                let pick_touched = match opts.kind {
+                    SessionKind::Critique => true,
+                    SessionKind::Work => work_retry_has_prior_blockers,
+                };
+                crate::__internal::steps::find_current_milestone(
+                    &opts.project_dir,
+                    &walk,
+                    pick_touched,
+                )
+            }
         };
         match resolved {
             crate::__internal::steps::CurrentMilestone::File(rel) => {
