@@ -204,8 +204,22 @@ function applyShikiHighlight(root: ParentNode): void {
     if (!pre) {
       continue;
     }
+    // Run Shiki's output through DOMPurify before grafting into the
+    // live DOM. Shiki escapes its inputs and emits a tight set of
+    // `<pre><code><span class="...">` tags, so this is defense in
+    // depth -- but the prior code path (innerHTML + replaceWith)
+    // skipped the sanitizer entirely, so any future Shiki regression
+    // or a bundled-language plugin with HTML injection would land
+    // straight in the panel DOM. Keep `style` allowed on Shiki's
+    // per-token spans (carry the syntax color), even though the
+    // outer sanitizer drops it for assistant text. See chat-panel
+    // audit #5 (2026-05-16).
+    const sanitized = DOMPurify.sanitize(html, {
+      ALLOWED_TAGS: ["pre", "code", "span"],
+      ALLOWED_ATTR: ["class", "style"],
+    });
     const tpl = document.createElement("template");
-    tpl.innerHTML = html;
+    tpl.innerHTML = sanitized;
     const replacement = tpl.content.firstElementChild;
     if (!replacement) {
       continue;
