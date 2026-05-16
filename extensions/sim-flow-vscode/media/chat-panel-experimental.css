@@ -1011,12 +1011,19 @@ body {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  overflow-x: auto;
+  /* Hide overflow so a hovered tile expanding to its full label
+   * forces neighbours to shrink instead of letting the rail
+   * scroll. */
+  overflow: hidden;
 }
 
 .x-step-rail-step {
-  flex: 0 0 auto;
-  min-width: 36px;
+  /* `flex-shrink: 1` plus `min-width: 0` lets neighbours give up
+   * width when a sibling expands on hover. `flex-basis: 36px`
+   * keeps the default tile wide enough for any DMx / DSx label. */
+  flex: 1 1 36px;
+  min-width: 0;
+  max-width: 36px;
   height: 16px;
   padding: 0 4px;
   border: 1px solid var(--x-palette-accent);
@@ -1032,6 +1039,41 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: max-width 120ms ease, padding 120ms ease;
+}
+
+/* Short / full label spans. Default: short visible, full hidden.
+ * Hover swaps them so the tile reveals "DM0: Specification Intake"
+ * while the tile itself widens via the rule below. */
+.x-step-rail-step-short {
+  display: inline;
+}
+
+.x-step-rail-step-full {
+  display: none;
+}
+
+.x-step-rail-step:hover,
+.x-step-rail-step:focus-visible {
+  /* `max-width: none` + `flex-grow: 0` lets the tile size to its
+   * content (the longer label). `flex-shrink: 0` keeps it from
+   * being squashed when neighbours are still trying to claim
+   * space. */
+  flex: 0 0 auto;
+  max-width: none;
+  padding: 0 8px;
+}
+
+.x-step-rail-step:hover .x-step-rail-step-short,
+.x-step-rail-step:focus-visible .x-step-rail-step-short {
+  display: none;
+}
+
+.x-step-rail-step:hover .x-step-rail-step-full,
+.x-step-rail-step:focus-visible .x-step-rail-step-full {
+  display: inline;
 }
 
 /* Pending step (default): outline + transparent fill already

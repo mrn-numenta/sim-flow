@@ -1173,8 +1173,8 @@ function div(
 // ---------------------------------------------------------------
 
 /**
- * Short title shown on hover when the step rail can't fit the
- * full descriptive label. Source: the dashboard's DM_STEPS array.
+ * Short title shown in the rail tooltip and (informationally) in
+ * the help popup. Source: the dashboard's DM_STEPS array.
  */
 const STEP_LABELS: Record<string, string> = {
   DM0: "Spec",
@@ -1196,6 +1196,26 @@ const STEP_LABELS: Record<string, string> = {
   DS3c: "Tests",
   DS4: "Screen",
   DS5: "Compare",
+};
+
+/**
+ * Full step labels surfaced on hover in the step rail. Replaces the
+ * 3-4 character step id with a `<id>: <descriptive name>` form so
+ * the user can mouse over any tile and read what it is without
+ * leaving the chat panel. CSS shrinks the other tiles to make room.
+ */
+const STEP_FULL_LABELS: Record<string, string> = {
+  DM0: "DM0: Specification Intake",
+  DM1: "DM1: Modeling Setup",
+  DM2a: "DM2a: Design Decomposition",
+  DM2b: "DM2b: Pipeline Mapping",
+  DM2c: "DM2c: Implementation Plan",
+  DM2d: "DM2d: Model Execution",
+  DM3a: "DM3a: Test Plan",
+  DM3b: "DM3b: Testbench Build",
+  DM3c: "DM3c: Test Execution",
+  DM4a: "DM4a: Performance Plan",
+  DM4b: "DM4b: Performance Execution",
 };
 
 /**
@@ -1299,7 +1319,18 @@ function buildStepRail(state: ChatPanelState): HTMLElement | null {
       title = `${STEP_LABELS[stepId] ?? stepId}: not yet completed. Click for any critique findings on disk.`;
     }
     tile.className = cls;
-    tile.textContent = stepId;
+    // Two labels share the tile: a short one (just the step id) for
+    // the default narrow tile, and a full one (`DM0: Specification
+    // Intake`) revealed on hover. CSS swaps which span is `display:
+    // inline` so the layout reflows naturally when the hovered tile
+    // widens.
+    const short = document.createElement("span");
+    short.className = "x-step-rail-step-short";
+    short.textContent = stepId;
+    const full = document.createElement("span");
+    full.className = "x-step-rail-step-full";
+    full.textContent = STEP_FULL_LABELS[stepId] ?? stepId;
+    tile.append(short, full);
     tile.title = title;
     tile.setAttribute("aria-label", title);
     tile.addEventListener("click", () => {
