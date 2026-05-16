@@ -505,9 +505,20 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   settings.appendChild(settingsPanel);
   rightZone.appendChild(settings);
 
-  // Total token counts on the far right edge of the toolbar so
-  // they sit directly above the per-bubble ↑/↓ counts inside the
-  // transcript summaries.
+  // Context-window usage pie + total token counts on the far right
+  // edge of the toolbar. The pie shows cumulative input+output
+  // tokens as a fraction of a reference context window; the counts
+  // sit directly above the per-bubble ↑/↓ counts inside the
+  // transcript summaries. Both are hidden when no session is
+  // anchored.
+  if (state.sessionActive) {
+    const usedTokens =
+      state.totalInputTokensEstimate + state.totalOutputTokensEstimate;
+    const fraction = Math.max(0, Math.min(1, usedTokens / LLM_CONTEXT_WINDOW));
+    const pct = Math.round(fraction * 100);
+    rightZone.appendChild(buildContextPie(fraction, pct, usedTokens));
+  }
+
   const totals = document.createElement("span");
   totals.className = "x-toolbar-tokens";
   const upTotal = state.totalInputTokensEstimate;
@@ -519,6 +530,75 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
 
   root.append(leftZone, centerZone, rightZone);
   return root;
+}
+
+/**
+ * Reference context window for the context-used pie indicator in
+ * the toolbar. Most current frontier models support at least this
+ * much; smaller local models will over-report (still informative
+ * as a trend, just not absolute).
+ */
+const LLM_CONTEXT_WINDOW = 128_000;
+
+/**
+ * Render the context-usage pie chart icon. A white-stroked outer
+ * circle holds a white-filled sector covering `fraction` (0..1)
+ * of the disc, swept clockwise from 12 o'clock. The element gets
+ * a `data-warn` flag past 80% so CSS can paint the fill red.
+ */
+function buildContextPie(
+  fraction: number,
+  pct: number,
+  usedTokens: number,
+): HTMLElement {
+  const NS = "http://www.w3.org/2000/svg";
+  const wrap = document.createElement("span");
+  wrap.className = "x-toolbar-context-pie";
+  if (pct >= 80) {
+    wrap.classList.add("x-toolbar-context-pie-warn");
+  }
+  wrap.title =
+    `Approximate context usage: ${pct}% (${usedTokens} tokens estimated against a ${formatTokens(LLM_CONTEXT_WINDOW)} reference window). ` +
+    "Cumulative across the whole conversation; actual usage per LLM call depends on the model's context size.";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "14");
+  svg.setAttribute("aria-hidden", "true");
+  // Outer ring.
+  const ring = document.createElementNS(NS, "circle");
+  ring.setAttribute("cx", "8");
+  ring.setAttribute("cy", "8");
+  ring.setAttribute("r", "7");
+  ring.setAttribute("fill", "none");
+  ring.setAttribute("stroke", "currentColor");
+  ring.setAttribute("stroke-width", "1");
+  svg.appendChild(ring);
+  // Filled sector. SVG arcs need explicit start + end points; a
+  // full pie (fraction=1) needs a tiny epsilon shave so the path
+  // closes properly instead of rendering as a degenerate zero-area
+  // shape.
+  if (fraction > 0) {
+    const safe = Math.min(0.9999, fraction);
+    const angle = safe * Math.PI * 2;
+    const cx = 8;
+    const cy = 8;
+    const r = 6;
+    const startX = cx;
+    const startY = cy - r;
+    const endX = cx + r * Math.sin(angle);
+    const endY = cy - r * Math.cos(angle);
+    const largeArc = safe > 0.5 ? 1 : 0;
+    const path = document.createElementNS(NS, "path");
+    path.setAttribute(
+      "d",
+      `M ${cx} ${cy} L ${startX} ${startY} A ${r} ${r} 0 ${largeArc} 1 ${endX} ${endY} Z`,
+    );
+    path.setAttribute("fill", "currentColor");
+    svg.appendChild(path);
+  }
+  wrap.appendChild(svg);
+  return wrap;
 }
 
 /**

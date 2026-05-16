@@ -1167,6 +1167,22 @@ body {
   padding: 4px 6px;
 }
 
+/* Context-window usage pie. White outline + white-filled sector by
+ * default; the SVG paints via `currentColor`, so the warning state
+ * just swaps `color` to flip both ring and fill at once. Sits
+ * directly to the left of the up/down token counts. */
+.x-toolbar-context-pie {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  margin-right: 4px;
+}
+
+.x-toolbar-context-pie-warn {
+  color: var(--vscode-errorForeground, #d2522d);
+}
+
 /* ---------------------------------------------------------------
  * Step-rail right-click context menu
  * ---------------------------------------------------------------

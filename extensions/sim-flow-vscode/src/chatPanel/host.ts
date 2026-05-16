@@ -690,12 +690,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   /**
    * Open the native picker so the user can drop a path into the
-   * composer textarea. Accepts both files (spec docs, source files
-   * the user wants to reference) and directories (project paths,
-   * source trees) -- the orchestrator decides what to do with the
-   * string once it's in the prompt. The Spec / All-files filters
-   * are advisory and only apply to the files tab on platforms that
-   * show a filter dropdown; folder selection ignores them.
+   * composer textarea. Accepts spec-shaped files (markdown, plain
+   * text, PDF) and directories (DM0 supports the paginated
+   * `docs/spec/` layout). The filter restricts the files tab so
+   * the user can't accidentally drop a binary into the spec slot.
    */
   private async pickFile(): Promise<void> {
     const picked = await vscode.window.showOpenDialog({
@@ -704,8 +702,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       canSelectMany: false,
       openLabel: "Insert path",
       filters: {
-        Spec: ["pdf", "md", "txt"],
-        "All files": ["*"],
+        "Spec (markdown, text, PDF)": [
+          "md",
+          "markdown",
+          "txt",
+          "text",
+          "pdf",
+        ],
       },
     });
     if (!picked || picked.length === 0) {
