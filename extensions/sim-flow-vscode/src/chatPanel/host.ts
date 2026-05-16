@@ -15,6 +15,7 @@ import type { LlmSource, SecretStorage } from "../llm";
 import { type PumpLlmConfig } from "../session/pump";
 import { SocketSessionPump } from "../session/socketPump";
 import { readFlowState } from "../state/flowState";
+import { stepOrderFor, stepsFromOnward } from "../state/stepOrder";
 import type { FlowState } from "../state/types";
 import {
   cliBackendArgFor,
@@ -439,6 +440,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       case "reset-step":
         await this.resetCurrentStep();
         return;
+      case "reset-step-pick":
+        await this.resetFromEarlierStep();
+        return;
       default:
         return;
     }
@@ -480,23 +484,84 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   /**
    * Reset the orchestrator's current step: discard its work
    * artifacts + critique state + gate flag so it can be re-run.
-   * Reads `current_step` from state.toml at click time so the
-   * reset always targets whatever step the orchestrator says it
-   * is on, not whatever was current at render time.
+   * Modal confirm before the destructive action lands. Reads
+   * `current_step` from state.toml at click time so the reset
+   * always targets whatever step the orchestrator says it is on,
+   * not whatever was current at render time.
    */
   private async resetCurrentStep(): Promise<void> {
     const session = this.activePump;
     if (!session) {
       return;
     }
-    const context = await this.readPanelContext();
-    if (!context.currentStep) {
+    if (typeof session.pump.reset !== "function") {
+      return;
+    }
+    const flowState = await readFlowStateSafe(session.projectDir);
+    if (!flowState?.current_step) {
+      return;
+    }
+    const targets = stepsFromOnward(flowState.flow, flowState.current_step);
+    if (targets.length === 0) {
+      return;
+    }
+    const ok = await confirmReset(targets, flowState.current_step);
+    if (!ok) {
+      return;
+    }
+    for (const step of targets) {
+      session.pump.reset(step);
+    }
+  }
+
+  /**
+   * Open a QuickPick of previously-completed steps and reset the
+   * chosen one + every step after it in the flow order. Modal
+   * confirm precedes the destructive action.
+   */
+  private async resetFromEarlierStep(): Promise<void> {
+    const session = this.activePump;
+    if (!session) {
       return;
     }
     if (typeof session.pump.reset !== "function") {
       return;
     }
-    session.pump.reset(context.currentStep);
+    const flowState = await readFlowStateSafe(session.projectDir);
+    if (!flowState) {
+      return;
+    }
+    const order = stepOrderFor(flowState.flow);
+    const passed = order.filter((step) => flowState.gates[step]?.passed === true);
+    if (passed.length === 0) {
+      await vscode.window.showInformationMessage(
+        "No completed steps to reset from. The current step is the earliest unfinished one.",
+      );
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(
+      passed.map((step) => ({
+        label: step,
+        description: `Reset \`${step}\` and every step after it`,
+      })),
+      {
+        placeHolder: "Reset which step? This and every later step will be discarded.",
+      },
+    );
+    if (!picked) {
+      return;
+    }
+    const targets = stepsFromOnward(flowState.flow, picked.label);
+    if (targets.length === 0) {
+      return;
+    }
+    const ok = await confirmReset(targets, picked.label);
+    if (!ok) {
+      return;
+    }
+    for (const step of targets) {
+      session.pump.reset(step);
+    }
   }
 
   /**
@@ -2488,6 +2553,34 @@ function computeNextAction(
     };
   }
   return null;
+}
+
+/**
+ * Modal confirmation for a Reset Step click. Spells out exactly
+ * which steps will be discarded and which artifacts the user is
+ * about to lose. Returns true iff the user clicks the destructive
+ * confirm action.
+ */
+async function confirmReset(
+  targets: readonly string[],
+  pickedStep: string,
+): Promise<boolean> {
+  const list = targets.join(", ");
+  const detail =
+    targets.length === 1
+      ? `Resetting \`${pickedStep}\` will permanently delete the work artifacts, critique notes, and gate flag for that step.`
+      : `Resetting from \`${pickedStep}\` will permanently delete the work artifacts, critique notes, and gate flags for: ${list}. The orchestrator will return to \`${pickedStep}\` and the listed later steps will need to be re-run from scratch.`;
+  const choice = await vscode.window.showWarningMessage(
+    targets.length === 1
+      ? `Reset step \`${pickedStep}\`?`
+      : `Reset from step \`${pickedStep}\`?`,
+    {
+      modal: true,
+      detail,
+    },
+    "Reset",
+  );
+  return choice === "Reset";
 }
 
 /**

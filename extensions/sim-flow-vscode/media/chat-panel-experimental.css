@@ -700,28 +700,55 @@ body {
   font-style: italic;
 }
 
-/* Reset Step: outline button on the left of Continue. Hover tints
- * in the error palette so the destructive intent is communicated
- * without permanently shouting at the user. */
-.x-reset-step {
+/* Reset Step: split button. The main half resets the current
+ * step; the trailing ▾ half opens a picker of earlier completed
+ * steps. Hover on either half tints the *whole* split in the
+ * error palette so the destructive intent is unmistakable, even
+ * though the dropdown half is just a control affordance. */
+.x-reset-step-wrap {
+  display: inline-flex;
+  align-items: stretch;
   border: 1px solid var(--x-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.x-reset-step {
   background: transparent;
   color: var(--vscode-foreground);
-  border-radius: 4px;
+  border: none;
   padding: 3px 10px;
   font: inherit;
   font-size: 11px;
   cursor: pointer;
 }
 
-.x-reset-step:hover:not(:disabled) {
+.x-reset-step-main {
+  border-right: 1px solid var(--x-border);
+}
+
+.x-reset-step-pick {
+  padding: 3px 6px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--x-muted);
+}
+
+.x-reset-step-wrap:hover:not(:disabled) {
   border-color: var(--vscode-errorForeground, #d2522d);
+}
+
+.x-reset-step:hover:not(:disabled) {
   color: var(--vscode-errorForeground, #d2522d);
   background: color-mix(
     in srgb,
     var(--vscode-errorForeground, #d2522d) 14%,
     transparent
   );
+}
+
+.x-reset-step-main:hover:not(:disabled) {
+  border-right-color: var(--vscode-errorForeground, #d2522d);
 }
 
 .x-reset-step:disabled {

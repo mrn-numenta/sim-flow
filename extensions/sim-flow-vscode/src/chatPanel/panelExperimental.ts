@@ -904,27 +904,47 @@ function buildComposerMeta(state: ChatPanelState): HTMLElement {
   const centerZone = div("x-composer-meta-center");
   const rightZone = div("x-composer-meta-right");
 
-  // Reset Step: discards the current step's results + gate flag so
-  // it can be re-run. Disabled with no live session or during an
-  // in-flight sub-session (the orchestrator rejects reset there
-  // anyway). Sits to the left of Continue so the destructive
-  // gesture is one step further from the primary action.
+  // Reset Step: split button with a primary action (reset current
+  // step) plus a dropdown arrow that opens a picker of earlier
+  // completed steps to reset from. Either path goes through a
+  // modal confirm in the host before anything is discarded.
+  const resetWrap = div("x-reset-step-wrap");
+  const resetMainDisabled = disabled || state.isStreaming || state.isViewer;
+
   const resetBtn = document.createElement("button");
   resetBtn.type = "button";
   resetBtn.id = "x-composer-reset";
-  resetBtn.className = "x-reset-step";
+  resetBtn.className = "x-reset-step x-reset-step-main";
   resetBtn.textContent = "Reset Step";
-  resetBtn.disabled = disabled || state.isStreaming || state.isViewer;
+  resetBtn.disabled = resetMainDisabled;
   resetBtn.title = state.currentStep
-    ? `Discard the results from \`${state.currentStep}\` and start the step over.`
-    : "Discard the current step's results and start the step over.";
+    ? `Reset \`${state.currentStep}\` -- discards its results and clears its gate flag. Click Continue to restart the step. A confirmation dialog spells out exactly what will be deleted before anything is touched.`
+    : "Reset the current step. A confirmation dialog spells out exactly what will be deleted before anything is touched.";
   resetBtn.addEventListener("click", () => {
     if (resetBtn.disabled) {
       return;
     }
     send({ type: "reset-step" });
   });
-  leftZone.appendChild(resetBtn);
+
+  const resetPickBtn = document.createElement("button");
+  resetPickBtn.type = "button";
+  resetPickBtn.id = "x-composer-reset-pick";
+  resetPickBtn.className = "x-reset-step x-reset-step-pick";
+  resetPickBtn.textContent = "▾";
+  resetPickBtn.disabled = resetMainDisabled;
+  resetPickBtn.setAttribute("aria-label", "Reset an earlier step");
+  resetPickBtn.title =
+    "Reset an earlier completed step. Selecting a step returns to it and discards the results of every step after. A confirmation dialog lists every step that will be reset before anything is touched.";
+  resetPickBtn.addEventListener("click", () => {
+    if (resetPickBtn.disabled) {
+      return;
+    }
+    send({ type: "reset-step-pick" });
+  });
+
+  resetWrap.append(resetBtn, resetPickBtn);
+  leftZone.appendChild(resetWrap);
 
   // Continue: primary flow-driving action. Disabled until the host
   // has a computed next action (typically: Manual mode parked

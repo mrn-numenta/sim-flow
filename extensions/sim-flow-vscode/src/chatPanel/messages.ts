@@ -200,7 +200,16 @@ export type WebviewMessage =
   | { type: "end-session" }
   /**
    * Reset the current step: discard its work/critique results +
-   * clear its gate flag so it can be re-run from scratch. Sent
-   * from the Reset Step button in the composer footer.
+   * clear its gate flag so it can be re-run from scratch. The
+   * host shows a modal confirmation before any destructive action
+   * lands. Sent from the Reset Step button in the composer footer.
    */
-  | { type: "reset-step" };
+  | { type: "reset-step" }
+  /**
+   * Open the "reset from earlier step" picker. The host shows a
+   * QuickPick of previously-completed steps (gate.passed === true);
+   * selecting one resets that step AND every step after it in the
+   * flow's canonical order. Confirmation dialog precedes the
+   * destructive action.
+   */
+  | { type: "reset-step-pick" };
