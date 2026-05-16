@@ -376,6 +376,23 @@
           "default": "",
           "description": "Absolute path (or PATH-resolvable command) of a SystemVerilog simulator the agent may invoke when `sim-flow.dashboard.verilogSimEnabled` is true. Examples: `/usr/local/bin/verilator`, `/tools/synopsys/vcs/bin/vcs`, `/opt/modelsim/bin/vsim`. Leave empty to disable the simulate-and-iterate appendix even when the checkbox is on."
         },
+        "sim-flow.coverage.thresholdPct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "default": 90,
+          "description": "DM3c line-coverage acceptance threshold (percent). The critique gate fails when measured coverage is below this value. Changes are written to `.sim-flow/config.toml::coverage.threshold_pct` for the active project (the Rust orchestrator reads from the TOML); other projects in the workspace retain whatever their own TOML says until you switch to them and re-save the setting."
+        },
+        "sim-flow.coverage.level": {
+          "type": "string",
+          "enum": ["module", "total"],
+          "enumDescriptions": [
+            "Every reported module must clear the threshold.",
+            "Only the project-wide total must clear the threshold."
+          ],
+          "default": "total",
+          "description": "DM3c coverage acceptance level. `module` requires every reported module to clear `sim-flow.coverage.thresholdPct`; `total` requires only the project-wide aggregate. Written to `.sim-flow/config.toml::coverage.level` for the active project on change."
+        },
         "sim-flow.auto.maxWorkIterations": {
           "type": "integer",
           "minimum": 1,

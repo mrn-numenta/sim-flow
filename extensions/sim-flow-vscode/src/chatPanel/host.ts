@@ -17,6 +17,10 @@ import { SocketSessionPump } from "../session/socketPump";
 import { readCritique } from "../state/critiques";
 import { readFlowState } from "../state/flowState";
 import { readPlanProgress } from "../state/planProgress";
+import {
+  COVERAGE_DEFAULTS,
+  writeCoverageSettings,
+} from "../state/projectConfig";
 import { stepOrderFor, stepsFromOnward } from "../state/stepOrder";
 import type { FlowState } from "../state/types";
 import {
@@ -188,6 +192,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           void this.promptReconnectIfLive(
             "LLM settings changed.",
           );
+        }
+        if (
+          event.affectsConfiguration("sim-flow.coverage.thresholdPct") ||
+          event.affectsConfiguration("sim-flow.coverage.level")
+        ) {
+          void this.pushCoverageSettingToActiveProject();
         }
       }),
       vscode.window.onDidChangeActiveTextEditor(() => {
@@ -2280,6 +2290,41 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
    * viewer (we don't own it), or when a previous prompt is still on
    * screen.
    */
+  /**
+   * Push `sim-flow.coverage.*` workspace-config values into the
+   * anchored project's `.sim-flow/config.toml`. The Rust orchestrator
+   * reads coverage from the TOML, not from VS Code config, so the
+   * webview-side setting only takes effect after this writeback.
+   *
+   * No-op when no project is anchored -- the next time a session
+   * opens, the orchestrator falls back to whatever the existing
+   * config.toml says.
+   */
+  private async pushCoverageSettingToActiveProject(): Promise<void> {
+    const projectDir =
+      this.activePump?.projectDir ?? this.pendingAutoLaunch?.projectDir;
+    if (!projectDir) {
+      return;
+    }
+    const cfg = vscode.workspace.getConfiguration("sim-flow");
+    const thresholdPct = cfg.get<number>(
+      "coverage.thresholdPct",
+      COVERAGE_DEFAULTS.thresholdPct,
+    );
+    const rawLevel = cfg.get<string>("coverage.level", COVERAGE_DEFAULTS.level);
+    const level: "module" | "total" =
+      rawLevel === "module" ? "module" : "total";
+    try {
+      await writeCoverageSettings(projectDir, { thresholdPct, level });
+    } catch (err) {
+      void vscode.window.showWarningMessage(
+        `sim-flow: failed to push coverage settings to ${projectDir}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
   private async promptReconnectIfLive(reason: string): Promise<void> {
     if (this.reconnectPromptInFlight) {
       return;
