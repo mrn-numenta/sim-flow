@@ -81,6 +81,7 @@ use crate::steps::registry_for;
 
 /// Inputs for `run_auto`. The driver picks up the active flow's
 /// remaining steps starting from `state.current_step`.
+#[derive(Clone)]
 pub struct AutoOptions {
     pub project_dir: PathBuf,
     pub foundation_root: PathBuf,
@@ -460,6 +461,61 @@ where
         loop {
             if let Some(o) = check_pre_subsession(auto_host) {
                 return Ok(o);
+            }
+
+            // Plan-detail walks (DM2cd / DM3ad / DM4ad) parallelize
+            // the Work phase: every pending stub is independent
+            // (each reads the same predecessor docs and writes to
+            // its own milestone file), so fanning out N Work sessions
+            // collapses the wall-clock cost of detailing each stub.
+            // Critique stays serial because all milestones share the
+            // per-step JSON path. Falls through to the serial path
+            // when `max_parallel_requests = 1`, there's only one
+            // pending stub, or this isn't a placeholder-mode walk.
+            if let Some(step) = registry.get(step_id) {
+                let ran_parallel = run_plan_detail_walk_parallel(opts, step, auto_host, llm)?;
+                if ran_parallel {
+                    if let Some(o) = check_post_subsession(
+                        auto_host,
+                        step_id,
+                        crate::client::SessionKind::Critique,
+                        opts,
+                    )? {
+                        return Ok(o);
+                    }
+                    // Parallel path is one-shot: every pending stub
+                    // got both Work and Critique. Re-check the gate
+                    // and either advance or flip to manual. V1
+                    // doesn't auto-retry on the parallel path
+                    // because retries would force the entire fan-out
+                    // to redo and the per-stub retry semantics on
+                    // top of a shared per-step critique JSON path
+                    // would race. Users re-run with
+                    // `--max-parallel-requests 1` to fall back to
+                    // the serial retry path if needed.
+                    let gate_findings = read_gate_findings(&opts.project_dir, step_id);
+                    if !gate_findings.is_empty() {
+                        auto_host.send(&Event::Diagnostic {
+                            level: DiagnosticLevel::Error,
+                            message: format!(
+                                "auto: {step_id} parallel plan-detail walk produced {} \
+                                 gate-failing finding(s); flipping to manual. Re-run with \
+                                 `--max-parallel-requests 1` for the serial retry path.",
+                                gate_findings.len()
+                            ),
+                        })?;
+                        flip_to_manual(auto_host)?;
+                        return Ok(AutoLoopOutcome::FlippedToManual);
+                    }
+                    try_advance_classified(&opts.project_dir, step_id, auto_host)?;
+                    info!(
+                        step = %step_id,
+                        elapsed_s = step_started.elapsed().as_secs(),
+                        "auto: step advanced (parallel plan-detail walk)"
+                    );
+                    clear_checkpoint(&opts.project_dir);
+                    break;
+                }
             }
 
             // Work session. The actual host's Hello was consumed in
@@ -1009,6 +1065,40 @@ where
     P: Presenter + ?Sized,
     L: LlmAdapter + ?Sized,
 {
+    run_subsession_scoped(
+        opts,
+        step_id,
+        kind,
+        auto,
+        host,
+        consume_end,
+        synth_hello,
+        llm,
+        None,
+    )
+}
+
+/// `run_subsession` with milestone pinning. Used by
+/// [`run_plan_detail_walk_parallel`] so each worker thread's session
+/// targets the exact stub it was assigned via
+/// `OrchestratorOptions::milestone_name`. Identical to
+/// `run_subsession` in every other respect.
+#[allow(clippy::too_many_arguments)]
+fn run_subsession_scoped<P, L>(
+    opts: &AutoOptions,
+    step_id: &str,
+    kind: crate::client::SessionKind,
+    auto: bool,
+    host: &mut AutoPresenter<P>,
+    consume_end: bool,
+    synth_hello: bool,
+    llm: &mut L,
+    milestone_name: Option<String>,
+) -> Result<()>
+where
+    P: Presenter + ?Sized,
+    L: LlmAdapter + ?Sized,
+{
     if synth_hello {
         host.queue_synthetic_hello();
     }
@@ -1056,11 +1146,11 @@ where
         // the artifact-write convention.
         agent_has_native_fs_tools: false,
         no_preamble: opts.no_preamble,
-        // Serial-walk sub-sessions don't pin to a specific milestone;
-        // the orchestrator's find_current_milestone heuristic picks
-        // the right stub. The parallel plan-detail walk dispatcher
-        // uses a different code path that DOES set milestone_name.
-        milestone_name: None,
+        // Pinned only when this sub-session was dispatched by the
+        // parallel plan-detail walk path via run_subsession_scoped.
+        // Serial walkers pass None and the orchestrator falls back
+        // to find_current_milestone's heuristics.
+        milestone_name,
     };
     let result = run_session(session_opts, host, llm);
     host.in_subsession = false;
@@ -1080,6 +1170,267 @@ where
         outcome: outcome.into(),
     });
     result
+}
+
+/// `Presenter` shim used by `run_plan_detail_walk_parallel`'s worker
+/// threads. Forwards every outgoing event into an `mpsc::Sender`
+/// (drained by the coordinator on the main thread) and supplies a
+/// single synthetic Hello before reporting clean close on subsequent
+/// `recv()` calls. Auto-mode work sessions never park for user
+/// input, so the "one Hello then None" contract is sufficient.
+struct ChannelPresenter {
+    tx: std::sync::mpsc::Sender<Event>,
+    hello_queued: bool,
+}
+
+impl ChannelPresenter {
+    fn new(tx: std::sync::mpsc::Sender<Event>) -> Self {
+        Self {
+            tx,
+            hello_queued: false,
+        }
+    }
+}
+
+impl Presenter for ChannelPresenter {
+    fn send(&mut self, event: &Event) -> Result<()> {
+        // Best-effort: if the coordinator has dropped its receiver
+        // (orchestrator-side error already in flight), don't override
+        // that error with a SendError. The first error wins.
+        let _ = self.tx.send(event.clone());
+        Ok(())
+    }
+
+    fn recv(&mut self) -> Result<Option<HostEvent>> {
+        if !self.hello_queued {
+            self.hello_queued = true;
+            return Ok(Some(HostEvent::Hello {
+                protocol_version: PROTOCOL_VERSION.into(),
+                host: HostInfo {
+                    name: "sim-flow-parallel-worker".into(),
+                    version: env!("CARGO_PKG_VERSION").into(),
+                },
+                capabilities: vec!["text".into(), "user-input".into(), "llm-request".into()],
+            }));
+        }
+        Ok(None)
+    }
+}
+
+/// Borrowing `LlmAdapter` wrapper. Each worker thread in the
+/// parallel plan-detail walk holds an owned `RefAdapter<'a, L>`
+/// that captures a shared reference into the main-thread `&L`,
+/// satisfying `run_subsession_scoped`'s `&mut L: LlmAdapter` bound
+/// without forcing a Send+Sync `Arc<dyn LlmAdapter>` at every call
+/// site. Works because `LlmAdapter::dispatch` is already `&self`
+/// and the trait requires `Send + Sync`.
+struct RefAdapter<'a, L: LlmAdapter + ?Sized>(&'a L);
+
+impl<'a, L: LlmAdapter + ?Sized> LlmAdapter for RefAdapter<'a, L> {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+    fn dispatch(
+        &self,
+        messages: &[LlmMessage],
+    ) -> Result<(String, crate::session::agent::LlmCallMetrics)> {
+        self.0.dispatch(messages)
+    }
+    fn dispatch_with_tools(
+        &self,
+        messages: &[LlmMessage],
+        tools: &[crate::session::agent::ToolAdvertise],
+    ) -> Result<(
+        String,
+        Vec<crate::session::agent::AdvertisedToolCall>,
+        crate::session::agent::LlmCallMetrics,
+    )> {
+        self.0.dispatch_with_tools(messages, tools)
+    }
+    fn adaptation_summary(&self) -> Option<crate::session::agent::AgentAdaptationSummary> {
+        self.0.adaptation_summary()
+    }
+}
+
+/// Parallel plan-detail walk dispatcher. For steps with a
+/// placeholder-marker milestone walk (DM2cd / DM3ad / DM4ad) where
+/// every pending stub is independent (each one reads the same
+/// predecessor docs and writes only its own milestone file), fan out
+/// Work sessions across worker threads up to `max_parallel_requests`.
+/// Critique sessions stay serial because they all write to the
+/// shared `docs/critiques/<step>-critique.json` path.
+///
+/// Returns `Ok(true)` when the parallel path ran to completion (Work
+/// for every stub, Critique for every stub, all reaching session
+/// end without error). Caller re-checks the step gate; on a clean
+/// gate the step advances, on a dirty gate the caller decides
+/// whether to retry. Returns `Ok(false)` when the parallel path was
+/// not applicable (single pending stub, `max_parallel_requests = 1`,
+/// or this isn't a placeholder-mode walk) and the caller should
+/// fall back to the existing serial walker.
+fn run_plan_detail_walk_parallel<P, L>(
+    opts: &AutoOptions,
+    step: &crate::__internal::steps::StepDescriptor,
+    auto_host: &mut AutoPresenter<P>,
+    llm: &mut L,
+) -> Result<bool>
+where
+    P: Presenter + ?Sized,
+    L: LlmAdapter + ?Sized,
+{
+    // Only placeholder-mode walks parallelize today.
+    let walk = match step.milestone_walk {
+        Some(w) if w.placeholder_marker.is_some() => w,
+        _ => return Ok(false),
+    };
+    // `max_parallel_requests == 1` is the explicit "use serial path"
+    // setting.
+    if opts.max_parallel_requests == 1 {
+        return Ok(false);
+    }
+    let pending = crate::__internal::steps::enumerate_pending_milestones(&opts.project_dir, &walk);
+    if pending.len() < 2 {
+        // One or zero pending stubs: no parallelism win; let the
+        // serial walker handle it (it has the established retry
+        // semantics).
+        return Ok(false);
+    }
+    let cap_raw = opts.max_parallel_requests as usize;
+    let cap = if cap_raw == 0 {
+        pending.len()
+    } else {
+        cap_raw.min(pending.len())
+    };
+
+    let step_id_owned = step.id.to_string();
+    let n_pending = pending.len();
+    auto_host.send(&Event::Diagnostic {
+        level: DiagnosticLevel::Info,
+        message: format!(
+            "auto: {step_id_owned} parallel plan-detail walk: {n_pending} pending stub(s), \
+             dispatching up to {cap} concurrent Work sessions"
+        ),
+    })?;
+
+    // PHASE 1: parallel Work fan-out.
+    // Shared queue of stubs the workers pull from; `pop()` so workers
+    // pick up stubs in reverse order (cheap, ordering doesn't matter
+    // here -- each stub is independent).
+    let queue = Arc::new(std::sync::Mutex::new(pending.clone()));
+    let (tx, rx) = std::sync::mpsc::channel::<Event>();
+
+    // `thread::scope` lets the workers borrow `&L` from the main
+    // thread without `'static` requirements. Workers send events
+    // through `tx`; the coordinator drains them on the main thread
+    // and forwards to `auto_host` so the dashboard sees per-worker
+    // SubSessionStarted / SubSessionEnded brackets and Diagnostic
+    // messages in arrival order.
+    let llm_shared: &L = &*llm;
+    let opts_ref: &AutoOptions = opts;
+    let step_id_ref: &str = &step_id_owned;
+    let work_result: Result<()> = std::thread::scope(|scope| -> Result<()> {
+        let mut handles: Vec<std::thread::ScopedJoinHandle<'_, Result<()>>> =
+            Vec::with_capacity(cap);
+        for _ in 0..cap {
+            let tx_w = tx.clone();
+            let queue_w = Arc::clone(&queue);
+            let opts_w = opts_ref;
+            let step_id_w = step_id_ref;
+            let llm_w = llm_shared;
+            handles.push(scope.spawn(move || -> Result<()> {
+                loop {
+                    let stub = queue_w.lock().unwrap().pop();
+                    let Some(milestone_rel) = stub else { break };
+                    let bare_name = std::path::Path::new(&milestone_rel)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(String::from)
+                        .unwrap_or_else(|| milestone_rel.clone());
+                    let mut sink = ChannelPresenter::new(tx_w.clone());
+                    let mode = Arc::new(AtomicU8::new(step_mode_to_u8(opts_w.step_mode)));
+                    let mut worker_host = AutoPresenter::new(&mut sink, mode);
+                    let mut adapter = RefAdapter(llm_w);
+                    run_subsession_scoped(
+                        opts_w,
+                        step_id_w,
+                        crate::client::SessionKind::Work,
+                        /*auto=*/ true,
+                        &mut worker_host,
+                        /*consume_end=*/ true,
+                        /*synth_hello=*/ true,
+                        &mut adapter,
+                        Some(bare_name),
+                    )?;
+                }
+                Ok(())
+            }));
+        }
+        // Drop the original sender so the channel closes when every
+        // worker's clone is dropped at thread exit.
+        drop(tx);
+        // Coordinator: forward worker events to the host serially.
+        // host.send is fallible (transport-closed); propagate
+        // first error so workers don't keep flooding the channel.
+        while let Ok(event) = rx.recv() {
+            auto_host.send(&event)?;
+        }
+        // Join workers and propagate the first error encountered.
+        let mut first_err: Option<crate::Error> = None;
+        for h in handles {
+            match h.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    if first_err.is_none() {
+                        first_err = Some(e);
+                    }
+                }
+                Err(panic) => {
+                    let msg = panic
+                        .downcast_ref::<&str>()
+                        .copied()
+                        .or_else(|| panic.downcast_ref::<String>().map(|s| s.as_str()))
+                        .unwrap_or("(unknown panic payload)");
+                    if first_err.is_none() {
+                        first_err = Some(crate::Error::State(format!(
+                            "parallel plan-detail worker panicked: {msg}"
+                        )));
+                    }
+                }
+            }
+        }
+        if let Some(e) = first_err {
+            return Err(e);
+        }
+        Ok(())
+    });
+    work_result?;
+
+    // PHASE 2: serial Critique for each (originally pending) stub.
+    // Critiques share the per-step JSON path so they cannot run
+    // concurrently. Each critique writes its findings and the
+    // orchestrator's gate evaluation between iterations decides
+    // whether to retry. We don't loop-retry on blockers here in V1
+    // -- if any stub's critique fires a BLOCKER, the step gate
+    // stays dirty and the outer auto loop reports halt.
+    for milestone_rel in &pending {
+        let bare_name = std::path::Path::new(milestone_rel)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(String::from)
+            .unwrap_or_else(|| milestone_rel.clone());
+        run_subsession_scoped(
+            opts,
+            step_id_ref,
+            crate::client::SessionKind::Critique,
+            /*auto=*/ true,
+            auto_host,
+            /*consume_end=*/ true,
+            /*synth_hello=*/ true,
+            llm,
+            Some(bare_name),
+        )?;
+    }
+    Ok(true)
 }
 
 pub(crate) fn session_kind_to_protocol(kind: crate::client::SessionKind) -> SessionKindOut {
