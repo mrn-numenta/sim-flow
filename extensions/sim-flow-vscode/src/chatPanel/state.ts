@@ -135,6 +135,13 @@ export function appendOrchestratorUserEntry(
           title,
           body,
           meta,
+          // Tally the body against the input side at append time so
+          // `summarizeTokenEstimates` picks it up in the toolbar
+          // totals. Without this, orchestrator-side prompts and tool
+          // results contribute 0 to the ↑ total even though the
+          // per-bubble badge surfaces a non-zero (length-derived)
+          // count.
+          requestTokensEstimate: estimateTextTokens(body),
         },
       ],
       nextId: state.nextId + 1,
