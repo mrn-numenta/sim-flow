@@ -622,8 +622,14 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
         ? state.projectLabel
         : "No project";
     projectBtn.textContent = `Project: ${projectName}`;
-    projectBtn.title =
-      "Switch the chat panel to a different sim-flow project. Stops the active session and launches a fresh one on the chosen project.";
+    // Viewer mode: clicking still dispatches `switch-project`,
+    // which tears down the viewer pump and launches a fresh
+    // driving session on the chosen project. Title text reflects
+    // that explicitly so the click isn't a surprise. See
+    // chat-panel audit #13 (2026-05-16).
+    projectBtn.title = state.isViewer
+      ? "Leave viewer mode and start a fresh sim-flow session on the chosen project. Detaches the current viewer attachment."
+      : "Switch the chat panel to a different sim-flow project. Stops the active session and launches a fresh one on the chosen project.";
   } else {
     projectBtn.textContent = "Start session";
     projectBtn.classList.add("x-toolbar-project-start");
