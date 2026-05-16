@@ -34,7 +34,9 @@ if (pkg.status !== 0) {
 const baseVersion = JSON.parse(readFileSync(resolve(extDir, "package.json"), "utf8")).version;
 const hash = execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim();
 const dirty = execSync("git status --porcelain", { encoding: "utf8" }).trim().length > 0;
-const devVersion = `${baseVersion}-dev.${hash}${dirty ? ".dirty" : ""}`;
+// Match the `g`-prefix from package-dev.mjs so an all-numeric git
+// short-hash doesn't produce an invalid SemVer pre-release tag.
+const devVersion = `${baseVersion}-dev.g${hash}${dirty ? ".dirty" : ""}`;
 const vsix = vsixPath(devVersion);
 
 console.log(`\nInstalling ${vsix}`);

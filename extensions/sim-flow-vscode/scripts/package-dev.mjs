@@ -95,7 +95,13 @@ const sourcePkg = readPkg();
 const baseVersion = stripDevSuffix(sourcePkg.version);
 const hash = gitShortHash();
 const dirty = gitDirty();
-const devVersion = `${baseVersion}-dev.${hash}${dirty ? ".dirty" : ""}`;
+// `git rev-parse --short HEAD` can return an all-numeric string
+// (e.g. "0680042"). Pre-release identifiers in SemVer reject
+// all-digit segments with a leading zero, and vsce treats those as
+// invalid versions. Prefix with `g` (same convention `git describe`
+// uses) so the identifier always contains at least one non-digit
+// and the version stays SemVer-valid regardless of the hash.
+const devVersion = `${baseVersion}-dev.g${hash}${dirty ? ".dirty" : ""}`;
 const outputPath = vsixPath(devVersion);
 
 console.log(`Packaging sim-flow-vscode ${devVersion} (from ${sourcePkg.version})`);
