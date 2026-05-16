@@ -562,6 +562,50 @@ mod tests {
     }
 
     #[test]
+    fn parse_sequence_prefix_extracts_leading_run_number() {
+        assert_eq!(parse_sequence_prefix("001-baseline"), Some(1));
+        assert_eq!(parse_sequence_prefix("042-runlong-tag"), Some(42));
+        // No hyphen at all -- the whole string parses.
+        assert_eq!(parse_sequence_prefix("123"), Some(123));
+        // Non-numeric prefix -> None.
+        assert_eq!(parse_sequence_prefix("abc-001"), None);
+        // Empty string -> None.
+        assert_eq!(parse_sequence_prefix(""), None);
+    }
+
+    #[test]
+    fn experiments_db_path_lands_under_dot_sim_flow() {
+        let p = experiments_db_path(std::path::Path::new("/proj/.sim-flow"));
+        assert!(p.ends_with("experiments.db"), "{}", p.display());
+    }
+
+    #[test]
+    fn list_runs_applies_each_filter_in_combination() {
+        let index = ExperimentIndex::open_in_memory().unwrap();
+        let mut row_a = sample_row("001-a");
+        row_a.workload = Some("throughput".into());
+        row_a.candidate = Some("mesh".into());
+        row_a.study = Some("noc".into());
+        index.insert_run(&row_a).unwrap();
+        let mut row_b = sample_row("002-b");
+        row_b.workload = Some("latency".into());
+        row_b.candidate = Some("ring".into());
+        row_b.study = Some("noc".into());
+        index.insert_run(&row_b).unwrap();
+        // Filter narrows to row_a.
+        let filter = RunFilter {
+            workload: Some("throughput".into()),
+            candidate: Some("mesh".into()),
+            study: Some("noc".into()),
+            parent_run_id: None,
+            limit: None,
+        };
+        let rows = index.list_runs(&filter).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].run_id, "001-a");
+    }
+
+    #[test]
     fn update_metrics_summary_persists() {
         let index = ExperimentIndex::open_in_memory().unwrap();
         index.insert_run(&sample_row("001-a")).unwrap();
