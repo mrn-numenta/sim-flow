@@ -812,6 +812,10 @@ body {
 
 .x-composer-input {
   flex: 1;
+  /* Single-line min height matches .x-send + .x-browse so the input
+   * row reads as three controls of equal height; grows to a 180px
+   * cap as the user types more lines. */
+  height: 32px;
   min-height: 32px;
   max-height: 180px;
   resize: none;
@@ -821,7 +825,7 @@ body {
   color: var(--vscode-input-foreground);
   font: inherit;
   line-height: 1.4;
-  padding: 7px 10px;
+  padding: 5px 10px;
   box-sizing: border-box;
   overflow-y: auto;
 }
@@ -837,16 +841,19 @@ body {
 }
 
 .x-send {
-  /* Outline-only square button. White glyph + white border on a
-   * transparent fill; hover paints a faint white overlay. Matches
-   * the new Stop button treatment in the composer-meta row so the
-   * two gestures read as a consistent pair. */
+  /* Outline-only rounded rectangle. White glyph + white border on a
+   * transparent fill; hover paints a faint white overlay. Width is
+   * narrower than height (2/3 of the 32px height) so the button
+   * reads as compact next to the wider Manual / Auto label without
+   * losing tap-target legibility. */
   border: 1px solid #fff;
   background: transparent;
   color: #fff;
   border-radius: 8px;
-  min-width: 32px;
-  min-height: 32px;
+  width: 22px;
+  min-width: 22px;
+  height: 32px;
+  box-sizing: border-box;
   padding: 0;
   font: inherit;
   font-size: 14px;
@@ -880,11 +887,12 @@ body {
   background: transparent;
   color: var(--vscode-foreground);
   border-radius: 8px;
-  padding: 6px 12px;
+  padding: 0 12px;
   font: inherit;
   font-size: 11px;
   cursor: pointer;
-  min-height: 32px;
+  height: 32px;
+  box-sizing: border-box;
 }
 
 .x-browse:hover:not(:disabled) {
