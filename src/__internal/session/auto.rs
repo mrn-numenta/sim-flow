@@ -3219,6 +3219,210 @@ mod tests {
     }
 
     #[test]
+    fn channel_presenter_forwards_send_into_channel() {
+        // ChannelPresenter::send must clone the event into the
+        // mpsc channel so the coordinator on the main thread can
+        // forward it to the real AutoPresenter. A regression here
+        // would silently drop per-worker events from the dashboard.
+        let (tx, rx) = std::sync::mpsc::channel::<Event>();
+        let mut pres = ChannelPresenter::new(tx);
+        pres.send(&Event::Diagnostic {
+            level: DiagnosticLevel::Info,
+            message: "hello from worker".into(),
+        })
+        .unwrap();
+        let received = rx.recv().unwrap();
+        match received {
+            Event::Diagnostic { level, message } => {
+                assert_eq!(level, DiagnosticLevel::Info);
+                assert_eq!(message, "hello from worker");
+            }
+            other => panic!("expected Diagnostic, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn channel_presenter_recv_emits_one_hello_then_closes() {
+        // The orchestrator's handshake requires a Hello as the
+        // first host event. AutoPresenter::queue_synthetic_hello
+        // covers the AutoPresenter layer; for the inner
+        // ChannelPresenter (called only after AutoPresenter
+        // exhausts pending_reads) we still need a hello so any
+        // residual handshake recv inside run_session resolves
+        // cleanly. After the hello we return None, which the
+        // auto-mode session treats as "host channel closed" --
+        // fine for a worker that's already exited its main loop.
+        let (tx, _rx) = std::sync::mpsc::channel::<Event>();
+        let mut pres = ChannelPresenter::new(tx);
+        match pres.recv().unwrap() {
+            Some(HostEvent::Hello { .. }) => {}
+            other => panic!("expected Hello on first recv, got {other:?}"),
+        }
+        assert!(pres.recv().unwrap().is_none(), "second recv must close");
+        assert!(
+            pres.recv().unwrap().is_none(),
+            "subsequent recv stays closed"
+        );
+    }
+
+    #[test]
+    fn ref_adapter_delegates_dispatch_to_inner() {
+        // RefAdapter is the borrow-friendly LlmAdapter wrapper each
+        // worker thread holds. The delegations must be 1:1 so the
+        // shared underlying adapter sees every dispatch as if it
+        // were called directly.
+        let mock = crate::session::MockAgent::new();
+        mock.enqueue("scripted text");
+        let adapter = RefAdapter(&mock);
+        let (text, _metrics) = adapter.dispatch(&[]).unwrap();
+        assert_eq!(text, "scripted text");
+        assert_eq!(mock.seen.lock().unwrap().len(), 1);
+        assert_eq!(adapter.name(), mock.name());
+    }
+
+    #[test]
+    fn run_plan_detail_walk_parallel_returns_false_for_max_parallel_one() {
+        // max_parallel_requests = 1 is the explicit opt-out
+        // signal -- caller must fall back to the serial walker
+        // even if there are many pending stubs.
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().to_path_buf();
+        std::fs::create_dir_all(project.join(".sim-flow")).unwrap();
+        let state = State::new(crate::state::Flow::DirectModeling, "DM2cd");
+        state.save(&project.join(".sim-flow")).unwrap();
+
+        let mut opts = options_with_llm("mock", None, None);
+        opts.project_dir = project;
+        opts.max_parallel_requests = 1;
+        let step = registry_for(crate::state::Flow::DirectModeling)
+            .get("DM2cd")
+            .unwrap()
+            .clone();
+        let mut host = TestHost::new();
+        let mode = Arc::new(AtomicU8::new(STEP_MODE_AUTO));
+        let mut auto_host = AutoPresenter::new(&mut host, mode);
+        let mut mock = crate::session::MockAgent::new();
+        let ran = run_plan_detail_walk_parallel(&opts, &step, &mut auto_host, &mut mock).unwrap();
+        assert!(
+            !ran,
+            "max_parallel_requests=1 must opt out of the parallel path"
+        );
+    }
+
+    #[test]
+    fn run_plan_detail_walk_parallel_returns_false_when_no_pending_stubs() {
+        // No milestone files on disk -> nothing to fan out ->
+        // caller falls back to the serial walker, which produces
+        // the right "AllResolved" or "NoMilestonesPresent" gate
+        // diagnostic.
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().to_path_buf();
+        std::fs::create_dir_all(project.join(".sim-flow")).unwrap();
+        std::fs::create_dir_all(project.join("docs/impl-plan")).unwrap();
+        let state = State::new(crate::state::Flow::DirectModeling, "DM2cd");
+        state.save(&project.join(".sim-flow")).unwrap();
+
+        let mut opts = options_with_llm("mock", None, None);
+        opts.project_dir = project;
+        opts.max_parallel_requests = 0;
+        let step = registry_for(crate::state::Flow::DirectModeling)
+            .get("DM2cd")
+            .unwrap()
+            .clone();
+        let mut host = TestHost::new();
+        let mode = Arc::new(AtomicU8::new(STEP_MODE_AUTO));
+        let mut auto_host = AutoPresenter::new(&mut host, mode);
+        let mut mock = crate::session::MockAgent::new();
+        let ran = run_plan_detail_walk_parallel(&opts, &step, &mut auto_host, &mut mock).unwrap();
+        assert!(
+            !ran,
+            "empty milestone dir must opt out of the parallel path (caller serial walker handles it)"
+        );
+    }
+
+    #[test]
+    fn run_plan_detail_walk_parallel_returns_false_for_single_pending_stub() {
+        // One pending stub: no parallelism win; the serial walker
+        // (with its retry semantics) is fine. The parallel path
+        // would just incur thread-spawn overhead and the same
+        // wall-clock as serial.
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().to_path_buf();
+        std::fs::create_dir_all(project.join(".sim-flow")).unwrap();
+        let plan_dir = project.join("docs/impl-plan");
+        std::fs::create_dir_all(&plan_dir).unwrap();
+        std::fs::write(
+            plan_dir.join("milestone-01-foo.md"),
+            "# 01\n<!-- detail-pending\n",
+        )
+        .unwrap();
+        let state = State::new(crate::state::Flow::DirectModeling, "DM2cd");
+        state.save(&project.join(".sim-flow")).unwrap();
+
+        let mut opts = options_with_llm("mock", None, None);
+        opts.project_dir = project;
+        opts.max_parallel_requests = 0;
+        let step = registry_for(crate::state::Flow::DirectModeling)
+            .get("DM2cd")
+            .unwrap()
+            .clone();
+        let mut host = TestHost::new();
+        let mode = Arc::new(AtomicU8::new(STEP_MODE_AUTO));
+        let mut auto_host = AutoPresenter::new(&mut host, mode);
+        let mut mock = crate::session::MockAgent::new();
+        let ran = run_plan_detail_walk_parallel(&opts, &step, &mut auto_host, &mut mock).unwrap();
+        assert!(
+            !ran,
+            "single pending stub must opt out of the parallel path"
+        );
+    }
+
+    #[test]
+    fn run_plan_detail_walk_parallel_returns_false_for_non_placeholder_walk() {
+        // Execution-mode walks (DM2d / DM3b / DM3c / DM4b) share
+        // src/ writes across milestones, so per-milestone Work
+        // sessions running in parallel would race on the source
+        // tree. The dispatcher refuses to engage on those.
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().to_path_buf();
+        std::fs::create_dir_all(project.join(".sim-flow")).unwrap();
+        let plan_dir = project.join("docs/impl-plan");
+        std::fs::create_dir_all(&plan_dir).unwrap();
+        // Two pending DM2d-style milestone files (checkbox mode).
+        std::fs::write(
+            plan_dir.join("milestone-01-foo.md"),
+            "# 01\n## Tasks\n- [ ] task\n",
+        )
+        .unwrap();
+        std::fs::write(
+            plan_dir.join("milestone-02-bar.md"),
+            "# 02\n## Tasks\n- [ ] task\n",
+        )
+        .unwrap();
+        let state = State::new(crate::state::Flow::DirectModeling, "DM2d");
+        state.save(&project.join(".sim-flow")).unwrap();
+
+        let mut opts = options_with_llm("mock", None, None);
+        opts.project_dir = project;
+        opts.max_parallel_requests = 0;
+        // DM2d's walk has placeholder_marker = None -> not a
+        // plan-detail walk -> dispatcher returns false.
+        let step = registry_for(crate::state::Flow::DirectModeling)
+            .get("DM2d")
+            .unwrap()
+            .clone();
+        let mut host = TestHost::new();
+        let mode = Arc::new(AtomicU8::new(STEP_MODE_AUTO));
+        let mut auto_host = AutoPresenter::new(&mut host, mode);
+        let mut mock = crate::session::MockAgent::new();
+        let ran = run_plan_detail_walk_parallel(&opts, &step, &mut auto_host, &mut mock).unwrap();
+        assert!(
+            !ran,
+            "execution-mode walks (DM2d et al.) must NOT engage the parallel path"
+        );
+    }
+
+    #[test]
     fn resolve_llm_for_kind_work_returns_primary_stack() {
         let opts = options_with_llm("vllm", Some("qwen3.6"), Some("http://localhost:8012/v1"));
         let resolved = resolve_llm_for_kind(&opts, crate::client::SessionKind::Work);
