@@ -68,7 +68,14 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     autoSessionManager,
     chatPanelProvider,
-    vscode.window.registerWebviewViewProvider(CHAT_PANEL_VIEW_ID, chatPanelProvider),
+    vscode.window.registerWebviewViewProvider(CHAT_PANEL_VIEW_ID, chatPanelProvider, {
+      // Keep the webview's HTML + JS state alive while it's hidden
+      // (e.g. while the user has an editor tab focused on top). Without
+      // this VS Code tears the webview down and rebuilds from scratch
+      // on every visibility flip, which the user perceives as the chat
+      // panel reverting to "no session / no project".
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
     vscode.commands.registerCommand("sim-flow.openChatPanel", () => openChatPanel()),
     vscode.commands.registerCommand("sim-flow.openDashboard", () => openDashboard(context)),
     vscode.commands.registerCommand("sim-flow.toggleExperimentalUi", () =>

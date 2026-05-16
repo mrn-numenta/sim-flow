@@ -137,11 +137,12 @@ body {
 /* Icon-only toolbar buttons (bubble-toggle, dashboard, help). All
  * share the same borderless / transparent treatment as the settings
  * gear summary so the three icons + the gear read as one row of
- * peer affordances. Hover paints the same subtle toolbar tint the
- * settings gear uses. */
-.x-toolbar-bubble-toggle,
-.x-toolbar-dashboard,
-.x-toolbar-help {
+ * peer affordances. Selectors prefixed with `.x-toolbar` so the
+ * specificity beats the generic `.x-toolbar button` reset further
+ * up (which would otherwise re-apply the input-bg border + fill). */
+.x-toolbar .x-toolbar-bubble-toggle,
+.x-toolbar .x-toolbar-dashboard,
+.x-toolbar .x-toolbar-help {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -152,9 +153,9 @@ body {
   line-height: 1;
 }
 
-.x-toolbar-bubble-toggle:hover,
-.x-toolbar-dashboard:hover,
-.x-toolbar-help:hover {
+.x-toolbar .x-toolbar-bubble-toggle:hover,
+.x-toolbar .x-toolbar-dashboard:hover,
+.x-toolbar .x-toolbar-help:hover {
   background: var(
     --vscode-toolbar-hoverBackground,
     color-mix(in srgb, var(--vscode-foreground) 12%, transparent)
@@ -1098,16 +1099,30 @@ body {
   width: 100%;
 }
 
-/* Preview rail (SV-while-in-DMF): muted opacity + dashed border
- * accents so the user reads it as "upcoming, not yet active". */
+/* Preview rail (SV-while-in-DMF): dashed border + muted text so
+ * the user reads it as "upcoming, not yet active". Opacity is NOT
+ * applied to the parent tile -- opacity creates a stacking context
+ * and the absolute-positioned hover tooltip inherits the fade,
+ * making the upcoming-step name unreadable over the DM rail. The
+ * tooltip overlay sets its own (full-opacity) background below. */
 .x-step-rail-preview .x-step-rail-step {
-  opacity: 0.7;
   border-style: dashed;
+  color: color-mix(in srgb, var(--vscode-foreground) 65%, transparent);
 }
 
 /* Pending overlay needs an opaque editor-bg fill so the expanded
- * label can be read against any tiles it overlaps. */
+ * label can be read against any tiles it overlaps (e.g. the SV
+ * preview rail rendered above the DM rail). */
 .x-step-rail-step-pending .x-step-rail-step-full {
+  background: var(--vscode-editor-background);
+  border-color: var(--x-palette-accent);
+  color: var(--vscode-foreground);
+}
+
+/* Preview-rail tooltip overrides: solid editor-bg fill + full
+ * foreground colour so the upcoming SV step name reads cleanly
+ * over whatever's rendered above it. */
+.x-step-rail-preview .x-step-rail-step-full {
   background: var(--vscode-editor-background);
   border-color: var(--x-palette-accent);
   color: var(--vscode-foreground);

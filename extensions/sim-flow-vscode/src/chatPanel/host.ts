@@ -432,6 +432,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     _token: vscode.CancellationToken,
   ): Promise<void> {
     this.view = webviewView;
+    // `retainContextWhenHidden` is configured on the
+    // `registerWebviewViewProvider` call in extension.ts so the
+    // panel's DOM + JS state survives an editor tab stealing focus.
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [
