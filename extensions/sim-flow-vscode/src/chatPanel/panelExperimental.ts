@@ -256,15 +256,30 @@ const TOGGLE_BUBBLES_EXPAND_SVG = `
   <line x1="10" y1="7.5" x2="10" y2="12.5"/>
 </svg>`;
 
+/**
+ * Settings gear icon. Approximates VS Code's `gear` codicon as
+ * inline SVG so we don't need to load the codicon font.
+ */
+const SETTINGS_GEAR_SVG = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round">
+  <circle cx="8" cy="8" r="2.2"/>
+  <path d="M8 1.5v2 M8 12.5v2 M1.5 8h2 M12.5 8h2 M3.5 3.5l1.4 1.4 M11.1 11.1l1.4 1.4 M3.5 12.5l1.4-1.4 M11.1 4.9l1.4-1.4"/>
+</svg>`;
+
 function buildToolbar(state: ChatPanelState): HTMLElement {
   const root = div("x-toolbar");
 
-  // Bubble expand/collapse toggle on the far left. Single button
-  // whose icon mirrors what the *next* click will do:
-  //   - bubbles currently expanded -> show collapse-all glyph
-  //   - bubbles currently collapsed -> show expand-all glyph
-  // The state is tracked locally (ui.bubblesExpanded) so the toggle
-  // survives state-update re-renders without consulting the DOM.
+  // Three zones: a left group, a centered middle group with the
+  // LLM status + token totals, and a right group with the settings
+  // gear. CSS grid-template-columns `auto 1fr auto` keeps the
+  // center genuinely centered no matter how wide the side groups
+  // get.
+  const leftZone = div("x-toolbar-left");
+  const centerZone = div("x-toolbar-center");
+  const rightZone = div("x-toolbar-right");
+
+  // ---- LEFT: bubble toggle + project button ----
+
   const toggleBtn = document.createElement("button");
   toggleBtn.type = "button";
   toggleBtn.className = "x-toolbar-bubble-toggle";
@@ -281,19 +296,14 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   toggleBtn.addEventListener("click", () => {
     ui.bubblesExpanded = !ui.bubblesExpanded;
     setAllBubblesOpen(ui.bubblesExpanded);
-    // Re-render so the icon flips to reflect the new "next click"
-    // semantic without waiting for a host state-update.
     render();
   });
-  root.appendChild(toggleBtn);
+  leftZone.appendChild(toggleBtn);
 
   // Project button: doubles as the Start-session affordance when
   // no pump is anchored. Window reloads no longer auto-launch, so
   // this button is how the user starts a fresh session -- and
   // how they switch projects once one is running.
-  //
-  //   - No session  -> "Start session"      (sends `start-session`)
-  //   - Active pump -> "Project: <name>"    (sends `switch-project`)
   const projectBtn = document.createElement("button");
   projectBtn.type = "button";
   projectBtn.className = "x-toolbar-project";
@@ -312,8 +322,6 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
       "Launch a sim-flow session. Uses the last project you worked on; otherwise opens the project picker.";
   }
   projectBtn.addEventListener("click", () => {
-    // Read the live state so morphdom listener carryover doesn't
-    // route a stale message type when sessionActive flips.
     const live = ui.state;
     if (live?.sessionActive) {
       send({ type: "switch-project" });
@@ -321,14 +329,56 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
       send({ type: "start-session" });
     }
   });
-  root.appendChild(projectBtn);
+  leftZone.appendChild(projectBtn);
 
-  root.appendChild(div("x-toolbar-spacer"));
+  // ---- CENTER: LLM status indicator + total tokens ----
 
-  const paletteLabel = document.createElement("span");
-  paletteLabel.className = "x-toolbar-label";
-  paletteLabel.textContent = "Palette";
-  root.appendChild(paletteLabel);
+  const llmStatus = document.createElement("span");
+  llmStatus.className = "x-toolbar-llm";
+  if (!state.sessionActive) {
+    llmStatus.classList.add("x-llm-offline");
+    llmStatus.textContent = "○ No session";
+    llmStatus.title =
+      "No sim-flow pump is anchored to this project. Click \"Start session\" to start one.";
+  } else if (state.isStreaming) {
+    llmStatus.classList.add("x-llm-working");
+    llmStatus.textContent = `● Working · ${state.sourceLabel}`;
+    llmStatus.title = `sim-flow is talking to ${state.sourceLabel} right now.`;
+  } else {
+    llmStatus.classList.add("x-llm-ready");
+    llmStatus.textContent = `● Ready · ${state.sourceLabel}`;
+    llmStatus.title = `Pump is connected; ${state.sourceLabel} will be called on the next sub-session.`;
+  }
+  centerZone.appendChild(llmStatus);
+
+  const totals = document.createElement("span");
+  totals.className = "x-toolbar-tokens";
+  const upTotal = state.totalInputTokensEstimate;
+  const downTotal = state.totalOutputTokensEstimate;
+  totals.textContent = `↑ ${formatTokens(upTotal)}  ↓ ${formatTokens(downTotal)}`;
+  totals.title = `Approximately ${upTotal} tokens sent to the LLM and ${downTotal} tokens received in this conversation.`;
+  centerZone.appendChild(totals);
+
+  // ---- RIGHT: settings gear (palette select + future settings) ----
+
+  // <details>-based popover. Clicking the gear toggles `open` and
+  // the panel inside is absolutely-positioned via CSS so it floats
+  // over the transcript instead of pushing other toolbar items
+  // around.
+  const settings = document.createElement("details");
+  settings.className = "x-toolbar-settings";
+  const settingsSummary = document.createElement("summary");
+  settingsSummary.className = "x-toolbar-settings-summary";
+  settingsSummary.innerHTML = SETTINGS_GEAR_SVG;
+  settingsSummary.setAttribute("aria-label", "Open chat panel settings");
+  settingsSummary.title = "Settings";
+  settings.appendChild(settingsSummary);
+
+  const settingsPanel = div("x-toolbar-settings-panel");
+  const palLabel = document.createElement("label");
+  palLabel.className = "x-toolbar-settings-label";
+  palLabel.textContent = "Palette";
+  settingsPanel.appendChild(palLabel);
 
   const select = document.createElement("select");
   select.className = "x-toolbar-palette";
@@ -348,33 +398,12 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
       persist();
     }
   });
-  root.appendChild(select);
+  palLabel.appendChild(select);
 
-  // LLM connection indicator on the far right. Three visual states
-  // derived from `sessionActive` + `isStreaming`:
-  //   - no pump      -> hollow dot, "No session"
-  //   - pump idle    -> solid dot, "Ready · <sourceLabel>"
-  //   - pump working -> solid dot + working class, "Working · <sourceLabel>"
-  // We don't actively probe the LLM endpoint -- a live pump that's
-  // producing events is the strongest signal the user actually wants.
-  const llmStatus = document.createElement("span");
-  llmStatus.className = "x-toolbar-llm";
-  if (!state.sessionActive) {
-    llmStatus.classList.add("x-llm-offline");
-    llmStatus.textContent = "○ No session";
-    llmStatus.title =
-      "No sim-flow pump is anchored to this project. Click \"Start session\" to start one.";
-  } else if (state.isStreaming) {
-    llmStatus.classList.add("x-llm-working");
-    llmStatus.textContent = `● Working · ${state.sourceLabel}`;
-    llmStatus.title = `sim-flow is talking to ${state.sourceLabel} right now.`;
-  } else {
-    llmStatus.classList.add("x-llm-ready");
-    llmStatus.textContent = `● Ready · ${state.sourceLabel}`;
-    llmStatus.title = `Pump is connected; ${state.sourceLabel} will be called on the next sub-session.`;
-  }
-  root.appendChild(llmStatus);
+  settings.appendChild(settingsPanel);
+  rightZone.appendChild(settings);
 
+  root.append(leftZone, centerZone, rightZone);
   return root;
 }
 
@@ -497,7 +526,9 @@ function messageBubble(
     // Tool calls collapse by default (file dumps would otherwise dwarf
     // the rest of the turn); everything else opens by default. The
     // morphdom hook preserves whatever the user toggles.
-    bubble.appendChild(bubbleDetails(entry.title, body, !tool, tool));
+    bubble.appendChild(
+      bubbleDetails(entry.title, body, !tool, tool, tokenBadgeFor(entry, body)),
+    );
   }
   row.appendChild(bubble);
   return row;
@@ -516,6 +547,7 @@ function bubbleDetails(
   body: string,
   defaultOpen: boolean,
   forceCodeBlock = false,
+  tokens: { text: string; title: string } | null = null,
 ): HTMLElement {
   const details = document.createElement("details");
   details.className = "x-bubble-details";
@@ -535,6 +567,15 @@ function bubbleDetails(
     previewNode.className = "x-bubble-summary-preview";
     previewNode.textContent = preview;
     summary.appendChild(previewNode);
+  }
+  // Per-turn token badge anchored at the summary's right edge. The
+  // preview node has `flex: 1` so this gets pushed to the right.
+  if (tokens) {
+    const tokenNode = document.createElement("span");
+    tokenNode.className = "x-bubble-summary-tokens";
+    tokenNode.textContent = tokens.text;
+    tokenNode.title = tokens.title;
+    summary.appendChild(tokenNode);
   }
   details.appendChild(summary);
   // Tool-result bubbles (forceCodeBlock = true) are almost always
@@ -560,6 +601,52 @@ function wrapAsCodeBlock(content: string): string {
   const lang = inferLangFromContent(content) ?? "text";
   const fence = "`".repeat(16);
   return `${fence}${lang}\n${content}\n${fence}`;
+}
+
+/**
+ * Compact label for a token count: bare integer under 1000, "1.2k"
+ * under 10000, "42k" beyond. Same shape used in both the per-bubble
+ * summary badge and the toolbar totals.
+ */
+function formatTokens(n: number): string {
+  if (n <= 0) {
+    return "0";
+  }
+  if (n < 1000) {
+    return String(n);
+  }
+  if (n < 10000) {
+    return `${(n / 1000).toFixed(1)}k`;
+  }
+  return `${Math.round(n / 1000)}k`;
+}
+
+/**
+ * Build a per-turn token badge. User / orchestrator-user / tool
+ * bubbles read as "input" and show an up arrow; assistant bubbles
+ * read as "output" and show a down arrow. Stored token estimates
+ * win when available; otherwise we fall back to the same heuristic
+ * the host uses (~4 chars per token).
+ */
+function tokenBadgeFor(
+  entry: Extract<ChatTranscriptEntry, { kind: "user" | "assistant" }>,
+  body: string,
+): { text: string; title: string } | null {
+  const isInput = entry.kind === "user";
+  const stored = isInput
+    ? entry.requestTokensEstimate
+    : entry.responseTokensEstimate;
+  const fallback = body.length === 0 ? 0 : Math.max(1, Math.ceil(body.length / 4));
+  const count = stored ?? fallback;
+  if (count <= 0) {
+    return null;
+  }
+  const arrow = isInput ? "↑" : "↓";
+  const direction = isInput ? "sent to" : "received from";
+  return {
+    text: `${arrow} ${formatTokens(count)}`,
+    title: `Approximately ${count} tokens ${direction} the LLM in this turn.`,
+  };
 }
 
 function firstNonEmptyLine(text: string): string {

@@ -67,23 +67,35 @@ body {
 }
 
 .x-toolbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 8px;
   padding: 6px 12px;
   border-bottom: 1px solid var(--x-border);
   font-size: 11px;
-  flex-wrap: wrap;
+}
+
+.x-toolbar-left,
+.x-toolbar-center,
+.x-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.x-toolbar-center {
+  justify-self: center;
+}
+
+.x-toolbar-right {
+  justify-self: end;
 }
 
 .x-toolbar-label {
   color: var(--x-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-}
-
-.x-toolbar-spacer {
-  flex: 1;
 }
 
 .x-toolbar select,
@@ -135,6 +147,77 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
+}
+
+/* Running token totals: same ↑/↓ shape as the per-bubble badge so
+ * the user can compare a turn to the conversation as a whole. */
+.x-toolbar-tokens {
+  color: var(--x-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding: 2px 6px;
+}
+
+/* Settings popover: a <details>-based dropdown anchored at the
+ * toolbar's right edge. The summary is the gear icon (no marker);
+ * the panel is absolutely positioned so opening it doesn't shift
+ * the rest of the toolbar layout. */
+.x-toolbar-settings {
+  position: relative;
+}
+
+.x-toolbar-settings > summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  color: var(--vscode-foreground);
+}
+
+.x-toolbar-settings > summary::-webkit-details-marker {
+  display: none;
+}
+
+.x-toolbar-settings > summary:hover {
+  background: var(
+    --vscode-toolbar-hoverBackground,
+    color-mix(in srgb, var(--vscode-foreground) 12%, transparent)
+  );
+}
+
+.x-toolbar-settings > summary > svg {
+  display: block;
+}
+
+.x-toolbar-settings-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 10;
+  background: var(--vscode-input-background, var(--vscode-editor-background));
+  border: 1px solid var(--x-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  min-width: 180px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.x-toolbar-settings-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--x-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 /* "Start session" variant of the project button. Tinted in the
@@ -350,6 +433,18 @@ body {
   white-space: nowrap;
   flex: 1;
   min-width: 0;
+}
+
+/* Per-turn token count, anchored at the summary's right edge. The
+ * preview node takes `flex: 1` and pushes the badge here. The
+ * counter has no flex so it always sits at its natural width. */
+.x-bubble-summary-tokens {
+  color: var(--x-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-left: 8px;
 }
 
 .x-bubble-thinking {
