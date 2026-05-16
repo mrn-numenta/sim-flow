@@ -71,3 +71,41 @@ pub trait Client: Send + Sync {
     fn name(&self) -> &'static str;
     fn invoke(&self, invocation: &Invocation) -> crate::Result<Session>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_success_is_true_when_exit_zero_false_otherwise() {
+        let ok = Session {
+            exit_status: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        };
+        assert!(ok.success());
+        for code in [1, 2, 101, -1, 255] {
+            let fail = Session {
+                exit_status: code,
+                stdout: String::new(),
+                stderr: String::new(),
+            };
+            assert!(!fail.success(), "exit {code}");
+        }
+    }
+
+    #[test]
+    fn session_kind_and_mode_enums_implement_copy_and_eq() {
+        // Behavioural smoke test: the orchestrator passes these by
+        // value into many call sites; if Copy was ever removed by a
+        // refactor a long chain of clones would silently appear.
+        let k = SessionKind::Work;
+        let k2 = k;
+        assert_eq!(k, k2);
+        assert_ne!(SessionKind::Work, SessionKind::Critique);
+        let m = SessionMode::OneShot;
+        let m2 = m;
+        assert_eq!(m, m2);
+        assert_ne!(SessionMode::Interactive, SessionMode::OneShot);
+    }
+}
