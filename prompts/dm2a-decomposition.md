@@ -125,6 +125,6 @@ Output artifacts:
 - `docs/analysis/data-movement.md`.
 
 When the artifacts above are complete, stop. Do not write
-`docs/critiques/DM2a-critique.md`; the critique is a distinct task.
+`docs/critiques/DM2a-critique.json`; the critique is a distinct task.
 Do not `/exit` on your own -- the user and the orchestrator control
 session boundaries.

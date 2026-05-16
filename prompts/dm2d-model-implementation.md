@@ -358,6 +358,6 @@ Milestone completion and step completion are different:
   implementation, not the first time the work is being reviewed.
 
 Do not write
-`docs/critiques/DM2d-critique.md`; the critique is a distinct task.
+`docs/critiques/DM2d-critique.json`; the critique is a distinct task.
 Do not `/exit` on your own -- the user and the orchestrator control
 session boundaries.

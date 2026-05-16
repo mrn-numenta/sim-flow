@@ -150,6 +150,6 @@ Output artifacts:
 - `docs/testbench.md`.
 
 When the artifacts above are complete, stop. Do not write
-`docs/critiques/DM1-critique.md`; the critique is a distinct task.
+`docs/critiques/DM1-critique.json`; the critique is a distinct task.
 Do not `/exit` on your own -- the user and the orchestrator control
 session boundaries.

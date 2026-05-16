@@ -224,6 +224,6 @@ claim of completeness was wrong; back up and reopen the
 affected tasks before moving forward.
 
 When the artifacts above are complete, stop. Do not write
-`docs/critiques/DM4b-critique.md`; the critique is a distinct task.
+`docs/critiques/DM4b-critique.json`; the critique is a distinct task.
 Do not `/exit` on your own -- the user and the orchestrator control
 session boundaries.

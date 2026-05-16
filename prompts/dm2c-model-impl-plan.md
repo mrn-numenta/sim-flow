@@ -146,6 +146,6 @@ That belongs in DM2d when the agent writes code.
   DM3.
 
 When the artifacts above are complete, stop. Do not write
-`docs/critiques/DM2c-critique.md`; the critique is a distinct
+`docs/critiques/DM2c-critique.json`; the critique is a distinct
 task. Do not `/exit` on your own -- the user and the orchestrator
 control session boundaries.

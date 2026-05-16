@@ -111,6 +111,6 @@ Read on demand:
   An empty task list is a `BLOCKER:` for the critique.
 
 When the current milestone is fully detailed, stop. Do not
-write `docs/critiques/DM2cd-critique.md`; the critique is a
+write `docs/critiques/DM2cd-critique.json`; the critique is a
 distinct task. Do not `/exit` on your own -- the user and the
 orchestrator control session boundaries.

@@ -146,5 +146,5 @@ Gate-significant rules:
 - DO NOT remove the `<!-- detail-pending -->` placeholder.
 
 When the artifacts above are complete, stop. Do not write
-`docs/critiques/DM4a-critique.md`; the critique is a distinct
+`docs/critiques/DM4a-critique.json`; the critique is a distinct
 task. Do not `/exit` on your own.

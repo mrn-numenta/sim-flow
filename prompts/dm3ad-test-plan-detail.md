@@ -129,5 +129,5 @@ Read on demand:
   empty task list is a `BLOCKER:`.
 
 When the current milestone is fully detailed, stop. Do not
-write `docs/critiques/DM3ad-critique.md`. Do not `/exit` on
+write `docs/critiques/DM3ad-critique.json`. Do not `/exit` on
 your own.

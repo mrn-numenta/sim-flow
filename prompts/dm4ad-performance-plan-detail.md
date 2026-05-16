@@ -123,5 +123,5 @@ Read on demand:
 - DO NOT remove the placeholder by leaving `## Tasks` empty.
 
 When the current milestone is fully detailed, stop. Do not
-write `docs/critiques/DM4ad-critique.md`. Do not `/exit` on
+write `docs/critiques/DM4ad-critique.json`. Do not `/exit` on
 your own.

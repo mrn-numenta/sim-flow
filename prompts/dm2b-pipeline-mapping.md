@@ -85,6 +85,6 @@ Output artifacts:
   `docs/analysis/pipeline-mapping/<NN>-<slug>.md` files.
 
 When the artifacts above are complete, stop. Do not write
-`docs/critiques/DM2b-critique.md`; the critique is a distinct task.
+`docs/critiques/DM2b-critique.json`; the critique is a distinct task.
 Do not `/exit` on your own -- the user and the orchestrator control
 session boundaries.

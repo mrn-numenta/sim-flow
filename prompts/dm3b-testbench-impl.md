@@ -248,7 +248,7 @@ completeness was wrong, so reopen the failing tasks first.
 
 When the artifacts in the current milestone are complete and
 verified, stop with the milestone-complete notice. Do not write
-`docs/critiques/DM3b-critique.md`; the critique is a distinct
+`docs/critiques/DM3b-critique.json`; the critique is a distinct
 task. Do not `/exit` on your own -- the user and the orchestrator
 control session boundaries.
 
