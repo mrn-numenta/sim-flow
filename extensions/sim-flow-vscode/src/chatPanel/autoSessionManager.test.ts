@@ -253,6 +253,126 @@ describe("chatPanel/autoSessionManager", () => {
     expect(r).toMatchObject({ sessionMode: "auto", stepRef: null });
   });
 
+  it("driveSession routes pump output through the delegate's markdown / llmRequest / assistantTurn / settled hooks", async () => {
+    const pump = new FakePump();
+    // Resolve settle synchronously to "awaiting-input" so the
+    // drive cycle completes; the delegate's settled callback is the
+    // termination of the drive.
+    type Renderer = {
+      markdown(text: string): void;
+      requestTokensEstimate?(t: number): void;
+      llmRequest?(args: {
+        role: string;
+        content: string;
+        turnIndex: number;
+        requestId: string;
+      }): void;
+      assistantTurn?(args: {
+        text: string;
+        finalChunk: boolean;
+        toolCalls: Array<{ id?: string; name: string; argumentsJson: string }>;
+      }): void;
+    };
+    let capturedRenderer: Renderer | undefined;
+    pump.settle = ((renderer: Renderer): Promise<SettleResult> => {
+      capturedRenderer = renderer;
+      return Promise.resolve({ status: "awaiting-input" });
+    }) as unknown as typeof pump.settle;
+
+    const calls: string[] = [];
+    const delegate: AutoSessionDriveDelegate = {
+      markdown(_s, text) {
+        calls.push(`md:${text}`);
+      },
+      requestTokensEstimate(_s, t) {
+        calls.push(`tok:${t}`);
+      },
+      llmRequest(_s, args) {
+        calls.push(`llm:${args.role}:${args.content}`);
+      },
+      assistantTurn(_s, args) {
+        calls.push(`turn:${args.text}:${args.finalChunk}`);
+      },
+      async settled(_s, result) {
+        calls.push(`settled:${result.status}`);
+      },
+    };
+    const session = await manager.launch(
+      {
+        sessionId: "drive-1",
+        socketPath: "/tmp/drive-1.sock",
+        projectDir: "/tmp/drive-proj",
+        pump: pump as never,
+        sourceTag: "ollama",
+        model: "x",
+        sessionMode: "auto",
+        stepRef: null,
+        launchSpecPath: undefined,
+      },
+      delegate,
+    );
+    // Wait for drive promise.
+    await session.drivePromise;
+    // The renderer we captured during settle must have all four hooks
+    // wired to the delegate's session-scoped variants.
+    expect(capturedRenderer).toBeTruthy();
+    capturedRenderer!.markdown("hello");
+    capturedRenderer!.requestTokensEstimate!(42);
+    capturedRenderer!.llmRequest!({
+      role: "user",
+      content: "do x",
+      turnIndex: 1,
+      requestId: "r-1",
+    });
+    capturedRenderer!.assistantTurn!({
+      text: "ok",
+      finalChunk: true,
+      toolCalls: [],
+    });
+    expect(calls).toContain("md:hello");
+    expect(calls).toContain("tok:42");
+    expect(calls).toContain("llm:user:do x");
+    expect(calls).toContain("turn:ok:true");
+    expect(calls).toContain("settled:awaiting-input");
+  });
+
+  it("driveSession returns early when the session is no longer active after settle", async () => {
+    const pump = new FakePump();
+    // Resolve settle on the next tick so we can clear the session
+    // between settle's resolution and the `if (!isActive) return` guard.
+    let resolveSettle: (r: SettleResult) => void = () => {};
+    pump.nextSettle = new Promise<SettleResult>((resolve) => {
+      resolveSettle = resolve;
+    });
+    let settledCalled = false;
+    const delegate: AutoSessionDriveDelegate = {
+      markdown() {},
+      requestTokensEstimate() {},
+      async settled() {
+        settledCalled = true;
+      },
+    };
+    const session = await manager.launch(
+      {
+        sessionId: "drive-stale",
+        socketPath: "/tmp/drive-stale.sock",
+        projectDir: "/tmp/drive-stale",
+        pump: pump as never,
+        sourceTag: "ollama",
+        model: "x",
+        sessionMode: "auto",
+        stepRef: null,
+        launchSpecPath: undefined,
+      },
+      delegate,
+    );
+    // Race: clear the session BEFORE settle resolves.
+    await manager.clearIfActive(session);
+    resolveSettle({ status: "awaiting-input" });
+    await session.drivePromise;
+    expect(settledCalled).toBe(false);
+  });
+
   it("dispose() tears down the active session and clears listeners", async () => {
     const { pump } = await launchOne();
     let disposed = false;
