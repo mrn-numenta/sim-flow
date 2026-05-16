@@ -127,7 +127,7 @@ vi.mock("./debug-log", () => ({
   },
 }));
 
-const { SessionPump } = await import("./pump");
+const { SessionPump, runOneShot } = await import("./pump");
 
 describe("session/pump", () => {
   beforeEach(() => {
@@ -506,6 +506,45 @@ describe("session/pump", () => {
     process.stdout.emit("data", `${JSON.stringify({ event: "request-user-input" })}\n`);
     await settle;
     expect(rendered.join("")).toContain("`cargo check`");
+  });
+
+  it("runOneShot spawns, sends one user message, and returns the terminal result", async () => {
+    const oneShotPromise = runOneShot(
+      {
+        binary: "/mock/bin/sim-flow",
+        args: ["session", "DM0.work", "--jsonl"],
+        cwd: "/tmp/example",
+      },
+      {
+        source: "vscode",
+        projectDir: "/tmp/example",
+        binary: "/mock/bin/sim-flow",
+        debugTokens: "",
+      },
+      "go ahead",
+      { markdown: () => {} },
+    );
+    const process = mock.state.processes.at(-1)!;
+    // First settle: orchestrator parks awaiting input.
+    process.stdout.emit("data", `${JSON.stringify({ event: "request-user-input" })}\n`);
+    // Yield so runOneShot's first settle resolves AND it calls
+    // sendUserMessage + starts settle #2 before we emit session-end.
+    await new Promise((r) => setTimeout(r, 0));
+    process.stdout.emit(
+      "data",
+      `${JSON.stringify({ event: "session-end", reason: "completed", message: "ok" })}\n`,
+    );
+    const result = await oneShotPromise;
+    expect(result).toEqual({
+      status: "ended",
+      endReason: "completed",
+      endMessage: "ok",
+    });
+    const written = process.stdin.writes
+      .map((line) => JSON.parse(line.trim()) as { event: string; text?: string });
+    expect(written.some((w) => w.event === "user-message" && w.text === "go ahead")).toBe(
+      true,
+    );
   });
 
   it("handles chunked protocol lines and surfaces orchestrator-driven session end", async () => {
