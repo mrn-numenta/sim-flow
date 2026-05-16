@@ -509,21 +509,36 @@ fn list_milestone_files(
         }
         files.push((name.to_string(), path));
     }
-    // Sort by (numeric prefix, full filename) so a 10th milestone
-    // doesn't lex-sort before the 9th. Previously
-    // `a.0.cmp(&b.0)` was pure string comparison, which gives
-    // `milestone-10 < milestone-9` whenever a project crosses the
-    // single-digit boundary. The walker then picked
-    // milestone-10 as "first pending" before milestone-9, running
-    // them out of intended order. Falling back to the filename
-    // string keeps the order deterministic when prefixes tie. See
-    // orchestrator audit #12 (2026-05-16).
+    // Sort by (prefix-group, numeric prefix, full filename) so a
+    // 10th milestone doesn't lex-sort before the 9th within a
+    // group. Pure string comparison gave
+    // `milestone-10 < milestone-9` whenever a project crossed the
+    // single-digit boundary. Falling back to the prefix string
+    // first keeps the existing cross-prefix ordering (the test
+    // suite codifies tb-* before test-*); within a prefix, the
+    // numeric run is the primary key. Filename fallback for the
+    // tie-breaking case. See orchestrator audit #12 (2026-05-16).
     files.sort_by(|a, b| {
-        milestone_numeric_key(&a.0, walk)
-            .cmp(&milestone_numeric_key(&b.0, walk))
+        let pa = milestone_prefix_match(&a.0, walk);
+        let pb = milestone_prefix_match(&b.0, walk);
+        pa.cmp(pb)
+            .then_with(|| milestone_numeric_key(&a.0, walk).cmp(&milestone_numeric_key(&b.0, walk)))
             .then_with(|| a.0.cmp(&b.0))
     });
     Some(files)
+}
+
+/// Return the `walk.file_prefixes` entry that matches `name`'s
+/// start, or `""` when no prefix matches (sorts before all
+/// matched entries). Used to group files by prefix so the
+/// numeric-aware sort below doesn't reorder e.g. `tb-*` and
+/// `test-*` against each other.
+fn milestone_prefix_match<'a>(name: &str, walk: &'a MilestoneWalkConfig) -> &'a str {
+    walk.file_prefixes
+        .iter()
+        .find(|p| name.starts_with(**p))
+        .copied()
+        .unwrap_or("")
 }
 
 /// Extract the numeric prefix run of `name` after stripping the
