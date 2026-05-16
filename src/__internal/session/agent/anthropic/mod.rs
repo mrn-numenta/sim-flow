@@ -666,4 +666,76 @@ mod tests {
         assert_eq!(agent.api_url(), "http://localhost:9999/v1/messages");
         assert_eq!(agent.model(), "claude-opus-4-7");
     }
+
+    #[test]
+    fn collect_text_concatenates_only_text_blocks() {
+        let blocks = vec![
+            ResponseContentBlock {
+                kind: Some("text".into()),
+                text: Some("hello ".into()),
+                id: None,
+                name: None,
+                input: None,
+            },
+            ResponseContentBlock {
+                kind: Some("tool_use".into()),
+                text: None,
+                id: Some("toolu_a".into()),
+                name: Some("read_file".into()),
+                input: Some(serde_json::json!({"path": "x"})),
+            },
+            ResponseContentBlock {
+                kind: Some("text".into()),
+                text: Some("world".into()),
+                id: None,
+                name: None,
+                input: None,
+            },
+        ];
+        assert_eq!(collect_text(&blocks), "hello world");
+    }
+
+    #[test]
+    fn collect_tool_uses_skips_non_tool_blocks_and_handles_missing_input() {
+        let blocks = vec![
+            ResponseContentBlock {
+                kind: Some("text".into()),
+                text: Some("preamble".into()),
+                id: None,
+                name: None,
+                input: None,
+            },
+            ResponseContentBlock {
+                kind: Some("tool_use".into()),
+                text: None,
+                id: Some("toolu_a".into()),
+                name: Some("read_file".into()),
+                input: Some(serde_json::json!({"path": "x"})),
+            },
+            ResponseContentBlock {
+                // Missing name -> filtered out.
+                kind: Some("tool_use".into()),
+                text: None,
+                id: Some("toolu_b".into()),
+                name: None,
+                input: Some(serde_json::json!({})),
+            },
+            ResponseContentBlock {
+                // Missing input -> argument string becomes "{}".
+                kind: Some("tool_use".into()),
+                text: None,
+                id: Some("toolu_c".into()),
+                name: Some("list_dir".into()),
+                input: None,
+            },
+        ];
+        let calls = collect_tool_uses(&blocks);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].id.as_deref(), Some("toolu_a"));
+        // Compact JSON: arguments_json comes from Value::to_string().
+        assert!(calls[0].arguments_json.contains("\"path\""));
+        assert_eq!(calls[1].name, "list_dir");
+        assert_eq!(calls[1].arguments_json, "{}");
+    }
 }
