@@ -846,7 +846,9 @@ body {
 }
 
 .x-send {
-  border: none;
+  /* Transparent border on the base so the stop variant can swap
+   * to a coloured outline without nudging the layout by a pixel. */
+  border: 1px solid transparent;
   background: var(--vscode-button-background);
   color: var(--vscode-button-foreground);
   border-radius: 8px;
@@ -875,20 +877,18 @@ body {
   cursor: not-allowed;
 }
 
-/* Stop variant: tinted in the warning palette so a streaming
- * cancel reads as destructive (matches VS Code's red palette
- * tokens; fall back to a fixed red if the variable isn't set). */
+/* Stop variant: outline-only, neutral white. The streaming cancel
+ * was previously painted in the error palette, but the red read
+ * as alarming for what's now a benign "drop to manual park"
+ * gesture (per the chat-panel Stop semantics). */
 .x-send-stop {
-  background: var(--vscode-errorForeground, #d2522d);
-  color: var(--vscode-button-foreground, #fff);
+  background: transparent;
+  color: #fff;
+  border-color: #fff;
 }
 
 .x-send-stop:hover:not(:disabled) {
-  background: color-mix(
-    in srgb,
-    var(--vscode-errorForeground, #d2522d) 80%,
-    black
-  );
+  background: color-mix(in srgb, #fff 12%, transparent);
 }
 
 .x-browse {
