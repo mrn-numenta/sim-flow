@@ -25,6 +25,9 @@ pub mod state;
 pub mod tick;
 pub mod walk;
 
+#[cfg(test)]
+mod tests;
+
 pub use state::milestone_is_resolved;
 pub use tick::tick_resolved_milestone_tasks;
 pub use walk::{enumerate_pending_milestones, find_current_milestone, find_milestone_by_name};
