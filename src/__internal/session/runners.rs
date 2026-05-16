@@ -1077,6 +1077,59 @@ error: could not compile `proj` (lib) due to 2 previous errors
     }
 
     #[test]
+    fn format_command_joins_cmd_and_args_with_spaces() {
+        assert_eq!(format_command("cargo", &[]), "cargo");
+        assert_eq!(format_command("cargo", &["check"]), "cargo check");
+        assert_eq!(
+            format_command("cargo", &["test", "--lib"]),
+            "cargo test --lib"
+        );
+    }
+
+    #[test]
+    fn is_instrumentation_line_recognizes_framework_noise() {
+        for line in [
+            "--- timing summary ---",
+            "--- host counters ---",
+            "elaboration: 12ms",
+            "  simulation: 5ms",
+            "total: 17ms",
+            "cycles: 1000",
+            "throughput: 0.88 MHz",
+            "elab insn: 4321",
+            "sim insn: 99",
+            "insn/sim-cycle: 12.3",
+        ] {
+            assert!(is_instrumentation_line(line), "{line}");
+        }
+        for line in [
+            "running 1 test",
+            "test foo::bar ... ok",
+            "thread 'main' panicked",
+            "",
+            "// just a comment",
+        ] {
+            assert!(!is_instrumentation_line(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn parse_panic_header_extracts_thread_and_location() {
+        let line = "thread 'foo::bar' (12345) panicked at tools/sim-flow/src/lib.rs:42:9:";
+        let (file, loc) = parse_panic_header(line).expect("parse");
+        assert_eq!(loc, "tools/sim-flow/src/lib.rs:42:9");
+        // The first element is whatever the parser pulls before the
+        // location; just sanity-check it's not empty.
+        assert!(!file.is_empty());
+    }
+
+    #[test]
+    fn parse_panic_header_returns_none_for_non_panic_line() {
+        assert!(parse_panic_header("running 1 test").is_none());
+        assert!(parse_panic_header("").is_none());
+    }
+
+    #[test]
     fn post_work_all_clean_only_true_when_both_pass() {
         let mut r = PostWorkCargoReport {
             fmt_ok: true,
