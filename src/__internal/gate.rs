@@ -523,8 +523,15 @@ fn expand_candidate_files(project_dir: &Path, paths: &[PathBuf]) -> Vec<PathBuf>
             // Skip scaffolding + auto-generated index files. The
             // index summarizes section content; the actual
             // numbers / patterns the gate looks for live in the
-            // section files themselves.
-            if matches!(name, ".gitkeep" | "README.md" | "_toc.md" | "index.md") {
+            // section files themselves. Case-insensitive so
+            // `Readme.md` / `INDEX.md` / Windows-style casings
+            // are also excluded. See orchestrator audit #20
+            // (2026-05-16).
+            let name_lower = name.to_ascii_lowercase();
+            if matches!(
+                name_lower.as_str(),
+                ".gitkeep" | "readme.md" | "_toc.md" | "index.md"
+            ) {
                 continue;
             }
             if let Ok(file_meta) = path.metadata()
