@@ -436,6 +436,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       case "end-session":
         await this.endSession();
         return;
+      case "reset-step":
+        await this.resetCurrentStep();
+        return;
       default:
         return;
     }
@@ -472,6 +475,28 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
     await this.launchAutoSession(undefined, picked);
+  }
+
+  /**
+   * Reset the orchestrator's current step: discard its work
+   * artifacts + critique state + gate flag so it can be re-run.
+   * Reads `current_step` from state.toml at click time so the
+   * reset always targets whatever step the orchestrator says it
+   * is on, not whatever was current at render time.
+   */
+  private async resetCurrentStep(): Promise<void> {
+    const session = this.activePump;
+    if (!session) {
+      return;
+    }
+    const context = await this.readPanelContext();
+    if (!context.currentStep) {
+      return;
+    }
+    if (typeof session.pump.reset !== "function") {
+      return;
+    }
+    session.pump.reset(context.currentStep);
   }
 
   /**

@@ -895,10 +895,40 @@ function buildComposerMeta(state: ChatPanelState): HTMLElement {
   const root = div("x-composer-meta");
   const disabled = state.currentStepMode === null;
 
-  // Continue button on the left -- the primary flow-driving action,
-  // placed where the eye reads first. Only meaningful when the host
-  // computed a next action (manual mode + parked + has a successor);
-  // we always render it so the user has a stable target.
+  // Three zones via CSS grid `auto 1fr auto`:
+  //   [Reset Step | Continue]   [Step: DM2d]   [Manual]
+  // Left holds flow-driving actions; centre shows the
+  // orchestrator's current step as a passive label; right holds
+  // the mode toggle.
+  const leftZone = div("x-composer-meta-left");
+  const centerZone = div("x-composer-meta-center");
+  const rightZone = div("x-composer-meta-right");
+
+  // Reset Step: discards the current step's results + gate flag so
+  // it can be re-run. Disabled with no live session or during an
+  // in-flight sub-session (the orchestrator rejects reset there
+  // anyway). Sits to the left of Continue so the destructive
+  // gesture is one step further from the primary action.
+  const resetBtn = document.createElement("button");
+  resetBtn.type = "button";
+  resetBtn.id = "x-composer-reset";
+  resetBtn.className = "x-reset-step";
+  resetBtn.textContent = "Reset Step";
+  resetBtn.disabled = disabled || state.isStreaming || state.isViewer;
+  resetBtn.title = state.currentStep
+    ? `Discard the results from \`${state.currentStep}\` and start the step over.`
+    : "Discard the current step's results and start the step over.";
+  resetBtn.addEventListener("click", () => {
+    if (resetBtn.disabled) {
+      return;
+    }
+    send({ type: "reset-step" });
+  });
+  leftZone.appendChild(resetBtn);
+
+  // Continue: primary flow-driving action. Disabled until the host
+  // has a computed next action (typically: Manual mode parked
+  // between sub-sessions).
   const continueBtn = document.createElement("button");
   continueBtn.type = "button";
   continueBtn.id = "x-composer-continue";
@@ -907,31 +937,38 @@ function buildComposerMeta(state: ChatPanelState): HTMLElement {
   continueBtn.textContent = action ? `Continue: ${action.label}` : "Continue";
   continueBtn.disabled = !action || state.isStreaming || state.isViewer;
   continueBtn.title = action
-    ? `Dispatches \`${action.kind}\` on \`${action.step}\` over the live session.`
-    : "Continue is available when the orchestrator parks between sub-sessions in manual mode.";
+    ? `Continue the flow from its current position -- dispatches \`${action.kind}\` on \`${action.step}\` over the live session.`
+    : "Continue the flow from its current position. Available when the orchestrator is parked in Manual mode between sub-sessions.";
   continueBtn.addEventListener("click", () => {
     if (continueBtn.disabled) {
       return;
     }
     send({ type: "continue-flow" });
   });
-  root.appendChild(continueBtn);
+  leftZone.appendChild(continueBtn);
 
-  root.appendChild(div("x-composer-meta-spacer"));
-
-  if (disabled) {
-    const hint = document.createElement("span");
-    hint.className = "x-composer-meta-hint";
-    hint.textContent = "(no live session)";
-    root.appendChild(hint);
+  // Centre: current step indicator. Falls back to a no-session
+  // label when nothing is anchored so the row never reads as
+  // empty. Hover reveals the phase too if the orchestrator has
+  // reported one.
+  const stateText = document.createElement("span");
+  stateText.className = "x-composer-step-state";
+  if (state.currentStep) {
+    stateText.textContent = state.currentPhase
+      ? `Step: ${state.currentStep} · ${state.currentPhase}`
+      : `Step: ${state.currentStep}`;
+    stateText.title = state.currentPhase
+      ? `Orchestrator is on step \`${state.currentStep}\` in phase \`${state.currentPhase}\`.`
+      : `Orchestrator is on step \`${state.currentStep}\`.`;
+  } else {
+    stateText.textContent = "No step";
+    stateText.classList.add("x-composer-step-state-empty");
+    stateText.title = "No active sim-flow session.";
   }
+  centerZone.appendChild(stateText);
 
-  // Mode toggle on the right -- text-only button (no background,
-  // no border) so it reads as a plain label that happens to be
-  // clickable. The button text is the *current* mode ("Auto" or
-  // "Manual"); clicking flips to the other. We keep it as a
-  // <button> rather than a span so keyboard focus + Enter work
-  // the same as any other control.
+  // Right: mode toggle. Text-only button that flips between Auto
+  // and Manual on click; label always names the *current* mode.
   const isAuto = state.currentStepMode === "auto";
   const modeBtn = document.createElement("button");
   modeBtn.type = "button";
@@ -946,15 +983,12 @@ function buildComposerMeta(state: ChatPanelState): HTMLElement {
     if (modeBtn.disabled) {
       return;
     }
-    // Read the live mode from `ui.state` so the click flips against
-    // the latest value rather than the closure's first-render
-    // snapshot (morphdom keeps the listener from render-1 attached
-    // to the live DOM node).
     const live = ui.state?.currentStepMode;
     send({ type: "set-step-mode", mode: live === "auto" ? "manual" : "auto" });
   });
-  root.appendChild(modeBtn);
+  rightZone.appendChild(modeBtn);
 
+  root.append(leftZone, centerZone, rightZone);
   return root;
 }
 

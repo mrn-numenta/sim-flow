@@ -197,4 +197,10 @@ export type WebviewMessage =
    * current activity and drops to Manual mode without killing the
    * pump. Sent from the small power button in the toolbar.
    */
-  | { type: "end-session" };
+  | { type: "end-session" }
+  /**
+   * Reset the current step: discard its work/critique results +
+   * clear its gate flag so it can be re-run from scratch. Sent
+   * from the Reset Step button in the composer footer.
+   */
+  | { type: "reset-step" };

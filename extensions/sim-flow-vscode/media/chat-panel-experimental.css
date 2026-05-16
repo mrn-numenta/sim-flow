@@ -660,21 +660,73 @@ body {
 }
 
 .x-composer-meta {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 8px;
   font-size: 11px;
   color: var(--x-muted);
 }
 
-.x-composer-meta-label {
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+.x-composer-meta-left,
+.x-composer-meta-center,
+.x-composer-meta-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.x-composer-meta-hint {
+.x-composer-meta-center {
+  justify-self: center;
+}
+
+.x-composer-meta-right {
+  justify-self: end;
+}
+
+/* Current-step indicator in the centre. Reads as a passive status
+ * label rather than a control -- no hover effect, no border. */
+.x-composer-step-state {
+  color: var(--vscode-foreground);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+
+.x-composer-step-state-empty {
   color: var(--x-muted);
   font-style: italic;
+}
+
+/* Reset Step: outline button on the left of Continue. Hover tints
+ * in the error palette so the destructive intent is communicated
+ * without permanently shouting at the user. */
+.x-reset-step {
+  border: 1px solid var(--x-border);
+  background: transparent;
+  color: var(--vscode-foreground);
+  border-radius: 4px;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.x-reset-step:hover:not(:disabled) {
+  border-color: var(--vscode-errorForeground, #d2522d);
+  color: var(--vscode-errorForeground, #d2522d);
+  background: color-mix(
+    in srgb,
+    var(--vscode-errorForeground, #d2522d) 14%,
+    transparent
+  );
+}
+
+.x-reset-step:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 /* Text-only mode toggle: reads as a plain label that happens to
@@ -704,9 +756,6 @@ body {
   cursor: not-allowed;
 }
 
-.x-composer-meta-spacer {
-  flex: 1;
-}
 
 /* Continue: text-only by default; hover paints a subtle gray
  * pill so the affordance is visible without the button competing
