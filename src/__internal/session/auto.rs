@@ -1321,6 +1321,13 @@ where
     let llm_shared: &L = &*llm;
     let opts_ref: &AutoOptions = opts;
     let step_id_ref: &str = &step_id_owned;
+    // Shared "stop dispatching new milestones" flag. The coordinator
+    // sets this when it forwards a max_auto_iters / max_critique_iters
+    // Diagnostic; workers check it before pulling the next stub off
+    // the queue so they don't continue burning compute past the cap.
+    // In-flight worker sessions complete normally (their own
+    // AutoPresenter already responds to the diagnostic with a Cancel).
+    let cap_exceeded_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let work_result: Result<()> = std::thread::scope(|scope| -> Result<()> {
         let mut handles: Vec<std::thread::ScopedJoinHandle<'_, Result<()>>> =
             Vec::with_capacity(cap);
@@ -1330,8 +1337,16 @@ where
             let opts_w = opts_ref;
             let step_id_w = step_id_ref;
             let llm_w = llm_shared;
+            let cap_flag_w = Arc::clone(&cap_exceeded_flag);
             handles.push(scope.spawn(move || -> Result<()> {
                 loop {
+                    if cap_flag_w.load(std::sync::atomic::Ordering::Acquire) {
+                        // Cap fired elsewhere; stop pulling new
+                        // milestones so we don't continue running
+                        // past the cap. Any sessions already in
+                        // flight complete on their own.
+                        break;
+                    }
                     let stub = queue_w.lock().unwrap().pop();
                     let Some(milestone_rel) = stub else { break };
                     let bare_name = std::path::Path::new(&milestone_rel)
@@ -1372,6 +1387,18 @@ where
         // when the receiver is still alive).
         let mut first_err: Option<crate::Error> = None;
         while let Ok(event) = rx.recv() {
+            // Signal workers to stop pulling new milestones the
+            // moment any worker emits the auto-cap diagnostic.
+            // Match the same string AutoPresenter's send watches
+            // for (line ~3096) so the parallel and serial paths
+            // agree on what "cap exceeded" means.
+            if let Event::Diagnostic { level, message } = &event
+                && matches!(level, DiagnosticLevel::Error)
+                && (message.contains("max_auto_iters") || message.contains("max_critique_iters"))
+                && !cap_exceeded_flag.load(std::sync::atomic::Ordering::Acquire)
+            {
+                cap_exceeded_flag.store(true, std::sync::atomic::Ordering::Release);
+            }
             if first_err.is_some() {
                 // Already in shutdown; drop subsequent events
                 // rather than re-trying host.send (which would
