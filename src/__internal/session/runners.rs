@@ -602,6 +602,30 @@ fn spawn(project: &Path, cmd: &str, args: &[&str]) -> Result<RunnerOutput> {
         source: err,
     })?;
 
+    // Drain stdout + stderr on dedicated threads so the child
+    // never blocks on `write(stderr)` when its output exceeds the
+    // OS pipe buffer (~64 KiB on Linux). Without this, cargo on
+    // a real failing build produces well over the buffer in
+    // diagnostics, wedges, and we hit the timeout below with
+    // empty stdout/stderr because read_to_end only ran AFTER
+    // try_wait. See orchestrator audit #3 (2026-05-16).
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
+    let stdout_handle = stdout_pipe.map(|mut s| {
+        std::thread::spawn(move || -> Vec<u8> {
+            let mut buf = Vec::new();
+            let _ = s.read_to_end(&mut buf);
+            buf
+        })
+    });
+    let stderr_handle = stderr_pipe.map(|mut s| {
+        std::thread::spawn(move || -> Vec<u8> {
+            let mut buf = Vec::new();
+            let _ = s.read_to_end(&mut buf);
+            buf
+        })
+    });
+
     // Poll for completion with a deadline. We can't use
     // `Command::output()` directly because it blocks until the
     // child exits -- a wedged cargo test would hang the whole
@@ -617,12 +641,25 @@ fn spawn(project: &Path, cmd: &str, args: &[&str]) -> Result<RunnerOutput> {
                 if started.elapsed() >= timeout {
                     let _ = child.kill();
                     let _ = child.wait();
+                    // Reader threads see EOF once kill closes the
+                    // pipes; collect what they captured so the
+                    // timeout diagnostic is more useful than the
+                    // prior "empty" output.
+                    let stdout = stdout_handle
+                        .and_then(|h| h.join().ok())
+                        .map(|b| String::from_utf8_lossy(&b).into_owned())
+                        .unwrap_or_default();
+                    let stderr = stderr_handle
+                        .and_then(|h| h.join().ok())
+                        .map(|b| String::from_utf8_lossy(&b).into_owned())
+                        .unwrap_or_default();
                     return Ok(RunnerOutput {
                         command: format_command(cmd, args),
-                        stdout_tail: String::new(),
+                        stdout_tail: tail(&stdout, 4_000),
                         stderr_tail: format!(
-                            "runner timed out after {} seconds (override via SIM_FLOW_CARGO_TIMEOUT_SECS)",
-                            timeout.as_secs()
+                            "runner timed out after {} seconds (override via SIM_FLOW_CARGO_TIMEOUT_SECS)\n{}",
+                            timeout.as_secs(),
+                            tail(&stderr, 8_000),
                         ),
                         exit_code: -1,
                     });
@@ -638,14 +675,12 @@ fn spawn(project: &Path, cmd: &str, args: &[&str]) -> Result<RunnerOutput> {
         }
     };
 
-    let mut stdout_buf = Vec::new();
-    let mut stderr_buf = Vec::new();
-    if let Some(mut s) = child.stdout.take() {
-        let _ = s.read_to_end(&mut stdout_buf);
-    }
-    if let Some(mut s) = child.stderr.take() {
-        let _ = s.read_to_end(&mut stderr_buf);
-    }
+    let stdout_buf = stdout_handle
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
+    let stderr_buf = stderr_handle
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
     let stdout = String::from_utf8_lossy(&stdout_buf).into_owned();
     let stderr = String::from_utf8_lossy(&stderr_buf).into_owned();
     let exit_code = exit_status.code().unwrap_or(-1);
