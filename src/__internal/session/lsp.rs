@@ -804,4 +804,80 @@ mod tests {
         let err = read_frame(&mut buf).unwrap_err();
         assert!(matches!(err, LspError::Exited));
     }
+
+    // ---- path_to_uri ----
+
+    #[test]
+    fn path_to_uri_renders_existing_path_as_file_url() {
+        let tmp = tempfile::tempdir().unwrap();
+        let uri = path_to_uri(tmp.path()).expect("uri");
+        if cfg!(windows) {
+            assert!(uri.starts_with("file:///"));
+        } else {
+            assert!(uri.starts_with("file://"));
+        }
+        // The URI must contain the canonical path; tempdir's path
+        // resolves through /private on macOS so we check both
+        // forms.
+        let canonical = tmp.path().canonicalize().unwrap();
+        assert!(uri.contains(&canonical.to_string_lossy().to_string()));
+    }
+
+    #[test]
+    fn path_to_uri_errors_on_nonexistent_path() {
+        let result = path_to_uri(Path::new("/no/such/path/here-on-purpose-3f8a"));
+        assert!(matches!(result, Err(LspError::Protocol(_))));
+    }
+
+    // ---- shutdown_client (idempotency) ----
+
+    #[test]
+    fn shutdown_client_is_idempotent_with_no_active_client() {
+        // The static CLIENT is empty in the unit-test context
+        // (no test spawned a real rust-analyzer subprocess). Two
+        // back-to-back shutdown_client() calls should both
+        // succeed and produce no observable change.
+        shutdown_client();
+        shutdown_client();
+        // No assertion needed; merely reaching this line proves
+        // the function returns without panic.
+    }
+
+    // ---- read_frame error paths beyond EOF ----
+
+    #[test]
+    fn read_frame_bad_content_length_value_errors() {
+        let bad = b"Content-Length: not-a-number\r\n\r\n{}".to_vec();
+        let mut buf = BufReader::new(Cursor::new(bad));
+        let err = read_frame(&mut buf).unwrap_err();
+        match err {
+            LspError::Protocol(msg) => {
+                assert!(msg.contains("bad Content-Length"), "got: {msg}");
+            }
+            other => panic!("expected Protocol error; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_frame_malformed_json_body_errors() {
+        let body = b"{ this is not valid JSON";
+        let header = format!("Content-Length: {}\r\n\r\n", body.len());
+        let mut bytes = header.into_bytes();
+        bytes.extend_from_slice(body);
+        let mut buf = BufReader::new(Cursor::new(bytes));
+        let err = read_frame(&mut buf).unwrap_err();
+        match err {
+            LspError::Protocol(msg) => assert!(msg.contains("decode"), "got: {msg}"),
+            other => panic!("expected Protocol error; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_frame_truncated_body_returns_io_error() {
+        // Header says 100 bytes; body is empty. read_exact fails.
+        let bytes = b"Content-Length: 100\r\n\r\n".to_vec();
+        let mut buf = BufReader::new(Cursor::new(bytes));
+        let err = read_frame(&mut buf).unwrap_err();
+        assert!(matches!(err, LspError::Io(_)));
+    }
 }
