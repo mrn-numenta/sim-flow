@@ -228,7 +228,30 @@ installFileLinkDelegation();
  * doesn't flash the old palette. When they disagree we trust the
  * host and re-apply.
  */
+/**
+ * Suppression window for syncPaletteFromHost after a local
+ * pushPaletteToHost. workspaceState.update is async, so a state
+ * refresh that fires for unrelated reasons (config change, file
+ * watcher tick) reads the OLD palette while our latest push is
+ * still in flight; without this guard, syncPaletteFromHost would
+ * see a "diff" and overwrite the user's most recent drag. 600 ms
+ * covers the round-trip comfortably without leaving the panel out
+ * of sync if the host ever rejects the write. See chat-panel
+ * audit #6 (2026-05-16).
+ */
+const PALETTE_PUSH_SUPPRESS_MS = 600;
+let paletteLastPushAt = 0;
+
 function syncPaletteFromHost(state: ChatPanelState): void {
+  if (
+    paletteLastPushAt !== 0
+    && Date.now() - paletteLastPushAt < PALETTE_PUSH_SUPPRESS_MS
+  ) {
+    // Local push is still in flight; the host's view of
+    // workspaceState may not yet reflect it. Trust the webview's
+    // current palette until the suppression window elapses.
+    return;
+  }
   let changed = false;
   if (state.palette && state.palette !== ui.palette) {
     ui.palette = state.palette;
@@ -390,6 +413,9 @@ function persist(): void {
  *  only survives panel reloads; workspaceState (host-side)
  *  survives VS Code restarts. */
 function pushPaletteToHost(): void {
+  // Mark the moment of the push so syncPaletteFromHost knows to
+  // ignore any stale-state echo for the suppression window above.
+  paletteLastPushAt = Date.now();
   send({
     type: "set-palette",
     palette: ui.palette,
