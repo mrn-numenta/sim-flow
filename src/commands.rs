@@ -1524,6 +1524,254 @@ mod tests {
     }
 
     #[test]
+    fn gate_check_to_out_renders_every_remaining_variant() {
+        use sim_flow::__internal::gate::GateCheck;
+
+        // FileMatches: kind=file-matches, has pattern.
+        let fm = GateCheck::FileMatches {
+            path: std::path::PathBuf::from("docs/plan.md"),
+            pattern: "(?m)^- \\[x\\]".to_string(),
+            description: "plan items all checked".to_string(),
+        };
+        let out = gate_check_to_out(&fm);
+        assert_eq!(out.kind, "file-matches");
+        assert_eq!(out.path.as_deref(), Some("docs/plan.md"));
+        assert_eq!(out.pattern.as_deref(), Some("(?m)^- \\[x\\]"));
+
+        // Shell: kind=shell, has cmd + args.
+        let sh = GateCheck::Shell {
+            cmd: "cargo".to_string(),
+            args: vec!["check".to_string(), "--manifest-path".to_string()],
+            description: "cargo check is green".to_string(),
+        };
+        let out = gate_check_to_out(&sh);
+        assert_eq!(out.kind, "shell");
+        assert!(out.path.is_none());
+        assert_eq!(out.cmd, Some("cargo"));
+        assert_eq!(
+            out.args
+                .as_ref()
+                .map(|a| a.iter().map(String::as_str).collect::<Vec<_>>()),
+            Some(vec!["check", "--manifest-path"]),
+        );
+
+        // CritiqueClean: kind=critique-clean.
+        let cc = GateCheck::CritiqueClean {
+            path: std::path::PathBuf::from("docs/critiques/DM0-critique.md"),
+            description: "DM0 critique has no blockers".to_string(),
+        };
+        let out = gate_check_to_out(&cc);
+        assert_eq!(out.kind, "critique-clean");
+        assert_eq!(out.path.as_deref(), Some("docs/critiques/DM0-critique.md"));
+
+        // ExperimentsRecorded: kind=experiments-recorded; no path.
+        let er = GateCheck::ExperimentsRecorded {
+            description: "perf runs recorded".to_string(),
+        };
+        let out = gate_check_to_out(&er);
+        assert_eq!(out.kind, "experiments-recorded");
+        assert!(out.path.is_none());
+
+        // MilestonesAllResolved: kind depends on placeholder_marker /
+        // forbid_deferred flags.
+        let mar = GateCheck::MilestonesAllResolved {
+            dir: std::path::PathBuf::from("docs/plan/DM3a"),
+            file_prefixes: vec!["impl-milestone-".to_string()],
+            placeholder_marker: None,
+            description: "all impl milestones resolved".to_string(),
+            forbid_deferred: false,
+        };
+        let out = gate_check_to_out(&mar);
+        assert_eq!(out.kind, "milestones-all-resolved");
+        assert_eq!(out.pattern.as_deref(), Some("impl-milestone-"));
+
+        let mar_detailed = GateCheck::MilestonesAllResolved {
+            dir: std::path::PathBuf::from("docs/plan/DM2c"),
+            file_prefixes: vec!["impl-milestone-".to_string()],
+            placeholder_marker: Some("<DETAIL_HERE>".to_string()),
+            description: "all impl milestones detailed".to_string(),
+            forbid_deferred: false,
+        };
+        assert_eq!(
+            gate_check_to_out(&mar_detailed).kind,
+            "milestones-all-detailed"
+        );
+
+        let mar_no_defer = GateCheck::MilestonesAllResolved {
+            dir: std::path::PathBuf::from("docs/plan/DM3a"),
+            file_prefixes: vec!["impl-milestone-".to_string()],
+            placeholder_marker: None,
+            description: "all impl milestones implemented".to_string(),
+            forbid_deferred: true,
+        };
+        assert_eq!(
+            gate_check_to_out(&mar_no_defer).kind,
+            "milestones-all-implemented"
+        );
+
+        // AnyExists: kind=any-exists; path is the | -joined list.
+        let ae = GateCheck::AnyExists {
+            paths: vec![
+                std::path::PathBuf::from("docs/critiques/DM0-critique.md"),
+                std::path::PathBuf::from("docs/critiques/DM0-critique.json"),
+            ],
+            description: "either critique file exists".to_string(),
+        };
+        let out = gate_check_to_out(&ae);
+        assert_eq!(out.kind, "any-exists");
+        assert!(out.path.as_deref().unwrap().contains(" | "));
+
+        // AnyMatches: kind=any-matches; path AND pattern set.
+        let am = GateCheck::AnyMatches {
+            paths: vec![std::path::PathBuf::from(
+                "docs/plan/DM3a/impl-milestone-01.md",
+            )],
+            pattern: "RESOLVED".to_string(),
+            description: "at least one milestone resolved".to_string(),
+        };
+        let out = gate_check_to_out(&am);
+        assert_eq!(out.kind, "any-matches");
+        assert_eq!(out.pattern.as_deref(), Some("RESOLVED"));
+    }
+
+    #[test]
+    fn bugs_cmd_list_with_empty_log_prints_summary_and_returns_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No .sim-flow/bug-log.jsonl on disk -> load_all returns [].
+        let r = bugs_cmd(
+            tmp.path(),
+            &crate::cli::BugsAction::List {
+                open: false,
+                resolved: false,
+                step: None,
+                category: None,
+            },
+        );
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn bugs_cmd_list_filters_by_open_resolved_step_category() {
+        use sim_flow::__internal::bug_log;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".sim-flow")).unwrap();
+
+        // Open one bug at DM0, category=correctness.
+        let id1 = bug_log::open(tmp.path(), "DM0", None, "correctness", "issue 1").unwrap();
+        // Open another at DM1, category=compile_error.
+        let _id2 = bug_log::open(tmp.path(), "DM1", None, "compile_error", "issue 2").unwrap();
+        // Resolve the first.
+        bug_log::resolve(tmp.path(), &id1, "fixed it", None).unwrap();
+
+        // Filter: only open.
+        let r = bugs_cmd(
+            tmp.path(),
+            &crate::cli::BugsAction::List {
+                open: true,
+                resolved: false,
+                step: None,
+                category: None,
+            },
+        );
+        assert!(r.is_ok());
+
+        // Filter: only resolved.
+        let r = bugs_cmd(
+            tmp.path(),
+            &crate::cli::BugsAction::List {
+                open: false,
+                resolved: true,
+                step: None,
+                category: None,
+            },
+        );
+        assert!(r.is_ok());
+
+        // Filter: step.
+        let r = bugs_cmd(
+            tmp.path(),
+            &crate::cli::BugsAction::List {
+                open: false,
+                resolved: false,
+                step: Some("DM1".to_string()),
+                category: None,
+            },
+        );
+        assert!(r.is_ok());
+
+        // Filter: category.
+        let r = bugs_cmd(
+            tmp.path(),
+            &crate::cli::BugsAction::List {
+                open: false,
+                resolved: false,
+                step: None,
+                category: Some("compile_error".to_string()),
+            },
+        );
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn bugs_cmd_show_renders_full_record_for_known_id() {
+        use sim_flow::__internal::bug_log;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".sim-flow")).unwrap();
+        let id = bug_log::open(
+            tmp.path(),
+            "DM2c",
+            Some("test-milestone-03"),
+            "test_failure",
+            "test_x panics on overflow",
+        )
+        .unwrap();
+        bug_log::append_event(
+            tmp.path(),
+            &id,
+            bug_log::BugEvent {
+                ts: "1700000000".to_string(),
+                kind: "hypothesis".to_string(),
+                rationale: Some("off-by-one in indexing".to_string()),
+                outcome: None,
+                message: None,
+            },
+        )
+        .unwrap();
+        bug_log::resolve(tmp.path(), &id, "fixed bounds check", None).unwrap();
+
+        let r = bugs_cmd(tmp.path(), &crate::cli::BugsAction::Show { id });
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn bugs_cmd_show_returns_state_error_for_unknown_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".sim-flow")).unwrap();
+        let r = bugs_cmd(
+            tmp.path(),
+            &crate::cli::BugsAction::Show {
+                id: "bug-999".to_string(),
+            },
+        );
+        let err = r.unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("bug-999"), "error should mention id: {msg}");
+    }
+
+    #[test]
+    fn prompt_scope_for_maps_each_variant() {
+        use sim_flow::__internal::prompts::PromptScope;
+        assert!(matches!(
+            prompt_scope_for(crate::cli::PromptScopeArg::Project),
+            PromptScope::Project
+        ));
+        assert!(matches!(
+            prompt_scope_for(crate::cli::PromptScopeArg::Global),
+            PromptScope::Global
+        ));
+    }
+
+    #[test]
     fn init_overwrites_existing_state_toml() {
         // Current contract: `sim-flow init` is unconditional --
         // running it on an existing project resets state.toml to
