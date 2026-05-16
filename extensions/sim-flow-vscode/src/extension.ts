@@ -355,6 +355,22 @@ function disposeAllResources(): void {
  * file watcher.
  */
 async function openDashboard(context: vscode.ExtensionContext): Promise<void> {
+  // Prefer the project the chat panel last anchored to so opening
+  // the dashboard never asks the user to re-pick what they're
+  // already working on. The chat panel writes
+  // `sim-flow.chatPanel.lastProjectDir` to workspaceState on every
+  // launch; if it's still a valid sim-flow project, use it
+  // verbatim and skip the picker entirely.
+  const remembered = context.workspaceState.get<string>(
+    "sim-flow.chatPanel.lastProjectDir",
+  );
+  if (
+    remembered &&
+    fs.existsSync(path.join(remembered, ".sim-flow", "state.toml"))
+  ) {
+    await openDashboardForProject(context, remembered);
+    return;
+  }
   const projectDir = await selectProjectDir();
   if (!projectDir) {
     return;
