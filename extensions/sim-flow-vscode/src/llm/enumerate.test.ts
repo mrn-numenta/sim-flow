@@ -121,4 +121,21 @@ describe("enumerateModels", () => {
     expect(result.models).toEqual([]);
     expect(result.emptyReason).toContain("no models");
   });
+
+  it("payload without a `.data` array is rejected as an unexpected shape", async () => {
+    const fakeFetch = (async () => jsonResponse({ items: [] })) as unknown as typeof fetch;
+    const result = await enumerateModels({ source: "lmstudio", fetchImpl: fakeFetch });
+    expect(result.models).toEqual([]);
+    expect(result.error).toContain("unexpected payload");
+  });
+
+  it("a network/fetch exception surfaces as `error` instead of throwing", async () => {
+    const fakeFetch = (async () => {
+      throw new Error("ECONNRESET");
+    }) as unknown as typeof fetch;
+    const result = await enumerateModels({ source: "lmstudio", fetchImpl: fakeFetch });
+    expect(result.models).toEqual([]);
+    expect(result.error).toContain("ECONNRESET");
+  });
+
 });

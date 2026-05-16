@@ -94,4 +94,73 @@ started = 2026-04-22T10:00:00Z
     expect(typeof state.started).toBe("string");
     expect(state.started).toContain("2026-04-22");
   });
+
+  it("rejects a non-table gate entry with a context-bearing parse error", () => {
+    // `gates.DM0 = "not a table"` -- parseGate must reject because
+    // the gate's body must be a TOML table, not a string.
+    const toml = `
+flow = "direct-modeling"
+current_step = "DM0"
+
+[gates]
+DM0 = "this should be a table"
+`;
+    try {
+      parseFlowStateText(toml);
+      throw new Error("expected parseFlowStateText to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(FlowStateParseError);
+      const msg = (err as Error).message;
+      // The error should name the failing path so users can find it.
+      expect(msg).toContain("DM0");
+    }
+  });
+
+  it("rejects an archived_gates value that is not a table", () => {
+    // `archived_gates` must be a table; a string here trips the
+    // top-level archived_gates type check.
+    const toml = `
+flow = "direct-modeling"
+current_step = "DM0"
+
+[gates]
+archived_gates = "wat"
+`;
+    // Note: this puts archived_gates UNDER [gates], which is its own
+    // shape error. The canonical not-a-table case has it at file root.
+    const tomlRoot = `
+flow = "direct-modeling"
+current_step = "DM0"
+
+[gates]
+
+archived_gates = "wat"
+`;
+    expect(() => parseFlowStateText(tomlRoot)).toThrowError(FlowStateParseError);
+    // The pure path that puts a string under [gates] should also fail
+    // (gates is supposed to be a table-of-gates).
+    expect(() => parseFlowStateText(toml)).toThrowError(FlowStateParseError);
+  });
+
+  it("rejects a per-candidate body that is not a table", () => {
+    // `gates.X.candidates.<cand>` must each be a table. Passing a
+    // string for a candidate trips parseGate via parseGateMap.
+    const toml = `
+flow = "direct-modeling"
+current_step = "DM5a"
+
+[gates.DM5a]
+passed = false
+
+[gates.DM5a.candidates]
+"mesh" = "not a table"
+`;
+    try {
+      parseFlowStateText(toml);
+      throw new Error("expected parseFlowStateText to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(FlowStateParseError);
+      expect((err as Error).message).toContain("mesh");
+    }
+  });
 });
