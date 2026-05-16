@@ -167,3 +167,120 @@ fn walk_files(start: &Path) -> Result<Vec<PathBuf>> {
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx<'a>(dir: &'a std::path::Path) -> ToolContext<'a> {
+        ToolContext::new(dir, None, None, None)
+    }
+
+    fn write(root: &std::path::Path, rel: &str, body: &str) {
+        let path = root.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, body).unwrap();
+    }
+
+    #[test]
+    fn missing_pattern_arg_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = SearchTool.invoke(&ctx(tmp.path()), &json!({})).unwrap();
+        assert!(!result.ok);
+        assert!(result.display.contains("missing `pattern`"));
+    }
+
+    #[test]
+    fn invalid_regex_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = SearchTool
+            .invoke(&ctx(tmp.path()), &json!({"pattern": "[unclosed"}))
+            .unwrap();
+        assert!(!result.ok);
+        assert!(result.display.contains("invalid regex"));
+    }
+
+    #[test]
+    fn search_finds_a_match_in_project_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(tmp.path(), "a.rs", "fn foo() {}\nfn bar() {}\n");
+        write(tmp.path(), "b.rs", "fn baz() {}\n");
+        let result = SearchTool
+            .invoke(&ctx(tmp.path()), &json!({"pattern": "fn foo"}))
+            .unwrap();
+        assert!(result.ok, "{}", result.display);
+        assert!(result.display.contains("a.rs"));
+        assert!(result.display.contains("fn foo()"));
+    }
+
+    #[test]
+    fn search_excludes_target_dir() {
+        // The project's `target/` is conventionally enormous and
+        // shouldn't appear in search hits. Walk filters it.
+        let tmp = tempfile::tempdir().unwrap();
+        write(tmp.path(), "src/a.rs", "needle here\n");
+        write(tmp.path(), "target/debug/deps/x.rs", "needle here\n");
+        let result = SearchTool
+            .invoke(&ctx(tmp.path()), &json!({"pattern": "needle"}))
+            .unwrap();
+        assert!(result.ok, "{}", result.display);
+        assert!(result.display.contains("src/a.rs"));
+        // target/ should not be walked.
+        assert!(
+            !result.display.contains("target/"),
+            "target/ should be excluded; got {}",
+            result.display
+        );
+    }
+
+    #[test]
+    fn search_path_arg_scopes_to_subdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(tmp.path(), "src/a.rs", "needle in src\n");
+        write(tmp.path(), "docs/b.md", "needle in docs\n");
+        let result = SearchTool
+            .invoke(
+                &ctx(tmp.path()),
+                &json!({"pattern": "needle", "path": "docs"}),
+            )
+            .unwrap();
+        assert!(result.ok, "{}", result.display);
+        assert!(result.display.contains("docs/b.md"));
+        assert!(!result.display.contains("src/a.rs"));
+    }
+
+    #[test]
+    fn search_returns_no_matches_message_when_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(tmp.path(), "a.txt", "hello\n");
+        let result = SearchTool
+            .invoke(
+                &ctx(tmp.path()),
+                &json!({"pattern": "won't-match-anything"}),
+            )
+            .unwrap();
+        assert!(result.ok);
+        assert!(
+            result.display.contains("0 hit")
+                || result.display.contains("(no matches)")
+                || result.display.contains("no matches"),
+            "expected zero-result message; got {}",
+            result.display
+        );
+    }
+
+    #[test]
+    fn search_lib_prefix_without_library_root_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = SearchTool
+            .invoke(
+                &ctx(tmp.path()),
+                &json!({"pattern": "x", "path": "lib:foo"}),
+            )
+            .unwrap();
+        assert!(!result.ok);
+        assert!(result.display.contains("not configured"));
+    }
+}
