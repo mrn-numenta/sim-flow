@@ -301,7 +301,21 @@ function applyPalette(): void {
  * listener survives morphdom rebuilds because it's bound to
  * `document`, not to any node morphdom owns.
  */
+let fileLinkDelegationInstalled = false;
+
 function installFileLinkDelegation(): void {
+  // Guard against double-install. The module-init call at the top of
+  // this file fires once per webview script load, and VS Code's
+  // `.html` reassignment for the experimental-UI toggle DOES rebuild
+  // the iframe in current versions -- but if a future webview surface
+  // ever re-evaluates the script without reloading the document, the
+  // delegated `click`/`keydown` listeners would multiply and each
+  // x-file-link click would fire `open-file` twice. The guard makes
+  // the install idempotent. See chat-panel audit #8 (2026-05-16).
+  if (fileLinkDelegationInstalled) {
+    return;
+  }
+  fileLinkDelegationInstalled = true;
   const activate = (target: EventTarget | null): boolean => {
     if (!(target instanceof Element)) {
       return false;
