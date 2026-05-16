@@ -129,13 +129,7 @@ scope and structure.
 
 ### Order, jumping, and deferring
 
-`docs/impl-plan/plan-management.md` is the source of truth for how to
-walk a plan: task states (`- [ ]` pending, `- [x]` done, `- [-]`
-deferred with `defer reason:` sub-bullet), how to handle
-out-of-order work (`order swap:` sub-bullet documenting why),
-and how to add work the plan missed (`added:` sub-bullet on a
-new `- [ ]` / `- [x]` row). Read it before starting; follow it
-strictly.
+{{ order_jumping_deferring }}
 4. **Payload types**: create Rust structs in `src/model/` derived
    from `data-movement.md`. Payload types live alongside the
    modules that produce and consume them.

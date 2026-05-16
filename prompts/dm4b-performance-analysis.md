@@ -127,12 +127,9 @@ Reference material (read on demand):
 
 ## Order, jumping, and deferring
 
-`docs/impl-plan/plan-management.md` is the source of truth: task
-states (`- [ ]` / `- [x]` / `- [-]` with `defer reason:`),
-out-of-order work (`order swap:` sub-bullet), and additions
-(`added:` sub-bullet). Read it before starting; the conventions
-apply to perf-milestone task rows the same way they apply to
-DM2c's implementation milestones.
+{{ order_jumping_deferring }} The conventions apply to
+perf-milestone task rows the same way they apply to DM2c's
+implementation milestones.
 
 DM4b-specific note: a deferred (`- [-]`) target-verification
 row is allowed only when the target is genuinely out of scope

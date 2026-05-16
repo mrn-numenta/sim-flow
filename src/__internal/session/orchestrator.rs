@@ -2727,6 +2727,16 @@ pub fn build_initial_messages(
         "pre_stop_hygiene".into(),
         prompts::load_template(&opts.foundation_root, "pre-stop-hygiene")?,
     );
+    // `{{ order_jumping_deferring }}` — the canonical
+    // pointer-to-plan-management.md paragraph every milestone-
+    // driven DMF step (DM2d, DM3b, DM3c, DM4b) needs near its
+    // procedure. Step-specific deferred-row notes (DM3c's
+    // coverage-threshold caveat, DM4b's target-row caveat) live
+    // in the prompt right after the splice.
+    template_context.insert(
+        "order_jumping_deferring".into(),
+        prompts::load_template(&opts.foundation_root, "order-jumping-deferring")?,
+    );
     let instruction_body = prompts::load_for_project_with_context(
         &opts.foundation_root,
         &opts.project_dir,

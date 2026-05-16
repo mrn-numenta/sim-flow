@@ -129,10 +129,7 @@ Do NOT chain milestones.
 
 ### Order, jumping, and deferring
 
-`docs/impl-plan/plan-management.md` is the source of truth: task
-states (`- [ ]` / `- [x]` / `- [-]` with `defer reason:`),
-out-of-order work (`order swap:` sub-bullet), and additions
-(`added:` sub-bullet). Read it before starting.
+{{ order_jumping_deferring }}
 
 DM3c-specific note: deferred (`- [-]`) rows count as resolved
 for milestone-completion, but they do NOT contribute to the

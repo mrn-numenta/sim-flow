@@ -124,10 +124,7 @@ Reference material (read on demand):
 
 ### Order, jumping, and deferring
 
-`docs/impl-plan/plan-management.md` is the source of truth: task
-states (`- [ ]` / `- [x]` / `- [-]` with `defer reason:`),
-out-of-order work (`order swap:` sub-bullet), and additions
-(`added:` sub-bullet). Read it before starting.
+{{ order_jumping_deferring }}
 
 ## Coding Requirements
 
