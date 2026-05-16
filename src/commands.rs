@@ -899,24 +899,6 @@ fn auto_cmd(
 /// macOS, `apt-get install verilator` on debian-likes, etc.) and
 /// picking wrong would surprise the user. Surfaces a warning to
 /// stderr so a fresh project setup catches the gap before SV3 runs.
-/// Resolve the effective `max_parallel_requests` knob: CLI flag wins
-/// when present, else the project's `.sim-flow/config.toml::[llm]`
-/// value, else 0. Surfaces a config-load failure as an error so a
-/// malformed TOML fails loud rather than silently falling back to
-/// the default (mirrors the rest of the orchestrator's config-load
-/// posture).
-fn resolve_max_parallel_requests(cli_value: Option<u32>, project: &Path) -> sim_flow::Result<u32> {
-    if let Some(v) = cli_value {
-        return Ok(v);
-    }
-    let dot = dot_dir(project);
-    if !dot.join(sim_flow::__internal::config::CONFIG_FILE).exists() {
-        return Ok(0);
-    }
-    let cfg = Config::load(&dot)?;
-    Ok(cfg.llm.max_parallel_requests)
-}
-
 fn probe_verilator_and_warn() {
     use sim_flow::__internal::preflight::{
         VerilatorStatus, probe_verilator, verilator_install_hint,
@@ -933,6 +915,24 @@ fn probe_verilator_and_warn() {
             );
         }
     }
+}
+
+/// Resolve the effective `max_parallel_requests` knob: CLI flag wins
+/// when present, else the project's `.sim-flow/config.toml::[llm]`
+/// value, else 0. Surfaces a config-load failure as an error so a
+/// malformed TOML fails loud rather than silently falling back to
+/// the default (mirrors the rest of the orchestrator's config-load
+/// posture).
+fn resolve_max_parallel_requests(cli_value: Option<u32>, project: &Path) -> sim_flow::Result<u32> {
+    if let Some(v) = cli_value {
+        return Ok(v);
+    }
+    let dot = dot_dir(project);
+    if !dot.join(sim_flow::__internal::config::CONFIG_FILE).exists() {
+        return Ok(0);
+    }
+    let cfg = Config::load(&dot)?;
+    Ok(cfg.llm.max_parallel_requests)
 }
 
 /// Ensure `cargo llvm-cov` is on PATH; install it (via `cargo
