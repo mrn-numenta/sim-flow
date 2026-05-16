@@ -739,34 +739,77 @@ pub fn tick_resolved_milestone_tasks(
         return 0;
     };
     let mut flipped = 0usize;
+    // Iterate via split_inclusive so each segment retains its
+    // original line ending (\n, \r\n, or the trailing slice with
+    // no terminator). The prior `body.lines()` strip + `join("\n")`
+    // re-emit silently converted CRLF files to LF -- breaks
+    // milestone files edited on Windows or by editors that
+    // preserve CRLF. See orchestrator audit #8 (2026-05-16).
     let new_body: String = body
-        .lines()
-        .map(|line| {
-            let trimmed = line.trim_start();
+        .split_inclusive('\n')
+        .map(|line_with_terminator| {
+            // Split off the trailing \r?\n so we mutate the
+            // content, not the terminator.
+            let (content, terminator) = split_line_terminator(line_with_terminator);
+            let trimmed = content.trim_start();
             if !trimmed.starts_with("- [ ]") {
-                return line.to_string();
+                return line_with_terminator.to_string();
             }
             let after = trimmed.trim_start_matches("- [ ]").trim_start();
             let Some(token) = first_backtick_token(after) else {
-                return line.to_string();
+                return line_with_terminator.to_string();
             };
             if !task_artifact_resolved(project_dir, token) {
-                return line.to_string();
+                return line_with_terminator.to_string();
             }
             flipped += 1;
-            line.replacen("- [ ]", "- [x]", 1)
+            let replaced = content.replacen("- [ ]", "- [x]", 1);
+            format!("{replaced}{terminator}")
         })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let new_body = if body.ends_with('\n') && !new_body.ends_with('\n') {
-        format!("{new_body}\n")
-    } else {
-        new_body
-    };
-    if flipped > 0 && std::fs::write(&path, new_body).is_err() {
+        .collect();
+    if flipped > 0 && write_milestone_atomic(&path, &new_body).is_err() {
         return 0;
     }
     flipped
+}
+
+/// Split `s` into (content, terminator) where terminator is one of
+/// "\r\n", "\n", or "" (no terminator on the final no-newline
+/// segment returned by `split_inclusive`).
+fn split_line_terminator(s: &str) -> (&str, &str) {
+    if let Some(stripped) = s.strip_suffix("\r\n") {
+        (stripped, "\r\n")
+    } else if let Some(stripped) = s.strip_suffix('\n') {
+        (stripped, "\n")
+    } else {
+        (s, "")
+    }
+}
+
+/// Atomic write: tempfile -> sync -> rename -> parent fsync. Same
+/// shape as state::write_atomic; inlined here to avoid coupling
+/// the steps module to state. Without atomicity a crash mid-write
+/// leaves a milestone file truncated and the auto loop can't
+/// resume cleanly. See orchestrator audit #8 (2026-05-16).
+fn write_milestone_atomic(path: &std::path::Path, body: &str) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let mut tmp_name = path
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    tmp_name.push(".tmp");
+    let tmp = path.with_file_name(tmp_name);
+    {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(body.as_bytes())?;
+        file.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)?;
+    if let Ok(dir) = std::fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
 }
 
 /// Pull the FIRST backtick-quoted token from `s`. Returns the inner
