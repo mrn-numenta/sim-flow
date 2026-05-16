@@ -555,4 +555,70 @@ mod tests {
         // Trivial guard against accidental edits to the vLLM default.
         assert_eq!(VLLM_DEFAULT_BASE_URL, "http://localhost:8000/v1");
     }
+
+    #[test]
+    fn yes_no_returns_yes_and_no_strings() {
+        assert_eq!(yes_no(true), "yes");
+        assert_eq!(yes_no(false), "no");
+    }
+
+    #[test]
+    fn resolved_base_url_anthropic_only_honors_generic_base() {
+        // No generic -> None (constructor substitutes api.anthropic.com).
+        assert_eq!(
+            resolved_base_url("anthropic", &cfg(None, None, None, None)),
+            None,
+        );
+        // Generic set -> returned verbatim.
+        assert_eq!(
+            resolved_base_url("anthropic", &cfg(Some("http://proxy"), None, None, None)).as_deref(),
+            Some("http://proxy"),
+        );
+        // anthropic-api alias maps identically.
+        assert_eq!(
+            resolved_base_url(
+                "anthropic-api",
+                &cfg(Some("http://proxy"), None, None, None)
+            )
+            .as_deref(),
+            Some("http://proxy"),
+        );
+        // The legacy per-backend openai/ollama fields are ignored.
+        assert_eq!(
+            resolved_base_url(
+                "anthropic",
+                &cfg(None, Some("http://o"), Some("http://oai"), None)
+            ),
+            None,
+        );
+    }
+
+    #[test]
+    fn resolved_base_url_vllm_falls_back_to_default_when_no_overrides() {
+        let r = resolved_base_url("vllm", &cfg(None, None, None, None));
+        assert_eq!(r.as_deref(), Some(VLLM_DEFAULT_BASE_URL));
+        // openai_base_url override wins over the default.
+        let r = resolved_base_url("vllm", &cfg(None, None, Some("http://prox:1234/v1"), None));
+        assert_eq!(r.as_deref(), Some("http://prox:1234/v1"));
+        // Generic --llm-base-url wins over everything.
+        let r = resolved_base_url(
+            "vllm",
+            &cfg(Some("http://gen"), None, Some("http://lega"), None),
+        );
+        assert_eq!(r.as_deref(), Some("http://gen"));
+    }
+
+    #[test]
+    fn build_cli_agent_returns_none_for_unknown_backend() {
+        let cfg = AgentConfig {
+            model: None,
+            model_family_id: None,
+            runtime_profile_id: None,
+            debug_adaptation: false,
+            base_url: None,
+            ollama_base_url: None,
+            openai_base_url: None,
+        };
+        assert!(build_cli_agent("not-a-real-backend", cfg).is_none());
+    }
 }
