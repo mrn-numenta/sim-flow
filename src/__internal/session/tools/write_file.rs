@@ -176,18 +176,27 @@ impl Tool for WriteFileTool {
                 parent.display()
             )));
         }
+        // When the agent writes a critique JSON, render the markdown
+        // sibling AFTER the JSON write -- but roll the JSON write
+        // back if render fails. Previously the JSON was committed
+        // and render failure left a half-state (gate would act on
+        // the JSON findings on the next evaluation, but the
+        // dashboard had no .md to display). Now we either commit
+        // BOTH files atomically or neither. See orchestrator audit
+        // #13 (2026-05-16).
         match std::fs::write(&abs, content.as_bytes()) {
             Ok(()) => {
-                // Render the critique markdown sibling when the
-                // agent writes a critique JSON. Mirrors the
-                // fenced-block path in `orchestrator::write_artifact`
-                // so both write surfaces produce both files.
                 if crate::critique::is_critique_json_path(&path)
                     && let Err(err) =
                         crate::critique::render_critique_markdown_to_disk(ctx.project_dir, &path)
                 {
+                    // Roll back the JSON write so we don't leave a
+                    // half-state on disk for the gate to read.
+                    // Best-effort -- if the unlink fails the user
+                    // still has a clear diagnostic naming the file.
+                    let _ = std::fs::remove_file(&abs);
                     return Ok(ToolResult::err(format!(
-                        "write_file: critique JSON written to `{path}` but markdown render failed: {err}"
+                        "write_file: critique markdown render failed for `{path}`: {err}. Rolled back the JSON write so the gate doesn't act on an unrendered critique."
                     )));
                 }
                 if let Some(step_id) = ctx.step_id {
