@@ -225,10 +225,24 @@ pub fn resolve_api_key(provider: Provider) -> Result<Option<KeyResolution>> {
     }))
 }
 
-#[derive(Debug, Clone)]
+/// Wrapper for a resolved API key. `Debug` is implemented by hand
+/// to print `"<redacted>"` instead of the raw secret -- any
+/// accidental `tracing::debug!("{:?}", resolution)`, `panic!`,
+/// `dbg!`, or test-failure print would otherwise leak the key
+/// into logs. See orchestrator audit #16 (2026-05-16).
+#[derive(Clone)]
 pub struct KeyResolution {
     pub key: String,
     pub source: KeySource,
+}
+
+impl std::fmt::Debug for KeyResolution {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeyResolution")
+            .field("key", &"<redacted>")
+            .field("source", &self.source)
+            .finish()
+    }
 }
 
 /// Persist `key` to the user's credentials file under `provider`'s
