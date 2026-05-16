@@ -250,14 +250,14 @@ function buildShell(): Node[] {
  * the chat panel webview doesn't currently load.
  */
 const TOGGLE_BUBBLES_COLLAPSE_SVG = `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1" stroke-linejoin="round">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1" stroke-linejoin="round">
   <rect x="1.5" y="1.5" width="9" height="9"/>
   <rect x="5.5" y="5.5" width="9" height="9" fill="var(--vscode-editor-background)"/>
   <line x1="7.5" y1="10" x2="12.5" y2="10"/>
 </svg>`;
 
 const TOGGLE_BUBBLES_EXPAND_SVG = `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1" stroke-linejoin="round">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1" stroke-linejoin="round">
   <rect x="1.5" y="1.5" width="9" height="9"/>
   <rect x="5.5" y="5.5" width="9" height="9" fill="var(--vscode-editor-background)"/>
   <line x1="7.5" y1="10" x2="12.5" y2="10"/>
@@ -269,7 +269,7 @@ const TOGGLE_BUBBLES_EXPAND_SVG = `
  * inline SVG so we don't need to load the codicon font.
  */
 const SETTINGS_GEAR_SVG = `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round">
   <circle cx="8" cy="8" r="2.2"/>
   <path d="M8 1.5v2 M8 12.5v2 M1.5 8h2 M12.5 8h2 M3.5 3.5l1.4 1.4 M11.1 11.1l1.4 1.4 M3.5 12.5l1.4-1.4 M11.1 4.9l1.4-1.4"/>
 </svg>`;
