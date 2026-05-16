@@ -187,21 +187,52 @@ impl State {
     }
 }
 
+/// Crash-safe atomic write: open temp file, write all bytes,
+/// `fsync(tmp)`, rename(tmp, dest), `fsync(parent_dir)`. Without
+/// these fsyncs the kernel can lose either the file contents OR
+/// the rename's directory-entry update across a power loss /
+/// host crash, leaving `state.toml` truncated, empty, or missing
+/// on the next boot -- and the orchestrator exits at start because
+/// the gate map / current_step was lost. See orchestrator audit
+/// #1 (2026-05-16).
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write as _;
+
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent).map_err(|source| Error::Io {
         path: parent.to_path_buf(),
         source,
     })?;
     let tmp = tmp_path(path);
-    std::fs::write(&tmp, bytes).map_err(|source| Error::Io {
-        path: tmp.clone(),
-        source,
-    })?;
+    // Open + write + sync the tempfile explicitly so the file
+    // contents hit disk before we rename. `std::fs::write` doesn't
+    // call fsync.
+    {
+        let mut file = std::fs::File::create(&tmp).map_err(|source| Error::Io {
+            path: tmp.clone(),
+            source,
+        })?;
+        file.write_all(bytes).map_err(|source| Error::Io {
+            path: tmp.clone(),
+            source,
+        })?;
+        file.sync_all().map_err(|source| Error::Io {
+            path: tmp.clone(),
+            source,
+        })?;
+    }
     std::fs::rename(&tmp, path).map_err(|source| Error::Io {
         path: path.to_path_buf(),
         source,
     })?;
+    // Sync the parent directory so the rename's directory-entry
+    // update is durable. Without this, a crash after the rename
+    // returned can still leave the dirent pointing at the old
+    // file (or no file). On platforms where opening a directory
+    // for fsync is unsupported, we silently skip -- best effort.
+    if let Ok(dir) = std::fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
     Ok(())
 }
 
