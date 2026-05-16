@@ -440,6 +440,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       case "reset-step":
         await this.resetCurrentStep();
         return;
+      case "open-dashboard":
+        await vscode.commands.executeCommand("sim-flow.openDashboard");
+        return;
       case "reset-step-pick":
         await this.resetFromEarlierStep();
         return;

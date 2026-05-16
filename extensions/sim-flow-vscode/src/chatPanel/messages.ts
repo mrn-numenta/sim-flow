@@ -206,6 +206,12 @@ export type WebviewMessage =
    */
   | { type: "reset-step" }
   /**
+   * Open the sim-flow dashboard for the chat panel's current
+   * project. Sent from the dashboard icon in the toolbar's right
+   * zone.
+   */
+  | { type: "open-dashboard" }
+  /**
    * Open the "reset from earlier step" picker. The host shows a
    * QuickPick of previously-completed steps (gate.passed === true);
    * selecting one resets that step AND every step after it in the

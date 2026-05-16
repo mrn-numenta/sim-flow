@@ -168,30 +168,18 @@ body {
   padding: 2px 6px;
 }
 
-/* End-session button: small power-glyph button in the centre zone.
- * Tinted in the error palette on hover so the click reads as
- * destructive ("disconnect + terminate"), distinguishing it from
- * the composer's Stop ■ (which only cancels the current activity). */
+/* End-session button: lives inside `.x-llm-group` so it reads as
+ * fused with the LLM status pill (shared colour, no gap). Drops
+ * the fixed 22x22 box in favour of the same `2px 8px` padding the
+ * rest of the toolbar buttons use so all toolbar items end up the
+ * same effective height. */
 .x-toolbar-end-session {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  font-size: 13px;
-  line-height: 1;
-  color: var(--x-muted);
+  padding: 2px 8px;
   border-radius: 4px;
-}
-
-.x-toolbar-end-session:hover {
-  color: var(--vscode-errorForeground, #d2522d);
-  background: color-mix(
-    in srgb,
-    var(--vscode-errorForeground, #d2522d) 18%,
-    transparent
-  );
+  line-height: 1;
 }
 
 /* Settings popover: a <details>-based dropdown anchored at the
@@ -272,44 +260,107 @@ body {
   );
 }
 
-/* LLM connection indicator. Renders as a small status pill; the
- * leading character (● / ○) is part of the textContent so the
- * indicator stays legible if CSS fails to load. Three colour
- * states track no-session / ready / working. */
+/* LLM connection indicator fused with the end-session button. The
+ * wrapping group sets the shared colour family via a state class
+ * (offline / ready / working) and zeroes out the inner border
+ * between the two children so they read as one continuous pill. */
+.x-llm-group {
+  display: inline-flex;
+  align-items: stretch;
+  border-radius: 4px;
+  /* The border lives on the group so it wraps both children as a
+   * single outline; per-state colours below override. */
+  border: 1px solid var(--x-border);
+  overflow: hidden;
+}
+
+.x-llm-group > .x-toolbar-end-session,
+.x-llm-group > .x-toolbar-llm {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.x-llm-group > .x-toolbar-end-session {
+  border-right: 1px solid var(--x-border);
+}
+
 .x-toolbar-llm {
   display: inline-flex;
   align-items: center;
   font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 4px;
+  padding: 2px 8px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 260px;
+  line-height: 1;
 }
 
-.x-toolbar-llm.x-llm-offline {
-  color: var(--x-muted);
+/* No-session: dashed outline, muted ink. End-session button is
+ * hidden in this state -- there's no session to end. */
+.x-llm-group.x-llm-offline {
   background: transparent;
-  border: 1px dashed var(--x-border);
+  border-style: dashed;
+}
+.x-llm-group.x-llm-offline .x-toolbar-llm,
+.x-llm-group.x-llm-offline .x-toolbar-end-session {
+  color: var(--x-muted);
 }
 
-.x-toolbar-llm.x-llm-ready {
-  color: color-mix(in srgb, var(--x-palette-output) 70%, var(--vscode-foreground));
+/* Ready: tinted in the output palette so the user can see the
+ * connection is live without a working animation. */
+.x-llm-group.x-llm-ready {
   background: color-mix(in srgb, var(--x-palette-output) 14%, var(--vscode-editor-background));
-  border: 1px solid color-mix(in srgb, var(--x-palette-output) 36%, transparent);
+  border-color: color-mix(in srgb, var(--x-palette-output) 36%, transparent);
+}
+.x-llm-group.x-llm-ready .x-toolbar-end-session {
+  border-right-color: color-mix(in srgb, var(--x-palette-output) 36%, transparent);
+}
+.x-llm-group.x-llm-ready .x-toolbar-llm,
+.x-llm-group.x-llm-ready .x-toolbar-end-session {
+  color: color-mix(in srgb, var(--x-palette-output) 70%, var(--vscode-foreground));
 }
 
-.x-toolbar-llm.x-llm-working {
-  color: var(--vscode-foreground);
+/* Working: stronger tint + pulsing animation. End-session shares
+ * the same active colour so the pair stays visually fused. */
+.x-llm-group.x-llm-working {
   background: color-mix(in srgb, var(--x-palette-output) 28%, var(--vscode-editor-background));
-  border: 1px solid var(--x-palette-output);
+  border-color: var(--x-palette-output);
   animation: x-llm-pulse 1.4s ease-in-out infinite;
+}
+.x-llm-group.x-llm-working .x-toolbar-end-session {
+  border-right-color: var(--x-palette-output);
+}
+.x-llm-group.x-llm-working .x-toolbar-llm,
+.x-llm-group.x-llm-working .x-toolbar-end-session {
+  color: var(--vscode-foreground);
+}
+
+/* Hover on the end-session half: subtle white overlay (kept
+ * neutral so it doesn't shout red at a click that's also offered
+ * by the toolbar's lighter ⏻ glyph button -- both gestures end
+ * the session, the colour cue is already established by the pill
+ * state). */
+.x-llm-group > .x-toolbar-end-session:hover {
+  background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
 }
 
 @keyframes x-llm-pulse {
   0%, 100% { opacity: 0.85; }
   50% { opacity: 1; }
+}
+
+/* Dashboard button: icon-only, matches bubble-toggle sizing so the
+ * three icon buttons (bubble-toggle, dashboard, settings gear)
+ * land at the same effective height. */
+.x-toolbar-dashboard {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  line-height: 1;
+  color: var(--vscode-foreground);
 }
 
 .x-loading {
@@ -656,8 +707,15 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* Thin border wraps the whole bottom-controls section -- the
+   * textarea row + the meta row (Reset / Continue / step state /
+   * Mode) -- so the cluster reads as one unit visually separate
+   * from the transcript above it. Outer margin keeps a little air
+   * between the border and the panel edge. */
+  margin: 0 8px 8px;
   padding: 8px 12px 10px;
-  border-top: 1px solid var(--x-border);
+  border: 1px solid var(--x-border);
+  border-radius: 6px;
   background: var(--vscode-editor-background);
 }
 

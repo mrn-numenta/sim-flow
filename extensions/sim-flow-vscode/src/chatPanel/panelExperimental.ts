@@ -327,58 +327,78 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   });
   leftZone.appendChild(projectBtn);
 
-  // ---- CENTER: end-session button + LLM status + total tokens ----
+  // ---- CENTER: end-session + LLM status, fused into one pill ----
 
-  // Small power button that fully terminates the session: cancel,
-  // shutdown, escalate. Distinct from the composer's Stop ■ which
-  // only cancels the current activity. Visible only when a pump is
-  // attached -- if there's no session there's nothing to end.
+  // The end-session button and the LLM status pill are presented
+  // as one visual unit so the user reads them as "this control
+  // belongs to that connection." Same border, same colour family
+  // (offline / ready / working), no gap between them. The state
+  // class on the wrapping group drives the shared palette.
+  const llmGroup = div("x-llm-group");
+  let stateClass: "x-llm-offline" | "x-llm-ready" | "x-llm-working";
+  let statusGlyph: string;
+  let statusText: string;
+  let statusTitle: string;
+  if (!state.sessionActive) {
+    stateClass = "x-llm-offline";
+    statusGlyph = "○";
+    statusText = "No session";
+    statusTitle =
+      "No sim-flow pump is anchored to this project. Click \"Start session\" to start one.";
+  } else if (state.isStreaming) {
+    stateClass = "x-llm-working";
+    statusGlyph = "●";
+    statusText = `Working · ${state.sourceLabel}`;
+    statusTitle = `sim-flow is talking to ${state.sourceLabel} right now.`;
+  } else {
+    stateClass = "x-llm-ready";
+    statusGlyph = "●";
+    statusText = `Ready · ${state.sourceLabel}`;
+    statusTitle = `Pump is connected; ${state.sourceLabel} will be called on the next sub-session.`;
+  }
+  llmGroup.classList.add(stateClass);
+
   if (state.sessionActive) {
     const endBtn = document.createElement("button");
     endBtn.type = "button";
     endBtn.className = "x-toolbar-end-session";
-    endBtn.textContent = "⏻";
+    endBtn.innerHTML = `<i class="codicon codicon-debug-disconnect" aria-hidden="true"></i>`;
     endBtn.setAttribute("aria-label", "End session");
     endBtn.title =
       "End the sim-flow session: disconnect from the LLM and terminate the orchestrator.";
     endBtn.addEventListener("click", () => {
       send({ type: "end-session" });
     });
-    centerZone.appendChild(endBtn);
+    llmGroup.appendChild(endBtn);
   }
 
   const llmStatus = document.createElement("span");
   llmStatus.className = "x-toolbar-llm";
-  if (!state.sessionActive) {
-    llmStatus.classList.add("x-llm-offline");
-    llmStatus.textContent = "○ No session";
-    llmStatus.title =
-      "No sim-flow pump is anchored to this project. Click \"Start session\" to start one.";
-  } else if (state.isStreaming) {
-    llmStatus.classList.add("x-llm-working");
-    llmStatus.textContent = `● Working · ${state.sourceLabel}`;
-    llmStatus.title = `sim-flow is talking to ${state.sourceLabel} right now.`;
-  } else {
-    llmStatus.classList.add("x-llm-ready");
-    llmStatus.textContent = `● Ready · ${state.sourceLabel}`;
-    llmStatus.title = `Pump is connected; ${state.sourceLabel} will be called on the next sub-session.`;
-  }
-  centerZone.appendChild(llmStatus);
+  llmStatus.textContent = `${statusGlyph} ${statusText}`;
+  llmStatus.title = statusTitle;
+  llmGroup.appendChild(llmStatus);
+  centerZone.appendChild(llmGroup);
 
-  const totals = document.createElement("span");
-  totals.className = "x-toolbar-tokens";
-  const upTotal = state.totalInputTokensEstimate;
-  const downTotal = state.totalOutputTokensEstimate;
-  totals.textContent = `↑ ${formatTokens(upTotal)}  ↓ ${formatTokens(downTotal)}`;
-  totals.title = `Approximately ${upTotal} tokens sent to the LLM and ${downTotal} tokens received in this conversation.`;
-  centerZone.appendChild(totals);
+  // ---- RIGHT: dashboard + settings + total tokens ----
 
-  // ---- RIGHT: settings gear (palette select + future settings) ----
+  // Dashboard button: opens the sim-flow dashboard for the chat
+  // panel's current project (no picker; host reads the same
+  // remembered project the chat panel itself is anchored to).
+  const dashboardBtn = document.createElement("button");
+  dashboardBtn.type = "button";
+  dashboardBtn.className = "x-toolbar-dashboard";
+  dashboardBtn.innerHTML = `<i class="codicon codicon-dashboard" aria-hidden="true"></i>`;
+  dashboardBtn.setAttribute("aria-label", "Open dashboard");
+  dashboardBtn.title =
+    "Open the sim-flow dashboard for the current project.";
+  dashboardBtn.addEventListener("click", () => {
+    send({ type: "open-dashboard" });
+  });
+  rightZone.appendChild(dashboardBtn);
 
-  // <details>-based popover. Clicking the gear toggles `open` and
-  // the panel inside is absolutely-positioned via CSS so it floats
-  // over the transcript instead of pushing other toolbar items
-  // around.
+  // Settings gear: <details>-based popover. Clicking the gear
+  // toggles `open` and the panel inside is absolutely-positioned
+  // via CSS so opening it doesn't shift the rest of the toolbar.
   const settings = document.createElement("details");
   settings.className = "x-toolbar-settings";
   const settingsSummary = document.createElement("summary");
@@ -416,6 +436,18 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
 
   settings.appendChild(settingsPanel);
   rightZone.appendChild(settings);
+
+  // Total token counts on the far right edge of the toolbar so
+  // they sit directly above the per-bubble ↑/↓ counts inside the
+  // transcript summaries.
+  const totals = document.createElement("span");
+  totals.className = "x-toolbar-tokens";
+  const upTotal = state.totalInputTokensEstimate;
+  const downTotal = state.totalOutputTokensEstimate;
+  totals.textContent = `↑ ${formatTokens(upTotal)}  ↓ ${formatTokens(downTotal)}`;
+  totals.title =
+    `Approximately ${upTotal} tokens sent to the LLM and ${downTotal} tokens received in this conversation.`;
+  rightZone.appendChild(totals);
 
   root.append(leftZone, centerZone, rightZone);
   return root;
