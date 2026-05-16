@@ -25,8 +25,17 @@ import {
 import { AutoSessionManager } from "./chatPanel/autoSessionManager";
 import { cleanupStalePidsAsync } from "./session/processRegistry";
 import { DashboardHost } from "./webview/host";
-import { cliBackendArgFor, isTerminalLlmSource, type LlmSourceTag } from "./webview/messages";
+import { type LlmSourceTag } from "./webview/messages";
 import { PerfPanelHost } from "./perfPanel/host";
+import { attachWatcherCommand } from "./extension/attachWatcher";
+import { dumpAvailableLmModels, testLmModel } from "./extension/lmStudio";
+import {
+  runFlowChatCommand,
+  runFlowInTerminal,
+  runFullyAutomatedInTerminal,
+  runStepCommand,
+  type StepRunnerDeps,
+} from "./extension/stepRunner";
 
 const dashboardHosts = new Map<string, DashboardHost>();
 const perfPanelHosts = new Map<string, PerfPanelHost>();
@@ -83,39 +92,51 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand("sim-flow.openPerfPanel", () => openPerfPanel(context)),
     vscode.commands.registerCommand("sim-flow.runStep", (step: unknown, projectDir?: unknown) =>
-      runStepCommand(step, "runStep", asString(projectDir)),
+      runStepCommand(stepRunnerDeps(), step, "runStep", asString(projectDir)),
     ),
     vscode.commands.registerCommand("sim-flow.runCritique", (step: unknown, projectDir?: unknown) =>
-      runStepCommand(step, "runCritique", asString(projectDir)),
+      runStepCommand(stepRunnerDeps(), step, "runCritique", asString(projectDir)),
     ),
     vscode.commands.registerCommand(
       "sim-flow.runFlow",
       (specPath?: unknown, projectDir?: unknown) =>
-        runFlowChatCommand(asString(specPath), asString(projectDir)),
+        runFlowChatCommand(stepRunnerDeps(), asString(specPath), asString(projectDir)),
     ),
     vscode.commands.registerCommand(
       "sim-flow.runFlowTerminal",
       (backend?: unknown, specPath?: unknown, projectDir?: unknown) =>
-        runFlowInTerminal(asString(backend), asString(specPath), asString(projectDir)),
+        runFlowInTerminal(
+          stepRunnerDeps(),
+          asString(backend),
+          asString(specPath),
+          asString(projectDir),
+        ),
     ),
     vscode.commands.registerCommand(
       "sim-flow.runAutoFullyAutomatedTerminal",
       (backend?: unknown, specPath?: unknown, projectDir?: unknown) =>
         runFullyAutomatedInTerminal(
+          stepRunnerDeps(),
           asString(backend),
           asString(specPath),
           asString(projectDir),
         ),
     ),
     vscode.commands.registerCommand("sim-flow.resetStep", (step: unknown, projectDir?: unknown) =>
-      runStepCommand(step, "resetStep", asString(projectDir)),
+      runStepCommand(stepRunnerDeps(), step, "resetStep", asString(projectDir)),
     ),
     vscode.commands.registerCommand("sim-flow.setApiKey", () => setApiKey(context)),
     vscode.commands.registerCommand("sim-flow.clearApiKey", () => clearApiKey(context)),
     vscode.commands.registerCommand("sim-flow.dumpAvailableLmModels", () =>
       dumpAvailableLmModels(),
     ),
-    vscode.commands.registerCommand("sim-flow.attachWatcher", () => attachWatcherCommand()),
+    vscode.commands.registerCommand("sim-flow.attachWatcher", () =>
+      attachWatcherCommand({
+        chatPanelProvider,
+        openDashboardForProject: (projectDir) =>
+          openDashboardForProject(globalContext(), projectDir),
+      }),
+    ),
     vscode.commands.registerCommand("sim-flow.testLmModel", () => testLmModel(context)),
     vscode.commands.registerCommand("sim-flow.switchProject", () => switchProjectCommand(context)),
     vscode.commands.registerCommand(
@@ -156,149 +177,12 @@ async function openChatPanel(): Promise<void> {
 }
 
 /**
- * `sim-flow: Attach to Running Watcher` command. Discovers
- * orchestrators that have a `--watch-socket` observer surface
- * bound (via `sim-flow watchers list --json`), shows a quick-pick
- * with project / pid / model context, and on selection opens a
- * VS Code terminal that streams the JSONL events from the chosen
- * socket using `nc -U`. The terminal is read-only-ish: anything
- * the user types is silently dropped on the orchestrator side
- * (the EventTap ignores observer input).
- *
- * Lightweight by design -- no new pump, no new webview. The
- * dashboard's full "watch alongside the test" UI can build on
- * the same `watchers list` discovery later.
- */
-async function attachWatcherCommand(): Promise<void> {
-  const cliBinary = (() => {
-    try {
-      const setting = vscode.workspace
-        .getConfiguration("sim-flow")
-        .get<string>("binaryPath");
-      return resolveBinary({
-        settingOverride: setting,
-        bundledCandidates,
-      });
-    } catch (err) {
-      void vscode.window.showErrorMessage(
-        `sim-flow: cannot resolve sim-flow binary: ${
-          (err as Error).message ?? String(err)
-        }`,
-      );
-      return undefined;
-    }
-  })();
-  if (!cliBinary) {
-    return;
-  }
-
-  const { execFile } = await import("node:child_process");
-  const stdout = await new Promise<string>((resolve, reject) => {
-    execFile(
-      cliBinary,
-      ["watchers", "list", "--json"],
-      { encoding: "utf8" },
-      (err, out) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        resolve(out);
-      },
-    );
-  }).catch((err) => {
-    void vscode.window.showErrorMessage(
-      `sim-flow: \`watchers list\` failed: ${err.message ?? String(err)}`,
-    );
-    return undefined;
-  });
-  if (stdout === undefined) {
-    return;
-  }
-
-  let entries: WatcherEntry[];
-  try {
-    entries = JSON.parse(stdout) as WatcherEntry[];
-  } catch (err) {
-    void vscode.window.showErrorMessage(
-      `sim-flow: malformed JSON from \`watchers list\`: ${
-        (err as Error).message ?? String(err)
-      }`,
-    );
-    return;
-  }
-
-  if (entries.length === 0) {
-    void vscode.window.showInformationMessage(
-      "sim-flow: no live watchers. Start an orchestrator with `sim-flow auto --watch-socket <path>` (or pass `--watch-socket` through `e2e_manual` / your launcher of choice) to make it discoverable here.",
-    );
-    return;
-  }
-
-  const items: (vscode.QuickPickItem & { entry: WatcherEntry })[] = entries.map(
-    (e) => ({
-      label: `pid ${e.pid} · ${path.basename(e.project_dir)}`,
-      description: e.llm_model
-        ? `${e.llm_backend}/${e.llm_model}`
-        : e.llm_backend,
-      detail: `${e.project_dir} · ${e.socket_path}`,
-      entry: e,
-    }),
-  );
-
-  const picked = await vscode.window.showQuickPick(items, {
-    title: "Attach to running sim-flow watcher",
-    placeHolder: "Pick the orchestrator to observe (read-only)",
-    matchOnDescription: true,
-    matchOnDetail: true,
-  });
-  if (!picked) {
-    return;
-  }
-
-  // Hand the chosen watcher off to the chat-panel provider so it
-  // attaches a viewer SocketSessionPump (read-only) and the
-  // dashboard's onActiveSessionChanged hook refreshes per-step
-  // button gating + chat-panel composer state.
-  //
-  // Canonicalize the project path BEFORE handing it off. Reason:
-  // VS Code's `vscode.window.activeTextEditor.document.uri.fsPath`
-  // resolves macOS `/tmp -> /private/tmp` symlinks (and similar on
-  // other platforms), so the chat-panel's per-message project
-  // resolver returns the realpath. The watcher registry, however,
-  // stores whatever string the orchestrator was launched with --
-  // typically `/tmp/...` raw. If we don't canonicalize here, the
-  // chat panel's `activePump.projectDir === context.projectDir`
-  // check fails and the panel shows OFFLINE with the live viewer
-  // pump invisible to it.
-  if (!chatPanelProvider) {
-    void vscode.window.showErrorMessage(
-      "sim-flow: chat panel not initialised; viewer attach unavailable.",
-    );
-    return;
-  }
-  const canonProjectDir = canonicalizePath(picked.entry.project_dir);
-  await chatPanelProvider.attachWatcherSession({
-    socketPath: picked.entry.socket_path,
-    projectDir: canonProjectDir,
-    pid: picked.entry.pid,
-    llmBackend: picked.entry.llm_backend,
-    llmModel: picked.entry.llm_model,
-  });
-  // Also reveal the dashboard for that project so the user sees
-  // step / critique / gate state alongside the chat panel. Use the
-  // canonical path here too so the new DashboardHost's
-  // `options.projectDir` matches the activePump's record.
-  await openDashboardForProject(globalContext(), canonProjectDir);
-}
-
-/**
  * Resolve symlinks (`fs.realpath`) so the path matches whatever
  * `vscode.window.activeTextEditor.document.uri.fsPath` produces for
  * a file under it. Falls back to the input on error (e.g. the
- * directory was just removed) -- viewer attach will still proceed
- * but the chat panel may render OFFLINE because of the path
- * mismatch.
+ * directory was just removed) -- the dashboard open call will still
+ * proceed but its `options.projectDir` may not match the chat
+ * panel's record.
  */
 function canonicalizePath(p: string): string {
   try {
@@ -308,14 +192,6 @@ function canonicalizePath(p: string): string {
   }
 }
 
-interface WatcherEntry {
-  pid: number;
-  socket_path: string;
-  project_dir: string;
-  started_at: string;
-  llm_backend: string;
-  llm_model: string | null;
-}
 
 function disposeAllResources(): void {
   for (const host of dashboardHosts.values()) {
@@ -865,255 +741,6 @@ async function renameProjectCommand(
  * - `resetStep` runs the fast one-shot `sim-flow reset <step>` in
  *   the shared terminal; the file watcher refreshes the dashboard.
  */
-async function runStepCommand(
-  step: unknown,
-  kind: "runStep" | "runCritique" | "resetStep",
-  projectDirHint: string | undefined,
-): Promise<void> {
-  if (typeof step !== "string" || step.trim().length === 0) {
-    await vscode.window.showErrorMessage(`sim-flow: ${kind} needs a step id (e.g. "DM0").`);
-    return;
-  }
-  const source = (vscode.workspace.getConfiguration("sim-flow").get<string>("llm.source") ??
-    "vscode") as LlmSourceTag;
-  switch (kind) {
-    case "runStep":
-      if (isTerminalLlmSource(source)) {
-        await runStepInTerminal(step, "work", source, projectDirHint);
-        return;
-      }
-      if (usesBuiltInChatSurface(source)) {
-        await openChatForStep(step, "work", projectDirHint);
-        return;
-      }
-      if (await tryLaunchStepInChatPanel(step, "work", projectDirHint)) {
-        return;
-      }
-      await openChatForStep(step, "work", projectDirHint);
-      return;
-    case "runCritique":
-      if (isTerminalLlmSource(source)) {
-        await runStepInTerminal(step, "critique", source, projectDirHint);
-        return;
-      }
-      if (usesBuiltInChatSurface(source)) {
-        await openChatForStep(step, "critique", projectDirHint);
-        return;
-      }
-      if (await tryLaunchStepInChatPanel(step, "critique", projectDirHint)) {
-        return;
-      }
-      await openChatForStep(step, "critique", projectDirHint);
-      return;
-    case "resetStep":
-      await runCliInTerminal(["reset", step], projectDirHint);
-      return;
-  }
-}
-
-async function tryLaunchStepInChatPanel(
-  step: string,
-  kind: "work" | "critique",
-  projectDirHint: string | undefined,
-): Promise<boolean> {
-  const source = (vscode.workspace.getConfiguration("sim-flow").get<string>("llm.source") ??
-    "vscode") as LlmSourceTag;
-  if (isTerminalLlmSource(source) || !chatPanelProvider) {
-    return false;
-  }
-  await chatPanelProvider.launchStepSession(step, kind, projectDirHint);
-  return true;
-}
-
-async function runStepInTerminal(
-  step: string,
-  kind: "work" | "critique",
-  source: LlmSourceTag,
-  projectDirHint: string | undefined,
-): Promise<void> {
-  const sub: string[] = ["session", `${step}.${kind}`, "--llm-backend", cliBackendArgFor(source)];
-  const model = vscode.workspace.getConfiguration("sim-flow").get<string>("llm.model")?.trim();
-  if (model && model.length > 0) {
-    sub.push("--llm-model", model);
-  }
-  await runCliInTerminal(sub, projectDirHint);
-}
-
-async function openChatForStep(
-  step: string,
-  kind: "work" | "critique",
-  projectDirHint: string | undefined,
-): Promise<void> {
-  const projectFlag = projectDirHint ? ` --project ${shellQuote(projectDirHint)}` : "";
-  const query = `@sim-flow /step ${step}.${kind}${projectFlag}`;
-  await openChatWithQuery(query);
-}
-
-async function openChatForAuto(
-  specPath: string | undefined,
-  projectDirHint: string | undefined,
-): Promise<void> {
-  const specFlag = specPath?.trim() ? ` --spec ${shellQuote(specPath.trim())}` : "";
-  const projectFlag = projectDirHint ? ` --project ${shellQuote(projectDirHint)}` : "";
-  const query = `@sim-flow /auto${specFlag}${projectFlag}`;
-  await openChatWithQuery(query);
-}
-
-/**
- * Hand the dashboard's Play click off to the chat participant for
- * non-CLI LLM sources. Despite the underlying CLI subcommand being
- * `sim-flow auto`, this is NOT specifically the "automated mode"
- * red-Play path -- this is the general "drive the flow" launch.
- * Whether the agent runs unattended or with the user in the loop is
- * controlled by sim-flow's `auto` flag (set by the participant /
- * orchestrator), independent of how the launch is named here.
- */
-async function runFlowChatCommand(
-  specPath: string | undefined,
-  projectDirHint: string | undefined,
-): Promise<void> {
-  const source = (vscode.workspace.getConfiguration("sim-flow").get<string>("llm.source") ??
-    "vscode") as LlmSourceTag;
-  if (usesBuiltInChatSurface(source)) {
-    await openChatForAuto(specPath, projectDirHint);
-    return;
-  }
-  if (!chatPanelProvider) {
-    await vscode.window.showErrorMessage(
-      "sim-flow: chat panel is not available yet. Reload the window and try again.",
-    );
-    return;
-  }
-  await chatPanelProvider.launchAutoSession(specPath, projectDirHint);
-}
-
-/**
- * Launch `sim-flow auto --llm-backend <name>` in the project's
- * terminal. Used by the dashboard's Play button when the user has
- * picked a CLI-agent source (`claude-cli`, `codex-cli`,
- * `gh-copilot-cli`) -- those don't have an HTTP backend the chat
- * participant can drive, so we hand the work to the in-terminal
- * subprocess instead. Auth comes from the user's existing CLI
- * login (claude /login, codex login, gh auth login).
- *
- * Note: this is the **general** "run the flow" launch path. It is
- * NOT specifically the fully-automated red-Play flow (which lives
- * in `runFullyAutomatedInTerminal` and forces `--session-mode
- * per-step` plus a required spec). The CLI subcommand happens to
- * be named `sim-flow auto` because it drives the orchestrator, but
- * the orchestrator's automated-vs-manual mode is set separately.
- */
-async function runFlowInTerminal(
-  backend: string | undefined,
-  specPath: string | undefined,
-  projectDirHint: string | undefined,
-): Promise<void> {
-  if (!backend) {
-    await vscode.window.showErrorMessage(
-      "sim-flow: missing CLI agent backend; expected `claude`, `codex`, or `gh-copilot`.",
-    );
-    return;
-  }
-  const sub: string[] = ["auto", "--llm-backend", backend];
-  // Pull in `sim-flow.session.mode` so the user's per-step / single
-  // choice in the dashboard's settings actually reaches the CLI.
-  // Single-session opens the control socket the dashboard buttons
-  // talk to via `src/session/control-client.ts`.
-  const sessionMode = (
-    vscode.workspace.getConfiguration("sim-flow").get<string>("session.mode") ?? "per-step"
-  ).trim();
-  if (sessionMode === "single") {
-    sub.push("--session-mode", "single");
-  } else {
-    sub.push("--session-mode", "per-step");
-  }
-  // Honor `sim-flow.llm.model` if set so the user's chosen claude
-  // model id (`sonnet` / `opus` / etc.) flows through.
-  const model = vscode.workspace.getConfiguration("sim-flow").get<string>("llm.model")?.trim();
-  if (model && model.length > 0) {
-    sub.push("--llm-model", model);
-  }
-  const trimmedSpec = specPath?.trim() ?? "";
-  if (trimmedSpec.length > 0) {
-    sub.push("--spec", trimmedSpec);
-  } else {
-    // No spec: drop DM0.work into interactive mode so the agent
-    // asks the user what to build instead of fabricating a spec
-    // from thin air. The DM0 work instructions already include the
-    // "if no spec.md, walk the user through filling it in" branch
-    // -- it only fires when the orchestrator's auto flag is off,
-    // which `--dm0-interactive` controls. Subsequent steps still
-    // run unattended once DM0 has produced a real spec.md.
-    sub.push("--dm0-interactive");
-  }
-  await runCliInTerminal(sub, projectDirHint);
-}
-
-/**
- * End-to-end automated flow for CLI agents (claude / codex /
- * gh-copilot). Spawns `sim-flow auto --session-mode per-step`
- * with the spec pre-ingested; the per-step PTY driver auto-walks
- * DM0 → DM4b in order, spawning a fresh agent per step. No
- * `--dm0-interactive` (would defeat the unattended intent), no
- * single-session control socket (the dashboard's manual buttons
- * are not used in this mode).
- */
-async function runFullyAutomatedInTerminal(
-  backend: string | undefined,
-  specPath: string | undefined,
-  projectDirHint: string | undefined,
-): Promise<void> {
-  if (!backend) {
-    await vscode.window.showErrorMessage(
-      "sim-flow: missing CLI agent backend; expected `claude`, `codex`, or `gh-copilot`.",
-    );
-    return;
-  }
-  if (!specPath || !specPath.trim()) {
-    await vscode.window.showErrorMessage(
-      "sim-flow: fully-automated mode requires a spec path.",
-    );
-    return;
-  }
-  const sub: string[] = [
-    "auto",
-    "--llm-backend",
-    backend,
-    "--session-mode",
-    "per-step",
-    "--spec",
-    specPath.trim(),
-  ];
-  const model = vscode.workspace
-    .getConfiguration("sim-flow")
-    .get<string>("llm.model")
-    ?.trim();
-  if (model && model.length > 0) {
-    sub.push("--llm-model", model);
-  }
-  await runCliInTerminal(sub, projectDirHint);
-}
-
-async function openChatWithQuery(query: string): Promise<void> {
-  try {
-    await vscode.commands.executeCommand("workbench.action.chat.open", { query });
-  } catch {
-    try {
-      await vscode.commands.executeCommand("workbench.action.chat.open", query);
-    } catch (err) {
-      await vscode.window.showErrorMessage(
-        `sim-flow: could not open a chat tab — ${String((err as Error).message ?? err)}.`,
-      );
-    }
-  }
-}
-
-function shellQuote(value: string): string {
-  if (/^[A-Za-z0-9_./:@%^+=-]+$/.test(value)) {
-    return value;
-  }
-  return `"${value.replace(/"/g, '\\"')}"`;
-}
 
 /**
  * Walk every sim-flow project under the open workspace folders and
@@ -1169,6 +796,21 @@ function asString(value: unknown): string | undefined {
 
 function usesBuiltInChatSurface(source: LlmSourceTag): boolean {
   return source === "vscode";
+}
+
+/**
+ * Bind the cross-extension hooks the stepRunner module needs --
+ * chat-panel provider, in-terminal launcher, and the LLM-source
+ * predicate. Called fresh on every command invocation so the
+ * provider reference reflects the current state (it's `undefined`
+ * before `activate` finishes wiring it up).
+ */
+function stepRunnerDeps(): StepRunnerDeps {
+  return {
+    chatPanelProvider,
+    runCliInTerminal,
+    usesBuiltInChatSurface,
+  };
 }
 
 /**
@@ -1278,225 +920,3 @@ function getStringSetting(key: string, fallback: string): string {
  * Each probe makes its own `sendRequest` so iterators don't fight
  * over a shared underlying source.
  */
-async function testLmModel(_context: vscode.ExtensionContext): Promise<void> {
-  void _context;
-  const channel = vscode.window.createOutputChannel("sim-flow: LM test");
-  channel.show(true);
-  const log = (line: string): void => {
-    channel.appendLine(line);
-  };
-  log(`# LM model probe ${new Date().toISOString()}`);
-  log("");
-
-  const config = vscode.workspace.getConfiguration("sim-flow");
-  const modelHint = config.get<string>("llm.model")?.trim() ?? "";
-  log(`sim-flow.llm.model: \`${modelHint || "(empty -> any)"}\``);
-
-  // Same vendor/family parsing the real backend uses.
-  const idx = modelHint.indexOf("/");
-  const vendor = idx >= 0 ? modelHint.slice(0, idx).trim() : undefined;
-  const family = idx >= 0 ? modelHint.slice(idx + 1).trim() : modelHint || undefined;
-  const selector: vscode.LanguageModelChatSelector = {};
-  if (vendor) {selector.vendor = vendor;}
-  if (family) {selector.family = family;}
-
-  let models: vscode.LanguageModelChat[];
-  try {
-    models = await vscode.lm.selectChatModels(selector);
-  } catch (err) {
-    log(`selectChatModels threw: ${(err as Error).message ?? String(err)}`);
-    return;
-  }
-  log(`selectChatModels returned ${models.length} model(s).`);
-  if (models.length === 0) {
-    log("Empty result. Try clearing `sim-flow.llm.model` or running `List Available Language Models`.");
-    return;
-  }
-  const model = models[0];
-  log(`Using: id=${model.id} vendor=${model.vendor} family=${model.family} maxInputTokens=${model.maxInputTokens}`);
-  log("");
-
-  type ProbeResult = { ok: boolean; partCount: number; durationMs: number; sample?: string };
-  const probes: Array<{ label: string; run: () => Promise<ProbeResult> }> = [
-    {
-      label: "A. stream(), no modelOptions",
-      run: () => probeStream(model, log, undefined),
-    },
-    {
-      label: "B. text(), no modelOptions",
-      run: () => probeText(model, log, undefined),
-    },
-    {
-      label: "C. stream(), modelOptions={max_tokens: 4096}",
-      run: () => probeStream(model, log, { max_tokens: 4096 }),
-    },
-  ];
-
-  // Compare against a known-working copilot model so we can tell
-  // whether an empty stream is provider-specific or our plumbing.
-  let copilotModel: vscode.LanguageModelChat | undefined;
-  try {
-    const copilotMatches = await vscode.lm.selectChatModels({ vendor: "copilot" });
-    copilotModel = copilotMatches.find((m) => m.family === "gpt-4o") ?? copilotMatches[0];
-  } catch {
-    // ignore; copilot may not be installed
-  }
-  if (copilotModel) {
-    probes.push({
-      label: `D. stream() against ${copilotModel.vendor}/${copilotModel.family} (control)`,
-      run: () => probeStream(copilotModel as vscode.LanguageModelChat, log, undefined),
-    });
-  } else {
-    log("(no copilot model found for control probe)");
-    log("");
-  }
-
-  for (const probe of probes) {
-    log(`---- ${probe.label} ----`);
-    let result: ProbeResult;
-    try {
-      result = await probe.run();
-    } catch (err) {
-      log(`  threw: ${(err as Error).message ?? String(err)}`);
-      log("");
-      continue;
-    }
-    log(
-      `  ${result.ok ? "OK" : "EMPTY"} -- ${result.partCount} part(s) in ${result.durationMs}ms${result.sample ? ` :: ${result.sample}` : ""}`,
-    );
-    log("");
-  }
-  log("Interpretation:");
-  log("  * If A and B both empty but D non-empty -> Claude Code's provider rejects sim-flow callers.");
-  log("  * If C non-empty but A empty -> provider requires modelOptions.max_tokens; we'll plumb it.");
-  log("  * If A and D both empty -> something in our code path is wrong (rebuild and retry).");
-  log("  * If everything non-empty -> the failure was specific to a long step prompt (e.g. DM2d); collapse system messages.");
-}
-
-async function probeStream(
-  model: vscode.LanguageModelChat,
-  log: (line: string) => void,
-  modelOptions: Record<string, unknown> | undefined,
-): Promise<{ ok: boolean; partCount: number; durationMs: number; sample?: string }> {
-  const tokenSource = new vscode.CancellationTokenSource();
-  const opts: vscode.LanguageModelChatRequestOptions = {
-    justification: "sim-flow: LM model probe",
-  };
-  if (modelOptions) {
-    opts.modelOptions = modelOptions;
-  }
-  const startedAt = Date.now();
-  const request = await model.sendRequest(
-    [vscode.LanguageModelChatMessage.User("respond with the single word: hi")],
-    opts,
-    tokenSource.token,
-  );
-  const streamLike = (request as unknown as { stream?: AsyncIterable<unknown> }).stream;
-  let partCount = 0;
-  let sample: string | undefined;
-  if (!streamLike) {
-    log("  (request.stream not present)");
-    return { ok: false, partCount: 0, durationMs: Date.now() - startedAt };
-  }
-  for await (const part of streamLike) {
-    partCount++;
-    if (partCount <= 2) {
-      const ctor = (part as { constructor?: { name?: string } })?.constructor?.name ?? typeof part;
-      const keys =
-        part && typeof part === "object"
-          ? Object.keys(part as object).join(", ")
-          : "(scalar)";
-      let preview = "";
-      try {
-        preview = JSON.stringify(part)?.slice(0, 96) ?? "";
-      } catch {
-        preview = "(unserializable)";
-      }
-      log(`  [${partCount}] ctor=${ctor} keys={${keys}} preview=${preview}`);
-    }
-    if (partCount === 1 && part && typeof part === "object" && "value" in part) {
-      sample = String((part as { value: unknown }).value).slice(0, 32);
-    }
-  }
-  return { ok: partCount > 0, partCount, durationMs: Date.now() - startedAt, sample };
-}
-
-async function probeText(
-  model: vscode.LanguageModelChat,
-  log: (line: string) => void,
-  modelOptions: Record<string, unknown> | undefined,
-): Promise<{ ok: boolean; partCount: number; durationMs: number; sample?: string }> {
-  const tokenSource = new vscode.CancellationTokenSource();
-  const opts: vscode.LanguageModelChatRequestOptions = {
-    justification: "sim-flow: LM model probe",
-  };
-  if (modelOptions) {
-    opts.modelOptions = modelOptions;
-  }
-  const startedAt = Date.now();
-  const request = await model.sendRequest(
-    [vscode.LanguageModelChatMessage.User("respond with the single word: hi")],
-    opts,
-    tokenSource.token,
-  );
-  let partCount = 0;
-  let sample: string | undefined;
-  for await (const fragment of request.text) {
-    partCount++;
-    if (partCount <= 2) {
-      log(`  [${partCount}] text=${JSON.stringify(fragment).slice(0, 96)}`);
-    }
-    if (partCount === 1) {
-      sample = String(fragment).slice(0, 32);
-    }
-  }
-  return { ok: partCount > 0, partCount, durationMs: Date.now() - startedAt, sample };
-}
-
-/**
- * Dump every chat model the VS Code Language Model API exposes to a
- * dedicated output channel. Useful for verifying whether an
- * external extension (e.g. Anthropic's Claude Code extension) has
- * registered itself as a chat-model provider via
- * `vscode.lm.registerChatModelProvider`. If it has, the model shows
- * up here and sim-flow's existing `vscode` backend can use it
- * without any code change. If it doesn't, only Copilot models
- * (and possibly nothing) appear.
- */
-async function dumpAvailableLmModels(): Promise<void> {
-  const channel = vscode.window.createOutputChannel("sim-flow: LM models");
-  channel.show(true);
-  channel.appendLine(`# Available chat models (queried at ${new Date().toISOString()})`);
-  channel.appendLine("");
-  let models: vscode.LanguageModelChat[];
-  try {
-    models = await vscode.lm.selectChatModels({});
-  } catch (err) {
-    channel.appendLine(`ERROR: vscode.lm.selectChatModels({}) threw: ${String(err)}`);
-    return;
-  }
-  if (models.length === 0) {
-    channel.appendLine(
-      "No chat models were returned. Install Copilot (or the Claude Code extension, " +
-        "or any other extension that registers a chat-model provider via " +
-        "`vscode.lm.registerChatModelProvider`) and re-run this command.",
-    );
-    return;
-  }
-  channel.appendLine(`Found ${models.length} model(s):\n`);
-  for (const m of models) {
-    channel.appendLine(`- id:               ${m.id}`);
-    channel.appendLine(`  vendor:           ${m.vendor}`);
-    channel.appendLine(`  family:           ${m.family}`);
-    channel.appendLine(`  name:             ${m.name}`);
-    channel.appendLine(`  version:          ${m.version}`);
-    channel.appendLine(`  maxInputTokens:   ${m.maxInputTokens}`);
-    channel.appendLine("");
-  }
-  channel.appendLine(
-    "Tip: a `vendor` of `anthropic` (or `claude-code`) here means the Claude Code " +
-      "extension is registered as a provider, and sim-flow's `vscode` source will " +
-      "pick it up automatically. Constrain via `sim-flow.llm.model` (matches the " +
-      "`family` field) if multiple models are available.",
-  );
-}
