@@ -2002,6 +2002,36 @@ mod tests {
     }
 
     #[test]
+    fn describe_rejects_step_kind_without_dot() {
+        use clap::Parser;
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        let cli = crate::cli::Cli::try_parse_from(["sim-flow", "status"]).unwrap();
+        let err = describe(&cli, tmp.path(), "DM0-work", false).unwrap_err();
+        assert!(format!("{err}").contains("<step>.<kind>"));
+    }
+
+    #[test]
+    fn describe_rejects_unknown_kind_string() {
+        use clap::Parser;
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        let cli = crate::cli::Cli::try_parse_from(["sim-flow", "status"]).unwrap();
+        let err = describe(&cli, tmp.path(), "DM0.review", false).unwrap_err();
+        assert!(format!("{err}").contains("unknown session kind"));
+    }
+
+    #[test]
+    fn describe_rejects_unknown_step_id() {
+        use clap::Parser;
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        let cli = crate::cli::Cli::try_parse_from(["sim-flow", "status"]).unwrap();
+        let err = describe(&cli, tmp.path(), "DM-zzz.work", false).unwrap_err();
+        assert!(format!("{err}").contains("not a"));
+    }
+
+    #[test]
     fn record_run_cmd_writes_a_row_to_the_experiments_db() {
         let tmp = tempfile::tempdir().unwrap();
         init(tmp.path(), Flow::DirectModeling).unwrap();
