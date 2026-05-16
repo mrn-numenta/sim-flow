@@ -488,6 +488,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       case "open-critique-popup":
         await this.openCritiquePopup(msg.step);
         return;
+      case "reset-from-step":
+        await this.resetFromStepId(msg.step);
+        return;
       default:
         return;
     }
@@ -586,6 +589,37 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
     for (const step of targets) {
       session.pump.reset(step);
+    }
+  }
+
+  /**
+   * Reset a specific step plus every step after it in the flow's
+   * canonical order. Same behaviour as `resetFromEarlierStep` once
+   * the user has picked a step -- skips the QuickPick because the
+   * rail-tile right-click already named the target.
+   */
+  private async resetFromStepId(step: string): Promise<void> {
+    const session = this.activePump;
+    if (!session) {
+      return;
+    }
+    if (typeof session.pump.reset !== "function") {
+      return;
+    }
+    const flowState = await readFlowStateSafe(session.projectDir);
+    if (!flowState) {
+      return;
+    }
+    const targets = stepsFromOnward(flowState.flow, step);
+    if (targets.length === 0) {
+      return;
+    }
+    const ok = await confirmReset(targets, step);
+    if (!ok) {
+      return;
+    }
+    for (const target of targets) {
+      session.pump.reset(target);
     }
   }
 

@@ -1166,3 +1166,53 @@ body {
   justify-content: center;
   padding: 4px 6px;
 }
+
+/* ---------------------------------------------------------------
+ * Step-rail right-click context menu
+ * ---------------------------------------------------------------
+ * Custom HTML menu pinned at the cursor position. The full-viewport
+ * backdrop is invisible -- it just catches outside clicks to close
+ * the menu -- so the chat panel underneath stays interactive-looking
+ * while the menu is up.
+ */
+.x-ctxmenu-backdrop {
+  position: fixed;
+  inset: 0;
+  background: transparent;
+  z-index: 60;
+}
+
+.x-ctxmenu {
+  position: absolute;
+  min-width: 180px;
+  padding: 4px 0;
+  background: var(--vscode-menu-background, var(--vscode-editor-background));
+  color: var(--vscode-menu-foreground, var(--vscode-foreground));
+  border: 1px solid
+    var(--vscode-menu-border, var(--x-palette-accent));
+  border-radius: 4px;
+  box-shadow: 0 6px 16px color-mix(in srgb, #000 45%, transparent);
+  font-size: 12px;
+}
+
+.x-ctxmenu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+
+.x-ctxmenu-item:hover,
+.x-ctxmenu-item:focus-visible {
+  background: var(
+    --vscode-menu-selectionBackground,
+    color-mix(in srgb, var(--vscode-foreground) 14%, transparent)
+  );
+  color: var(--vscode-menu-selectionForeground, var(--vscode-foreground));
+  outline: none;
+}

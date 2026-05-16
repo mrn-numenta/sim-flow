@@ -96,6 +96,13 @@ interface UiState {
     string,
     { findings: Finding[]; hasBlocking: boolean } | null
   >;
+  /**
+   * Right-click context menu anchored over the step rail. `null`
+   * when nothing is open; otherwise carries the step id the user
+   * clicked plus the click coordinates so the overlay can place
+   * itself there. A click anywhere else closes the menu.
+   */
+  openContextMenu: { step: string; x: number; y: number } | null;
 }
 
 interface PersistedState {
@@ -113,6 +120,7 @@ const ui: UiState = {
   bubblesExpanded: true,
   openPopup: null,
   critiqueData: new Map(),
+  openContextMenu: null,
 };
 
 applyPalette();
@@ -289,6 +297,10 @@ function buildShell(): Node[] {
   const popup = buildPopup(ui.state);
   if (popup) {
     nodes.push(popup);
+  }
+  const ctxMenu = buildContextMenu();
+  if (ctxMenu) {
+    nodes.push(ctxMenu);
   }
   return nodes;
 }
@@ -1257,6 +1269,19 @@ function buildStepRail(state: ChatPanelState): HTMLElement | null {
       }
       render();
     });
+    tile.addEventListener("contextmenu", (event) => {
+      // Right-click opens a custom HTML context menu at the cursor
+      // position. The native context menu would be a webview-level
+      // copy/paste menu, which isn't useful here; preventDefault
+      // suppresses it so only our menu shows.
+      event.preventDefault();
+      ui.openContextMenu = {
+        step: stepId,
+        x: event.clientX,
+        y: event.clientY,
+      };
+      render();
+    });
     rail.appendChild(tile);
   }
   return rail;
@@ -1392,6 +1417,59 @@ function appendFindingSection(
   }
   section.appendChild(list);
   body.appendChild(section);
+}
+
+// ---------------------------------------------------------------
+// Right-click context menu on rail tiles
+// ---------------------------------------------------------------
+
+/**
+ * Render the rail-tile right-click context menu as a fixed-position
+ * overlay. Returns null when no menu is open. The backdrop catches
+ * a click anywhere outside the menu and closes it; the menu itself
+ * stops propagation so clicks on its items don't dismiss before the
+ * handler runs.
+ */
+function buildContextMenu(): HTMLElement | null {
+  const open = ui.openContextMenu;
+  if (!open) {
+    return null;
+  }
+  const backdrop = div("x-ctxmenu-backdrop");
+  backdrop.addEventListener("click", () => {
+    ui.openContextMenu = null;
+    render();
+  });
+  backdrop.addEventListener("contextmenu", (e) => {
+    // A second right-click anywhere outside the menu also closes
+    // it. Suppress the default native menu so the user gets one
+    // consistent dismiss gesture.
+    e.preventDefault();
+    ui.openContextMenu = null;
+    render();
+  });
+  const menu = div("x-ctxmenu");
+  menu.style.left = `${open.x}px`;
+  menu.style.top = `${open.y}px`;
+  menu.setAttribute("role", "menu");
+  menu.addEventListener("click", (e) => e.stopPropagation());
+
+  const resetItem = document.createElement("button");
+  resetItem.type = "button";
+  resetItem.className = "x-ctxmenu-item";
+  resetItem.setAttribute("role", "menuitem");
+  resetItem.textContent = `Reset from ${open.step}…`;
+  resetItem.title = `Reset \`${open.step}\` and every step after it. A confirmation dialog lists every step that will be reset before anything is touched.`;
+  resetItem.addEventListener("click", () => {
+    const step = open.step;
+    ui.openContextMenu = null;
+    send({ type: "reset-from-step", step });
+    render();
+  });
+  menu.appendChild(resetItem);
+
+  backdrop.appendChild(menu);
+  return backdrop;
 }
 
 // Kick off the Shiki highlighter in the background. When it's ready we

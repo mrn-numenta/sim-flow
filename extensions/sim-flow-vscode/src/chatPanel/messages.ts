@@ -261,4 +261,12 @@ export type WebviewMessage =
    * HostMessage carrying the parsed findings (or null when no
    * critique exists yet).
    */
-  | { type: "open-critique-popup"; step: string };
+  | { type: "open-critique-popup"; step: string }
+  /**
+   * Reset a specific step plus every step after it in the flow's
+   * canonical order. Sent by the rail-tile right-click context
+   * menu, where the user has already picked the target step. The
+   * host shows a modal confirmation listing every step that will
+   * be discarded before any artifact is deleted.
+   */
+  | { type: "reset-from-step"; step: string };
