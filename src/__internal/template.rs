@@ -309,4 +309,53 @@ mod tests {
         expand_into(src.path(), dst.path(), &v).unwrap();
         assert!(dst.path().join("foo.rs").exists());
     }
+
+    #[test]
+    fn expand_into_missing_source_returns_io_error() {
+        let dst = tempfile::tempdir().unwrap();
+        let v = BTreeMap::new();
+        let nowhere = std::path::Path::new("/this/does/not/exist/at/all");
+        assert!(expand_into(nowhere, dst.path(), &v).is_err());
+    }
+
+    #[test]
+    fn template_path_joins_under_foundation_templates_dir() {
+        let p = template_path(std::path::Path::new("/abs/foundation"), "model-project");
+        assert!(p.ends_with("tools/sim-flow/templates/model-project"));
+    }
+
+    #[test]
+    fn default_placeholders_populates_canonical_keys() {
+        let m = default_placeholders(
+            "demo-model",
+            std::path::Path::new("/abs/foundation"),
+            "../sim-models/library",
+        );
+        assert_eq!(
+            m.get("project-name").map(String::as_str),
+            Some("demo-model")
+        );
+        assert_eq!(m.get("crate_name").map(String::as_str), Some("demo_model"));
+        assert_eq!(
+            m.get("foundation_path").map(String::as_str),
+            Some("/abs/foundation"),
+        );
+        assert_eq!(
+            m.get("library_path").map(String::as_str),
+            Some("../sim-models/library"),
+        );
+        // Timestamp must be present + non-empty (full shape tested elsewhere).
+        assert!(m.get("timestamp").is_some_and(|t| !t.is_empty()));
+    }
+
+    #[test]
+    fn is_leap_handles_century_and_400_year_edges() {
+        // 2000 is a leap year (divisible by 400).
+        assert!(is_leap(2000));
+        // 1900 is NOT (divisible by 100 but not 400).
+        assert!(!is_leap(1900));
+        // 2024 is leap; 2025 is not.
+        assert!(is_leap(2024));
+        assert!(!is_leap(2025));
+    }
 }
