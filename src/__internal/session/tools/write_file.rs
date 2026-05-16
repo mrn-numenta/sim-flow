@@ -215,3 +215,225 @@ impl Tool for WriteFileTool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx<'a>(dir: &'a std::path::Path, write_paths: &'a [String]) -> ToolContext<'a> {
+        ToolContext::new(dir, None, None, None).with_write_paths(write_paths)
+    }
+
+    fn open_writes() -> Vec<String> {
+        // Prefix-style entries (trailing slash) permit anything
+        // under the named dir; non-slash entries match the exact
+        // filename. is_path_allowed_for_writes treats a
+        // trailing-slash entry as a prefix and a non-slash entry
+        // as exact-match.
+        vec![
+            "out/".to_string(),
+            "src/".to_string(),
+            "a.txt".to_string(),
+            "b.txt".to_string(),
+            "link.txt".to_string(),
+        ]
+    }
+
+    #[test]
+    fn writes_a_file_under_project_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let writes = open_writes();
+        let result = WriteFileTool
+            .invoke(
+                &ctx(tmp.path(), &writes),
+                &json!({"path": "out/a.txt", "content": "hello\n"}),
+            )
+            .unwrap();
+        assert!(result.ok, "{}", result.display);
+        let body = std::fs::read_to_string(tmp.path().join("out/a.txt")).unwrap();
+        assert_eq!(body, "hello\n");
+        assert_eq!(result.touched_paths, vec!["out/a.txt".to_string()]);
+    }
+
+    #[test]
+    fn writes_overwrite_existing_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "old\n").unwrap();
+        let writes = open_writes();
+        let result = WriteFileTool
+            .invoke(
+                &ctx(tmp.path(), &writes),
+                &json!({"path": "a.txt", "content": "new\n"}),
+            )
+            .unwrap();
+        assert!(result.ok);
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("a.txt")).unwrap(),
+            "new\n"
+        );
+    }
+
+    #[test]
+    fn missing_path_arg_returns_pedagogical_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let writes = open_writes();
+        let result = WriteFileTool
+            .invoke(&ctx(tmp.path(), &writes), &json!({"content": "x"}))
+            .unwrap();
+        assert!(!result.ok);
+        assert!(result.display.contains("missing `path`"));
+        // The error should include the required-shape hint so the
+        // model can self-correct on the first retry.
+        assert!(result.display.contains("Required shape"));
+    }
+
+    #[test]
+    fn missing_content_arg_returns_pedagogical_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let writes = open_writes();
+        let result = WriteFileTool
+            .invoke(&ctx(tmp.path(), &writes), &json!({"path": "a.txt"}))
+            .unwrap();
+        assert!(!result.ok);
+        assert!(result.display.contains("missing `content`"));
+        assert!(result.display.contains("Required shape"));
+    }
+
+    #[test]
+    fn lib_prefix_is_rejected_as_read_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let writes = open_writes();
+        let result = WriteFileTool
+            .invoke(
+                &ctx(tmp.path(), &writes),
+                &json!({"path": "lib:foo.md", "content": "x"}),
+            )
+            .unwrap();
+        assert!(!result.ok);
+        assert!(result.display.contains("library root is read-only"));
+    }
+
+    #[test]
+    fn write_outside_allowlist_is_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let writes = vec!["docs/".to_string()];
+        let result = WriteFileTool
+            .invoke(
+                &ctx(tmp.path(), &writes),
+                &json!({"path": "src/a.rs", "content": "x"}),
+            )
+            .unwrap();
+        assert!(!result.ok);
+        assert!(result.display.contains("outside the write allowlist"));
+        assert!(result.display.contains("docs/"));
+    }
+
+    #[test]
+    fn write_with_empty_allowlist_says_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let writes: Vec<String> = vec![];
+        let result = WriteFileTool
+            .invoke(
+                &ctx(tmp.path(), &writes),
+                &json!({"path": "a.txt", "content": "x"}),
+            )
+            .unwrap();
+        assert!(!result.ok);
+        assert!(result.display.contains("(none)"));
+    }
+
+    #[test]
+    fn dotdot_traversal_is_rejected_by_resolve_safe_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let writes = open_writes();
+        let result = WriteFileTool
+            .invoke(
+                &ctx(tmp.path(), &writes),
+                &json!({"path": "../escape.txt", "content": "x"}),
+            )
+            .unwrap();
+        assert!(!result.ok);
+    }
+
+    #[test]
+    fn absolute_path_is_rejected_by_resolve_safe_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let writes = open_writes();
+        let result = WriteFileTool
+            .invoke(
+                &ctx(tmp.path(), &writes),
+                &json!({"path": "/etc/passwd", "content": "x"}),
+            )
+            .unwrap();
+        assert!(!result.ok);
+    }
+
+    #[test]
+    fn symlink_destination_is_refused() {
+        // Pre-existing symlink at the target path must be refused
+        // (orchestrator audit #6 fix). Create a regular file
+        // outside the project dir and a symlink inside pointing
+        // at it; write_file must refuse rather than overwrite the
+        // target.
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        let link = tmp.path().join("link.txt");
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+        let writes = open_writes();
+        let result = WriteFileTool
+            .invoke(
+                &ctx(tmp.path(), &writes),
+                &json!({"path": "link.txt", "content": "would-be evil\n"}),
+            )
+            .unwrap();
+        assert!(!result.ok);
+        assert!(
+            result.display.contains("symlink"),
+            "got: {}",
+            result.display
+        );
+        // The outside-tempfile should still hold its original
+        // contents (empty).
+        let outside_body = std::fs::read_to_string(outside.path()).unwrap();
+        assert!(outside_body.is_empty(), "symlink target was clobbered");
+    }
+
+    // --- autocorrect_path ---
+
+    #[test]
+    fn autocorrect_returns_none_with_no_milestone_body() {
+        assert!(autocorrect_path("src/a.rs", None).is_none());
+    }
+
+    #[test]
+    fn autocorrect_returns_none_when_path_is_already_milestone_canonical() {
+        let body = "- [ ] `src/model/foo.rs::Foo` builds the foo";
+        assert!(autocorrect_path("src/model/foo.rs", Some(body)).is_none());
+    }
+
+    #[test]
+    fn autocorrect_redirects_to_milestone_canonical_path() {
+        let body = "- [ ] `src/model/foo.rs::Foo` builds the foo";
+        let out = autocorrect_path("src/foo.rs", Some(body));
+        assert_eq!(out.as_deref(), Some("src/model/foo.rs"));
+    }
+
+    #[test]
+    fn autocorrect_keeps_top_level_component_constraint() {
+        // Same filename across DIFFERENT top-level dirs is not
+        // redirected; the agent's choice stands.
+        let body = "- [ ] `tests/foo.rs::Foo` tests";
+        let out = autocorrect_path("src/foo.rs", Some(body));
+        assert!(out.is_none());
+    }
+
+    #[test]
+    fn autocorrect_rejects_traversal_in_milestone_token() {
+        // Milestone text containing a token with `..` must not
+        // produce a redirect target -- defense in depth in case
+        // the milestone is LLM-authored.
+        let body = "- [ ] `src/../../etc/foo.rs::Foo` mischief";
+        let out = autocorrect_path("src/foo.rs", Some(body));
+        assert!(out.is_none());
+    }
+}
