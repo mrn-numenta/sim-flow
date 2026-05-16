@@ -230,6 +230,36 @@ mod tests {
     }
 
     #[test]
+    fn invoke_missing_query_returns_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ToolContext::new(tmp.path(), None, None, None);
+        let r = ApiReferencesTool.invoke(&ctx, &json!({})).unwrap();
+        assert!(!r.ok);
+        assert!(r.display.contains("missing"));
+    }
+
+    #[test]
+    fn invoke_whitespace_query_returns_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ToolContext::new(tmp.path(), None, None, None);
+        let r = ApiReferencesTool
+            .invoke(&ctx, &json!({"query": "   "}))
+            .unwrap();
+        assert!(!r.ok);
+    }
+
+    #[test]
+    fn invoke_without_framework_root_returns_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ToolContext::new(tmp.path(), None, None, None);
+        let r = ApiReferencesTool
+            .invoke(&ctx, &json!({"query": "LaneCtx"}))
+            .unwrap();
+        assert!(!r.ok);
+        assert!(r.display.contains("framework root"));
+    }
+
+    #[test]
     fn singular_label_for_one_ref() {
         let refs = json!([{
             "uri": "file:///abs/foundation/library/foo/src/lib.rs",

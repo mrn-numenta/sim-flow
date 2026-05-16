@@ -295,6 +295,35 @@ mod tests {
     }
 
     #[test]
+    fn invoke_missing_query_returns_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ToolContext::new(tmp.path(), None, None, None);
+        let r = ApiHoverTool.invoke(&ctx, &json!({})).unwrap();
+        assert!(!r.ok);
+        assert!(r.display.contains("missing"));
+    }
+
+    #[test]
+    fn invoke_whitespace_query_returns_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ToolContext::new(tmp.path(), None, None, None);
+        let r = ApiHoverTool.invoke(&ctx, &json!({"query": "   "})).unwrap();
+        assert!(!r.ok);
+        assert!(r.display.contains("empty"));
+    }
+
+    #[test]
+    fn invoke_without_framework_root_returns_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ToolContext::new(tmp.path(), None, None, None);
+        let r = ApiHoverTool
+            .invoke(&ctx, &json!({"query": "HasLogic"}))
+            .unwrap();
+        assert!(!r.ok);
+        assert!(r.display.contains("framework root"));
+    }
+
+    #[test]
     fn renders_singular_banner_when_only_one_match() {
         let outcome = HoverOutcome::Resolved {
             hit: SymbolHit {
