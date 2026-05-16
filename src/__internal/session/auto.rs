@@ -1295,10 +1295,46 @@ where
                 return Ok(false);
             }
         };
+    // Invalidate any pre-existing per-step critique JSON before
+    // we re-enter the walk. Two scenarios this addresses:
+    //
+    // (a) Crash between Phase 1 and Phase 2: Phase 2 may have
+    //     written a partial critique (milestone-01 critiqued,
+    //     orchestrator died before milestone-02). On resume,
+    //     pending.len() == 0 (Phase 1 done) and we fall through
+    //     to the serial walker, which reads the stale JSON and
+    //     may advance against a critique nobody re-validated.
+    // (b) User manually retrying after a previous dirty-gate run:
+    //     the prior critique was against OLDER code; the code has
+    //     since been edited, so the prior findings are no longer
+    //     authoritative. A fresh critique sweep is what the user
+    //     wants.
+    //
+    // Deleting unconditionally on parallel-walker entry handles
+    // both: Phase 2 below will write a fresh JSON if it runs, and
+    // if we fall through to the serial walker its gate evaluation
+    // sees "no critique yet" rather than a stale one.
+    let critiques_dir = opts.project_dir.join("docs/critiques");
+    let critique_json = critiques_dir.join(format!("{step_id}-critique.json", step_id = step.id));
+    if critique_json.exists() {
+        let _ = std::fs::remove_file(&critique_json);
+        let critique_md = critiques_dir.join(format!("{step_id}-critique.md", step_id = step.id));
+        let _ = std::fs::remove_file(&critique_md);
+        auto_host.send(&Event::Diagnostic {
+            level: DiagnosticLevel::Info,
+            message: format!(
+                "auto: {step_id} parallel plan-detail re-entry invalidated prior critique \
+                 JSON to avoid acting on stale findings from a previous run",
+                step_id = step.id,
+            ),
+        })?;
+    }
     if pending.len() < 2 {
         // One or zero pending stubs: no parallelism win; let the
         // serial walker handle it (it has the established retry
-        // semantics).
+        // semantics). With the prior critique already invalidated
+        // above, the serial walker's gate evaluation will require
+        // a fresh critique pass before advancing.
         return Ok(false);
     }
     let cap_raw = opts.max_parallel_requests as usize;
