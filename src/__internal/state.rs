@@ -3,11 +3,67 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result};
 
 pub const STATE_FILE: &str = "state.toml";
+pub const STATE_LOCK_FILE: &str = "state.lock";
+
+/// Guard holding an exclusive advisory file lock on
+/// `<dot_dir>/state.lock`. Released on drop. Used by
+/// [`State::transaction`] to serialize concurrent state.toml
+/// mutations across processes (two terminals running
+/// `sim-flow auto`, a dashboard issuing Advance while auto is
+/// running, etc.). The lock is per-`.sim-flow/` so projects in
+/// different directories are independent.
+///
+/// Wraps `fs2::FileExt::lock_exclusive` (flock on Unix,
+/// LockFileEx on Windows). The lockfile itself contains no data;
+/// it exists purely as a kernel-tracked lock target.
+///
+/// See orchestrator audit #2 (2026-05-16). Adoption is in-progress
+/// -- callers that load-mutate-save state should migrate to
+/// `State::transaction`; until then the legacy `State::load` +
+/// `state.save` path remains vulnerable to TOCTOU clobbers
+/// between load and save (orchestrator audit #14).
+pub struct StateLock {
+    /// Held open for the duration of the lock; dropping it
+    /// releases the flock.
+    _file: std::fs::File,
+}
+
+impl StateLock {
+    pub fn acquire(dot_dir: &Path) -> Result<Self> {
+        std::fs::create_dir_all(dot_dir).map_err(|source| Error::Io {
+            path: dot_dir.to_path_buf(),
+            source,
+        })?;
+        let path = dot_dir.join(STATE_LOCK_FILE);
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|source| Error::Io {
+                path: path.clone(),
+                source,
+            })?;
+        file.lock_exclusive().map_err(|source| Error::Io {
+            path: path.clone(),
+            source,
+        })?;
+        Ok(Self { _file: file })
+    }
+}
+
+impl Drop for StateLock {
+    fn drop(&mut self) {
+        let _ = self._file.unlock();
+    }
+}
 
 /// Which flow a project is currently in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,11 +136,36 @@ impl State {
         toml::from_str(&text).map_err(|source| Error::TomlParse { path, source })
     }
 
-    /// Atomic save to `<dir>/state.toml`.
+    /// Atomic save to `<dir>/state.toml`. Acquires
+    /// `<dir>/state.lock` for the write so two concurrent saves
+    /// from different sim-flow processes serialize at the FS
+    /// level. Does NOT protect the read-mutate-save cycle from
+    /// load+save TOCTOU -- callers needing that should use
+    /// [`State::transaction`].
     pub fn save(&self, dir: &Path) -> Result<()> {
+        let _lock = StateLock::acquire(dir)?;
         let path = dir.join(STATE_FILE);
         let text = toml::to_string_pretty(self)?;
         write_atomic(&path, text.as_bytes())
+    }
+
+    /// Run `f` under an exclusive cross-process lock on
+    /// `<dir>/state.lock`, loading the current state, passing
+    /// `&mut self` so `f` can mutate, then saving on success.
+    /// Both load and save run while the lock is held, so a
+    /// concurrent sim-flow process performing its own transaction
+    /// will see this transaction's changes (and vice versa)
+    /// -- closes the TOCTOU window in [`State::load`] +
+    /// `state.save` patterns. See orchestrator audit #2 + #14
+    /// (2026-05-16).
+    pub fn transaction<R>(dir: &Path, f: impl FnOnce(&mut Self) -> Result<R>) -> Result<R> {
+        let _lock = StateLock::acquire(dir)?;
+        let mut state = Self::load(dir)?;
+        let result = f(&mut state)?;
+        let path = dir.join(STATE_FILE);
+        let text = toml::to_string_pretty(&state)?;
+        write_atomic(&path, text.as_bytes())?;
+        Ok(result)
     }
 
     /// Mark a (flat) gate passed.

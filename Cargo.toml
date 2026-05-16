@@ -58,6 +58,11 @@ thiserror = "2"
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Cross-platform advisory file locking for the `.sim-flow/state.lock`
+# guard used to serialize concurrent state.toml mutations from
+# multiple sim-flow processes (two terminals + a dashboard, e.g.).
+# Wraps flock on Unix and LockFileEx on Windows.
+fs2 = "0.4"
 ureq = { version = "2", default-features = false, features = ["json", "tls"] }
 # Raw-mode termios on the controlling terminal so user keystrokes
 # pass through to the spawned PTY child unprocessed (no line
