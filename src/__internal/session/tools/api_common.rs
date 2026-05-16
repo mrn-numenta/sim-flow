@@ -61,9 +61,23 @@ pub fn extract_hit(item: &Value) -> Option<SymbolHit> {
         .map(str::to_string);
     let location = item.get("location")?;
     let uri = location.get("uri")?.as_str()?.to_string();
-    let start = location.get("range")?.get("start")?;
-    let line = start.get("line")?.as_u64()?;
-    let character = start.get("character")?.as_u64()?;
+    // LSP 3.17 `WorkspaceSymbol.location` can be either `Location`
+    // (uri + range) or `{ uri }` alone when the server supports
+    // lazy resolution. rust-analyzer always sends the full form
+    // today because we don't advertise
+    // `workspaceSymbol.resolveSupport`, but if it ever switches we
+    // don't want every hit to fall out of `pick_best_hit`.
+    // Default to (0, 0) when the range is absent so follow-up
+    // textDocument/* calls land at the top of the file -- imperfect
+    // but better than silently dropping the symbol. See
+    // LSP-discovery post-impl critique #10 (2026-05-16).
+    let (line, character) = match location.get("range").and_then(|r| r.get("start")) {
+        Some(start) => (
+            start.get("line").and_then(|v| v.as_u64()).unwrap_or(0),
+            start.get("character").and_then(|v| v.as_u64()).unwrap_or(0),
+        ),
+        None => (0, 0),
+    };
     Some(SymbolHit {
         name,
         kind,
@@ -205,6 +219,22 @@ mod tests {
         // appear earlier in the list.
         assert_eq!(hit.name, "HasLogic");
         assert_eq!(hit.kind, 11);
+    }
+
+    #[test]
+    fn extracts_hit_with_missing_range_at_origin() {
+        // LSP 3.17 WorkspaceSymbol may omit `range` under lazy
+        // resolve. extract_hit should still return Some with
+        // (0, 0) so the symbol isn't dropped silently.
+        let raw = serde_json::json!({
+            "name": "LazyResolved",
+            "kind": 23,
+            "location": { "uri": "file:///abs/foundation/a.rs" }
+        });
+        let hit = extract_hit(&raw).expect("hit");
+        assert_eq!(hit.name, "LazyResolved");
+        assert_eq!(hit.line, 0);
+        assert_eq!(hit.character, 0);
     }
 
     #[test]
