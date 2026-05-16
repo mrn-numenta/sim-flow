@@ -86,8 +86,9 @@ themselves.
      `BLOCKER:`.
 6. **Coverage strategy** (`coverage.md`):
    - Names `cargo-llvm-cov` as the tool.
-   - States a numeric line-coverage threshold (90% expected;
-     other values need prose justification).
+   - States a numeric line-coverage threshold (90% line coverage
+     on `src/model/` is the default; other values need prose
+     justification).
    - Has Exclusions / Run Command / Report Output sections.
    - Run Command is in a CLOSED triple-backtick code fence.
 7. **Stub leakage**: does ANY stub leak per-task content

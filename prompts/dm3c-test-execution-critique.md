@@ -70,8 +70,9 @@ regress earlier milestones.
 
 5. **Coverage threshold** (coverage milestone only). Is
    `cargo-llvm-cov` line coverage at or above `coverage.md`'s
-   declared threshold (default 90%)? Is the measured percentage
-   written into `test-plan.md`'s `## Coverage` section?
+   declared threshold (90% line coverage on `src/model/` is the
+   default)? Is the measured percentage written into
+   `test-plan.md`'s `## Coverage` section?
 
 6. **Coverage exclusions** (coverage milestone only). Are any
    new exclusions DM3c added to `coverage.md` justified -- each
