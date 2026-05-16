@@ -202,6 +202,31 @@ mod tests {
     }
 
     #[test]
+    fn outcome_message_quiet_for_no_op_outcomes() {
+        // Committed -> Some
+        assert!(outcome_message(&CommitOutcome::Committed).is_some());
+        // NotARepo -> None
+        assert!(outcome_message(&CommitOutcome::NotARepo).is_none());
+        // NothingToCommit -> None
+        assert!(outcome_message(&CommitOutcome::NothingToCommit).is_none());
+        // Failed -> Some with the detail attached.
+        let msg = outcome_message(&CommitOutcome::Failed("boom".into())).unwrap();
+        assert!(msg.contains("boom"));
+        assert!(msg.contains("commit on advance failed"));
+    }
+
+    #[test]
+    fn commit_step_advance_returns_not_a_repo_for_plain_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Not a git repo -- no .git/ subdir.
+        let outcome = commit_step_advance(tmp.path(), "DM0", Some("DM1"));
+        assert!(
+            matches!(outcome, CommitOutcome::NotARepo),
+            "got {outcome:?}",
+        );
+    }
+
+    #[test]
     fn commits_final_step_with_final_marker() {
         let tmp = tempfile::tempdir().unwrap();
         init_repo(tmp.path());
