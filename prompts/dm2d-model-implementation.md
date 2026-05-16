@@ -47,7 +47,8 @@ Reference material (read on demand; do NOT bulk-read upfront):
          - `api_expand_macro(path, line)` to see what a derive
            (`HasLogic`, `ConfigModel`, ...) actually generates.
        First call per session spawns rust-analyzer and waits for
-       initial indexing (~2 min on a cold workspace); subsequent
+       initial indexing (2-3 min on a cold workspace, capped at
+       5 min); subsequent
        calls are fast.
     2. **`fw:api/pages/.../*.md` snapshot (fallback)** -- a static
        rustdoc mirror, still under `fw:api/pages/...`. Use it when

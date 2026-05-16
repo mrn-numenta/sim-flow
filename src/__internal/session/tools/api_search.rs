@@ -33,7 +33,7 @@ impl Tool for ApiSearchTool {
         "api_search"
     }
     fn description(&self) -> &'static str {
-        "Search the foundation framework workspace for symbols (types, traits, functions, modules) by name. Backed by rust-analyzer over LSP, so results reflect the live workspace, not generated docs. Use this BEFORE reading `fw:api/pages/...md` -- it tells you in one round-trip whether a symbol exists, its kind, and where it's defined. First call per session spawns rust-analyzer and waits for initial indexing (can take ~30s on a cold workspace)."
+        "Search the foundation framework workspace for symbols (types, traits, functions, modules) by name. Backed by rust-analyzer over LSP, so results reflect the live workspace, not generated docs. Use this BEFORE reading `fw:api/pages/...md` -- it tells you in one round-trip whether a symbol exists, its kind, and where it's defined. First call per session spawns rust-analyzer and waits for initial indexing (2-3 min on a cold workspace, capped at 5 min); subsequent calls are sub-second."
     }
     fn args_schema(&self) -> Value {
         json!({

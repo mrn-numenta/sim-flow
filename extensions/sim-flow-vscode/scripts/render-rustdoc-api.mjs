@@ -267,7 +267,7 @@ function buildToc(pageCount) {
   );
   lines.push("");
   lines.push(
-    "First call per session spawns rust-analyzer (~2 min for the cold index of the full foundation workspace); subsequent calls are fast.",
+    "First call per session spawns rust-analyzer (2-3 min for the cold index of the full foundation workspace, capped at 5 min); subsequent calls are sub-second.",
   );
   lines.push("");
   lines.push("## Recommended starting points");

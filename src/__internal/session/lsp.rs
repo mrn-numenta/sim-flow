@@ -15,24 +15,56 @@
 //! cached by the static.
 //!
 //! Threading: rust-analyzer LSP is request/response with optional
-//! interleaved notifications. The client is intentionally
-//! single-threaded -- all requests serialize on the static
-//! `Mutex`. Notifications received while waiting for a response
-//! are dropped except for `experimental/serverStatus`, which
-//! `wait_for_quiescent` consumes during startup to know when
-//! initial indexing has finished.
+//! interleaved notifications. The client has one dedicated reader
+//! thread that decodes frames off rust-analyzer's stdout and
+//! pushes them over a bounded `sync_channel` to the main thread,
+//! which serializes all requests behind the static `Mutex`. The
+//! reader thread exists only so the main thread can honor
+//! `recv_timeout` deadlines -- a direct blocking read on stdout
+//! would ignore the timeout and let a wedged rust-analyzer hang
+//! the agent indefinitely. Notifications received while waiting
+//! for a response are dropped except for
+//! `experimental/serverStatus`, which `wait_for_quiescent`
+//! consumes during startup to know when initial indexing has
+//! finished.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Mutex;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
-const READY_TIMEOUT: Duration = Duration::from_secs(120);
+/// Maximum wall time for the initial workspace-indexing phase
+/// between `initialize` and the first `experimental/serverStatus`
+/// notification with `quiescent=true`. Cold-indexing the full
+/// sim-foundation workspace observed at ~2 min 30 s on an Apple
+/// M-series; 5 min leaves headroom for slower disks / CI without
+/// hanging the agent indefinitely. The previous 120 s value
+/// "passed" only because the blocking read on stdout didn't
+/// actually honor the deadline (see PHASE-3 critique).
+const READY_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Per-request timeout for `workspace/symbol`, `textDocument/*`,
+/// and `rust-analyzer/expandMacro`. Once indexing is done these
+/// are typically sub-second; the 60 s ceiling exists so a wedged
+/// or very-slow response is surfaced as `LspError::Timeout` rather
+/// than hanging the agent.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Capacity of the channel between the reader thread (decoding
+/// frames off rust-analyzer's stdout) and the main thread
+/// (consuming responses/notifications). Bounded so a notification
+/// flood during indexing can't grow unbounded, and so the reader
+/// thread back-pressures rust-analyzer via the OS pipe buffer when
+/// the main thread is slow. 64 is enough to absorb the
+/// $/progress + experimental/serverStatus burst during a cold
+/// indexing without ever filling up in practice.
+const INCOMING_CHANNEL_CAPACITY: usize = 64;
 
 /// Override for the rust-analyzer binary location. Useful when the
 /// default `rust-analyzer` on `PATH` is a rustup shim that resolves
@@ -63,7 +95,17 @@ pub type LspResult<T> = std::result::Result<T, LspError>;
 pub struct RustAnalyzerClient {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    /// Frames decoded by the reader thread arrive here. `Ok(Value)`
+    /// for a successfully-parsed JSON-RPC message; `Err(...)` when
+    /// rust-analyzer exited or sent something we couldn't parse.
+    /// The sender side is owned exclusively by the reader thread,
+    /// so a `Disconnected` recv is conclusive evidence the reader
+    /// thread has exited (and rust-analyzer's stdout is closed).
+    incoming: Receiver<LspResult<Value>>,
+    /// Handle to the reader thread. Joined in `Drop` after we kill
+    /// the child so its stdout EOFs and the thread's `read_line`
+    /// returns. Wrapped in `Option` so `Drop` can `take()` it.
+    reader_thread: Option<JoinHandle<()>>,
     next_id: i64,
     workspace_root: PathBuf,
 }
@@ -97,10 +139,16 @@ impl RustAnalyzerClient {
             .stdout
             .take()
             .ok_or_else(|| LspError::Protocol("rust-analyzer stdout missing".into()))?;
+        let (tx, rx) = mpsc::sync_channel::<LspResult<Value>>(INCOMING_CHANNEL_CAPACITY);
+        let reader_thread = std::thread::Builder::new()
+            .name("rust-analyzer-reader".into())
+            .spawn(move || reader_loop(BufReader::new(stdout), tx))
+            .map_err(LspError::Io)?;
         let mut client = Self {
             child,
             stdin,
-            stdout: BufReader::new(stdout),
+            incoming: rx,
+            reader_thread: Some(reader_thread),
             next_id: 0,
             workspace_root: workspace_root.to_path_buf(),
         };
@@ -327,44 +375,95 @@ impl RustAnalyzerClient {
         Ok(())
     }
 
-    fn read_message_with_deadline(&mut self, _deadline: Instant) -> LspResult<Value> {
-        // BufReader doesn't expose a deadline; for Phase 1 we
-        // accept a blocking read and rely on rust-analyzer's
-        // liveness. If indexing wedges we hit the outer
-        // `wait_for_quiescent` timeout via the elapsed check.
-        // TODO(phase 2+): swap for a non-blocking read or a
-        // reader thread + channel if we observe real wedges.
+    fn read_message_with_deadline(&mut self, deadline: Instant) -> LspResult<Value> {
+        // Cheap liveness probe: if rust-analyzer has already
+        // exited, surface the exit status (more specific than the
+        // `Exited` we'd get once the channel disconnects).
         if let Some(status) = self.child.try_wait()? {
             return Err(LspError::Protocol(format!(
                 "rust-analyzer exited: {status}"
             )));
         }
-        let mut content_length: Option<usize> = None;
-        loop {
-            let mut line = String::new();
-            let n = self.stdout.read_line(&mut line)?;
-            if n == 0 {
-                return Err(LspError::Exited);
-            }
-            let line = line.trim_end_matches(['\r', '\n']);
-            if line.is_empty() {
-                break;
-            }
-            if let Some(rest) = line.strip_prefix("Content-Length:") {
-                let len: usize = rest
-                    .trim()
-                    .parse()
-                    .map_err(|e| LspError::Protocol(format!("bad Content-Length: {e}")))?;
-                content_length = Some(len);
-            }
-            // Other headers (Content-Type, etc.) are accepted and ignored.
-        }
-        let len = content_length
-            .ok_or_else(|| LspError::Protocol("missing Content-Length header".into()))?;
-        let mut buf = vec![0u8; len];
-        self.stdout.read_exact(&mut buf)?;
-        serde_json::from_slice(&buf).map_err(|e| LspError::Protocol(format!("decode: {e}")))
+        recv_message(&self.incoming, deadline)
     }
+}
+
+/// Receive one message from the reader thread, honoring `deadline`.
+/// Returns:
+/// - `Ok(value)` when a frame arrives in time.
+/// - `Err(LspError::Timeout)` when no frame arrives by `deadline`.
+/// - `Err(LspError::Exited)` when the reader thread has dropped its
+///   `Sender` (i.e. rust-analyzer's stdout closed and the thread
+///   exited).
+/// - Whatever error the reader thread sent (e.g. a frame parse
+///   failure) is propagated as-is.
+fn recv_message(rx: &Receiver<LspResult<Value>>, deadline: Instant) -> LspResult<Value> {
+    let now = Instant::now();
+    let remaining = deadline.saturating_duration_since(now);
+    if remaining.is_zero() {
+        return Err(LspError::Timeout(Duration::ZERO));
+    }
+    match rx.recv_timeout(remaining) {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(e)) => Err(e),
+        Err(RecvTimeoutError::Timeout) => Err(LspError::Timeout(remaining)),
+        Err(RecvTimeoutError::Disconnected) => Err(LspError::Exited),
+    }
+}
+
+/// Reader-thread entry point: loop forwarding each decoded frame
+/// over `tx` until rust-analyzer's stdout closes (EOF) or a frame
+/// fails to parse. The thread exits when either happens or when
+/// the main thread drops the `Receiver` (send returns `Err`).
+fn reader_loop(mut reader: BufReader<ChildStdout>, tx: SyncSender<LspResult<Value>>) {
+    loop {
+        match read_frame(&mut reader) {
+            Ok(value) => {
+                if tx.send(Ok(value)).is_err() {
+                    // Main thread dropped the receiver -- we're
+                    // being shut down, exit quietly.
+                    return;
+                }
+            }
+            Err(e) => {
+                // Best-effort report the failure, then exit.
+                let _ = tx.send(Err(e));
+                return;
+            }
+        }
+    }
+}
+
+/// Read one LSP frame (`Content-Length: N\r\n\r\n<N bytes of JSON>`)
+/// from `reader` and decode it as a JSON value. Returns
+/// `LspError::Exited` on EOF before any header, `LspError::Protocol`
+/// on malformed headers or unparseable JSON. Other headers
+/// (`Content-Type`, etc.) are accepted and ignored.
+fn read_frame<R: BufRead>(reader: &mut R) -> LspResult<Value> {
+    let mut content_length: Option<usize> = None;
+    loop {
+        let mut line = String::new();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 {
+            return Err(LspError::Exited);
+        }
+        let line = line.trim_end_matches(['\r', '\n']);
+        if line.is_empty() {
+            break;
+        }
+        if let Some(rest) = line.strip_prefix("Content-Length:") {
+            let len: usize = rest
+                .trim()
+                .parse()
+                .map_err(|e| LspError::Protocol(format!("bad Content-Length: {e}")))?;
+            content_length = Some(len);
+        }
+    }
+    let len =
+        content_length.ok_or_else(|| LspError::Protocol("missing Content-Length header".into()))?;
+    let mut buf = vec![0u8; len];
+    reader.read_exact(&mut buf)?;
+    serde_json::from_slice(&buf).map_err(|e| LspError::Protocol(format!("decode: {e}")))
 }
 
 impl Drop for RustAnalyzerClient {
@@ -373,7 +472,7 @@ impl Drop for RustAnalyzerClient {
         // log "client exited without proper shutdown sequence" to
         // stderr. Spec sequence: shutdown request -> exit
         // notification. We don't strictly need the shutdown
-        // response, so fire-and-forget on a tight 2s budget.
+        // response, so fire-and-forget.
         self.next_id += 1;
         let id = self.next_id;
         let shutdown = json!({
@@ -386,6 +485,15 @@ impl Drop for RustAnalyzerClient {
         let _ = self.notify("exit", json!(null));
         let _ = self.child.kill();
         let _ = self.child.wait();
+        // After kill+wait, the child's stdout is closed; the
+        // reader thread's blocking read_line returns 0 (EOF) and
+        // the thread exits. Join so we don't leak it. Drop on a
+        // `static Mutex<Option<...>>` is unreachable today, but
+        // direct uses of the client elsewhere benefit from clean
+        // teardown.
+        if let Some(handle) = self.reader_thread.take() {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -455,7 +563,7 @@ mod tests {
     fn parses_well_formed_frame() {
         let body = r#"{"jsonrpc":"2.0","id":1,"result":42}"#;
         let mut buf = BufReader::new(Cursor::new(frame(body)));
-        let msg = read_one(&mut buf).unwrap();
+        let msg = read_frame(&mut buf).unwrap();
         assert_eq!(msg["id"], 1);
         assert_eq!(msg["result"], 42);
     }
@@ -467,8 +575,8 @@ mod tests {
         let mut bytes = frame(a);
         bytes.extend(frame(b));
         let mut buf = BufReader::new(Cursor::new(bytes));
-        let m1 = read_one(&mut buf).unwrap();
-        let m2 = read_one(&mut buf).unwrap();
+        let m1 = read_frame(&mut buf).unwrap();
+        let m2 = read_frame(&mut buf).unwrap();
         assert_eq!(m1["method"], "a");
         assert_eq!(m2["method"], "b");
     }
@@ -482,7 +590,7 @@ mod tests {
         )
         .into_bytes();
         let mut buf = BufReader::new(Cursor::new(bytes));
-        let msg = read_one(&mut buf).unwrap();
+        let msg = read_frame(&mut buf).unwrap();
         assert_eq!(msg["id"], 7);
     }
 
@@ -564,39 +672,88 @@ mod tests {
     fn rejects_missing_content_length() {
         let bytes = b"\r\n{}".to_vec();
         let mut buf = BufReader::new(Cursor::new(bytes));
-        let err = read_one(&mut buf).unwrap_err();
+        let err = read_frame(&mut buf).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("missing Content-Length"), "got: {msg}");
     }
 
-    /// Test-only helper that mirrors `read_message_with_deadline`
-    /// against an arbitrary reader. Kept inline so we don't have to
-    /// expose the parsing internals on the type itself just for
-    /// tests.
-    fn read_one<R: BufRead + Read>(r: &mut R) -> LspResult<Value> {
-        let mut content_length: Option<usize> = None;
-        loop {
-            let mut line = String::new();
-            let n = r.read_line(&mut line)?;
-            if n == 0 {
-                return Err(LspError::Exited);
-            }
-            let line = line.trim_end_matches(['\r', '\n']);
-            if line.is_empty() {
-                break;
-            }
-            if let Some(rest) = line.strip_prefix("Content-Length:") {
-                let len: usize = rest
-                    .trim()
-                    .parse()
-                    .map_err(|e| LspError::Protocol(format!("bad Content-Length: {e}")))?;
-                content_length = Some(len);
-            }
+    // ---- recv_message: deadline + reader-thread contract ----
+
+    #[test]
+    fn recv_message_returns_value_when_sender_sent() {
+        let (tx, rx) = mpsc::sync_channel::<LspResult<Value>>(1);
+        tx.send(Ok(json!({ "id": 1 }))).unwrap();
+        let deadline = Instant::now() + Duration::from_millis(50);
+        let v = recv_message(&rx, deadline).unwrap();
+        assert_eq!(v["id"], 1);
+    }
+
+    #[test]
+    fn recv_message_returns_timeout_when_nothing_sent() {
+        let (_tx, rx) = mpsc::sync_channel::<LspResult<Value>>(1);
+        let deadline = Instant::now() + Duration::from_millis(20);
+        let err = recv_message(&rx, deadline).unwrap_err();
+        assert!(
+            matches!(err, LspError::Timeout(_)),
+            "expected Timeout, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn recv_message_returns_timeout_for_already_past_deadline() {
+        let (_tx, rx) = mpsc::sync_channel::<LspResult<Value>>(1);
+        // Deadline in the past; recv_timeout shouldn't be called
+        // with zero duration (we short-circuit), and we surface
+        // Timeout immediately.
+        let deadline = Instant::now() - Duration::from_secs(1);
+        let err = recv_message(&rx, deadline).unwrap_err();
+        assert!(
+            matches!(err, LspError::Timeout(d) if d == Duration::ZERO),
+            "expected Timeout(0), got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn recv_message_returns_exited_when_sender_dropped() {
+        let (tx, rx) = mpsc::sync_channel::<LspResult<Value>>(1);
+        drop(tx);
+        let deadline = Instant::now() + Duration::from_millis(50);
+        let err = recv_message(&rx, deadline).unwrap_err();
+        assert!(
+            matches!(err, LspError::Exited),
+            "expected Exited, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn recv_message_propagates_reader_thread_error() {
+        let (tx, rx) = mpsc::sync_channel::<LspResult<Value>>(1);
+        tx.send(Err(LspError::Protocol("bad frame".into())))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_millis(50);
+        let err = recv_message(&rx, deadline).unwrap_err();
+        match err {
+            LspError::Protocol(s) => assert_eq!(s, "bad frame"),
+            other => panic!("expected Protocol, got: {other:?}"),
         }
-        let len = content_length
-            .ok_or_else(|| LspError::Protocol("missing Content-Length header".into()))?;
-        let mut buf = vec![0u8; len];
-        r.read_exact(&mut buf)?;
-        serde_json::from_slice(&buf).map_err(|e| LspError::Protocol(format!("decode: {e}")))
+    }
+
+    // ---- reader_loop end-to-end via an in-memory pipe ----
+
+    /// Drive `reader_loop` against a `BufRead` that wraps an
+    /// in-memory byte stream so we can exercise the reader thread
+    /// without spawning a real subprocess. We can't use the real
+    /// `reader_loop` here because it takes a `BufReader<ChildStdout>`;
+    /// instead use the underlying `read_frame` + manual loop, which is
+    /// the same shape.
+    #[test]
+    fn read_frame_then_eof_is_clean() {
+        let body = r#"{"id":7}"#;
+        let bytes = format!("Content-Length: {}\r\n\r\n{body}", body.len()).into_bytes();
+        let mut buf = BufReader::new(Cursor::new(bytes));
+        let v = read_frame(&mut buf).unwrap();
+        assert_eq!(v["id"], 7);
+        let err = read_frame(&mut buf).unwrap_err();
+        assert!(matches!(err, LspError::Exited));
     }
 }
