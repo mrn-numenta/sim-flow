@@ -1248,6 +1248,181 @@ mod tests {
             other => panic!("expected SessionEnd, got {other:?}"),
         }
     }
+
+    // --- pure-helper tests ---
+
+    #[test]
+    fn truncate_field_passes_through_when_short() {
+        assert_eq!(truncate_field("hi", 10), "hi");
+        assert_eq!(truncate_field("", 10), "");
+    }
+
+    #[test]
+    fn truncate_field_truncates_with_ellipsis() {
+        let out = truncate_field("abcdefghij", 5);
+        // Takes n-1=4 chars then appends ellipsis (U+2026, 3 bytes).
+        assert_eq!(out, "abcd…");
+    }
+
+    #[test]
+    fn truncate_field_counts_chars_not_bytes_for_multibyte() {
+        // Two emojis = 2 chars but several bytes each. We should
+        // pass through, not slice mid-codepoint.
+        let out = truncate_field("🚀🎯", 5);
+        assert_eq!(out, "🚀🎯");
+    }
+
+    #[test]
+    fn kind_str_round_trips_the_session_kind_enum() {
+        use sim_flow::__internal::client::SessionKind;
+        assert_eq!(kind_str(SessionKind::Work), "work");
+        assert_eq!(kind_str(SessionKind::Critique), "critique");
+    }
+
+    #[test]
+    fn parse_slug_kind_splits_at_dot() {
+        let (slug, kind) = parse_slug_kind("dm2d.work").unwrap();
+        assert_eq!(slug, "dm2d");
+        assert_eq!(kind_str(kind), "work");
+        let (slug, kind) = parse_slug_kind("dm0.critique").unwrap();
+        assert_eq!(slug, "dm0");
+        assert_eq!(kind_str(kind), "critique");
+    }
+
+    #[test]
+    fn parse_slug_kind_rejects_missing_dot() {
+        let err = parse_slug_kind("dm2d-work").unwrap_err();
+        assert!(format!("{err}").contains("expected `<slug>.work` or `<slug>.critique`"));
+    }
+
+    #[test]
+    fn parse_slug_kind_rejects_unknown_kind() {
+        let err = parse_slug_kind("dm0.review").unwrap_err();
+        assert!(format!("{err}").contains("unknown kind `review`"));
+    }
+
+    #[test]
+    fn dot_dir_appends_dot_sim_flow() {
+        let p = std::path::Path::new("/some/project");
+        assert_eq!(dot_dir(p), p.join(".sim-flow"));
+    }
+
+    #[test]
+    fn current_iso8601_returns_non_empty_string() {
+        let s = current_iso8601();
+        assert!(!s.is_empty());
+        // Should parse as a u64-ish second count (we render as
+        // seconds-since-epoch, not literal ISO 8601 -- the name is
+        // legacy).
+        assert!(s.chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn source_spec_up_to_date_is_false_when_dest_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = tmp.path().join("spec.md");
+        std::fs::write(&spec, "spec body\n").unwrap();
+        // .sim-flow/source-spec.md not on disk yet.
+        assert!(!source_spec_up_to_date(&spec, tmp.path()));
+    }
+
+    #[test]
+    fn source_spec_up_to_date_is_true_when_dest_newer_than_src() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = tmp.path().join("spec.md");
+        std::fs::write(&spec, "spec body\n").unwrap();
+        let dot = tmp.path().join(".sim-flow");
+        std::fs::create_dir_all(&dot).unwrap();
+        // Sleep a moment so the dest's mtime is strictly after
+        // the source's. Without this the comparison sees equal
+        // timestamps and is FS/clock-resolution dependent.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(dot.join("source-spec.md"), "ingested copy\n").unwrap();
+        assert!(source_spec_up_to_date(&spec, tmp.path()));
+    }
+
+    #[test]
+    fn resolve_max_parallel_requests_cli_arg_wins() {
+        let tmp = tempfile::tempdir().unwrap();
+        let resolved = resolve_max_parallel_requests(Some(4), tmp.path()).unwrap();
+        assert_eq!(resolved, 4);
+    }
+
+    #[test]
+    fn resolve_max_parallel_requests_returns_zero_when_no_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let resolved = resolve_max_parallel_requests(None, tmp.path()).unwrap();
+        assert_eq!(resolved, 0, "no config file -> 0 default");
+    }
+
+    #[test]
+    fn gate_check_to_out_renders_file_exists_variant() {
+        use sim_flow::__internal::gate::GateCheck;
+        let check = GateCheck::FileExists {
+            path: std::path::PathBuf::from("docs/spec.md"),
+            description: "spec exists".to_string(),
+        };
+        let out = gate_check_to_out(&check);
+        assert_eq!(out.kind, "file-exists");
+        assert_eq!(out.description, "spec exists");
+        assert_eq!(out.path.as_deref(), Some("docs/spec.md"));
+        assert!(out.pattern.is_none());
+        assert!(out.cmd.is_none());
+    }
+
+    // --- init / status / advance end-to-end against a tempdir ---
+
+    #[test]
+    fn init_creates_state_toml_at_dm0() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        let state_path = tmp.path().join(".sim-flow/state.toml");
+        assert!(state_path.is_file());
+        let body = std::fs::read_to_string(&state_path).unwrap();
+        assert!(body.contains("current_step"));
+        assert!(
+            body.contains("DM0"),
+            "DM is the head step for DMF; got:\n{body}"
+        );
+    }
+
+    #[test]
+    fn init_creates_state_toml_at_ds0_for_design_study() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DesignStudy).unwrap();
+        let body = std::fs::read_to_string(tmp.path().join(".sim-flow/state.toml")).unwrap();
+        assert!(
+            body.contains("DS0"),
+            "DS0 is the head step for DSF; got:\n{body}"
+        );
+    }
+
+    #[test]
+    fn init_overwrites_existing_state_toml() {
+        // Current contract: `sim-flow init` is unconditional --
+        // running it on an existing project resets state.toml to
+        // the head step. This is intentional today (no --force
+        // gate like reset has) so newcomers can re-init a stale
+        // checkout, but it's worth flagging in the audit log as a
+        // candidate for the next destructive-action pass.
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        let dot = tmp.path().join(".sim-flow/state.toml");
+        // Mutate state externally to simulate progress past DM0.
+        let body = std::fs::read_to_string(&dot).unwrap();
+        std::fs::write(&dot, body.replace("DM0", "DM2c")).unwrap();
+        // Re-running init clobbers back to DM0.
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        let after = std::fs::read_to_string(&dot).unwrap();
+        assert!(
+            after.contains("DM0"),
+            "init did not reset to DM0; got:\n{after}"
+        );
+        assert!(
+            !after.contains("DM2c"),
+            "init did not clobber DM2c; got:\n{after}"
+        );
+    }
 }
 
 fn init(project: &Path, flow: Flow) -> sim_flow::Result<()> {
