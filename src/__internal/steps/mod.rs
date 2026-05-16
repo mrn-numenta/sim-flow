@@ -462,6 +462,24 @@ fn join_milestone_rel(walk: &MilestoneWalkConfig, name: &str) -> String {
     )
 }
 
+/// True iff the named milestone is fully resolved -- the parallel
+/// plan-detail walk dispatcher uses this to decide whether its
+/// pinned milestone session is done, since
+/// [`find_current_milestone`] no longer gives a useful answer when
+/// multiple workers are racing.
+///
+/// Placeholder-mode (DM2cd / DM3ad / DM4ad): resolved iff the
+/// `<!-- detail-pending` marker is gone from the milestone body.
+///
+/// Execution-mode (DM2d / DM3b / DM3c / DM4b): resolved iff no `[ ]`
+/// rows remain (and, when `walk.forbid_deferred`, no `[-]` rows
+/// either). Defined as `!milestone_is_pending`; exposed so the
+/// orchestrator's pinned-worker wind-down can ask the question
+/// directly.
+pub fn milestone_is_resolved(walk: &MilestoneWalkConfig, path: &std::path::Path) -> bool {
+    !milestone_is_pending(walk, path)
+}
+
 /// "Pending" means the agent still has work to do on this milestone.
 /// In execution mode that's a `- [ ]` row -- and additionally `- [-]`
 /// (deferred) when `walk.forbid_deferred` is true, so the walker

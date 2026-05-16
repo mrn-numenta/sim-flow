@@ -143,7 +143,7 @@ fn mock_agent_enqueue_with_tool_calls_round_trips() {
     // The mock records the catalog so tests can assert the
     // orchestrator actually advertised tools (vs the trait
     // fall-through that would skip it entirely).
-    let seen = mock.seen_tools.borrow();
+    let seen = mock.seen_tools.lock().unwrap();
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].len(), 1);
     assert_eq!(seen[0][0].name, "read_file");

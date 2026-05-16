@@ -27,13 +27,23 @@ use crate::session::protocol::LlmMessage;
 /// orchestrator is sync; HTTP-driven adapters block the calling
 /// thread for the duration of the request.
 ///
+/// `Send + Sync`: production adapters (`ClaudeAgent`,
+/// `OpenAiCompatAgent`, `AnthropicAgent`, `OllamaAgent`, `CodexAgent`,
+/// `GhCopilotAgent`) hold immutable config and have no interior
+/// mutability, so they compose to `Sync` trivially. `MockAgent` uses
+/// `Mutex` (not `RefCell`) for its scripted-response queue so it
+/// satisfies the bound too. The bound is load-bearing for the
+/// parallel plan-detail walk dispatcher in
+/// `session::auto::run_plan_detail_walk_parallel`, which shares one
+/// adapter across worker threads.
+///
 /// `dispatch_with_tools` is the native-tool-call path; native-aware
 /// backends thread the tool catalog into the request and parse
 /// returned tool invocations. Backends that don't support native
 /// tools (e.g. subprocess CLIs) inherit the default impl which
 /// drops the catalog and returns the plain dispatch result with no
 /// tool calls.
-pub trait LlmAdapter: Send {
+pub trait LlmAdapter: Send + Sync {
     /// Short identifier for diagnostics ("openai-compat", "claude",
     /// "ollama", etc.). Surfaced in tracing/metrics.
     fn name(&self) -> &str;

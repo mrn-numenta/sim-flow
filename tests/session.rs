@@ -98,10 +98,10 @@ fn handshake_emits_hello_ack_and_phase_changed() {
     // through the adapter (the opening turn). The mock had no
     // scripted response so the orchestrator received an empty turn.
     assert!(
-        !mock.seen.borrow().is_empty(),
+        !mock.seen.lock().unwrap().is_empty(),
         "expected at least one LLM dispatch through the adapter",
     );
-    let messages = &mock.seen.borrow()[0];
+    let messages = &mock.seen.lock().unwrap()[0];
     // System (convention + instructions), System (tool catalog),
     // optional System (framework API TOC when bundled docs are
     // available), System (stable session inputs -- spec.md is
@@ -149,7 +149,7 @@ fn handshake_emits_hello_ack_and_phase_changed() {
     // Tool catalog also surfaces as a structured field for
     // backends that support native tool-use. Every step now
     // gets the same universal set.
-    let seen_tools = mock.seen_tools.borrow();
+    let seen_tools = mock.seen_tools.lock().unwrap();
     if let Some(tools) = seen_tools.first() {
         for expected in ["read_file", "write_file", "list_dir", "search"] {
             assert!(tools.iter().any(|t| t.name == expected));
@@ -269,7 +269,7 @@ fn critique_session_lists_predecessor_inputs_as_toc() {
 
     run_session(opts(&project, SessionKind::Critique), &mut host, &mut mock).unwrap();
 
-    let seen = mock.seen.borrow();
+    let seen = mock.seen.lock().unwrap();
     let messages = seen.first().expect("expected at least one LLM dispatch");
     let system_blob = messages
         .iter()
@@ -325,7 +325,7 @@ fn large_predecessor_inputs_stay_as_toc_only() {
 
     run_session(opts(&project, SessionKind::Critique), &mut host, &mut mock).unwrap();
 
-    let seen = mock.seen.borrow();
+    let seen = mock.seen.lock().unwrap();
     let messages = seen.first().expect("expected at least one LLM dispatch");
     let system_blob = messages
         .iter()
@@ -380,7 +380,7 @@ fn work_session_expands_directory_inputs_one_level_in_the_toc() {
     };
     let _ = run_session(dm2d_opts, &mut host, &mut mock);
 
-    let seen = mock.seen.borrow();
+    let seen = mock.seen.lock().unwrap();
     let first = seen.first().expect("at least one LLM dispatch");
     let system_blob = first
         .iter()
@@ -494,7 +494,7 @@ fn write_outside_step_allowlist_is_rejected_and_fed_back_to_agent() {
     // The rejection must be threaded back to the LLM as a User turn
     // before the orchestrator re-issues. Without this the agent
     // marches into validators / gates believing the write landed.
-    let llm_requests = mock.seen.borrow();
+    let llm_requests = mock.seen.lock().unwrap();
     assert_eq!(
         llm_requests.len(),
         2,
@@ -716,7 +716,7 @@ fn tool_call_in_response_is_executed_and_results_feed_back() {
 
     // The second LLM dispatch should include the tool result as a
     // user message in the messages array.
-    let request_payloads = mock.seen.borrow();
+    let request_payloads = mock.seen.lock().unwrap();
     assert!(
         request_payloads.len() >= 2,
         "expected at least 2 LLM requests"
@@ -799,7 +799,7 @@ fn near_repeat_streak_injects_loop_guard_hint_into_next_user_message() {
     // message whose content begins with the loop-guard hint prefix
     // (the tool result for turn 2 was the message that got the
     // injection).
-    let request_payloads = mock.seen.borrow();
+    let request_payloads = mock.seen.lock().unwrap();
     assert!(
         request_payloads.len() >= 3,
         "expected at least 3 LLM requests (turns lr-1/2/3); got {}",
@@ -1138,7 +1138,7 @@ fn manual_mode_starts_parked_and_emits_initial_step_mode_changed() {
     // Manual-mode parking should never run a sub-session without a
     // command, so the orchestrator should never have dispatched.
     assert!(
-        mock.seen.borrow().is_empty(),
+        mock.seen.lock().unwrap().is_empty(),
         "no LLM dispatch should fire in a parked manual run"
     );
 }
@@ -1172,7 +1172,7 @@ fn manual_mode_dispatches_run_gate_and_keeps_parking() {
     );
     // No LLM dispatch should happen for RunGate.
     assert!(
-        mock.seen.borrow().is_empty(),
+        mock.seen.lock().unwrap().is_empty(),
         "RunGate should not dispatch an LLM call"
     );
 }

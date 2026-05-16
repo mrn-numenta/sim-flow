@@ -1056,6 +1056,11 @@ where
         // the artifact-write convention.
         agent_has_native_fs_tools: false,
         no_preamble: opts.no_preamble,
+        // Serial-walk sub-sessions don't pin to a specific milestone;
+        // the orchestrator's find_current_milestone heuristic picks
+        // the right stub. The parallel plan-detail walk dispatcher
+        // uses a different code path that DOES set milestone_name.
+        milestone_name: None,
     };
     let result = run_session(session_opts, host, llm);
     host.in_subsession = false;

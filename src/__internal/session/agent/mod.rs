@@ -129,7 +129,7 @@ pub struct AdvertisedToolCall {
     pub arguments_json: String,
 }
 
-pub trait CliAgent: Send {
+pub trait CliAgent: Send + Sync {
     fn name(&self) -> &str;
     fn dispatch(&self, messages: &[LlmMessage]) -> Result<(String, LlmCallMetrics)>;
     /// Dispatch with a tool catalog advertised to the model. Default

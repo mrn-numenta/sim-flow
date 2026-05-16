@@ -139,6 +139,17 @@ pub struct OrchestratorOptions {
     /// (`--preamble`) when debugging a model's reasoning -- the
     /// extra prose is what you're trying to read in that case.
     pub no_preamble: bool,
+    /// Pin this session to a specific milestone within the step's
+    /// `milestone_walk` (instead of `find_current_milestone`'s
+    /// first-pending / highest-touched heuristics). Used by the
+    /// parallel plan-detail walk dispatcher in
+    /// `session::auto::run_plan_detail_walk_parallel` so each worker
+    /// thread operates on the stub it was assigned. `None` keeps
+    /// today's behavior: the orchestrator picks the milestone via
+    /// `find_current_milestone`. Value is the bare milestone
+    /// filename (e.g. `"milestone-03-decode.md"`) or the
+    /// project-relative path; both forms resolve to the same stub.
+    pub milestone_name: Option<String>,
 }
 
 impl Default for OrchestratorOptions {
@@ -161,6 +172,7 @@ impl Default for OrchestratorOptions {
             max_identical_responses: 3,
             agent_has_native_fs_tools: false,
             no_preamble: true,
+            milestone_name: None,
         }
     }
 }
@@ -284,11 +296,24 @@ where
             SessionKind::Critique => true,
             SessionKind::Work => work_retry_has_prior_blockers,
         };
-        match crate::__internal::steps::find_current_milestone(
-            &opts.project_dir,
-            &walk,
-            pick_touched,
-        ) {
+        let resolved = match &opts.milestone_name {
+            // Pinned worker (parallel plan-detail dispatcher):
+            // bypass the walker's first-pending / highest-touched
+            // heuristics and scope to the exact stub this session
+            // was assigned. `find_milestone_by_name` returns the
+            // stub regardless of its pending state, so the orchestrator
+            // still inlines the right file when a Critique runs after
+            // its paired Work cleared the placeholder.
+            Some(name) => {
+                crate::__internal::steps::find_milestone_by_name(&opts.project_dir, &walk, name)
+            }
+            None => crate::__internal::steps::find_current_milestone(
+                &opts.project_dir,
+                &walk,
+                pick_touched,
+            ),
+        };
+        match resolved {
             crate::__internal::steps::CurrentMilestone::File(rel) => {
                 Some(opts.project_dir.join(rel))
             }
@@ -1923,42 +1948,63 @@ where
                         session_persisted_writes,
                     )
                 {
-                    let current = crate::__internal::steps::find_current_milestone(
-                        &opts.project_dir,
-                        &walk,
-                        false,
-                    );
                     use crate::__internal::steps::CurrentMilestone;
-                    let milestone_done = match &current {
-                        // No more pending milestones: this case
-                        // is identical to "structural gate clean"
-                        // and is actually unreachable here
-                        // (MilestonesAllResolved would have made
-                        // the gate clean above), but keep the
-                        // arm for safety.
-                        CurrentMilestone::AllResolved => true,
-                        CurrentMilestone::File(rel) => {
-                            // The current milestone is the one
-                            // with the FIRST `- [ ]` row -- so
-                            // by definition `current` always has
-                            // pending rows. To detect "milestone
-                            // just finished", check the highest-
-                            // numbered milestone with at least
-                            // one `- [x]` (i.e. retry-mode pick).
-                            // If that's a DIFFERENT file than
-                            // the current pending one, the agent
-                            // finished a milestone this session.
-                            let touched = crate::__internal::steps::find_current_milestone(
-                                &opts.project_dir,
-                                &walk,
-                                true,
-                            );
-                            matches!(
-                                &touched,
-                                CurrentMilestone::File(t) if t != rel
-                            )
+                    let milestone_done = if let Some(name) = &opts.milestone_name {
+                        // Pinned worker (parallel plan-detail walk):
+                        // the global walker can't see "this session's
+                        // milestone" while other workers are racing
+                        // through their own stubs. Ask directly
+                        // whether the assigned stub is resolved.
+                        match crate::__internal::steps::find_milestone_by_name(
+                            &opts.project_dir,
+                            &walk,
+                            name,
+                        ) {
+                            CurrentMilestone::File(rel) => {
+                                crate::__internal::steps::milestone_is_resolved(
+                                    &walk,
+                                    &opts.project_dir.join(&rel),
+                                )
+                            }
+                            _ => false,
                         }
-                        CurrentMilestone::NoMilestonesPresent => false,
+                    } else {
+                        let current = crate::__internal::steps::find_current_milestone(
+                            &opts.project_dir,
+                            &walk,
+                            false,
+                        );
+                        match &current {
+                            // No more pending milestones: this case
+                            // is identical to "structural gate clean"
+                            // and is actually unreachable here
+                            // (MilestonesAllResolved would have made
+                            // the gate clean above), but keep the
+                            // arm for safety.
+                            CurrentMilestone::AllResolved => true,
+                            CurrentMilestone::File(rel) => {
+                                // The current milestone is the one
+                                // with the FIRST `- [ ]` row -- so
+                                // by definition `current` always has
+                                // pending rows. To detect "milestone
+                                // just finished", check the highest-
+                                // numbered milestone with at least
+                                // one `- [x]` (i.e. retry-mode pick).
+                                // If that's a DIFFERENT file than
+                                // the current pending one, the agent
+                                // finished a milestone this session.
+                                let touched = crate::__internal::steps::find_current_milestone(
+                                    &opts.project_dir,
+                                    &walk,
+                                    true,
+                                );
+                                matches!(
+                                    &touched,
+                                    CurrentMilestone::File(t) if t != rel
+                                )
+                            }
+                            CurrentMilestone::NoMilestonesPresent => false,
+                        }
                     };
                     if milestone_done {
                         host.send(&Event::SessionEnd {
@@ -2791,7 +2837,12 @@ pub fn build_initial_messages(
             tool_calls: Vec::new(),
         });
     }
-    if let Some(inputs) = build_session_inputs(&opts.project_dir, step, opts.kind) {
+    if let Some(inputs) = build_session_inputs(
+        &opts.project_dir,
+        step,
+        opts.kind,
+        opts.milestone_name.as_ref(),
+    ) {
         messages.push(LlmMessage {
             role: LlmRole::System,
             content: inputs.stable,
@@ -3095,6 +3146,7 @@ fn build_session_inputs(
     project_dir: &Path,
     step: &StepDescriptor,
     kind: SessionKind,
+    milestone_name: Option<&String>,
 ) -> Option<SessionInputs> {
     // Predecessors and this step's existing artifacts are listed as
     // a TOC (path + size) -- the agent fetches their content via
@@ -3166,8 +3218,22 @@ fn build_session_inputs(
                 SessionKind::Critique => true,
                 SessionKind::Work => !prior_critique_gate_findings.is_empty(),
             };
-            match crate::__internal::steps::find_current_milestone(project_dir, &walk, pick_touched)
-            {
+            let resolved = match milestone_name {
+                // Pinned worker (parallel plan-detail dispatcher).
+                // Scope is the assigned stub regardless of walker
+                // state -- a Critique that lands after its paired
+                // Work cleared the placeholder still needs to read
+                // the same file.
+                Some(name) => {
+                    crate::__internal::steps::find_milestone_by_name(project_dir, &walk, name)
+                }
+                None => crate::__internal::steps::find_current_milestone(
+                    project_dir,
+                    &walk,
+                    pick_touched,
+                ),
+            };
+            match resolved {
                 crate::__internal::steps::CurrentMilestone::File(rel) => Some(rel),
                 // AllResolved / NoMilestonesPresent: don't inject a
                 // milestone scope. The structural gate
