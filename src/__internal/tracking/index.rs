@@ -76,6 +76,7 @@ impl ExperimentIndex {
         let path = experiments_db_path(dot_sim_flow);
         let project_dir = dot_sim_flow.parent().map(Path::to_path_buf);
         let conn = Connection::open(&path).map_err(wrap_sqlite)?;
+        configure_connection(&conn)?;
         let index = Self { conn, project_dir };
         index.apply_schema()?;
         Ok(index)
@@ -83,6 +84,7 @@ impl ExperimentIndex {
 
     pub fn open_path(path: &Path) -> Result<Self> {
         let conn = Connection::open(path).map_err(wrap_sqlite)?;
+        configure_connection(&conn)?;
         let index = Self {
             conn,
             project_dir: None,
@@ -93,6 +95,10 @@ impl ExperimentIndex {
 
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory().map_err(wrap_sqlite)?;
+        // In-memory DBs are per-connection by definition so the
+        // concurrency pragmas are no-ops, but applying them keeps
+        // the open paths uniform.
+        configure_connection(&conn)?;
         let index = Self {
             conn,
             project_dir: None,
@@ -180,8 +186,44 @@ impl ExperimentIndex {
         Ok(v.and_then(|s| s.parse().ok()).unwrap_or(0))
     }
 
+    /// Allocate the next sequence number and INSERT a row that uses
+    /// it in a single transaction so two concurrent record_run
+    /// callers can't both see the same max + race the resulting
+    /// INSERT on UNIQUE(run_id). Caller supplies a closure that
+    /// builds the row given the allocated sequence; the closure may
+    /// return Err to abort the transaction. See orchestrator audit
+    /// #5 (2026-05-16).
+    pub fn allocate_and_insert_run(
+        &mut self,
+        build_row: impl FnOnce(u32) -> RunRow,
+    ) -> Result<(u32, i64)> {
+        let tx = self.conn.transaction().map_err(wrap_sqlite)?;
+        let max: Option<String> = tx
+            .query_row(
+                "SELECT run_id FROM runs ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(wrap_sqlite)?;
+        let current = max.as_deref().and_then(parse_sequence_prefix).unwrap_or(0);
+        let sequence = current + 1;
+        let row = build_row(sequence);
+        let row_id = insert_run_inner(&tx, &row)?;
+        tx.commit().map_err(wrap_sqlite)?;
+        Ok((sequence, row_id))
+    }
+
     /// Allocate the next sequence number. Numbers are monotonic per-DB; the
     /// sequence does not recycle when rows are deleted.
+    ///
+    /// Note: this method is racy when two processes call it
+    /// concurrently -- both can read the same `max` and produce the
+    /// same sequence. New code should prefer
+    /// [`allocate_and_insert_run`] which wraps the
+    /// max-select + insert in one transaction. Existing callers
+    /// that just want to display the next sequence (no insert)
+    /// can continue using this.
     pub fn next_sequence(&self) -> Result<u32> {
         let max: Option<String> = self
             .conn
@@ -197,39 +239,7 @@ impl ExperimentIndex {
     }
 
     pub fn insert_run(&self, row: &RunRow) -> Result<i64> {
-        self.conn
-            .execute(
-                r#"INSERT INTO runs (
-                    run_id, timestamp, git_commit, git_branch, git_dirty,
-                    config_fingerprint, manifest_path, workload, candidate,
-                    study, metrics_summary, parent_run_id, sweep_parameter,
-                    sweep_value, tags, notes, lifecycle
-                ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                    ?14, ?15, ?16, ?17
-                )"#,
-                params![
-                    row.run_id,
-                    row.timestamp,
-                    row.git_commit,
-                    row.git_branch,
-                    row.git_dirty as i64,
-                    row.config_fingerprint,
-                    row.manifest_path,
-                    row.workload,
-                    row.candidate,
-                    row.study,
-                    row.metrics_summary,
-                    row.parent_run_id,
-                    row.sweep_parameter,
-                    row.sweep_value,
-                    row.tags,
-                    row.notes,
-                    row.lifecycle,
-                ],
-            )
-            .map_err(wrap_sqlite)?;
-        let inserted_id = self.conn.last_insert_rowid();
+        let inserted_id = insert_run_inner(&self.conn, row)?;
         // Best-effort mirror to the per-user global DB.
         if let Some(project_dir) = &self.project_dir {
             let _ = crate::__internal::global_db::with_db(|db| {
@@ -397,6 +407,63 @@ fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
         notes: row.get(16)?,
         lifecycle: row.get(17)?,
     })
+}
+
+/// Apply per-connection pragmas to avoid SQLITE_BUSY in
+/// concurrent-writer scenarios. journal_mode=WAL lets readers
+/// proceed while one writer is active; busy_timeout(5000) makes
+/// any second writer wait up to 5 s for the first to commit
+/// instead of failing immediately with SQLITE_BUSY. Mirrors what
+/// `global_db.rs` already does on the global DB. See orchestrator
+/// audit #5 (2026-05-16).
+fn configure_connection(conn: &Connection) -> Result<()> {
+    // journal_mode is a query (returns the new mode); execute the
+    // pragma and ignore the result. busy_timeout is a normal
+    // pragma.
+    conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))
+        .map_err(wrap_sqlite)?;
+    conn.execute_batch("PRAGMA busy_timeout = 5000")
+        .map_err(wrap_sqlite)?;
+    Ok(())
+}
+
+/// Inner INSERT that operates on any sqlite Connection-like (a
+/// real Connection or a Transaction). Used by both `insert_run`
+/// (no transaction) and `allocate_and_insert_run` (inside a
+/// transaction that also reads the max sequence).
+fn insert_run_inner(conn: &rusqlite::Connection, row: &RunRow) -> Result<i64> {
+    conn.execute(
+        r#"INSERT INTO runs (
+            run_id, timestamp, git_commit, git_branch, git_dirty,
+            config_fingerprint, manifest_path, workload, candidate,
+            study, metrics_summary, parent_run_id, sweep_parameter,
+            sweep_value, tags, notes, lifecycle
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+            ?14, ?15, ?16, ?17
+        )"#,
+        params![
+            row.run_id,
+            row.timestamp,
+            row.git_commit,
+            row.git_branch,
+            row.git_dirty as i64,
+            row.config_fingerprint,
+            row.manifest_path,
+            row.workload,
+            row.candidate,
+            row.study,
+            row.metrics_summary,
+            row.parent_run_id,
+            row.sweep_parameter,
+            row.sweep_value,
+            row.tags,
+            row.notes,
+            row.lifecycle,
+        ],
+    )
+    .map_err(wrap_sqlite)?;
+    Ok(conn.last_insert_rowid())
 }
 
 fn wrap_sqlite(e: rusqlite::Error) -> Error {
