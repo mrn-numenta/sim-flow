@@ -241,3 +241,74 @@ fn tail(s: &str, max: usize) -> String {
     let trimmed = s.get(start..).unwrap_or(s);
     format!("...(truncated, last {max} bytes)\n{trimmed}")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx<'a>(dir: &'a std::path::Path) -> ToolContext<'a> {
+        ToolContext::new(dir, None, None, None)
+    }
+
+    #[test]
+    fn missing_command_arg_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = RunCargoTool.invoke(&ctx(tmp.path()), &json!({})).unwrap();
+        assert!(!result.ok);
+        assert!(result.display.contains("missing `command`"));
+    }
+
+    #[test]
+    fn unsupported_command_lists_the_allowlist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = RunCargoTool
+            .invoke(&ctx(tmp.path()), &json!({"command": "publish"}))
+            .unwrap();
+        assert!(!result.ok);
+        assert!(result.display.contains("unsupported command `publish`"));
+        // The error must spell out the allowlist so the agent can
+        // self-correct on the next turn.
+        assert!(result.display.contains("fmt"));
+        assert!(result.display.contains("test"));
+        assert!(result.display.contains("run"));
+    }
+
+    #[test]
+    fn binary_args_on_non_run_command_is_rejected() {
+        // binary_args is reserved for `run`. Calling `check` with
+        // them must fail loud rather than silently dropping them.
+        let tmp = tempfile::tempdir().unwrap();
+        let result = RunCargoTool
+            .invoke(
+                &ctx(tmp.path()),
+                &json!({"command": "check", "binary_args": ["--run-id", "x"]}),
+            )
+            .unwrap();
+        assert!(!result.ok);
+        assert!(result.display.contains("only applies to command = `run`"));
+        assert!(result.display.contains("got command = `check`"));
+    }
+
+    #[test]
+    fn empty_binary_args_array_on_non_run_is_ok_to_reach_spawn() {
+        // An empty array shouldn't be flagged -- it's the
+        // not-empty case that matters. The spawn will then fail
+        // because there's no Cargo.toml in the tempdir, but the
+        // validation should let us past the binary_args check.
+        let tmp = tempfile::tempdir().unwrap();
+        let result = RunCargoTool
+            .invoke(
+                &ctx(tmp.path()),
+                &json!({"command": "check", "binary_args": []}),
+            )
+            .unwrap();
+        // The result will be ok=false because cargo check fails in
+        // an empty dir, but the failure message should NOT be the
+        // binary_args-misuse one.
+        assert!(
+            !result.display.contains("only applies to command = `run`"),
+            "binary_args check spuriously fired for empty array; got {}",
+            result.display
+        );
+    }
+}
