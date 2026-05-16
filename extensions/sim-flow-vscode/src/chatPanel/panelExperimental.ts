@@ -1706,6 +1706,22 @@ function submitPrompt(): void {
   ui.draft = "";
   persist();
   send({ type: "send-prompt", prompt });
+  // Clear the live textarea directly. The morphdom diff in render()
+  // skips updates to a focused textarea (the onBeforeElUpdated hook
+  // returns false for focused fields so the user's caret position
+  // survives state-update churn), which means an Enter-to-send -- the
+  // most common submit path -- would leave the just-sent text visible
+  // in the textarea. The user then either pressed Enter again
+  // (silently no-op, ui.draft is empty) or typed more characters
+  // which got concatenated onto the stale text and resubmitted as a
+  // single message on the next send. See chat-panel audit #3.
+  const liveArea = document.getElementById("x-composer-textarea") as
+    | HTMLTextAreaElement
+    | null;
+  if (liveArea) {
+    liveArea.value = "";
+    autoResize(liveArea);
+  }
   render();
 }
 
