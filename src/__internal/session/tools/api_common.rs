@@ -276,6 +276,32 @@ mod tests {
     }
 
     #[test]
+    fn symbol_kind_label_covers_lsp_kinds_and_falls_back_for_unknown() {
+        // Spot-check every named kind in the dense LSP enum -- a
+        // sloppy `match` would silently fall through and the
+        // dashboard would render "Symbol" for everything.
+        for (k, expected) in [
+            (1u64, "File"),
+            (2, "Module"),
+            (5, "Class"),
+            (6, "Method"),
+            (10, "Enum"),
+            (11, "Trait"),
+            (12, "Function"),
+            (13, "Variable"),
+            (14, "Constant"),
+            (22, "EnumMember"),
+            (23, "Struct"),
+            (26, "TypeParam"),
+        ] {
+            assert_eq!(symbol_kind_label(k), expected, "kind {k}");
+        }
+        // Unknown / out-of-range -> generic fallback label.
+        assert_eq!(symbol_kind_label(999), "Symbol");
+        assert_eq!(symbol_kind_label(0), "Symbol");
+    }
+
+    #[test]
     fn format_location_value_returns_line_for_dedup() {
         let loc = json!({
             "uri": "file:///abs/foundation/a.rs",
