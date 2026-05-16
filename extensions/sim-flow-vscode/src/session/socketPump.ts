@@ -20,50 +20,11 @@ import type {
   StepDescriptorOut,
   StepMode,
 } from "./protocol-types";
-import { renderBuildOutput } from "./buildOutput";
-
-type SocketPumpBusEvent =
-  | { type: "settled"; result: PumpSettleResult }
-  | { type: "step-mode"; mode: StepMode }
-  | { type: "in-sub-session"; inSubSession: boolean }
-  | {
-      type: "gate-result";
-      step: string;
-      clean: boolean;
-      failures: { description: string; reason: string }[];
-    }
-  | {
-      // Orchestrator parked the sub-session and is asking for human
-      // guidance. The `prompt` field is the text to show above the
-      // composer (the question itself, or operator instructions
-      // like "/retry or /end-session"). `placeholder` hints what
-      // shape of reply is expected and goes inside the textarea.
-      // Both are optional in the wire format; if absent, the chat
-      // panel falls back to its generic "awaiting input" notice.
-      type: "request-user-input";
-      prompt: string | null;
-      placeholder: string | null;
-    }
-  | {
-      // Orchestrator suggested an actionable quick-reply. `label`
-      // is the button text; `action` is the literal string the
-      // host should ship as a `UserMessage` when the user clicks.
-      // Typically emitted in clusters just before a
-      // `request-user-input` (the orchestrator emits one per
-      // action, then parks). The chat panel accumulates these
-      // until a UserMessage ships or a new sub-session opens.
-      type: "followup";
-      label: string;
-      action: string;
-    }
-  | {
-      // Orchestrator's hint about what `ContinueFlow` would do
-      // next. `label` is pre-rendered for the chat panel's
-      // Continue button ("Run critique on DM2d"); null means "no
-      // action available, render Continue as disabled."
-      type: "next-action-hint";
-      label: string | null;
-    };
+import {
+  handleEvent,
+  type EventDispatchContext,
+  type SocketPumpBusEvent,
+} from "./socketPump/events";
 
 export interface SocketSessionPumpOptions {
   sessionId: string;
@@ -783,7 +744,9 @@ export class SocketSessionPump implements LiveSessionTransport {
     try {
       event = JSON.parse(line) as ProtocolEvent;
     } catch (err) {
-      this.renderDiagnostic("error", `protocol: bad JSON from sim-flow: ${(err as Error).message}`);
+      this.currentRenderer?.markdown(
+        `\n**Error**: protocol: bad JSON from sim-flow: ${(err as Error).message}\n`,
+      );
       return;
     }
     this.debugLog.logEventIn(event);
@@ -829,221 +792,12 @@ export class SocketSessionPump implements LiveSessionTransport {
   }
 
   private handleEvent(event: ProtocolEvent): void {
-    const wasBusy = this.inSubSession;
-    // Update the parking flag BEFORE dispatching the per-event
-    // case. The bracket flag (`inSubSessionFlag`) is the orchestrator's
-    // server-side truth; the parking flag (`awaitingUserInputFlag`)
-    // is our derivation: `request-user-input` parks, any other
-    // active event resumes. Bracket transitions and pure-state
-    // events (step-mode echo, hello-ack) don't change the parking
-    // signal; they're handled inline in their cases below.
-    if (event.event === "request-user-input") {
-      this.awaitingUserInputFlag = true;
-    } else if (
-      event.event !== "step-mode-changed" &&
-      event.event !== "hello-ack" &&
-      event.event !== "sub-session-started" &&
-      event.event !== "sub-session-ended" &&
-      event.event !== "session-end"
-    ) {
-      this.awaitingUserInputFlag = false;
-    }
-    switch (event.event) {
-      case "hello-ack":
-        this.sessionTag = event.session;
-        this.stepDescriptor = event.step_descriptor;
-        this.renderHelloAck(event);
-        break;
-      case "assistant-text": {
-        const toolCalls = (event.tool_calls ?? []).map((c) => ({
-          id: c.id ?? undefined,
-          name: c.name,
-          argumentsJson: c.arguments_json,
-        }));
-        // Prefer the structured `assistantTurn` renderer hook when
-        // available -- it carries both the prose AND the tool calls
-        // the LLM emitted, so experimental hosts can render a
-        // complete record even on tool-only turns (text=""). Fall
-        // back to `markdown(text)` for the legacy chat-participant
-        // path, which has no concept of tool calls.
-        if (this.currentRenderer?.assistantTurn) {
-          this.currentRenderer.assistantTurn({
-            text: event.text,
-            finalChunk: event.final_chunk,
-            toolCalls,
-          });
-        } else if (event.text.length > 0) {
-          this.currentRenderer?.markdown(event.text);
-        }
-        break;
-      }
-      case "llm-request":
-        // Experimental: surface every non-Assistant message the
-        // orchestrator added to the prompt stack so hosts can render
-        // the running prompt+response transcript. Renderers that
-        // don't implement `llmRequest` (e.g. VS Code chat
-        // participant) silently ignore.
-        this.currentRenderer?.llmRequest?.({
-          role: event.role,
-          content: event.content,
-          turnIndex: event.turn_index,
-          requestId: event.request_id,
-        });
-        break;
-      case "request-user-input":
-        // Surface prompt + placeholder to subscribers before the
-        // settle so the chat panel can paint the banner BEFORE
-        // flipping into the awaiting-input state. Both fields are
-        // optional in the wire format; the chat panel renders the
-        // generic "Waiting on user" notice when prompt is null.
-        this.bus.emit("msg", {
-          type: "request-user-input",
-          prompt: event.prompt ?? null,
-          placeholder: event.placeholder ?? null,
-        } as SocketPumpBusEvent);
-        this.bus.emit("msg", {
-          type: "settled",
-          result: { status: "awaiting-input" },
-        } as SocketPumpBusEvent);
-        break;
-      case "artifact-written":
-        this.currentRenderer?.markdown(`\n_Wrote \`${event.path}\` (${event.bytes} bytes)._\n`);
-        break;
-      case "tool-invoked":
-        this.currentRenderer?.markdown(
-          `\n_Tool \`${event.name}\` ${event.args_summary ? `(${event.args_summary}) ` : ""}-> ${event.status} (${event.duration_ms} ms)._\n`,
-        );
-        break;
-      case "phase-changed":
-        this.currentRenderer?.markdown(`\n**Phase:** \`${event.phase}\`\n`);
-        break;
-      case "build-output":
-        this.currentRenderer?.markdown(renderBuildOutput(event));
-        break;
-      case "gate-result":
-        if (event.clean) {
-          this.currentRenderer?.markdown(`\n**Gate \`${event.step}\`: clean.**\n`);
-        } else {
-          const lines = event.failures.map((f) => `- ${f.description}: ${f.reason}`).join("\n");
-          this.currentRenderer?.markdown(
-            `\n**Gate \`${event.step}\`: ${event.failures.length} failure(s).**\n\n${lines}\n`,
-          );
-        }
-        // Bus event so the dashboard's `gate-result` HostMessage path
-        // gets the structured result. Without this, manual-mode JSONL
-        // gate clicks only land in the chat panel as markdown -- the
-        // per-step "Run Gate" pending action stays "..." until the 5s
-        // failsafe, the gate cache never updates, and downstream
-        // buttons (Advance) don't react.
-        this.bus.emit("msg", {
-          type: "gate-result",
-          step: event.step,
-          clean: event.clean,
-          failures: event.failures.map((f) => ({
-            description: f.description,
-            reason: f.reason,
-          })),
-        } as SocketPumpBusEvent);
-        break;
-      case "state-advanced":
-        this.currentRenderer?.markdown(
-          `\n**Advanced past \`${event.from}\`${event.to ? `; current step is now \`${event.to}\`.` : ` (final step in this flow).`}**\n`,
-        );
-        break;
-      case "followup":
-        // Still surface the suggestion in the transcript for any
-        // text-only renderer (the chat panel will additionally
-        // surface a clickable chip via the bus event below).
-        this.currentRenderer?.markdown(
-          `\n_Suggested next: ${event.label} (\`${event.action}\`)._\n`,
-        );
-        this.bus.emit("msg", {
-          type: "followup",
-          label: event.label,
-          action: event.action,
-        } as SocketPumpBusEvent);
-        break;
-      case "next-action-hint":
-        this.bus.emit("msg", {
-          type: "next-action-hint",
-          label: event.label ?? null,
-        } as SocketPumpBusEvent);
-        break;
-      case "diagnostic":
-        this.renderDiagnostic(event.level, event.message);
-        break;
-      case "session-end":
-        this.markTerminated({
-          status: "ended",
-          endReason: event.reason,
-          endMessage: event.message ?? undefined,
-        });
-        break;
-      case "step-mode-changed":
-        // Track the orchestrator's truth and notify subscribers (the
-        // dashboard's toggle UI listens via `onStepModeChanged`). The
-        // event also fires at session start as the orchestrator
-        // echoes the initial `--step-mode` flag, so the toggle
-        // matches reality before the user touches anything.
-        this.currentStepMode = event.mode;
-        this.bus.emit("msg", {
-          type: "step-mode",
-          mode: event.mode,
-        } as SocketPumpBusEvent);
-        break;
-      case "sub-session-started":
-        // Bracket open. A fresh sub-session is by definition not
-        // parked, so clear the parking flag too (covers the case
-        // where the previous sub-session ended while parked and a
-        // new one starts before any active-work event).
-        this.inSubSessionFlag = true;
-        this.awaitingUserInputFlag = false;
-        break;
-      case "sub-session-ended":
-        // Bracket close. Dashboard listeners re-enable per-step
-        // buttons (subject to disk-state preconditions).
-        this.inSubSessionFlag = false;
-        this.awaitingUserInputFlag = false;
-        break;
-      default: {
-        const exhaustive: never = event;
-        void exhaustive;
-      }
-    }
-    // Single emission point for the effective busy signal. Events
-    // that don't change the bracket / parking pair are no-ops here
-    // (`wasBusy === isBusy`); everything that does — bracket open
-    // and close, parking on `request-user-input`, resuming on the
-    // next active-work event — fires exactly once per transition.
-    const isBusy = this.inSubSession;
-    if (isBusy !== wasBusy) {
-      this.bus.emit("msg", {
-        type: "in-sub-session",
-        inSubSession: isBusy,
-      } as SocketPumpBusEvent);
-    }
+    // The dispatch context interface mirrors this class's private
+    // fields exactly; the cast bridges TS's nominal privacy check
+    // while preserving structural compatibility at runtime.
+    handleEvent(this as unknown as EventDispatchContext, event);
   }
 
-  private renderHelloAck(event: ProtocolEvent & { event: "hello-ack" }): void {
-    const banner = [
-      `**Step \`${event.session.step}\` ${event.session.kind} session**`,
-      event.session.candidate ? `(candidate \`${event.session.candidate}\`)` : null,
-      `— sim-flow ${event.sim_flow_version}; protocol v${event.protocol_version}; backend \`${this.llm.source}\`${this.llm.model ? ` (\`${this.llm.model}\`)` : ""}.`,
-    ]
-      .filter(Boolean)
-      .join(" ");
-    this.currentRenderer?.markdown(`${banner}\n\n`);
-    if (event.step_descriptor.phases.length > 0) {
-      this.currentRenderer?.markdown(
-        `_Phases:_ ${event.step_descriptor.phases.map((p) => `\`${p}\``).join(" -> ")}\n\n`,
-      );
-    }
-  }
-
-  private renderDiagnostic(level: string, message: string): void {
-    const tag = level === "error" ? "**Error**" : level === "warning" ? "**Warning**" : "**Info**";
-    this.currentRenderer?.markdown(`\n${tag}: ${message}\n`);
-  }
 
 
   private sendHostEvent(event: HostEvent): void {
