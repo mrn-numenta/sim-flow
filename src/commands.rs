@@ -1946,6 +1946,46 @@ mod tests {
     }
 
     #[test]
+    fn metrics_cmd_with_no_log_file_returns_ok_with_no_op_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No .sim-flow/logs/llm-metrics.jsonl on disk.
+        for group_by in [
+            crate::cli::MetricsGroupBy::Raw,
+            crate::cli::MetricsGroupBy::Step,
+            crate::cli::MetricsGroupBy::Kind,
+            crate::cli::MetricsGroupBy::Backend,
+            crate::cli::MetricsGroupBy::Model,
+        ] {
+            assert!(metrics_cmd(tmp.path(), group_by, false).is_ok());
+        }
+    }
+
+    #[test]
+    fn metrics_cmd_skips_malformed_rows_and_reports_count() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(".sim-flow").join("logs");
+        std::fs::create_dir_all(&dir).unwrap();
+        // Empty file -> "no rows" branch.
+        std::fs::write(dir.join("llm-metrics.jsonl"), "").unwrap();
+        assert!(metrics_cmd(tmp.path(), crate::cli::MetricsGroupBy::Raw, false).is_ok());
+        // File with only malformed lines -> skipped path; no rows.
+        std::fs::write(
+            dir.join("llm-metrics.jsonl"),
+            "{not json}\n{also not json}\n",
+        )
+        .unwrap();
+        assert!(metrics_cmd(tmp.path(), crate::cli::MetricsGroupBy::Raw, false).is_ok());
+    }
+
+    #[test]
+    fn sweep_results_cmd_with_no_runs_returns_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        // No sweep child runs in the index -- prints summary and ok.
+        assert!(sweep_results_cmd(tmp.path(), "001-no-such-parent").is_ok());
+    }
+
+    #[test]
     fn coverage_cmd_show_uses_defaults_when_config_absent() {
         let tmp = tempfile::tempdir().unwrap();
         let r = coverage_cmd(
