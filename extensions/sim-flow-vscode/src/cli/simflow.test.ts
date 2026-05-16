@@ -288,6 +288,233 @@ describe("SimFlowCli.newModel", () => {
   });
 });
 
+describe("SimFlowCli.planProgress / planProgressAll", () => {
+  it("planProgress forwards the current step", async () => {
+    const { execute, calls } = capturing(
+      JSON.stringify({ milestones: [], current_task: null, plan_path: "docs/plan/DM0.md" }),
+    );
+    const cli = makeCli(execute);
+    const out = await cli.planProgress("DM0");
+    expect(out.plan_path).toBe("docs/plan/DM0.md");
+    expect(calls[0][1]).toEqual([
+      "--project",
+      "/proj",
+      "plan-progress",
+      "--current-step",
+      "DM0",
+    ]);
+  });
+
+  it("planProgressAll passes --all", async () => {
+    const { execute, calls } = capturing(JSON.stringify({ DM0: { milestones: [] } }));
+    const cli = makeCli(execute);
+    await cli.planProgressAll();
+    expect(calls[0][1]).toContain("plan-progress");
+    expect(calls[0][1]).toContain("--all");
+  });
+});
+
+describe("SimFlowCli.critiques / critiqueForStep", () => {
+  it("critiques returns the JSON-decoded array", async () => {
+    const { execute, calls } = capturing(JSON.stringify([{ step: "DM0", clean: true }]));
+    const cli = makeCli(execute);
+    const out = await cli.critiques();
+    expect(out).toHaveLength(1);
+    expect(calls[0][1]).toEqual(["--project", "/proj", "critiques"]);
+  });
+
+  it("critiqueForStep narrows to one step via --step", async () => {
+    const { execute, calls } = capturing(JSON.stringify({ step: "DM2c", clean: false }));
+    const cli = makeCli(execute);
+    const out = await cli.critiqueForStep("DM2c");
+    expect(out).toMatchObject({ step: "DM2c", clean: false });
+    expect(calls[0][1]).toEqual(["--project", "/proj", "critiques", "--step", "DM2c"]);
+  });
+});
+
+describe("SimFlowCli.documents", () => {
+  it("forwards the flow as --flow", async () => {
+    const { execute, calls } = capturing("[]");
+    const cli = makeCli(execute);
+    await cli.documents("direct-modeling");
+    expect(calls[0][1]).toEqual([
+      "--project",
+      "/proj",
+      "documents",
+      "--flow",
+      "direct-modeling",
+    ]);
+  });
+});
+
+describe("SimFlowCli.advance", () => {
+  it("calls advance with an optional step + --json", async () => {
+    const { execute, calls } = capturing(
+      JSON.stringify({
+        step: "DM0",
+        clean: true,
+        advanced: true,
+        next_step: "DM1",
+        failures: [],
+      }),
+    );
+    const cli = makeCli(execute);
+    await cli.advance("DM0");
+    expect(calls[0][1]).toEqual(["--project", "/proj", "advance", "DM0", "--json"]);
+  });
+
+  it("omits the step when called with no argument", async () => {
+    const { execute, calls } = capturing(
+      JSON.stringify({
+        step: "DM0",
+        clean: true,
+        advanced: false,
+        next_step: null,
+        failures: [],
+      }),
+    );
+    const cli = makeCli(execute);
+    await cli.advance();
+    expect(calls[0][1]).toEqual(["--project", "/proj", "advance", "--json"]);
+  });
+
+  it("tolerates non-zero exit when stdout still carries a JSON failure payload", async () => {
+    const payload = JSON.stringify({
+      step: "DM0",
+      clean: false,
+      advanced: false,
+      next_step: null,
+      failures: [{ description: "x", reason: "y" }],
+    });
+    const execute: Execute = async () => {
+      const err: Error & { code?: number; stdout?: string } = new Error("exit 1");
+      err.code = 1;
+      err.stdout = payload;
+      throw err;
+    };
+    const cli = makeCli(execute);
+    const out = await cli.advance("DM0");
+    expect(out.clean).toBe(false);
+  });
+});
+
+describe("SimFlowCli describe / prompts / convertSv / blockDiagram", () => {
+  it("describe forwards <step>.<kind>", async () => {
+    const { execute, calls } = capturing(JSON.stringify({ slug: "dm0-spec", body: "..." }));
+    const cli = makeCli(execute);
+    await cli.describe("DM0", "work");
+    expect(calls[0][1]).toEqual(["--project", "/proj", "describe", "DM0.work", "--json"]);
+  });
+
+  it("promptsList hits prompts/list with --json", async () => {
+    const { execute, calls } = capturing("[]");
+    const cli = makeCli(execute);
+    await cli.promptsList();
+    expect(calls[0][1]).toEqual(["--project", "/proj", "prompts", "list", "--json"]);
+  });
+
+  it("promptShow returns stdout verbatim and forwards <slug>.<kind>", async () => {
+    const { execute, calls } = capturing("raw prompt body\n");
+    const cli = makeCli(execute);
+    const out = await cli.promptShow("dm0-spec", "critique");
+    expect(out).toBe("raw prompt body\n");
+    expect(calls[0][1]).toEqual([
+      "--project",
+      "/proj",
+      "prompts",
+      "show",
+      "dm0-spec.critique",
+    ]);
+  });
+
+  it("promptShow wraps subprocess errors into a typed SimFlowCliError", async () => {
+    const execute: Execute = async () => {
+      throw new Error("ENOENT");
+    };
+    const cli = makeCli(execute);
+    await expect(cli.promptShow("dm0", "work")).rejects.toBeInstanceOf(SimFlowCliError);
+  });
+
+  it("convertSv adds --force only when requested", async () => {
+    const { execute, calls } = capturing("");
+    const cli = makeCli(execute);
+    await cli.convertSv(false);
+    expect(calls[0][1]).toEqual(["--project", "/proj", "convert-sv"]);
+    await cli.convertSv(true);
+    expect(calls[1][1]).toEqual(["--project", "/proj", "convert-sv", "--force"]);
+  });
+
+  it("convertSv wraps subprocess errors", async () => {
+    const execute: Execute = async () => {
+      throw new Error("boom");
+    };
+    const cli = makeCli(execute);
+    await expect(cli.convertSv()).rejects.toBeInstanceOf(SimFlowCliError);
+  });
+
+  it("promptReset forwards the scope flag and wraps errors", async () => {
+    const { execute, calls } = capturing("");
+    const cli = makeCli(execute);
+    await cli.promptReset("dm0", "work", "global");
+    expect(calls[0][1]).toEqual([
+      "--project",
+      "/proj",
+      "prompts",
+      "reset",
+      "dm0.work",
+      "--scope",
+      "global",
+    ]);
+    const failing = makeCli(async () => {
+      throw new Error("boom");
+    });
+    await expect(failing.promptReset("dm0", "work", "all")).rejects.toBeInstanceOf(SimFlowCliError);
+  });
+
+  it("blockDiagram fires the block-diagram subcommand", async () => {
+    const { execute, calls } = capturing("");
+    const cli = makeCli(execute);
+    await cli.blockDiagram();
+    expect(calls[0][1]).toContain("block-diagram");
+  });
+});
+
+describe("toCliError fallback (non-object throw)", () => {
+  it("execJson wraps a non-object throw value into a SimFlowCliError", async () => {
+    // A throw value that is not an Error / object exercises the
+    // `toCliError` fallback branch (no .message, no .stderr).
+    const execute: Execute = async () => {
+      // eslint-disable-next-line @typescript-eslint/no-throw-literal
+      throw "not an object";
+    };
+    const cli = makeCli(execute);
+    await expect(cli.status()).rejects.toBeInstanceOf(SimFlowCliError);
+    await expect(cli.status()).rejects.toMatchObject({ kind: "spawn-failed" });
+  });
+});
+
+describe("shellQuote (via buildCommandLine)", () => {
+  it("quotes an empty arg with ''", async () => {
+    const cli = makeCli(async () => ({ stdout: "", stderr: "" }));
+    const line = cli.buildCommandLine(["echo", ""]);
+    // The empty arg becomes ''.
+    expect(line.split(" ").pop()).toBe("''");
+  });
+
+  it("does not quote argv tokens that match the safe charset", async () => {
+    const cli = makeCli(async () => ({ stdout: "", stderr: "" }));
+    const line = cli.buildCommandLine(["reset", "DM2a"]);
+    // No quoting should be applied to DM2a or reset.
+    expect(line).toMatch(/\breset\s+DM2a$/);
+  });
+
+  it("escapes single quotes inside an argv value", async () => {
+    const cli = makeCli(async () => ({ stdout: "", stderr: "" }));
+    const line = cli.buildCommandLine(["echo", "it's tricky"]);
+    expect(line).toContain("'it'\\''s tricky'");
+  });
+});
+
 describe("SimFlowCli argv helpers", () => {
   it("buildArgs composes global and subcommand args", () => {
     const cli = makeCli(async () => ({ stdout: "", stderr: "" }), {
