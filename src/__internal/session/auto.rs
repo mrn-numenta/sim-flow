@@ -1362,13 +1362,29 @@ where
         // worker's clone is dropped at thread exit.
         drop(tx);
         // Coordinator: forward worker events to the host serially.
-        // host.send is fallible (transport-closed); propagate
-        // first error so workers don't keep flooding the channel.
-        while let Ok(event) = rx.recv() {
-            auto_host.send(&event)?;
-        }
-        // Join workers and propagate the first error encountered.
+        // host.send is fallible (transport-closed). Capture the
+        // first such error into `first_err` rather than propagating
+        // via `?` -- bailing here would skip the handle-join loop
+        // below, and `thread::scope`'s auto-join would silently
+        // discard every worker's `Result` and panic payload.
+        // Continue draining the channel so workers can finish
+        // emitting (their `send` is best-effort and won't block
+        // when the receiver is still alive).
         let mut first_err: Option<crate::Error> = None;
+        while let Ok(event) = rx.recv() {
+            if first_err.is_some() {
+                // Already in shutdown; drop subsequent events
+                // rather than re-trying host.send (which would
+                // likely fail again and clobber the original
+                // error).
+                continue;
+            }
+            if let Err(e) = auto_host.send(&event) {
+                first_err = Some(e);
+            }
+        }
+        // Join workers; surface the first worker Err / panic if
+        // the rx loop didn't already report one.
         for h in handles {
             match h.join() {
                 Ok(Ok(())) => {}
