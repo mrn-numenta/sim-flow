@@ -357,10 +357,35 @@ export function stripProtocolFences(text: string): string {
 export function summarizeTokenEstimates(
   transcript: ChatTranscriptEntry[],
 ): { input: number; output: number } {
+  // Orchestrator-emitted user/tool entries (meta starts with
+  // "orchestrator-") carry the *full prompt-stack* the LLM was sent
+  // that turn. Across turns the orchestrator re-emits the same
+  // historical messages -- a user message from turn 1 appears again
+  // in turn 2's stack, etc. Summing every entry's
+  // requestTokensEstimate would tally those carry-forward messages
+  // once per turn they appear, overstating the input total in
+  // proportion to conversation length. Dedup by (meta, body) so
+  // each unique stack message contributes exactly once. Genuine
+  // human-typed user entries (meta != "orchestrator-*") and
+  // assistant responses are always unique and tallied normally.
+  // See chat-panel audit #11 (2026-05-16).
+  const seenOrchestratorBodies = new Set<string>();
   return transcript.reduce(
     (totals, entry) => {
       if (entry.kind === "assistant" || entry.kind === "user") {
-        totals.input += entry.requestTokensEstimate ?? 0;
+        const isOrchestratorEmitted =
+          entry.kind === "user"
+          && typeof entry.meta === "string"
+          && entry.meta.startsWith("orchestrator-");
+        if (isOrchestratorEmitted) {
+          const key = `${entry.meta}::${entry.body}`;
+          if (!seenOrchestratorBodies.has(key)) {
+            seenOrchestratorBodies.add(key);
+            totals.input += entry.requestTokensEstimate ?? 0;
+          }
+        } else {
+          totals.input += entry.requestTokensEstimate ?? 0;
+        }
         totals.output += entry.responseTokensEstimate ?? 0;
       }
       return totals;
