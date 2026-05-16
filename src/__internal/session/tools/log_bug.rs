@@ -198,4 +198,39 @@ mod tests {
             .unwrap();
         assert!(!result.ok);
     }
+
+    #[test]
+    fn log_bug_rejects_missing_category_with_allowed_values_in_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = LogBugTool
+            .invoke(&ctx(tmp.path()), &json!({"issue": "x"}))
+            .unwrap();
+        assert!(!result.ok);
+        // Error must enumerate the allowed categories so the agent can
+        // self-correct without an external lookup.
+        assert!(result.display.contains("Allowed values"));
+        assert!(result.display.contains("test_failure"));
+        assert!(result.display.contains("compile_error"));
+    }
+
+    #[test]
+    fn log_bug_with_milestone_path_includes_it_in_record_and_response() {
+        let tmp = tempfile::tempdir().unwrap();
+        let milestone = "docs/test-plan/test-milestone-03.md";
+        let result = LogBugTool
+            .invoke(
+                &ToolContext::new(tmp.path(), None, None, None)
+                    .with_step_id("DM3a")
+                    .with_milestone_path(Some(milestone)),
+                &json!({"issue": "x", "category": "test_failure"}),
+            )
+            .unwrap();
+        assert!(result.ok);
+        assert!(result.display.contains(milestone));
+        // And the record on disk carries the milestone.
+        let records = crate::bug_log::load_all(tmp.path());
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].milestone.as_deref(), Some(milestone));
+        assert_eq!(records[0].step, "DM3a");
+    }
 }
