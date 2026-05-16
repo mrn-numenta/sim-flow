@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   AutoSessionManager,
   type AutoSessionDriveDelegate,
+  type StoredAutoSessionRecord,
 } from "./autoSessionManager";
 
 class FakeMemento {
@@ -376,14 +377,14 @@ describe("chatPanel/autoSessionManager", () => {
   it("attach hydrates a session from a stored record and persists it", async () => {
     const pump = new FakePump();
     pump.nextSettle = Promise.resolve({ status: "awaiting-input" });
-    const stored = {
+    const stored: StoredAutoSessionRecord = {
       sessionId: "old-session",
       socketPath: "/tmp/old.sock",
       projectDir: "/tmp/attach-proj",
       awaitingInput: true,
       sourceTag: "ollama",
       model: "x",
-      sessionMode: "auto" as const,
+      sessionMode: "auto",
       stepRef: null,
       launchSpecPath: undefined,
       updatedAtMs: 1,
