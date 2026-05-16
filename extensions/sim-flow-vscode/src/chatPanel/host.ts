@@ -656,62 +656,43 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
     if (this.activePump.stopRequested) {
+      // Rapid double-clicks: a cancel is already in flight. Don't
+      // re-send (idempotent on the wire anyway) and don't append a
+      // duplicate note. The flag clears in onManagedSessionSettled
+      // when the orchestrator confirms it's parked.
       return;
     }
     const session = this.activePump;
     session.stopRequested = true;
-    session.awaitingInput = false;
+
+    // The Stop button's intent is "halt the current activity but
+    // keep the session alive": cancel the in-flight sub-session
+    // and drop the orchestrator into manual mode so it parks at
+    // `wait_for_command` instead of plowing into the next bracket.
+    // No process termination, no escalation -- the session stays
+    // attached and the user can resume with the Continue button or
+    // typed input.
+    //
+    // Order: flip to manual first so the auto loop's post-
+    // sub-session mode check returns `FlippedToManual` after the
+    // cancel lands; otherwise auto could schedule the next
+    // sub-session before the mode flag arrives.
+    if (typeof session.pump.setStepMode === "function") {
+      session.pump.setStepMode("manual");
+    }
+    session.pump.cancel();
+
+    // Persist the operator-visible note. The orchestrator will
+    // settle the cancelled sub-session via its normal settle path
+    // (drive loop -> delegate.settled) and the panel will refresh
+    // to show the parked state.
     conversation = appendNote(
       conversation,
-      "Stopping session",
-      "Cancellation requested for the running sim-flow session.",
+      "Cancelled",
+      "Stopped the current activity and switched to Manual mode. The session is still attached -- click Continue or type to drive the next step.",
     );
     await this.persistConversation(context.projectDir, conversation);
     await this.postState(context, conversation);
-
-    // Send `cancel` first so the orchestrator can finish cleanly if
-    // it's parked at request-user-input. Then escalate to
-    // shutdown -> SIGTERM -> SIGKILL via `disconnectWithEscalation`
-    // -- the soft cancel doesn't reach a child that's blocked inside
-    // a synchronous LLM dispatch (the wire reader only services
-    // events between turns), so the only reliable way to interrupt
-    // a mid-LLM-call run is to terminate the process.
-    session.pump.cancel();
-    let outcome: "clean" | "sigterm" | "sigkill" | "already-gone" | undefined;
-    try {
-      // Tight timeouts: when the orchestrator is mid-LLM-call the
-      // socket reader can't service `shutdown`, so the default 5s
-      // clean wait is dead time the user is staring at. 1s is enough
-      // for the in-between-turns case and keeps the worst-case stop
-      // latency to ~2s (1s soft + 1s SIGTERM + immediate SIGKILL).
-      outcome = await session.pump.disconnectWithEscalation?.(1_000, 1_000);
-    } catch (err) {
-      console.error(
-        `sim-flow: chat-panel stop escalation failed: ${(err as Error).message ?? String(err)}`,
-      );
-    }
-    // The normal teardown path: when the orchestrator settles cleanly
-    // (clean exit OR SIGTERM-induced exit), the drive loop's
-    // `delegate.settled(...)` fires `onManagedSessionSettled`, which
-    // appends "Stopped the running sim-flow session." and clears the
-    // active session. We only need to step in when that path didn't
-    // run -- typically a SIGKILL where the child dies without emitting
-    // a final settle event. Test for that by checking whether the
-    // session is still pinned as the active pump.
-    if (this.activePump !== session) {
-      return;
-    }
-    await this.autoSessions.clearIfActive(session);
-    let finalConversation = this.readConversation(context.projectDir);
-    finalConversation = appendNote(
-      finalConversation,
-      "Session stopped",
-      outcome === "sigkill"
-        ? "The orchestrator did not exit after shutdown / SIGTERM and was killed (SIGKILL)."
-        : "Stopped the running sim-flow session.",
-    );
-    await this.persistConversation(context.projectDir, finalConversation);
-    await this.postState(context, finalConversation);
   }
 
   /**

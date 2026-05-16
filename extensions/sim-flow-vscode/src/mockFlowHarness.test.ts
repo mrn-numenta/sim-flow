@@ -2211,40 +2211,19 @@ describe("mocked dashboard/chat harness", () => {
     await flushAsyncWork();
 
     state = latestState(chatView);
-    expect(state?.canStop).toBe(false);
-    expect(state?.currentPhase).toBeNull();
-    expect(state?.currentTool).toBeNull();
-    expect(state?.currentArtifact).toBeNull();
-    expect(transcriptBodies(state!)).toContain("Cancellation requested for the running sim-flow session.");
-    expect(transcriptBodies(state!)).toContain("Stopped the running sim-flow session.");
-
-    mock.state.pumpScripts.set(exampleDir, [
-      {
-        onSettle: (renderer) => {
-          renderer.markdown("Relaunched session reached DM1.\n");
-          markPassed(exampleDir, "DM0", "DM1");
-          renderer.markdown("\n**Advanced past `DM0`; current step is now `DM1`.**\n");
-        },
-        result: {
-          status: "ended",
-          endReason: "completed",
-          endMessage: "Relaunched mock session completed.",
-        },
-      },
-    ]);
-
-    await mock.state.lastDashboardPanel!.webview.emit({
-      type: "run-auto",
-      specPath,
-    });
-    await flushAsyncWork();
-
-    state = latestState(chatView);
-    expect(state?.currentStep).toBe("DM1");
-    expect(transcriptBodies(state!)).toContain("Relaunched session reached DM1.");
-    expect(transcriptBodies(state!)).not.toContain(
-      "Working through the initial grayscale decomposition.",
+    // New stop semantic: cancel the current activity, drop to
+    // manual mode, but keep the session alive. The note text and
+    // session retention reflect that.
+    expect(transcriptBodies(state!)).toContain(
+      "Stopped the current activity and switched to Manual mode. The session is still attached -- click Continue or type to drive the next step.",
     );
+
+    // A subsequent run-auto for the SAME project / spec should
+    // no-op (matching session already attached). To force a fresh
+    // relaunch in the test we'd need a different spec; the
+    // relaunch-cleanly behaviour now belongs to the project
+    // switcher rather than the chat-panel Stop button, so we just
+    // assert the parked-but-alive state here.
   });
 
   it("does not clear the transcript while an auto session is active", async () => {
@@ -2353,8 +2332,14 @@ describe("mocked dashboard/chat harness", () => {
 
     const state = latestState(chatView);
     const bodies = transcriptBodies(state!);
-    expect(countOccurrences(bodies, "Cancellation requested for the running sim-flow session.")).toBe(1);
-    expect(countOccurrences(bodies, "Stopped the running sim-flow session.")).toBe(1);
+    // Two rapid Stop clicks should produce exactly one cancel note;
+    // the second click hits the `stopRequested` idempotency guard.
+    expect(
+      countOccurrences(
+        bodies,
+        "Stopped the current activity and switched to Manual mode. The session is still attached -- click Continue or type to drive the next step.",
+      ),
+    ).toBe(1);
   });
 
   it("stops cleanly during a gate and step-transition burst", async () => {
@@ -2413,8 +2398,9 @@ describe("mocked dashboard/chat harness", () => {
     expect(bodies).toContain("Gate `DM0`: clean.");
     expect(bodies).toContain("Advanced past `DM0`; current step is now `DM1`.");
     expect(bodies).toContain("Preparing the DM1 follow-up work.");
-    expect(bodies).toContain("Cancellation requested for the running sim-flow session.");
-    expect(bodies).toContain("Stopped the running sim-flow session.");
+    expect(bodies).toContain(
+      "Stopped the current activity and switched to Manual mode. The session is still attached -- click Continue or type to drive the next step.",
+    );
   });
 
 });
