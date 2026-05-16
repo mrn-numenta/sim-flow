@@ -437,6 +437,141 @@ describe("session/socketPump", () => {
     expect(() => pump.dispose()).not.toThrow();
   });
 
+  it("renders an in-settle artifact-written / tool-invoked / phase-changed sequence", async () => {
+    const { pump, socket } = await makePump("renderer-events");
+    const rendered: string[] = [];
+    const settle2 = pump.settle({ markdown: (t) => rendered.push(t) });
+    socket.emit(
+      "data",
+      `${JSON.stringify({ event: "artifact-written", path: "docs/spec.md", bytes: 42 })}\n`,
+    );
+    socket.emit(
+      "data",
+      `${JSON.stringify({
+        event: "tool-invoked",
+        name: "write_file",
+        args_summary: "docs/spec.md",
+        status: "ok",
+        duration_ms: 12,
+      })}\n`,
+    );
+    socket.emit(
+      "data",
+      `${JSON.stringify({ event: "phase-changed", phase: "impl" })}\n`,
+    );
+    socket.emit("data", `${JSON.stringify({ event: "request-user-input" })}\n`);
+    await settle2;
+    const out = rendered.join("");
+    expect(out).toContain("Wrote `docs/spec.md` (42 bytes)");
+    expect(out).toContain("Tool `write_file`");
+    expect(out).toContain("(12 ms)");
+    expect(out).toContain("**Phase:**");
+    expect(out).toContain("impl");
+    pump.dispose();
+  });
+
+  it("renders state-advanced events to the active renderer (queued + flushed)", async () => {
+    const { pump, socket } = await makePump("state-advance");
+    const rendered: string[] = [];
+    const settle2 = pump.settle({ markdown: (t) => rendered.push(t) });
+    // state-advanced is NOT in the bypass list, so it queues until
+    // flushQueuedEvents runs inside settle and reaches the renderer.
+    socket.emit(
+      "data",
+      `${JSON.stringify({ event: "state-advanced", from: "DM0", to: "DM1" })}\n`,
+    );
+    socket.emit("data", `${JSON.stringify({ event: "request-user-input" })}\n`);
+    await settle2;
+    const out = rendered.join("");
+    expect(out).toContain("Advanced past `DM0`");
+    expect(out).toContain("DM1");
+    pump.dispose();
+  });
+
+  it("renders diagnostic events with severity tags (info / warning / error)", async () => {
+    const { pump, socket } = await makePump("diag");
+    const rendered: string[] = [];
+    const settle2 = pump.settle({ markdown: (t) => rendered.push(t) });
+    socket.emit(
+      "data",
+      `${JSON.stringify({ event: "diagnostic", level: "info", message: "Just FYI" })}\n`,
+    );
+    socket.emit(
+      "data",
+      `${JSON.stringify({ event: "diagnostic", level: "warning", message: "Heads up" })}\n`,
+    );
+    socket.emit(
+      "data",
+      `${JSON.stringify({ event: "diagnostic", level: "error", message: "Boom" })}\n`,
+    );
+    socket.emit("data", `${JSON.stringify({ event: "request-user-input" })}\n`);
+    await settle2;
+    const out = rendered.join("");
+    expect(out).toContain("**Info**: Just FYI");
+    expect(out).toContain("**Warning**: Heads up");
+    expect(out).toContain("**Error**: Boom");
+    pump.dispose();
+  });
+
+  it("assistant-text routes to assistantTurn when present (incl. tool_calls)", async () => {
+    const { pump, socket } = await makePump("assistant-turn");
+    const turns: Array<{
+      text: string;
+      finalChunk: boolean;
+      toolCallNames: string[];
+    }> = [];
+    const settle2 = pump.settle({
+      markdown: () => {},
+      assistantTurn: (args) =>
+        turns.push({
+          text: args.text,
+          finalChunk: args.finalChunk,
+          toolCallNames: args.toolCalls.map((t) => t.name),
+        }),
+    });
+    socket.emit(
+      "data",
+      `${JSON.stringify({
+        event: "assistant-text",
+        text: "",
+        final_chunk: true,
+        tool_calls: [
+          { id: "t-1", name: "write_file", arguments_json: '{"path":"x.md"}' },
+        ],
+      })}\n`,
+    );
+    socket.emit("data", `${JSON.stringify({ event: "request-user-input" })}\n`);
+    await settle2;
+    expect(turns).toEqual([
+      { text: "", finalChunk: true, toolCallNames: ["write_file"] },
+    ]);
+    pump.dispose();
+  });
+
+  it("llm-request routes to renderer.llmRequest with the full payload", async () => {
+    const { pump, socket } = await makePump("llm-req");
+    const reqs: Array<{ role: string; content: string; turnIndex: number }> = [];
+    const settle2 = pump.settle({
+      markdown: () => {},
+      llmRequest: (args) =>
+        reqs.push({ role: args.role, content: args.content, turnIndex: args.turnIndex }),
+    });
+    socket.emit(
+      "data",
+      `${JSON.stringify({
+        event: "llm-request",
+        role: "user",
+        content: "Please do X",
+        turn_index: 3,
+        request_id: "req-5",
+      })}\n`,
+    );
+    socket.emit("data", `${JSON.stringify({ event: "request-user-input" })}\n`);
+    await settle2;
+    expect(reqs).toEqual([{ role: "user", content: "Please do X", turnIndex: 3 }]);
+    pump.dispose();
+  });
+
   it("notifies subscribers when StepModeChanged arrives from the orchestrator", async () => {
     mock.reset();
 
