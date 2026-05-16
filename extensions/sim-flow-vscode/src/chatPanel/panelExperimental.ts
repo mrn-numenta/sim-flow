@@ -722,6 +722,11 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   // accents make it clear the values aren't currently in effect.
   settingsPanel.appendChild(buildCustomPalettePickers());
 
+  // Enable Verilog: checkmark-style row in the same popover. The
+  // host writes the change back to `sim-flow.verilog.enabled` and
+  // the configuration listener triggers a refresh.
+  settingsPanel.appendChild(buildVerilogToggle(state));
+
   settings.appendChild(settingsPanel);
   rightZone.appendChild(settings);
 
@@ -955,6 +960,34 @@ function buildCustomPalettePickers(): HTMLElement {
   }
   root.appendChild(grid);
   return root;
+}
+
+/**
+ * "Enable Verilog" checkmark row in the settings popover. The
+ * leading ✓ glyph is present when enabled and hidden (replaced by
+ * matching whitespace so the label position stays stable) when
+ * disabled. Clicking the row sends `set-verilog-enabled` to the
+ * host; the host writes the workspace setting and a config-change
+ * listener triggers a fresh state-update so the SVF rail appears
+ * / disappears.
+ */
+function buildVerilogToggle(state: ChatPanelState): HTMLElement {
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "x-toolbar-settings-checkrow";
+  const check = document.createElement("span");
+  check.className = "x-toolbar-settings-check";
+  check.textContent = state.verilogEnabled ? "✓" : " ";
+  const label = document.createElement("span");
+  label.textContent = "Enable Verilog";
+  row.append(check, label);
+  row.title = state.verilogEnabled
+    ? "SystemVerilog conversion is enabled. Disabling hides the SV rail and treats DM4b as the terminal step."
+    : "Show the SystemVerilog conversion rail under the DM rail and let DM4b advance into the SV flow.";
+  row.addEventListener("click", () => {
+    send({ type: "set-verilog-enabled", enabled: !state.verilogEnabled });
+  });
+  return row;
 }
 
 function buildTranscript(state: ChatPanelState): HTMLElement {
@@ -1467,17 +1500,40 @@ function buildComposerControls(state: ChatPanelState): HTMLElement {
   playBtn.id = "x-composer-play";
   playBtn.className = "x-play";
   playBtn.innerHTML = `<i class="codicon codicon-play" aria-hidden="true"></i>`;
+  // Special case: DM4b has passed AND Verilog generation is enabled
+  // -> Continue means "flip the project into the SV flow at SV0".
+  // The orchestrator's NextActionHint is null in this state (DM4b
+  // is terminal in the DM flow), so we override the disabled +
+  // dispatch behaviour rather than relying on hint.
+  const passedSet = new Set(state.passedSteps);
+  const dm4bConvertReady =
+    state.verilogEnabled &&
+    state.flow === "direct-modeling" &&
+    passedSet.has("DM4b") &&
+    !state.isStreaming &&
+    !state.isViewer;
   const hintLabel = state.nextActionHint?.label ?? null;
-  playBtn.disabled = !hintLabel || state.isStreaming || state.isViewer;
-  playBtn.setAttribute(
-    "aria-label",
-    hintLabel ? `Continue: ${hintLabel}` : "Continue",
-  );
-  playBtn.title = hintLabel
-    ? `Continue: ${hintLabel}`
-    : "Continue the flow from its current position. Available when the orchestrator is parked in Manual mode between sub-sessions.";
+  if (dm4bConvertReady) {
+    playBtn.disabled = false;
+    playBtn.setAttribute("aria-label", "Convert to SystemVerilog");
+    playBtn.title =
+      "Convert to SystemVerilog -- runs `sim-flow convert-sv` to flip the project into the SV flow at SV0, then reconnects the pump.";
+  } else {
+    playBtn.disabled = !hintLabel || state.isStreaming || state.isViewer;
+    playBtn.setAttribute(
+      "aria-label",
+      hintLabel ? `Continue: ${hintLabel}` : "Continue",
+    );
+    playBtn.title = hintLabel
+      ? `Continue: ${hintLabel}`
+      : "Continue the flow from its current position. Available when the orchestrator is parked in Manual mode between sub-sessions.";
+  }
   playBtn.addEventListener("click", () => {
     if (playBtn.disabled) {
+      return;
+    }
+    if (dm4bConvertReady) {
+      send({ type: "convert-to-sv" });
       return;
     }
     send({ type: "continue-flow" });
@@ -1622,6 +1678,11 @@ const STEP_LABELS: Record<string, string> = {
   DS3c: "Tests",
   DS4: "Screen",
   DS5: "Compare",
+  SV0: "Plan",
+  SV0d: "Detail",
+  SV1: "RTL",
+  SV2: "UVM",
+  SV3: "Build",
 };
 
 /**
@@ -1642,6 +1703,11 @@ const STEP_FULL_LABELS: Record<string, string> = {
   DM3c: "DM3c: Test Execution",
   DM4a: "DM4a: Performance Plan",
   DM4b: "DM4b: Performance Execution",
+  SV0: "SV0: Verilog Plan",
+  SV0d: "SV0d: Plan Detail",
+  SV1: "SV1: RTL Emission",
+  SV2: "SV2: UVM Emission",
+  SV3: "SV3: Build & Validate",
 };
 
 /**
@@ -1706,6 +1772,31 @@ const STEP_DESCRIPTIONS: Record<string, { title: string; body: string }> = {
     body:
       "Execute each perf milestone, recording at least one run in `experiments.db`. The gate inspects experiment artifacts and clears once the perf plan is fully covered.",
   },
+  SV0: {
+    title: "SV0 — Verilog Plan",
+    body:
+      "Classify each Foundation module into a hardware pattern and stub RTL + UVM milestones under `generated/plan/`. Produces `generated/plan.md` (the index) plus per-area `rtl-milestone-NN-*.md` and `uvm-milestone-NN-*.md` files. Entered automatically after DM4b passes when Verilog generation is enabled.",
+  },
+  SV0d: {
+    title: "SV0d — Plan Detail",
+    body:
+      "Fill in each milestone stub's task list. Walks every `rtl-milestone-` and `uvm-milestone-` placeholder under `generated/plan/` until every entry has been detailed.",
+  },
+  SV1: {
+    title: "SV1 — RTL Emission",
+    body:
+      "Emit synthesizable SystemVerilog into `generated/rtl/` one module per RTL milestone, including shared packed structs (`payloads.sv`) and top-level wiring (`top.sv`). Critique runs between milestones; the gate clears once every RTL milestone task is resolved.",
+  },
+  SV2: {
+    title: "SV2 — UVM Emission",
+    body:
+      "Emit UVM testbench scaffolding (sequence items, env, top) plus per-test files into `generated/test/`. Walks the `uvm-milestone-` set in `generated/plan/` until every UVM milestone task is resolved.",
+  },
+  SV3: {
+    title: "SV3 — Build & Validate",
+    body:
+      "Generate the simulator file list (`sim.f`), a runnable `Makefile`, and a `validation.md` summary. Drives the emitted RTL through Verilator (or your configured simulator) and iterates the generated SystemVerilog until simulation passes.",
+  },
 };
 
 /**
@@ -1725,17 +1816,53 @@ function buildStepRail(state: ChatPanelState): HTMLElement | null {
   if (!state.flow) {
     return null;
   }
-  const order = stepOrderFor(state.flow);
-  const passed = new Set(state.passedSteps);
+  // When the user is mid-DMF and Verilog generation is enabled,
+  // stack the SV preview rail below the active DMF rail so they
+  // can see the pipeline ahead of them. When the project has
+  // already flipped to SV (post-DM4b convert-sv), the active
+  // rail IS the SV one; nothing extra to show.
+  const showSvPreview =
+    state.flow === "direct-modeling" && state.verilogEnabled;
+  if (!showSvPreview) {
+    return renderRailForFlow(state, state.flow, true);
+  }
+  const stack = div("x-step-rail-stack");
+  stack.appendChild(renderRailForFlow(state, "direct-modeling", true));
+  stack.appendChild(renderRailForFlow(state, "systemverilog-convert", false));
+  return stack;
+}
+
+/**
+ * Render a single horizontal rail for `flow`. When `active` is
+ * true, the rail reflects the orchestrator's truth (current step,
+ * passed gates) for the live project; when false, every tile is
+ * rendered pending (this is the SV preview shown under DMF when
+ * Verilog generation is enabled but the project hasn't flipped
+ * yet).
+ */
+function renderRailForFlow(
+  state: ChatPanelState,
+  flow: import("../cli/types").Flow,
+  active: boolean,
+): HTMLElement {
+  const order = stepOrderFor(flow);
+  const passed = active ? new Set(state.passedSteps) : new Set<string>();
+  const currentStep = active ? state.currentStep : null;
   const rail = div("x-step-rail");
   rail.setAttribute("role", "tablist");
-  rail.setAttribute("aria-label", "Flow step rail");
+  rail.setAttribute(
+    "aria-label",
+    active ? "Flow step rail" : "Upcoming SystemVerilog step rail",
+  );
+  if (!active) {
+    rail.classList.add("x-step-rail-preview");
+  }
   for (const stepId of order) {
     const tile = document.createElement("button");
     tile.type = "button";
     let cls = "x-step-rail-step";
     let title: string;
-    if (stepId === state.currentStep) {
+    if (stepId === currentStep) {
       cls += " x-step-rail-step-current";
       title = `${STEP_LABELS[stepId] ?? stepId}: current step. Click for the latest critique findings.`;
     } else if (passed.has(stepId)) {
@@ -1743,14 +1870,11 @@ function buildStepRail(state: ChatPanelState): HTMLElement | null {
       title = `${STEP_LABELS[stepId] ?? stepId}: gate passed. Click for that step's critique findings.`;
     } else {
       cls += " x-step-rail-step-pending";
-      title = `${STEP_LABELS[stepId] ?? stepId}: not yet completed. Click for any critique findings on disk.`;
+      title = active
+        ? `${STEP_LABELS[stepId] ?? stepId}: not yet completed. Click for any critique findings on disk.`
+        : `${STEP_LABELS[stepId] ?? stepId}: upcoming. The project flips into the SV flow once DM4b passes and you click Convert to SystemVerilog.`;
     }
     tile.className = cls;
-    // Two labels share the tile: a short one (just the step id) for
-    // the default narrow tile, and a full one (`DM0: Specification
-    // Intake`) revealed on hover. CSS swaps which span is `display:
-    // inline` so the layout reflows naturally when the hovered tile
-    // widens.
     const short = document.createElement("span");
     short.className = "x-step-rail-step-short";
     short.textContent = stepId;
@@ -1761,8 +1885,6 @@ function buildStepRail(state: ChatPanelState): HTMLElement | null {
     tile.title = title;
     tile.setAttribute("aria-label", title);
     tile.addEventListener("click", () => {
-      // Same-tile second click closes; otherwise switch which
-      // step's critique is shown.
       if (
         ui.openPopup &&
         ui.openPopup.kind === "critique" &&
@@ -1778,11 +1900,12 @@ function buildStepRail(state: ChatPanelState): HTMLElement | null {
       render();
     });
     tile.addEventListener("contextmenu", (event) => {
-      // Right-click opens a custom HTML context menu at the cursor
-      // position. The native context menu would be a webview-level
-      // copy/paste menu, which isn't useful here; preventDefault
-      // suppresses it so only our menu shows.
       event.preventDefault();
+      // No reset menu on the SV preview rail -- there's nothing
+      // to reset there yet.
+      if (!active) {
+        return;
+      }
       ui.openContextMenu = {
         step: stepId,
         x: event.clientX,

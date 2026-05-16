@@ -188,6 +188,15 @@ export interface ChatPanelState {
     taskTotal: number | null;
   } | null;
   /**
+   * Whether `sim-flow.verilog.enabled` is on. When true, the chat
+   * panel shows the SystemVerilog conversion rail underneath the
+   * DMF rail and (when DM4b has passed) offers a "Convert to
+   * SystemVerilog" continue action that flips the project into
+   * the systemverilog-convert flow. Mirrors the VS Code setting
+   * so changes survive panel reloads + restarts.
+   */
+  verilogEnabled: boolean;
+  /**
    * Active palette name. Persisted in `workspaceState` so it
    * survives VS Code restarts (in addition to `vscode.setState`
    * for fast in-session apply).
@@ -349,4 +358,20 @@ export type WebviewMessage =
       type: "set-palette";
       palette: ChatPalette;
       customPalette: ChatCustomPalette;
-    };
+    }
+  /**
+   * Toggle `sim-flow.verilog.enabled`. The host updates the VS
+   * Code workspace setting; the configuration change listener
+   * already in the chat panel host refreshes the panel so the
+   * SVF rail appears / disappears in response.
+   */
+  | { type: "set-verilog-enabled"; enabled: boolean }
+  /**
+   * Flip the anchored project from DirectModeling into the
+   * SystemVerilog conversion flow at SV0. Sent from the Continue
+   * button on a passed DM4b when verilog generation is enabled.
+   * The host runs `sim-flow convert-sv` against the project and
+   * then reconnects the pump so the orchestrator picks up the
+   * post-flip state.
+   */
+  | { type: "convert-to-sv" };

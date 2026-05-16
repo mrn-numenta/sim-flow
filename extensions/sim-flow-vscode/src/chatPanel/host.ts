@@ -14,6 +14,11 @@ import {
 import type { LlmSource, SecretStorage } from "../llm";
 import { type PumpLlmConfig } from "../session/pump";
 import { SocketSessionPump } from "../session/socketPump";
+import {
+  SimFlowCli,
+  bundledCandidates,
+  resolveBinary,
+} from "../cli";
 import { readCritique } from "../state/critiques";
 import { readFlowState } from "../state/flowState";
 import { readPlanProgress } from "../state/planProgress";
@@ -209,6 +214,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         }
         if (event.affectsConfiguration("sim-flow.llm.maxParallelRequests")) {
           void this.pushLlmSettingToActiveProject();
+        }
+        if (event.affectsConfiguration("sim-flow.verilog.enabled")) {
+          // The chat panel's SV rail + DM4b -> SV0 transition both
+          // depend on this flag; a refresh repaints with the new
+          // value without waiting for the next state-update.
+          void this.refresh();
         }
       }),
       vscode.window.onDidChangeActiveTextEditor(() => {
@@ -518,6 +529,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       case "set-palette":
         await this.persistPaletteChoice(msg.palette, msg.customPalette);
         return;
+      case "set-verilog-enabled":
+        await vscode.workspace
+          .getConfiguration("sim-flow")
+          .update(
+            "verilog.enabled",
+            msg.enabled,
+            vscode.ConfigurationTarget.Workspace,
+          );
+        return;
+      case "convert-to-sv":
+        await this.convertActiveProjectToSv();
+        return;
       default:
         return;
     }
@@ -590,6 +613,62 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           err instanceof Error ? err.message : String(err)
         }`,
       );
+    }
+  }
+
+  /**
+   * Run `sim-flow convert-sv` against the anchored project and
+   * reconnect the pump so the orchestrator picks up the post-flip
+   * state.toml (flow = systemverilog-convert, current_step = SV0).
+   * No-op when no project is anchored. Errors surface as a
+   * non-modal warning.
+   */
+  private async convertActiveProjectToSv(): Promise<void> {
+    const session = this.activePump;
+    const projectDir =
+      session?.projectDir ?? this.anchoredProjectDir();
+    if (!projectDir) {
+      void vscode.window.showWarningMessage(
+        "sim-flow: no anchored project to convert to SystemVerilog.",
+      );
+      return;
+    }
+    const config = vscode.workspace.getConfiguration("sim-flow");
+    const setting = config.get<string>("binaryPath");
+    const foundationRoot = config.get<string>("foundationRoot");
+    let binary: string;
+    try {
+      binary = resolveBinary({ settingOverride: setting, bundledCandidates });
+    } catch (err) {
+      void vscode.window.showErrorMessage(
+        `sim-flow: cannot resolve sim-flow binary: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return;
+    }
+    const cli = new SimFlowCli({
+      binary,
+      projectDir,
+      foundationRoot: foundationRoot ?? "",
+    });
+    try {
+      await cli.convertSv(false);
+    } catch (err) {
+      void vscode.window.showWarningMessage(
+        `sim-flow: convert-sv failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return;
+    }
+    if (session) {
+      // Reuse the standard reconnect helper so the pump re-reads
+      // state.toml and picks up `flow = systemverilog-convert,
+      // current_step = SV0`.
+      await this.reconnectActivePump(session);
+    } else {
+      void this.refresh();
     }
   }
 
@@ -1811,6 +1890,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       sessionActive:
         !!this.activePump && this.activePump.projectDir === context.projectDir,
       currentMilestone: context.currentMilestone,
+      verilogEnabled:
+        vscode.workspace
+          .getConfiguration("sim-flow")
+          .get<boolean>("verilog.enabled") === true,
       palette: this.readSavedPalette(),
       customPalette: this.readSavedCustomPalette(),
     };

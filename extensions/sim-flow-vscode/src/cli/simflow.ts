@@ -240,6 +240,22 @@ export class SimFlowCli {
   }
 
   /**
+   * Flip the project from DirectModeling into the SystemVerilog
+   * conversion flow at SV0. Wraps `sim-flow convert-sv`. Errors
+   * surface to the caller; the chat panel uses this when the user
+   * clicks the "Convert to SystemVerilog" continue action on a
+   * passed DM4b.
+   */
+  async convertSv(force = false): Promise<void> {
+    const args = this.buildArgs(force ? ["convert-sv", "--force"] : ["convert-sv"]);
+    try {
+      await this.execute(this.binary, args);
+    } catch (err) {
+      throw toCliError(this.binary, args, err, "non-zero-exit");
+    }
+  }
+
+  /**
    * Persist a prompt override at the given scope. We bypass the
    * injectable `Execute` here because the CLI reads the new content
    * from stdin and the standard executor doesn't support stdin

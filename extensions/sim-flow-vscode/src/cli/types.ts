@@ -3,7 +3,7 @@
 // canonical schemas; this file must stay in lock-step. Bump and update
 // both if the JSON output changes.
 
-export type Flow = "direct-modeling" | "design-study";
+export type Flow = "direct-modeling" | "design-study" | "systemverilog-convert";
 
 export interface Gate {
   passed: boolean;

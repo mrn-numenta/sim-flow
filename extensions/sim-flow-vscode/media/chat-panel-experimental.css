@@ -294,6 +294,42 @@ body {
   cursor: pointer;
 }
 
+/* Checkable row inside the settings popover (e.g. "Enable
+ * Verilog"). Leading ✓ glyph slot is always 12px wide so toggling
+ * doesn't shift the label horizontally; hover/focus paint the same
+ * tint as the menu/context items. */
+.x-toolbar-settings-checkrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--vscode-foreground);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.x-toolbar-settings-check {
+  display: inline-block;
+  width: 12px;
+  text-align: center;
+  color: var(--vscode-foreground);
+  font-weight: 600;
+}
+
+.x-toolbar-settings-checkrow:hover,
+.x-toolbar-settings-checkrow:focus-visible {
+  background: var(
+    --vscode-menu-selectionBackground,
+    color-mix(in srgb, var(--vscode-foreground) 12%, transparent)
+  );
+  outline: none;
+}
+
 /* "Start session" variant of the project button. Tinted in the
  * output palette so it reads as a primary action when the panel
  * is otherwise idle. Reverts to the plain toolbar chrome once a
@@ -1045,6 +1081,28 @@ body {
  * target is clearly interactive. */
 .x-step-rail-step-pending:hover {
   background: color-mix(in srgb, var(--x-palette-tool) 18%, transparent);
+}
+
+/* Vertical stack of two rails -- shown when the user is in DMF
+ * and Verilog generation is enabled, so the upcoming SV rail
+ * sits directly beneath the active DM rail. */
+.x-step-rail-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.x-step-rail-stack > .x-step-rail {
+  width: 100%;
+}
+
+/* Preview rail (SV-while-in-DMF): muted opacity + dashed border
+ * accents so the user reads it as "upcoming, not yet active". */
+.x-step-rail-preview .x-step-rail-step {
+  opacity: 0.7;
+  border-style: dashed;
 }
 
 /* Pending overlay needs an opaque editor-bg fill so the expanded

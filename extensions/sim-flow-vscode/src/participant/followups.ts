@@ -80,8 +80,19 @@ export const DS_ORDER: readonly string[] = [
   "DS9",
 ];
 
-export function flowOrderFor(flow: "direct-modeling" | "design-study"): readonly string[] {
-  return flow === "direct-modeling" ? DM_ORDER : DS_ORDER;
+export const SV_ORDER: readonly string[] = ["SV0", "SV0d", "SV1", "SV2", "SV3"];
+
+export function flowOrderFor(
+  flow: "direct-modeling" | "design-study" | "systemverilog-convert",
+): readonly string[] {
+  switch (flow) {
+    case "direct-modeling":
+      return DM_ORDER;
+    case "design-study":
+      return DS_ORDER;
+    case "systemverilog-convert":
+      return SV_ORDER;
+  }
 }
 
 function nextStepAfter(step: string, order: readonly string[]): string | undefined {

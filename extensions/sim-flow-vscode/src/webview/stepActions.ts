@@ -36,6 +36,7 @@ const STEP_ORDER: Record<DashboardState["flow"]["flow"], string[]> = {
     "DM4b",
   ],
   "design-study": ["DS0", "DS1", "DS2", "DS3", "DS4", "DS5a", "DS5b", "DS6", "DS7", "DS8", "DS9"],
+  "systemverilog-convert": ["SV0", "SV0d", "SV1", "SV2", "SV3"],
 };
 
 export function deriveStepActionState(input: DeriveStepActionInput): StepActionState {

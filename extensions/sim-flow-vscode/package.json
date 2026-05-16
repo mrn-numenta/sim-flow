@@ -399,6 +399,11 @@
           "default": 0,
           "description": "Cap on concurrent in-flight LLM Work sessions during plan-detail walks (DM2cd / DM3ad / DM4ad). `0` means no limit (every pending milestone stub fires at once). `1` forces the legacy serial path. Higher values fan out N stubs in parallel up to the cap. Has no effect on execution walks (DM2d / DM3b / DM3c / DM4b). Written to `.sim-flow/config.toml::llm.max_parallel_requests` for the active project on change."
         },
+        "sim-flow.verilog.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, the chat panel shows the SystemVerilog conversion step rail (SV0 → SV3) underneath the DirectModeling rail and offers a 'Convert to SystemVerilog' continue action once DM4b has passed (which flips the project into the systemverilog-convert flow via `sim-flow convert-sv`). When disabled, DM4b is the terminal step."
+        },
         "sim-flow.auto.maxWorkIterations": {
           "type": "integer",
           "minimum": 1,

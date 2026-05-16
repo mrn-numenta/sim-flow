@@ -35,9 +35,31 @@ const DS_STEP_ORDER: readonly string[] = [
   "DS5",
 ];
 
+/**
+ * SystemVerilog conversion flow step ordering. Mirrors the Rust
+ * step registry in `tools/sim-flow/src/__internal/steps/sv.rs`.
+ * Used both for the SV rail rendered alongside DMF when verilog
+ * generation is enabled, and as the per-flow ordering once
+ * `sim-flow convert-sv` flips a project into this flow.
+ */
+export const SV_STEP_ORDER: readonly string[] = [
+  "SV0",
+  "SV0d",
+  "SV1",
+  "SV2",
+  "SV3",
+];
+
 /** Return the ordered step IDs for the given flow. */
 export function stepOrderFor(flow: Flow): readonly string[] {
-  return flow === "direct-modeling" ? DM_STEP_ORDER : DS_STEP_ORDER;
+  switch (flow) {
+    case "direct-modeling":
+      return DM_STEP_ORDER;
+    case "design-study":
+      return DS_STEP_ORDER;
+    case "systemverilog-convert":
+      return SV_STEP_ORDER;
+  }
 }
 
 /**
