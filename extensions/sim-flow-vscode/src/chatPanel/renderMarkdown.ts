@@ -172,12 +172,14 @@ function applyShikiHighlight(root: ParentNode): void {
   for (const code of Array.from(blocks)) {
     // Prefer an explicit `language-X` class on the <code> element
     // (set by markdown-it for ```rust fences); fall back to a
-    // content-based guess for fences that arrived without a tag --
-    // this is the common case for tool-result dumps and for LLMs
-    // that emit bare ``` blocks.
+    // content-based guess for fences that arrived without a tag,
+    // or with the explicit but uninformative "text" tag (which
+    // upstream callers use when they couldn't decide a language).
+    const explicit = inferLang(code as HTMLElement);
     const lang =
-      inferLang(code as HTMLElement) ??
-      inferLangFromContent(code.textContent ?? "");
+      explicit && explicit !== "text"
+        ? explicit
+        : inferLangFromContent(code.textContent ?? "");
     if (!lang || !SHIKI_LANGS.includes(lang as BundledLanguage)) {
       continue;
     }

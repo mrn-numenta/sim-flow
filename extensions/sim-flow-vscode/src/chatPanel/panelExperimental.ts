@@ -600,15 +600,21 @@ function bubbleDetails(
 /**
  * Wrap content in a fenced code block with a content-inferred
  * language. Uses a long backtick fence so embedded shorter fences
- * in the content don't close the wrapper prematurely. Falls back
- * to `text` when no language guess hits cleanly -- the code block
- * still picks up the bubble's CSS treatment even without syntax
- * colours.
+ * in the content don't close the wrapper prematurely.
+ *
+ * When the heuristic can't pick a language we emit the fence
+ * WITHOUT one (rather than falling back to "text") so markdown-it
+ * produces a `<code>` with no `language-X` class -- otherwise
+ * `applyShikiHighlight` short-circuits on the explicit "text" tag
+ * and never tries the content-based re-guess inside the highlight
+ * pass.
  */
 function wrapAsCodeBlock(content: string): string {
-  const lang = inferLangFromContent(content) ?? "text";
+  const lang = inferLangFromContent(content);
   const fence = "`".repeat(16);
-  return `${fence}${lang}\n${content}\n${fence}`;
+  return lang
+    ? `${fence}${lang}\n${content}\n${fence}`
+    : `${fence}\n${content}\n${fence}`;
 }
 
 /**
