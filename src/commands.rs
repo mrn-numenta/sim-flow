@@ -1978,6 +1978,51 @@ mod tests {
     }
 
     #[test]
+    fn advance_unknown_step_returns_invalid_step_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        let err = advance(tmp.path(), Some("DM-zzz"), None, false).unwrap_err();
+        assert!(format!("{err}").contains("not a"), "{err}");
+    }
+
+    #[test]
+    fn advance_refuses_per_candidate_steps_or_candidate_arg() {
+        // DM doesn't have per_candidate steps in the registry; pass
+        // an explicit candidate arg to trip the per-candidate guard.
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        let err = advance(tmp.path(), Some("DM0"), Some("mesh"), false).unwrap_err();
+        assert!(format!("{err}").contains("per-candidate"), "{err}");
+    }
+
+    #[test]
+    fn advance_failing_gate_returns_gate_error_in_text_and_json_modes() {
+        // DM0's gate-checks include critique-clean: at fresh init there
+        // is no critique file, so the gate will fail.
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        // text mode
+        let err = advance(tmp.path(), None, None, false).unwrap_err();
+        assert!(format!("{err}").contains("failed"), "{err}");
+        // json mode
+        let err = advance(tmp.path(), None, None, true).unwrap_err();
+        assert!(format!("{err}").contains("failed"), "{err}");
+    }
+
+    #[test]
+    fn emit_gate_json_serializes_a_failing_report() {
+        use sim_flow::__internal::gate::{GateFailure, GateReport};
+        let report = GateReport {
+            failures: vec![GateFailure {
+                description: "spec exists".into(),
+                reason: "missing".into(),
+            }],
+        };
+        // Should not error -- just exercise serde path.
+        assert!(emit_gate_json("DM0", &report).is_ok());
+    }
+
+    #[test]
     fn new_cmd_study_and_candidate_are_not_yet_implemented() {
         // Phase 5 lands these; for now they return State errors so
         // callers see "not yet implemented" rather than a panic.
