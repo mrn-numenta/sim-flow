@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use crate::{Error, Result};
 
 mod api_common;
+mod api_expand_macro;
 mod api_hover;
 mod api_impls;
 mod api_references;
@@ -37,6 +38,7 @@ mod run_cargo;
 mod search;
 mod write_file;
 
+pub use api_expand_macro::ApiExpandMacroTool;
 pub use api_hover::ApiHoverTool;
 pub use api_impls::ApiImplsTool;
 pub use api_references::ApiReferencesTool;
@@ -382,6 +384,7 @@ pub fn build_dispatcher(names: &[&'static str]) -> Vec<Box<dyn Tool>> {
             "api_hover" => out.push(Box::new(ApiHoverTool)),
             "api_impls" => out.push(Box::new(ApiImplsTool)),
             "api_references" => out.push(Box::new(ApiReferencesTool)),
+            "api_expand_macro" => out.push(Box::new(ApiExpandMacroTool)),
             _ => {} // unknown tool name; skip
         }
     }

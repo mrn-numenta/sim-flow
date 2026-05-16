@@ -40,6 +40,7 @@ pub const UNIVERSAL_TOOLS: &[&str] = &[
     "api_hover",
     "api_impls",
     "api_references",
+    "api_expand_macro",
 ];
 
 #[derive(Debug, Clone)]

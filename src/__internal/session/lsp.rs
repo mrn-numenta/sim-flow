@@ -190,6 +190,29 @@ impl RustAnalyzerClient {
         )
     }
 
+    /// `rust-analyzer/expandMacro` extension. Given a position
+    /// inside a macro invocation (derive attribute, macro_rules
+    /// call, attribute macro, ...) returns
+    /// `{ name: string, expansion: string }` -- the macro name and
+    /// the expanded source. Returns `Null` when the position isn't
+    /// inside a macro call. Documented at
+    /// `https://rust-analyzer.github.io/book/contributing/lsp-extensions.html#expand-macro`.
+    pub fn rust_analyzer_expand_macro(
+        &mut self,
+        uri: &str,
+        line: u64,
+        character: u64,
+    ) -> LspResult<Value> {
+        self.request(
+            "rust-analyzer/expandMacro",
+            json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character },
+            }),
+            REQUEST_TIMEOUT,
+        )
+    }
+
     fn handshake(&mut self) -> LspResult<()> {
         let root_uri = path_to_uri(&self.workspace_root)?;
         let params = json!({
@@ -366,7 +389,12 @@ impl Drop for RustAnalyzerClient {
     }
 }
 
-fn path_to_uri(p: &Path) -> LspResult<String> {
+/// `file://...` URI for a filesystem path, canonicalized so the
+/// URI matches whatever rust-analyzer sees during workspace
+/// discovery. Public so tools can convert a path the agent
+/// supplied into a URI for `textDocument/*` requests without
+/// reimplementing the platform-specific bits.
+pub fn path_to_uri(p: &Path) -> LspResult<String> {
     let canonical = p
         .canonicalize()
         .map_err(|e| LspError::Protocol(format!("canonicalize {p:?}: {e}")))?;
