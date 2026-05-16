@@ -339,7 +339,25 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   });
   leftZone.appendChild(projectBtn);
 
-  // ---- CENTER: LLM status indicator + total tokens ----
+  // ---- CENTER: end-session button + LLM status + total tokens ----
+
+  // Small power button that fully terminates the session: cancel,
+  // shutdown, escalate. Distinct from the composer's Stop ■ which
+  // only cancels the current activity. Visible only when a pump is
+  // attached -- if there's no session there's nothing to end.
+  if (state.sessionActive) {
+    const endBtn = document.createElement("button");
+    endBtn.type = "button";
+    endBtn.className = "x-toolbar-end-session";
+    endBtn.textContent = "⏻";
+    endBtn.setAttribute("aria-label", "End session");
+    endBtn.title =
+      "End the sim-flow session: disconnect from the LLM and terminate the orchestrator.";
+    endBtn.addEventListener("click", () => {
+      send({ type: "end-session" });
+    });
+    centerZone.appendChild(endBtn);
+  }
 
   const llmStatus = document.createElement("span");
   llmStatus.className = "x-toolbar-llm";

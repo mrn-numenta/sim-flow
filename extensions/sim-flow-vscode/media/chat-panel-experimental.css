@@ -172,6 +172,32 @@ body {
   padding: 2px 6px;
 }
 
+/* End-session button: small power-glyph button in the centre zone.
+ * Tinted in the error palette on hover so the click reads as
+ * destructive ("disconnect + terminate"), distinguishing it from
+ * the composer's Stop ■ (which only cancels the current activity). */
+.x-toolbar-end-session {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--x-muted);
+  border-radius: 4px;
+}
+
+.x-toolbar-end-session:hover {
+  color: var(--vscode-errorForeground, #d2522d);
+  background: color-mix(
+    in srgb,
+    var(--vscode-errorForeground, #d2522d) 18%,
+    transparent
+  );
+}
+
 /* Settings popover: a <details>-based dropdown anchored at the
  * toolbar's right edge. The summary is the gear icon (no marker);
  * the panel is absolutely positioned so opening it doesn't shift

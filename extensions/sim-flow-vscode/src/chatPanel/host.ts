@@ -391,11 +391,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     switch (msg.type) {
       case "ready":
         await this.refresh();
-        // No auto-launch on ready. Window reloads re-mount the
-        // webview, which would otherwise re-fire the project
-        // picker every time. The user starts a session explicitly
-        // via the toolbar's "Start session" button (which sends
-        // the `start-session` message handled below).
+        // Auto-resume the last project (if we remember one) in
+        // Manual mode so the user lands on a familiar conversation
+        // ready to be advanced via Continue. No picker fires here
+        // -- if there's no remembered project, the empty-state
+        // "Start session" button takes over.
+        void this.tryAutoResume();
         return;
       case "refresh":
         await this.refresh();
@@ -431,6 +432,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         return;
       case "start-session":
         await this.startSession();
+        return;
+      case "end-session":
+        await this.endSession();
         return;
       default:
         return;
@@ -648,6 +652,67 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     await this.postState(context, conversation);
   }
 
+  /**
+   * Terminate the active session: cancel, shutdown, escalate to
+   * SIGTERM/SIGKILL if the orchestrator doesn't exit cleanly,
+   * then clear the active-session pin. The chat panel becomes
+   * idle and the toolbar's project button reverts to "Start
+   * session". Distinct from `stopConversation`, which only
+   * cancels the current activity without killing the pump.
+   */
+  private async endSession(): Promise<void> {
+    const context = await this.readPanelContext();
+    let conversation = this.readConversation(context.projectDir);
+
+    if (this.activePump?.projectDir !== context.projectDir) {
+      return;
+    }
+    if (this.activePump.stopRequested) {
+      return;
+    }
+    const session = this.activePump;
+    session.stopRequested = true;
+    session.awaitingInput = false;
+    conversation = appendNote(
+      conversation,
+      "Ending session",
+      "Terminating the running sim-flow session.",
+    );
+    await this.persistConversation(context.projectDir, conversation);
+    await this.postState(context, conversation);
+
+    // Send `cancel` first so the orchestrator can finish cleanly
+    // if it's parked. Then escalate to shutdown -> SIGTERM ->
+    // SIGKILL via `disconnectWithEscalation` -- the soft cancel
+    // doesn't reach a child blocked inside a synchronous LLM
+    // dispatch (the wire reader only services events between
+    // turns), so the only reliable way to interrupt a mid-LLM-call
+    // run is to terminate the process.
+    session.pump.cancel();
+    let outcome: "clean" | "sigterm" | "sigkill" | "already-gone" | undefined;
+    try {
+      outcome = await session.pump.disconnectWithEscalation?.(1_000, 1_000);
+    } catch (err) {
+      console.error(
+        `sim-flow: chat-panel end-session escalation failed: ${(err as Error).message ?? String(err)}`,
+      );
+    }
+    if (this.activePump !== session) {
+      return;
+    }
+    await this.autoSessions.clearIfActive(session);
+    let finalConversation = this.readConversation(context.projectDir);
+    finalConversation = appendNote(
+      finalConversation,
+      "Session ended",
+      outcome === "sigkill"
+        ? "The orchestrator did not exit after shutdown / SIGTERM and was killed (SIGKILL)."
+        : "Stopped the running sim-flow session.",
+    );
+    await this.persistConversation(context.projectDir, finalConversation);
+    await this.postState(context, finalConversation);
+  }
+
   private async stopConversation(): Promise<void> {
     const context = await this.readPanelContext();
     let conversation = this.readConversation(context.projectDir);
@@ -743,6 +808,35 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   /**
+   * Auto-resume the previously-active project when the chat panel
+   * mounts. Silent and side-effect-light: no picker, no errors --
+   * if we don't have a remembered project, or if the project is
+   * no longer on disk, we leave the panel idle and the user clicks
+   * "Start session" themselves. Forces Manual mode regardless of
+   * the workspace `sim-flow.flow.stepMode` setting so the
+   * orchestrator parks at `wait_for_command` instead of plowing
+   * forward unattended.
+   */
+  private async tryAutoResume(): Promise<void> {
+    if (this.activePump || this.pendingAutoLaunch) {
+      return;
+    }
+    const remembered = this.workspaceState.get<string>(
+      ChatPanelProvider.LAST_PROJECT_KEY,
+    );
+    if (!remembered) {
+      return;
+    }
+    const candidates = await findProjectCandidates();
+    if (!candidates.includes(remembered)) {
+      return;
+    }
+    await this.launchAutoSession(undefined, remembered, {
+      forceStepMode: "manual",
+    });
+  }
+
+  /**
    * Explicit "Start session" action from the chat panel toolbar.
    * Fires only when the user clicks; window reload, tab focus,
    * etc. no longer trigger it. If a previous project is remembered
@@ -796,6 +890,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   async launchAutoSession(
     specPath: string | undefined,
     projectDirHint: string | undefined,
+    options: { forceStepMode?: "auto" | "manual" } = {},
   ): Promise<void> {
     // Resolve the target project BEFORE revealing the chat view so we
     // can anchor the panel and pre-clear its transcript cache. The
@@ -875,7 +970,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     await this.startAutoSession(
       ctx,
       trimmedSpec,
-      { resetConversation: true },
+      { resetConversation: true, forceStepMode: options.forceStepMode },
     );
   }
 
@@ -1078,7 +1173,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   private async startAutoSession(
     ctx: { projectDir: string; cli: { binary: string; foundationRoot?: string } },
     trimmedSpec: string | undefined,
-    options: { resetConversation: boolean; launchTitle?: string; launchBody?: string },
+    options: {
+      resetConversation: boolean;
+      launchTitle?: string;
+      launchBody?: string;
+      /** Force a specific step mode regardless of the workspace
+       * `sim-flow.flow.stepMode` setting. Used by auto-resume to
+       * land the orchestrator in Manual park on cold start. */
+      forceStepMode?: "auto" | "manual";
+    },
   ): Promise<void> {
     const config = vscode.workspace.getConfiguration("sim-flow");
     const llmConfig = buildPumpLlmConfig(ctx, this.secrets, config);
@@ -1086,7 +1189,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     const maxCritiqueIters = config.get<number>("auto.maxCritiqueIterations") ?? 10;
     const maxCritiqueNoProgressIters =
       config.get<number>("auto.maxCritiqueNoProgressIterations") ?? 3;
-    const stepMode = readStepModeSetting(config);
+    // `forceStepMode` overrides the workspace setting -- used by
+    // the on-ready auto-resume path so a session that was running
+    // in Auto when the window closed comes back parked at manual
+    // (so it doesn't immediately resume work without the user's
+    // explicit say-so).
+    const stepMode = options.forceStepMode ?? readStepModeSetting(config);
 
     const sessionId = randomUUID();
     const socketPath = reconnectableSocketPath(sessionId);

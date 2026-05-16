@@ -188,4 +188,13 @@ export type WebviewMessage =
    * the toolbar's "Start session" button when no session is
    * active.
    */
-  | { type: "start-session" };
+  | { type: "start-session" }
+  /**
+   * Terminate the active sim-flow session: cancel any in-flight
+   * sub-session, send shutdown, escalate to SIGTERM/SIGKILL if the
+   * orchestrator doesn't exit cleanly. Distinct from the composer
+   * Stop button (`stop-conversation`), which only cancels the
+   * current activity and drops to Manual mode without killing the
+   * pump. Sent from the small power button in the toolbar.
+   */
+  | { type: "end-session" };
