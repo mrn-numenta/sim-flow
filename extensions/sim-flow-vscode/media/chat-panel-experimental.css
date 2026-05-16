@@ -407,13 +407,14 @@ body {
   border-left-color: var(--x-palette-accent);
 }
 
-/* System bubbles: the session-opening prompt. Quieter than the
- * orchestrator-user prompts (paler stripe, no bg fill) since the
- * content is "standing context" the user hasn't typed and the
- * orchestrator didn't dynamically produce. Default-collapsed in
- * the webview so it doesn't dominate scroll. */
+/* System bubbles: the session-opening prompt. Same subtle-tint
+ * pattern as the other roles but drawn from the accent anchor so
+ * "standing context" reads distinct from the dynamic
+ * orchestrator-user (input anchor) and assistant (output anchor)
+ * traffic. Default-collapsed in the webview so it doesn't
+ * dominate scroll. */
 .x-bubble-user.x-bubble-orchestrator.x-bubble-system {
-  background: transparent;
+  background: color-mix(in srgb, var(--x-palette-accent) 12%, transparent);
   color: var(--vscode-foreground);
   border-left-color: color-mix(
     in srgb,
