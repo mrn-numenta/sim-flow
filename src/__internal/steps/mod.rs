@@ -329,11 +329,100 @@ pub fn find_current_milestone(
     walk: &MilestoneWalkConfig,
     prior_critique_has_blockers: bool,
 ) -> CurrentMilestone {
-    let dir = project_dir.join(walk.dir.trim_end_matches('/'));
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(e) => e,
-        Err(_) => return CurrentMilestone::NoMilestonesPresent,
+    let files = match list_milestone_files(project_dir, walk) {
+        Some(f) if !f.is_empty() => f,
+        _ => return CurrentMilestone::NoMilestonesPresent,
     };
+
+    if prior_critique_has_blockers {
+        // Retry: highest-numbered milestone the agent has touched.
+        for (name, path) in files.iter().rev() {
+            if milestone_is_touched(walk, path) {
+                return CurrentMilestone::File(join_milestone_rel(walk, name));
+            }
+        }
+        // Nothing touched yet: fall through to first-pending.
+    }
+
+    for (name, path) in &files {
+        if milestone_is_pending(walk, path) {
+            return CurrentMilestone::File(join_milestone_rel(walk, name));
+        }
+    }
+    CurrentMilestone::AllResolved
+}
+
+/// Project-relative paths of every milestone file under `walk.dir`
+/// that is currently pending, in walker order. Used by the parallel
+/// plan-detail walk dispatcher to fan out Work sessions across all
+/// pending stubs at once; the serial walker keeps using
+/// [`find_current_milestone`] one-at-a-time.
+///
+/// Returns an empty vec when the directory is missing, contains no
+/// matching milestone files, or every milestone is already resolved.
+/// (Callers that care about the "no milestones present" vs "all
+/// done" distinction should still use [`find_current_milestone`] --
+/// this helper collapses the two into "nothing to do.")
+pub fn enumerate_pending_milestones(
+    project_dir: &std::path::Path,
+    walk: &MilestoneWalkConfig,
+) -> Vec<String> {
+    let Some(files) = list_milestone_files(project_dir, walk) else {
+        return Vec::new();
+    };
+    files
+        .iter()
+        .filter(|(_, path)| milestone_is_pending(walk, path))
+        .map(|(name, _)| join_milestone_rel(walk, name))
+        .collect()
+}
+
+/// Look up a specific milestone by its bare filename (e.g.
+/// `"milestone-03-decode.md"`) or by its project-relative path (e.g.
+/// `"docs/impl-plan/milestone-03-decode.md"`). Returns
+/// `CurrentMilestone::File` for an exact match, regardless of whether
+/// the milestone is pending, touched, or resolved -- the parallel
+/// dispatcher uses this to scope a worker's session to a specific
+/// stub it has already decided to operate on.
+///
+/// Returns `NoMilestonesPresent` when the directory is missing or
+/// empty; `AllResolved` is never returned (it would conflate "found
+/// but resolved" with "nothing matched the name").
+pub fn find_milestone_by_name(
+    project_dir: &std::path::Path,
+    walk: &MilestoneWalkConfig,
+    needle: &str,
+) -> CurrentMilestone {
+    let bare = std::path::Path::new(needle)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(needle);
+    let Some(files) = list_milestone_files(project_dir, walk) else {
+        return CurrentMilestone::NoMilestonesPresent;
+    };
+    if files.is_empty() {
+        return CurrentMilestone::NoMilestonesPresent;
+    }
+    for (name, _) in &files {
+        if name == bare {
+            return CurrentMilestone::File(join_milestone_rel(walk, name));
+        }
+    }
+    CurrentMilestone::NoMilestonesPresent
+}
+
+/// Walker-order list of every `<prefix><digits>...md` file in
+/// `walk.dir`, used by [`find_current_milestone`],
+/// [`enumerate_pending_milestones`], and [`find_milestone_by_name`].
+/// Returns `None` if the directory cannot be read at all (missing
+/// directory or permission error); `Some(empty)` if the directory
+/// exists but no milestone files match.
+fn list_milestone_files(
+    project_dir: &std::path::Path,
+    walk: &MilestoneWalkConfig,
+) -> Option<Vec<(String, std::path::PathBuf)>> {
+    let dir = project_dir.join(walk.dir.trim_end_matches('/'));
+    let entries = std::fs::read_dir(&dir).ok()?;
     let mut files: Vec<(String, std::path::PathBuf)> = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
@@ -346,9 +435,6 @@ pub fn find_current_milestone(
         let Some(prefix) = walk.file_prefixes.iter().find(|p| name.starts_with(**p)) else {
             continue;
         };
-        // Skip the prefix and require a digit-prefixed remainder
-        // so `plan.md` / `plan-management.md` etc. don't sneak in
-        // when the prefix is short.
         let rest = &name[prefix.len()..];
         if !rest
             .chars()
@@ -360,39 +446,20 @@ pub fn find_current_milestone(
         }
         files.push((name.to_string(), path));
     }
-    if files.is_empty() {
-        return CurrentMilestone::NoMilestonesPresent;
-    }
     files.sort_by(|a, b| a.0.cmp(&b.0));
+    Some(files)
+}
 
-    let join_rel = |name: &str| {
-        format!(
-            "{}{}",
-            if walk.dir.ends_with('/') {
-                walk.dir.to_string()
-            } else {
-                format!("{}/", walk.dir)
-            },
-            name
-        )
-    };
-
-    if prior_critique_has_blockers {
-        // Retry: highest-numbered milestone the agent has touched.
-        for (name, path) in files.iter().rev() {
-            if milestone_is_touched(walk, path) {
-                return CurrentMilestone::File(join_rel(name));
-            }
-        }
-        // Nothing touched yet: fall through to first-pending.
-    }
-
-    for (name, path) in &files {
-        if milestone_is_pending(walk, path) {
-            return CurrentMilestone::File(join_rel(name));
-        }
-    }
-    CurrentMilestone::AllResolved
+fn join_milestone_rel(walk: &MilestoneWalkConfig, name: &str) -> String {
+    format!(
+        "{}{}",
+        if walk.dir.ends_with('/') {
+            walk.dir.to_string()
+        } else {
+            format!("{}/", walk.dir)
+        },
+        name
+    )
 }
 
 /// "Pending" means the agent still has work to do on this milestone.
@@ -1233,6 +1300,128 @@ mod write_path_tests {
             result,
             CurrentMilestone::File("docs/test-plan/tb-milestone-02-drivers.md".into()),
             "lexicographic order across both prefixes; tb-* sorts before test-*"
+        );
+    }
+
+    #[test]
+    fn enumerate_pending_milestones_placeholder_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("docs/impl-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_milestone(
+            &dir,
+            "milestone-01-payloads.md",
+            "# 01\n## Tasks\n- [ ] real\n",
+        );
+        write_milestone(
+            &dir,
+            "milestone-02-skeletons.md",
+            "# 02\n<!-- detail-pending\n",
+        );
+        write_milestone(
+            &dir,
+            "milestone-03-decode.md",
+            "# 03\n<!-- detail-pending\n",
+        );
+        write_milestone(
+            &dir,
+            "milestone-04-execute.md",
+            "# 04\n## Tasks\n- [ ] real\n",
+        );
+        let walk = placeholder_walk();
+        let pending = enumerate_pending_milestones(tmp.path(), &walk);
+        assert_eq!(
+            pending,
+            vec![
+                "docs/impl-plan/milestone-02-skeletons.md".to_string(),
+                "docs/impl-plan/milestone-03-decode.md".to_string(),
+            ],
+            "placeholder-mode enumerates stubs in walker order"
+        );
+    }
+
+    #[test]
+    fn enumerate_pending_milestones_returns_empty_when_all_resolved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("docs/impl-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_milestone(
+            &dir,
+            "milestone-01-payloads.md",
+            "# 01\n## Tasks\n- [ ] real\n",
+        );
+        write_milestone(
+            &dir,
+            "milestone-02-skeletons.md",
+            "# 02\n## Tasks\n- [ ] real\n",
+        );
+        let walk = placeholder_walk();
+        let pending = enumerate_pending_milestones(tmp.path(), &walk);
+        assert!(pending.is_empty(), "no stubs with the placeholder remain");
+    }
+
+    #[test]
+    fn enumerate_pending_milestones_returns_empty_when_dir_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let walk = placeholder_walk();
+        let pending = enumerate_pending_milestones(tmp.path(), &walk);
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn find_milestone_by_name_bare_filename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("docs/impl-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_milestone(&dir, "milestone-01-foo.md", "# 01\n");
+        write_milestone(&dir, "milestone-02-bar.md", "# 02\n");
+        let walk = placeholder_walk();
+        let found = find_milestone_by_name(tmp.path(), &walk, "milestone-02-bar.md");
+        assert_eq!(
+            found,
+            CurrentMilestone::File("docs/impl-plan/milestone-02-bar.md".into())
+        );
+    }
+
+    #[test]
+    fn find_milestone_by_name_accepts_relative_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("docs/impl-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_milestone(&dir, "milestone-01-foo.md", "# 01\n");
+        let walk = placeholder_walk();
+        let found = find_milestone_by_name(tmp.path(), &walk, "docs/impl-plan/milestone-01-foo.md");
+        assert_eq!(
+            found,
+            CurrentMilestone::File("docs/impl-plan/milestone-01-foo.md".into())
+        );
+    }
+
+    #[test]
+    fn find_milestone_by_name_returns_not_present_for_unknown_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("docs/impl-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_milestone(&dir, "milestone-01-foo.md", "# 01\n");
+        let walk = placeholder_walk();
+        let found = find_milestone_by_name(tmp.path(), &walk, "milestone-99-nope.md");
+        assert_eq!(found, CurrentMilestone::NoMilestonesPresent);
+    }
+
+    #[test]
+    fn find_milestone_by_name_resolves_regardless_of_pending_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("docs/impl-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        // Fully detailed milestone (no placeholder) -- the parallel
+        // walker still needs to scope a Critique session to it.
+        write_milestone(&dir, "milestone-01-foo.md", "# 01\n## Tasks\n- [ ] real\n");
+        let walk = placeholder_walk();
+        let found = find_milestone_by_name(tmp.path(), &walk, "milestone-01-foo.md");
+        assert_eq!(
+            found,
+            CurrentMilestone::File("docs/impl-plan/milestone-01-foo.md".into()),
+            "resolved milestones must still be addressable by name"
         );
     }
 
