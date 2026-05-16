@@ -269,6 +269,20 @@ where
             }
             StepMode::Manual => {
                 debug!("dispatching to wait_for_command (manual mode)");
+                // Signal the host that we're parked before blocking
+                // on `recv`. Without this the panel-side pump has no
+                // event to interpret as "drive settled, awaiting
+                // input" -- it keeps the drive promise pending, and
+                // any subsequent host action that gates on
+                // `waitForDrive` (most notably `sendPumpPrompt`)
+                // hangs forever, so a user-typed prompt clears the
+                // composer but never actually reaches the wire.
+                // Empty prompt + placeholder is harmless: the chat
+                // panel treats `currentPrompt == null` as "no banner".
+                auto_host.send(&Event::RequestUserInput {
+                    prompt: None,
+                    placeholder: None,
+                })?;
                 match wait_for_command(&opts, &mut auto_host, &mut qa_history, llm)? {
                     ManualOutcome::Continue => continue,
                     ManualOutcome::Shutdown => break RunOutcome::Shutdown,
