@@ -113,13 +113,8 @@ Do NOT chain milestones.
    a `- defer reason:` sub-bullet):
    - `run_cargo({"command": "test"})` -- the full suite still
      passes (no regression).
-   - `cargo fmt --check` AND `cargo clippy --all-targets -- -D
-     warnings` are run AUTOMATICALLY by the orchestrator after
-     you stop and surfaced to the next critique. Do NOT invoke
-     them yourself; their results are authoritative when the
-     critique sees them. A FAIL on either gets flagged as a
-     BLOCKER and you'll re-enter the milestone with diagnostics
-     inlined.
+
+   {{ pre_stop_hygiene }}
 
    Then **STOP**. Surface a clear notice:
 

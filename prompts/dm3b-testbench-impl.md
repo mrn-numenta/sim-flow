@@ -108,14 +108,8 @@ Reference material (read on demand):
      compiles before you stop. Cheap to run; do NOT skip.
    - On the smoke milestone only:
      `run_cargo({"command": "test"})` -- the smoke test passes.
-   - `cargo fmt --check` AND `cargo clippy --all-targets -- -D
-     warnings` are run AUTOMATICALLY by the orchestrator
-     post-stop and surfaced to the next critique. Do NOT
-     invoke them yourself unless you suspect formatting / lint
-     drift mid-session and want a quick local check; their
-     results are authoritative when the critique sees them.
-     A FAIL on either gets flagged as a BLOCKER and you'll
-     re-enter this milestone with the diagnostics inlined.
+
+   {{ pre_stop_hygiene }}
 
    Then **STOP**. Surface a clear notice:
 

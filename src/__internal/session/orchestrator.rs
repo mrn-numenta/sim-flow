@@ -2718,6 +2718,15 @@ pub fn build_initial_messages(
         "coding_requirements_checks".into(),
         prompts::load_template(&opts.foundation_root, "coding-requirements-checks")?,
     );
+    // `{{ pre_stop_hygiene }}` — the cargo-fmt-and-clippy
+    // "orchestrator runs these after you stop" reminder every
+    // code-authoring DMF step needs at end-of-milestone. The
+    // template is top-level unindented; each prompt splices it
+    // at flat indent.
+    template_context.insert(
+        "pre_stop_hygiene".into(),
+        prompts::load_template(&opts.foundation_root, "pre-stop-hygiene")?,
+    );
     let instruction_body = prompts::load_for_project_with_context(
         &opts.foundation_root,
         &opts.project_dir,

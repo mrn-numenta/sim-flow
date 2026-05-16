@@ -118,15 +118,12 @@ Reference material (read on demand):
 
 8. **Pre-stop hygiene** (every milestone, but especially when
    any Rust helpers / sweep glue / scratch binaries landed):
-   `cargo fmt --check` AND `cargo clippy --all-targets -- -D
-   warnings` are run AUTOMATICALLY by the orchestrator after
-   you stop and surfaced to the next critique. Do NOT invoke
-   them yourself; their results are authoritative when the
-   critique sees them. A FAIL on either gets flagged as a
-   BLOCKER and you'll re-enter the milestone with diagnostics
-   inlined. For purely-markdown milestones (no new Rust code),
-   the orchestrator's checks are cheap idempotent no-ops; you
-   don't need to do anything special.
+
+   {{ pre_stop_hygiene }}
+
+   For purely-markdown milestones (no new Rust code), the
+   orchestrator's checks are cheap idempotent no-ops; you don't
+   need to do anything special.
 
 ## Order, jumping, and deferring
 

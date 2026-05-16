@@ -177,15 +177,12 @@ strictly.
      module is done.
    - `run_cargo({"command": "test"})` -- once smoke / unit
      tests are in place, the elaboration smoke test must pass.
-   `cargo fmt --check` AND `cargo clippy --all-targets -- -D
-   warnings` are run AUTOMATICALLY by the orchestrator AFTER you
-   stop and surfaced to the next critique. Do NOT invoke them
-   yourself; their results are authoritative when the critique
-   sees them. Any FAIL is flagged as a BLOCKER and you'll
-   re-enter the milestone with diagnostics inlined.
+
    Read the returned stdout / stderr; if there are real errors,
    fix them and re-run. Do NOT guess at build errors from
    source -- always confirm with `run_cargo` output.
+
+   {{ pre_stop_hygiene }}
 8. **Tests**: write **only** unit tests and smoke tests at this
    step. Exhaustive verification (directed sequences, coverage
    targets, randomized stimulus, scoreboards) belongs to **DM3** --
