@@ -59,4 +59,61 @@ describe("resolveBinary", () => {
       expect((err as SimFlowCliError).kind).toBe("binary-not-found");
     }
   });
+
+  it("returns null path lookup when pathEnv is empty", () => {
+    // Covers the `if (!pathEnv) return null` early-exit branch.
+    // With no PATH and no bundled candidates, the resolver should
+    // fall through to the not-found error.
+    try {
+      resolveBinary({
+        settingOverride: "",
+        pathEnv: "",
+        bundledCandidates: () => [],
+        exists: mkExists([]),
+      });
+      throw new Error("expected resolveBinary to throw");
+    } catch (err) {
+      expect((err as SimFlowCliError).kind).toBe("binary-not-found");
+    }
+  });
+
+  it("skips empty PATH entries from a trailing-colon edge case", () => {
+    // "/usr/bin::/usr/local/bin" -- split yields ["/usr/bin", "",
+    // "/usr/local/bin"]. The empty segment must NOT be join()'d into
+    // "/sim-flow" (or any other false-positive), it must be skipped.
+    const visited: string[] = [];
+    const exists = (p: string): boolean => {
+      visited.push(p);
+      return p === "/usr/local/bin/sim-flow";
+    };
+    const resolved = resolveBinary({
+      pathEnv: "/usr/bin::/usr/local/bin",
+      exists,
+    });
+    expect(resolved).toBe("/usr/local/bin/sim-flow");
+    // /sim-flow (the empty-dir join result) must NOT have been
+    // probed.
+    expect(visited).not.toContain("/sim-flow");
+  });
+
+  it("uses the real fs accessSync code path when no exists hook is provided", () => {
+    // /bin/sh exists and is executable on every supported test host;
+    // /this-binary-does-not-exist obviously isn't. This trips the
+    // default defaultExists() implementation rather than the test
+    // hook, covering its try / catch branches.
+    const resolved = resolveBinary({
+      settingOverride: "/bin/sh",
+    });
+    expect(resolved).toBe("/bin/sh");
+    try {
+      resolveBinary({
+        settingOverride: "/no/such/binary",
+        pathEnv: "",
+        bundledCandidates: () => [],
+      });
+      throw new Error("expected resolveBinary to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(SimFlowCliError);
+    }
+  });
 });
