@@ -550,6 +550,15 @@ pub fn shutdown_client() {
 /// a time anyway, and the contention is negligible at LLM-turn
 /// granularity. If the spawned client was rooted at a different
 /// workspace, returns an error -- one client per process for now.
+///
+/// Both `workspace_root` arguments are canonicalized (symlinks
+/// resolved, `..` collapsed, trailing slashes normalized) before
+/// comparison; otherwise a caller passing `crates/framework/..`
+/// or a non-canonical path would erroneously fail the
+/// "already-attached" check against an existing client that
+/// happened to store the same directory under a different
+/// spelling. See LSP-discovery post-impl critique #6
+/// (2026-05-16).
 pub fn with_client<F, T>(workspace_root: &Path, f: F) -> LspResult<T>
 where
     F: FnOnce(&mut RustAnalyzerClient) -> LspResult<T>,
@@ -558,7 +567,9 @@ where
         .lock()
         .map_err(|_| LspError::Protocol("rust-analyzer client mutex poisoned".into()))?;
     if let Some(existing) = guard.as_ref() {
-        if existing.workspace_root() != workspace_root {
+        let stored = canonicalize_or_self(existing.workspace_root());
+        let incoming = canonicalize_or_self(workspace_root);
+        if stored != incoming {
             return Err(LspError::Protocol(format!(
                 "rust-analyzer already attached to {:?}; refusing to re-attach to {:?}",
                 existing.workspace_root(),
@@ -571,6 +582,10 @@ where
     }
     let client = guard.as_mut().expect("client populated above");
     f(client)
+}
+
+fn canonicalize_or_self(p: &Path) -> PathBuf {
+    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
 }
 
 #[cfg(test)]
