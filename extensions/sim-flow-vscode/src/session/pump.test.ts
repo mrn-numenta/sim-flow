@@ -409,6 +409,105 @@ describe("session/pump", () => {
     expect(pump.descriptor).toMatchObject({ phases: ["chat", "impl"] });
   });
 
+  it("sendUserMessage writes a user-message host event to the subprocess stdin", () => {
+    const { pump, process } = makePump();
+    pump.sendUserMessage("hello orchestrator");
+    const written = process.stdin.writes
+      .map((line) => JSON.parse(line.trim()) as { event: string; text?: string });
+    // The pump emits its initial `hello` handshake event on construct;
+    // the last write should be the user-message we just sent.
+    expect(written.at(-1)).toEqual({ event: "user-message", text: "hello orchestrator" });
+  });
+
+  it("sendUserMessage is a no-op after the pump has terminated", async () => {
+    const { pump, process } = makePump();
+    pump.settle({ markdown: () => {} });
+    process.stdout.emit(
+      "data",
+      `${JSON.stringify({ event: "session-end", reason: "completed" })}\n`,
+    );
+    // Drain microtasks so the bus listener actually marks terminated.
+    await new Promise((r) => setTimeout(r, 1));
+    process.stdin.writes.length = 0;
+    pump.sendUserMessage("ignored");
+    expect(process.stdin.writes).toEqual([]);
+  });
+
+  it("cancel writes a cancel host event", () => {
+    const { pump, process } = makePump();
+    pump.cancel();
+    const written = process.stdin.writes
+      .map((line) => JSON.parse(line.trim()) as { event: string });
+    expect(written.at(-1)).toEqual({ event: "cancel" });
+  });
+
+  it("session-end without a message resolves with endMessage=undefined (not 'null' string)", async () => {
+    const { pump, process } = makePump();
+    const settlePromise = pump.settle({ markdown: () => {} });
+    process.stdout.emit(
+      "data",
+      `${JSON.stringify({ event: "session-end", reason: "completed" })}\n`,
+    );
+    const result = await settlePromise;
+    expect(result).toEqual({
+      status: "ended",
+      endReason: "completed",
+      endMessage: undefined,
+    });
+  });
+
+  it("settle short-circuits to the cached termination reason on the second call", async () => {
+    const { pump, process } = makePump();
+    const settlePromise = pump.settle({ markdown: () => {} });
+    process.stdout.emit(
+      "data",
+      `${JSON.stringify({ event: "session-end", reason: "completed", message: "done" })}\n`,
+    );
+    const first = await settlePromise;
+    // Second settle should return the same result without needing
+    // any further stdout. (Pump caches its terminal state.)
+    const second = await pump.settle({ markdown: () => {} });
+    expect(second).toEqual(first);
+  });
+
+  it("renders info / error / warning diagnostics with their tags", async () => {
+    const { pump, process } = makePump();
+    const rendered: string[] = [];
+    const settle = pump.settle({ markdown: (t) => rendered.push(t) });
+    process.stdout.emit(
+      "data",
+      `${JSON.stringify({ event: "diagnostic", level: "info", message: "FYI" })}\n`,
+    );
+    process.stdout.emit(
+      "data",
+      `${JSON.stringify({ event: "diagnostic", level: "error", message: "Boom" })}\n`,
+    );
+    process.stdout.emit("data", `${JSON.stringify({ event: "request-user-input" })}\n`);
+    await settle;
+    const out = rendered.join("");
+    expect(out).toContain("**Info**: FYI");
+    expect(out).toContain("**Error**: Boom");
+  });
+
+  it("renders build-output events via renderBuildOutput", async () => {
+    const { pump, process } = makePump();
+    const rendered: string[] = [];
+    const settle = pump.settle({ markdown: (t) => rendered.push(t) });
+    process.stdout.emit(
+      "data",
+      `${JSON.stringify({
+        event: "build-output",
+        command: "cargo check",
+        exit_code: 0,
+        stdout_tail: "Finished",
+        stderr_tail: "",
+      })}\n`,
+    );
+    process.stdout.emit("data", `${JSON.stringify({ event: "request-user-input" })}\n`);
+    await settle;
+    expect(rendered.join("")).toContain("`cargo check`");
+  });
+
   it("handles chunked protocol lines and surfaces orchestrator-driven session end", async () => {
     const pump = new SessionPump(
       {
