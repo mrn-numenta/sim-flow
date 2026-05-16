@@ -1744,9 +1744,28 @@ fn try_advance<P: Presenter + ?Sized>(
     step_id: &str,
     host: &mut AutoPresenter<P>,
 ) -> Result<bool> {
-    use crate::gate;
     let dot = project_dir.join(".sim-flow");
-    let mut state = State::load(&dot)?;
+    // Hold the state.lock for the FULL load + gate::evaluate +
+    // git commit + state.save sequence. The git_commit step
+    // shells out and can take many seconds; without the lock,
+    // anything else that wrote state.toml during that window (a
+    // dashboard Advance from another panel, a parallel
+    // `sim-flow status --json`, a manual edit) would see the
+    // pre-advance state and silently overwrite our mark_passed
+    // when it saved. The audit's most-exposed TOCTOU window.
+    // See orchestrator audit #14 (2026-05-16).
+    State::transaction(&dot, |state| {
+        try_advance_inner(project_dir, step_id, host, state)
+    })
+}
+
+fn try_advance_inner<P: Presenter + ?Sized>(
+    project_dir: &Path,
+    step_id: &str,
+    host: &mut AutoPresenter<P>,
+    state: &mut State,
+) -> Result<bool> {
+    use crate::gate;
     let registry = registry_for(state.flow);
     let step = registry.get(step_id).ok_or_else(|| {
         crate::Error::InvalidStep(format!("{} is not a {} step", step_id, state.flow.as_str()))
@@ -1814,7 +1833,9 @@ fn try_advance<P: Presenter + ?Sized>(
     if let Some(next_step) = next {
         state.current_step = next_step.to_string();
     }
-    state.save(&dot)?;
+    // State::transaction (the caller wrapper) saves the mutated
+    // state when this function returns Ok; no explicit state.save
+    // here.
 
     // Auto-resolve open bugs filed under this step. The gate just
     // passed; whatever bugs the agent was tracking for it are
