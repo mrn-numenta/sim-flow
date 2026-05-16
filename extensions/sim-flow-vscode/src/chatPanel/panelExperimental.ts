@@ -534,8 +534,21 @@ function messageBubble(
     // Tool calls collapse by default (file dumps would otherwise dwarf
     // the rest of the turn); everything else opens by default. The
     // morphdom hook preserves whatever the user toggles.
+    //
+    // Tool results from `read_file` on a markdown file are an
+    // exception: we leave `forceCodeBlock` off so the body renders
+    // as markdown (headings, lists, fenced code blocks within) and
+    // the user sees the document the way it's meant to read --
+    // rather than a literal dump of `#` and `-` characters.
+    const renderAsCode = tool && !isReadingMarkdownFile(body);
     bubble.appendChild(
-      bubbleDetails(entry.title, body, !tool, tool, tokenBadgeFor(entry, body)),
+      bubbleDetails(
+        entry.title,
+        body,
+        !tool,
+        renderAsCode,
+        tokenBadgeFor(entry, body),
+      ),
     );
   }
   row.appendChild(bubble);
@@ -595,6 +608,27 @@ function bubbleDetails(
   const renderText = forceCodeBlock ? wrapAsCodeBlock(body) : body;
   details.appendChild(markdownBody(renderText));
   return details;
+}
+
+/**
+ * Detect tool-result bodies whose `[read_file ...]` header points
+ * at a markdown file. Used to opt those bubbles out of the
+ * code-block wrap so the document renders as markdown (headings,
+ * lists, fenced blocks) rather than as a literal text dump.
+ *
+ * Matches the orchestrator's read_file format:
+ *   "[read_file `path/to/doc.md`]\n\n<contents>"
+ *
+ * Other tool wrappers (write_file, search, etc.) still take the
+ * code-block path since their output is typically log-shaped.
+ */
+function isReadingMarkdownFile(body: string): boolean {
+  const match = body.match(/^\[read_file `([^`]+)`\]/);
+  if (!match) {
+    return false;
+  }
+  const path = match[1] ?? "";
+  return /\.(md|markdown|mdx)$/i.test(path);
 }
 
 /**
