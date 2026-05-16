@@ -5177,4 +5177,44 @@ Hope that helps."#;
         let body = br#"{"a": "never closed"#;
         assert!(super::scan_balanced_json(body, 0).is_none());
     }
+
+    #[test]
+    fn effective_artifacts_empty_false_when_response_has_artifact_fence() {
+        let body = "Here is the file.\n\n```docs/spec.md\n# spec\n```\n";
+        assert!(!super::effective_artifacts_empty(
+            body,
+            crate::client::SessionKind::Work
+        ));
+    }
+
+    #[test]
+    fn effective_artifacts_empty_critique_lenient_when_response_has_prose() {
+        // Critique with prose + no tool calls + no artifacts -> non-empty.
+        let prose_only = "Here is my finding.\n\nThe code is fine.\n";
+        assert!(!super::effective_artifacts_empty(
+            prose_only,
+            crate::client::SessionKind::Critique
+        ));
+        // Same prose in Work mode is still empty (Work requires an
+        // actual artifact write).
+        assert!(super::effective_artifacts_empty(
+            prose_only,
+            crate::client::SessionKind::Work
+        ));
+    }
+
+    #[test]
+    fn effective_artifacts_empty_true_when_only_a_tool_call_and_no_prose() {
+        let body = "```tool:read_file\nsrc/lib.rs\n```\n";
+        assert!(super::effective_artifacts_empty(
+            body,
+            crate::client::SessionKind::Work
+        ));
+        // For critique, the lenient rule requires NO tool call to flip
+        // to "non-empty", so this is still empty.
+        assert!(super::effective_artifacts_empty(
+            body,
+            crate::client::SessionKind::Critique
+        ));
+    }
 }
