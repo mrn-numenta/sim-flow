@@ -169,6 +169,16 @@ export interface LiveSessionTransport {
   reset?(step: string): void;
   shutdown?(): void;
   /**
+   * Continue-flow shortcut. Tells the orchestrator to run the next
+   * logical manual-mode action (work → critique → advance →
+   * work-on-next-step) without the host having to compute which
+   * action that is. The orchestrator already knows from
+   * state.toml + critique resolution + its own sub-session
+   * history. Only the JSONL transport implements this; older
+   * orchestrators reject the event with a Diagnostic.
+   */
+  continueFlow?(): void;
+  /**
    * Graceful-then-forceful disconnect. Sends `shutdown`, waits for
    * the orchestrator child to exit cleanly, escalates to SIGTERM,
    * then SIGKILL. Returns the path that ended the child. Only the
@@ -212,6 +222,20 @@ export interface LiveSessionTransport {
    * pump subscriptions; the stdio pump leaves it undefined.
    */
   onFollowup?(listener: (msg: { label: string; action: string }) => void): () => void;
+  /**
+   * Subscribe to `NextActionHint` events. The orchestrator emits
+   * these every time it parks at `wait_for_command` (manual mode),
+   * carrying a pre-rendered label like "Run critique on DM2d" or
+   * "Advance past DM0". The chat panel surfaces this on its
+   * Continue button so the user sees what the next click will do
+   * without the chat panel having to duplicate the orchestrator's
+   * state machine. `label === null` means the orchestrator has
+   * nothing useful to suggest (e.g. no current step) -- render
+   * the Continue button as disabled.
+   */
+  onNextActionHint?(
+    listener: (msg: { label: string | null }) => void,
+  ): () => void;
   /**
    * True when this pump is attached as a read-only observer to a
    * `--watch-socket` tap. Dashboard / chat panel use this to
@@ -581,6 +605,11 @@ export class SessionPump {
         // Stdio pump doesn't track sub-session bracketing; the
         // socketPump handles it for the dashboard. The events
         // already round-trip through the debug log above.
+        break;
+      case "next-action-hint":
+        // Stdio pump doesn't drive the chat panel's Continue button;
+        // the socketPump translates this into a bus event for the
+        // chat panel. Debug log already records it above.
         break;
       default: {
         const exhaustive: never = event;

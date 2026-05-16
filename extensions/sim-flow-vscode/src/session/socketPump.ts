@@ -55,6 +55,14 @@ type SocketPumpBusEvent =
       type: "followup";
       label: string;
       action: string;
+    }
+  | {
+      // Orchestrator's hint about what `ContinueFlow` would do
+      // next. `label` is pre-rendered for the chat panel's
+      // Continue button ("Run critique on DM2d"); null means "no
+      // action available, render Continue as disabled."
+      type: "next-action-hint";
+      label: string | null;
     };
 
 export interface SocketSessionPumpOptions {
@@ -475,6 +483,23 @@ export class SocketSessionPump implements LiveSessionTransport {
   }
 
   /**
+   * Subscribe to `NextActionHint` events. The orchestrator emits one
+   * each time it parks at `wait_for_command` to advertise what
+   * `ContinueFlow` would do next; the chat panel uses `label` to
+   * drive its Continue button text, or disables the button when
+   * `label` is null.
+   */
+  onNextActionHint(listener: (msg: { label: string | null }) => void): () => void {
+    const wrapped = (msg: SocketPumpBusEvent) => {
+      if (msg.type === "next-action-hint") {
+        listener({ label: msg.label });
+      }
+    };
+    this.bus.on("msg", wrapped);
+    return () => this.bus.off("msg", wrapped);
+  }
+
+  /**
    * Manual-mode host commands. Each one fires-and-forgets — the
    * orchestrator emits `Diagnostic` if the command is rejected (auto
    * mode owns step execution, sub-session in flight, etc.) and that
@@ -508,6 +533,11 @@ export class SocketSessionPump implements LiveSessionTransport {
   reset(step: string): void {
     if (this.options.viewer) return;
     this.sendHostEventAfterReady({ event: "reset", step });
+  }
+
+  continueFlow(): void {
+    if (this.options.viewer) return;
+    this.sendHostEventAfterReady({ event: "continue-flow" });
   }
 
   shutdown(): void {
@@ -931,6 +961,12 @@ export class SocketSessionPump implements LiveSessionTransport {
           type: "followup",
           label: event.label,
           action: event.action,
+        } as SocketPumpBusEvent);
+        break;
+      case "next-action-hint":
+        this.bus.emit("msg", {
+          type: "next-action-hint",
+          label: event.label ?? null,
         } as SocketPumpBusEvent);
         break;
       case "diagnostic":

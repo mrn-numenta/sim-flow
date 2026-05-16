@@ -50,15 +50,14 @@ export interface ManagedAutoSessionState {
   stepRef: ManagedStepRef | null;
   launchSpecPath: string | undefined;
   /**
-   * Step ID for which the chat panel most recently dispatched
-   * `pump.advance()`. Used by `computeNextAction` to detect whether
-   * the orchestrator's advance succeeded (current_step moved past
-   * this step) or refused (current_step still equals this step).
-   * Cleared the next time `continueFlow` dispatches a non-advance
-   * action -- single-shot tracking, not a queue. Persisted only in
-   * memory; a fresh session restart resets it.
+   * Most recent `NextActionHint` label the orchestrator emitted (or
+   * null when it explicitly said "no action available"). The chat
+   * panel uses this verbatim for the Continue button text and
+   * disables the button when null. `undefined` means no hint has
+   * arrived yet (e.g. fresh attach, auto mode); the panel renders
+   * Continue as disabled in that case too.
    */
-  lastAdvanceAttemptFor: string | null;
+  nextActionHint: string | null | undefined;
 }
 
 export interface StoredAutoSessionRecord {
@@ -211,7 +210,7 @@ export class AutoSessionManager implements vscode.Disposable {
       sessionMode: options.sessionMode,
       stepRef: options.stepRef,
       launchSpecPath: options.launchSpecPath,
-      lastAdvanceAttemptFor: null,
+      nextActionHint: undefined,
     };
     this.activeSession = session;
     this.notifyActiveSessionChanged();
@@ -242,6 +241,9 @@ export class AutoSessionManager implements vscode.Disposable {
     // the chips no longer apply -- the orchestrator will re-emit
     // them if the next park needs them.
     session.pendingFollowups = [];
+    // Same story for the Continue-button hint -- the next park will
+    // emit a fresh `NextActionHint` if it wants one.
+    session.nextActionHint = undefined;
     await this.persistRecord(session);
     session.pump.sendUserMessage(prompt);
     this.startDrive(session, delegate);
@@ -267,6 +269,23 @@ export class AutoSessionManager implements vscode.Disposable {
       return;
     }
     session.pendingFollowups = [...session.pendingFollowups, followup];
+  }
+
+  /**
+   * Record the most recent `NextActionHint` label the orchestrator
+   * emitted. `null` means the orchestrator has no next action it can
+   * recommend (state.toml missing, etc.); the panel renders Continue
+   * as disabled. Cleared back to `undefined` when a new sub-session
+   * opens so a stale hint doesn't survive into the next park.
+   */
+  setNextActionHint(
+    session: ManagedAutoSessionState,
+    label: string | null,
+  ): void {
+    if (!this.isActive(session)) {
+      return;
+    }
+    session.nextActionHint = label;
   }
 
   /**
@@ -388,7 +407,7 @@ export class AutoSessionManager implements vscode.Disposable {
       sessionMode: record.sessionMode,
       stepRef: record.stepRef,
       launchSpecPath: record.launchSpecPath,
-      lastAdvanceAttemptFor: null,
+      nextActionHint: undefined,
     };
     this.activeSession = session;
     this.notifyActiveSessionChanged();

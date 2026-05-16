@@ -99,20 +99,15 @@ export interface ChatPanelState {
    */
   currentStepMode: StepMode | null;
   /**
-   * Suggested next manual-mode action, computed by the host from
-   * the pump's last `SessionTag` plus the project's gate state.
-   * Drives the Continue button under the composer: when the
-   * orchestrator parks in manual mode, the button dispatches this
-   * action to the existing pump (no fresh session spawn).
-   * `null` when no action is computable -- e.g. auto mode, no live
-   * pump, the pump isn't parked, or the last sub-session was Q&A.
+   * Pre-rendered Continue button label the orchestrator emitted via
+   * `NextActionHint` at the most recent manual-mode park. The chat
+   * panel uses this verbatim ("Run critique on DM0"). `null` means
+   * the orchestrator said it has no next action available (the
+   * panel renders Continue as disabled). The whole object is `null`
+   * when no hint has arrived yet -- e.g. no live pump, auto mode,
+   * the orchestrator hasn't parked yet, or the pump is mid-work.
    */
-  nextAction: {
-    kind: "work" | "critique" | "gate" | "advance";
-    step: string;
-    /** Pre-rendered label for the button ("Run critique on DM0"). */
-    label: string;
-  } | null;
+  nextActionHint: { label: string | null } | null;
   /**
    * Whether a sim-flow pump is currently anchored to this project's
    * chat panel. The toolbar LLM indicator uses this together with
@@ -168,10 +163,11 @@ export type WebviewMessage =
    */
   | { type: "pick-file" }
   /**
-   * Continue button under the composer. The host has already
-   * computed the suggested next action and embedded it in
-   * `ChatPanelState.nextAction`; the webview just signals intent
-   * and the host dispatches the right host-event over the pump.
+   * Continue button under the composer. The webview signals intent
+   * and the host forwards `ContinueFlow` to the orchestrator, which
+   * owns the manual-mode state machine and picks the next action
+   * (work / critique / advance). The label on the button comes from
+   * the orchestrator's `NextActionHint`.
    */
   | { type: "continue-flow" }
   /**

@@ -131,6 +131,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
    * actually doing.
    */
   private stepModeListenerDispose: (() => void) | null = null;
+  /**
+   * Subscription to the active pump's `onNextActionHint`. Each
+   * manual-mode park, the orchestrator emits a hint describing what
+   * `ContinueFlow` would do next; the chat panel uses the label
+   * verbatim on its Continue button.
+   */
+  private nextActionHintListenerDispose: (() => void) | null = null;
 
   /**
    * workspaceState key for the most recently launched project dir.
@@ -199,6 +206,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.attachRequestUserInputListener(session);
       this.attachFollowupListener(session);
       this.attachStepModeListener(session);
+      this.attachNextActionHintListener(session);
       // A newly attached/replaced session changes the panel's anchor
       // immediately; refresh so OFFLINE flips to VIEWING/STREAMING
       // without waiting for the next pump event. We intentionally do
@@ -251,6 +259,31 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       // delay all but the last chip by one tick.
       void this.refresh();
     });
+  }
+
+  private attachNextActionHintListener(
+    session: ManagedAutoSessionState | undefined,
+  ): void {
+    if (this.nextActionHintListenerDispose) {
+      this.nextActionHintListenerDispose();
+      this.nextActionHintListenerDispose = null;
+    }
+    if (!session || typeof session.pump.onNextActionHint !== "function") {
+      return;
+    }
+    this.nextActionHintListenerDispose = session.pump.onNextActionHint(
+      ({ label }) => {
+        const current = this.activePump;
+        if (!current) {
+          return;
+        }
+        this.autoSessions.setNextActionHint(current, label);
+        // Repaint so the Continue button label updates before the
+        // user clicks. Arrives right before each `request-user-input`
+        // in manual mode.
+        void this.refresh();
+      },
+    );
   }
 
   private attachRequestUserInputListener(
@@ -349,6 +382,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.stepModeListenerDispose();
       this.stepModeListenerDispose = null;
     }
+    if (this.nextActionHintListenerDispose) {
+      this.nextActionHintListenerDispose();
+      this.nextActionHintListenerDispose = null;
+    }
     for (const d of this.disposables) {
       d.dispose();
     }
@@ -426,7 +463,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         await this.pickFile();
         return;
       case "continue-flow":
-        await this.continueFlow();
+        this.continueFlow();
         return;
       case "switch-project":
         await this.switchProject();
@@ -568,44 +605,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   /**
-   * Dispatch the host-computed next manual-mode action over the
-   * active pump. The action shape lives in `ChatPanelState.nextAction`
-   * (computed by `computeNextAction`); the webview just signals
-   * intent. Sending over the live pump (rather than spawning a
-   * fresh step session) keeps the orchestrator's accumulated
-   * context intact.
+   * Forward the Continue intent to the orchestrator. The orchestrator
+   * owns the manual-mode state machine (work -> critique -> advance,
+   * with critique outcome driving the work-vs-advance branch); the
+   * chat panel just signals intent. Sending over the live pump keeps
+   * the orchestrator's accumulated context intact.
    */
-  private async continueFlow(): Promise<void> {
+  private continueFlow(): void {
     const session = this.activePump;
     if (!session) {
       return;
     }
-    const context = await this.readPanelContext();
-    const action = computeNextAction(session, context);
-    if (!action) {
-      return;
-    }
-    // Track advance dispatches in a single-shot flag so the next
-    // `computeNextAction` call can branch on the outcome (succeeded
-    // -> work on new step; refused -> re-run work on same step).
-    // Any other dispatch clears the flag.
-    session.lastAdvanceAttemptFor =
-      action.kind === "advance" ? action.step : null;
-    const pump = session.pump;
-    switch (action.kind) {
-      case "work":
-        pump.runStep?.(action.step, "work");
-        return;
-      case "critique":
-        pump.runCritique?.(action.step);
-        return;
-      case "gate":
-        pump.runGate?.(action.step);
-        return;
-      case "advance":
-        pump.advance?.(action.step);
-        return;
-    }
+    session.pump.continueFlow?.();
   }
 
   /**
@@ -1585,9 +1596,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         this.activePump?.projectDir === context.projectDir
           ? (this.activePump.pump.stepMode ?? null)
           : null,
-      nextAction:
-        this.activePump?.projectDir === context.projectDir
-          ? computeNextAction(this.activePump, context)
+      nextActionHint:
+        this.activePump?.projectDir === context.projectDir &&
+        this.activePump.nextActionHint !== undefined
+          ? { label: this.activePump.nextActionHint }
           : null,
       sessionActive:
         !!this.activePump && this.activePump.projectDir === context.projectDir,
@@ -2472,105 +2484,6 @@ async function resolveProjectDirForPanel(): Promise<string | null> {
   }
   const candidates = await findProjectCandidates();
   return candidates[0] ?? null;
-}
-
-/**
- * Compute the manual-mode "next action" surfaced as the Continue
- * button under the composer. Mirrors how the dashboard's per-step
- * buttons gate themselves on session+gate state; produced once per
- * `buildState` so the webview just renders a label.
- *
- * Returns null when there's nothing useful to dispatch:
- *   - auto mode (no parking between sub-sessions),
- *   - no live pump or it's busy (`!awaitingInput`),
- *   - last sub-session was a Q&A turn (no semantic "continue").
- *
- * The state machine is the common path -- work → critique → gate
- * → advance → next-step's work. Edge cases (gate refused, Reset,
- * mid-flow `current_step` jumps from external CLI commands) the
- * user can still drive from the dashboard's step rail.
- */
-function computeNextAction(
-  session: ManagedAutoSessionState,
-  context: PanelContext,
-): {
-  kind: "work" | "critique" | "gate" | "advance";
-  step: string;
-  label: string;
-} | null {
-  if (session.pump.stepMode !== "manual") {
-    return null;
-  }
-  if (session.pump.inSubSession) {
-    return null;
-  }
-  const last = session.pump.session;
-  const currentStep = context.currentStep;
-
-  // Post-advance branch. When the chat panel most recently dispatched
-  // `advance` for some step, the next click should react to the
-  // outcome rather than re-suggest advance:
-  //   - current_step moved past it  → advance succeeded, run work on
-  //     the new step.
-  //   - current_step is still the same → advance refused (the gate
-  //     ran inside advance and failed -- typically due to unresolved
-  //     critique findings -- or the orchestrator declined for
-  //     milestone / cap reasons). Re-run work on the same step so
-  //     the model gets another swing.
-  // The flag is single-shot -- `continueFlow` clears it on the next
-  // non-advance dispatch.
-  if (session.lastAdvanceAttemptFor && currentStep) {
-    const advancedFrom = session.lastAdvanceAttemptFor;
-    const advanced = currentStep !== advancedFrom;
-    const target = advanced ? currentStep : advancedFrom;
-    return {
-      kind: "work",
-      step: target,
-      label: advanced
-        ? `Run work on ${target}`
-        : `Re-run work on ${target} (advance was refused)`,
-    };
-  }
-
-  // No prior sub-session info -- e.g. just attached. Suggest
-  // running work on the orchestrator's current step.
-  if (!last) {
-    if (!currentStep) {
-      return null;
-    }
-    return {
-      kind: "work",
-      step: currentStep,
-      label: `Run work on ${currentStep}`,
-    };
-  }
-  // Q&A turns don't have a natural "continue" successor; the user
-  // tells the panel what to do next by typing or using the rail.
-  if (last.kind === "qa") {
-    return null;
-  }
-  if (last.kind === "work") {
-    return {
-      kind: "critique",
-      step: last.step,
-      label: `Run critique on ${last.step}`,
-    };
-  }
-  if (last.kind === "critique") {
-    // After critique, always try advance. Advance runs the gate
-    // internally; if the critique is unresolved the gate fails and
-    // advance refuses (state.toml unchanged). The next Continue
-    // hits the `lastAdvanceAttemptFor` branch above and suggests
-    // re-running work. So we skip the explicit "gate" click
-    // entirely -- gate happens inside advance.
-    const targetStep = currentStep ?? last.step;
-    return {
-      kind: "advance",
-      step: targetStep,
-      label: `Advance past ${targetStep}`,
-    };
-  }
-  return null;
 }
 
 /**

@@ -903,9 +903,11 @@ function buildComposer(state: ChatPanelState): HTMLElement {
 /**
  * Composer footer holding the Manual/Auto step-mode toggle and the
  * Continue button. The mode toggle wires the orchestrator's
- * `setStepMode` (auto/manual); Continue dispatches the host-computed
- * `nextAction` so the user can advance the flow without leaving the
- * chat panel. Both are disabled when no pump is live.
+ * `setStepMode` (auto/manual); Continue forwards `ContinueFlow` to
+ * the orchestrator, which owns the manual-mode state machine and
+ * picks the next action. The button label comes from the
+ * orchestrator's most recent `NextActionHint`. Both are disabled
+ * when no pump is live.
  */
 function buildComposerMeta(state: ChatPanelState): HTMLElement {
   const root = div("x-composer-meta");
@@ -962,18 +964,18 @@ function buildComposerMeta(state: ChatPanelState): HTMLElement {
   resetWrap.append(resetBtn, resetPickBtn);
   leftZone.appendChild(resetWrap);
 
-  // Continue: primary flow-driving action. Disabled until the host
-  // has a computed next action (typically: Manual mode parked
-  // between sub-sessions).
+  // Continue: primary flow-driving action. Disabled until the
+  // orchestrator advertises a next action via NextActionHint
+  // (typically: Manual mode parked between sub-sessions).
   const continueBtn = document.createElement("button");
   continueBtn.type = "button";
   continueBtn.id = "x-composer-continue";
   continueBtn.className = "x-continue";
-  const action = state.nextAction;
-  continueBtn.textContent = action ? `Continue: ${action.label}` : "Continue";
-  continueBtn.disabled = !action || state.isStreaming || state.isViewer;
-  continueBtn.title = action
-    ? `Continue the flow from its current position -- dispatches \`${action.kind}\` on \`${action.step}\` over the live session.`
+  const hintLabel = state.nextActionHint?.label ?? null;
+  continueBtn.textContent = hintLabel ? `Continue: ${hintLabel}` : "Continue";
+  continueBtn.disabled = !hintLabel || state.isStreaming || state.isViewer;
+  continueBtn.title = hintLabel
+    ? "Continue the flow from its current position. The orchestrator decides the next action."
     : "Continue the flow from its current position. Available when the orchestrator is parked in Manual mode between sub-sessions.";
   continueBtn.addEventListener("click", () => {
     if (continueBtn.disabled) {
