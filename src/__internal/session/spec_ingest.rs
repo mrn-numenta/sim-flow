@@ -587,6 +587,45 @@ mod tests {
     }
 
     #[test]
+    fn first_pdf_heading_takes_first_non_empty_line_truncated() {
+        let body = "\n\n   First section heading\nrest of body\n";
+        assert_eq!(first_pdf_heading(body, 1), "First section heading");
+        // Past 120 chars -> truncates at 120.
+        let long_line = "a".repeat(200);
+        assert_eq!(first_pdf_heading(&long_line, 2).chars().count(), 120);
+    }
+
+    #[test]
+    fn first_pdf_heading_falls_back_to_page_label_on_empty_text() {
+        let body = "   \n  \n";
+        assert!(first_pdf_heading(body, 7).contains("Page 7"));
+        assert!(first_pdf_heading("", 1).contains("Page 1"));
+    }
+
+    #[test]
+    fn first_heading_or_line_strips_hash_prefix_on_markdown_heading_line() {
+        // The helper walks lines; for markdown the FIRST non-empty
+        // line is what counts. If that line is a heading, strip the
+        // hashes; otherwise return it verbatim.
+        let md = "# Title line\n\nbody\n";
+        assert_eq!(first_heading_or_line(md, SpecKind::Markdown), "Title line");
+        // Heading with multiple hashes -> hashes stripped.
+        assert_eq!(
+            first_heading_or_line("### Deep\n", SpecKind::Markdown),
+            "Deep"
+        );
+    }
+
+    #[test]
+    fn first_heading_or_line_falls_back_to_first_non_empty_line() {
+        let md = "just plain text\nsecond line";
+        let got = first_heading_or_line(md, SpecKind::Markdown);
+        assert!(got.contains("just plain text"));
+        // Empty string -> sentinel.
+        assert_eq!(first_heading_or_line("", SpecKind::PlainText), "(empty)");
+    }
+
+    #[test]
     fn identity_h_garbage_detected() {
         let placeholder = "?Identity-H Unimplemented?";
         // 100 placeholder copies + tiny preamble.
