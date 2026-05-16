@@ -1772,6 +1772,90 @@ mod tests {
     }
 
     #[test]
+    fn plan_progress_rejects_more_than_one_mode_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        // --kind impl AND --current-step (illegal combo)
+        let r = plan_progress_cmd(
+            tmp.path(),
+            Some(crate::cli::PlanKindArg::Impl),
+            Some("DM3a"),
+            false,
+        );
+        let err = r.unwrap_err();
+        assert!(format!("{err}").contains("mutually exclusive"));
+        // --all AND --kind impl (illegal combo)
+        let r = plan_progress_cmd(tmp.path(), Some(crate::cli::PlanKindArg::Impl), None, true);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn plan_progress_requires_some_mode_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = plan_progress_cmd(tmp.path(), None, None, false);
+        let err = r.unwrap_err();
+        assert!(format!("{err}").contains("must pass one"));
+    }
+
+    #[test]
+    fn plan_progress_all_mode_succeeds_on_an_empty_project() {
+        // No docs/plan present -- read_all_plan_progress should
+        // return an empty report and the command writes valid JSON.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".sim-flow")).unwrap();
+        // Project state is required by some readers; create a minimal one.
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        let r = plan_progress_cmd(tmp.path(), None, None, true);
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn plan_progress_kind_mode_succeeds_for_each_plan_kind_arg() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        for k in [
+            crate::cli::PlanKindArg::Impl,
+            crate::cli::PlanKindArg::Test,
+            crate::cli::PlanKindArg::Perf,
+        ] {
+            assert!(plan_progress_cmd(tmp.path(), Some(k), None, false).is_ok());
+        }
+    }
+
+    #[test]
+    fn plan_progress_current_step_infers_kind_via_plan_kind_for_step() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        // DM3a is an impl step in DMF -- plan_kind_for_step returns
+        // Impl. The command should still succeed even with no plan
+        // files on disk; the reader emits an empty report.
+        assert!(plan_progress_cmd(tmp.path(), None, Some("DM3a"), false).is_ok());
+    }
+
+    #[test]
+    fn documents_cmd_rejects_unknown_flow_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = documents_cmd(tmp.path(), "bogus-flow");
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn documents_cmd_succeeds_on_a_freshly_inited_dm_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        assert!(documents_cmd(tmp.path(), "direct-modeling").is_ok());
+    }
+
+    #[test]
+    fn critiques_cmd_with_no_critiques_returns_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), Flow::DirectModeling).unwrap();
+        // No docs/critiques on disk -- prints "(no critiques)" and ok.
+        assert!(critiques_cmd(tmp.path(), None).is_ok());
+        // With step filter for a step that has no critique file.
+        assert!(critiques_cmd(tmp.path(), Some("DM0")).is_ok());
+    }
+
+    #[test]
     fn init_overwrites_existing_state_toml() {
         // Current contract: `sim-flow init` is unconditional --
         // running it on an existing project resets state.toml to
