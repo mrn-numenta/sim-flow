@@ -60,11 +60,18 @@ const ALLOWED_TAGS = [
   "ul",
 ];
 
-// `class` + `style` are allowed so Shiki's token spans survive
-// sanitization (Shiki paints colors via inline styles). DOMPurify's
-// CSS allow-list still scrubs `style` for javascript: / expression()
-// payloads, so this isn't a free pass.
-const ALLOWED_ATTR = ["href", "target", "rel", "class", "style", "tabindex"];
+// `class` is allowed so Shiki's token classes survive sanitization.
+//
+// `style` is NOT allowed: DOMPurify's CSS scrubber only blocks
+// javascript: / expression() payloads, not arbitrary CSS, so a
+// hostile LLM markdown response could inject CSS like
+//   position: fixed; inset: 0; background: black;
+// to overlay the panel or repaint disabled buttons as enabled
+// (chat-panel audit #4, 2026-05-16). Shiki's color output is grafted
+// in AFTER DOMPurify by applyShikiHighlight (see code-block path
+// below), so the sanitizer doesn't need to preserve `style` for
+// assistant text.
+const ALLOWED_ATTR = ["href", "target", "rel", "class", "tabindex"];
 
 let purifyHooksInstalled = false;
 function ensurePurifyHooks(): void {
