@@ -489,6 +489,16 @@ function buildShell(): Node[] {
   const shell = div("x-shell");
   shell.appendChild(buildToolbar(ui.state));
   shell.appendChild(buildTranscript(ui.state));
+  // Orchestrator-supplied state (notice / parked prompt / idle-Q&A
+  // hint / awaiting-user-input cue). The standard panel.ts renders
+  // these in its hero block; the experimental panel previously only
+  // surfaced state.currentPlaceholder via the textarea placeholder
+  // and dropped the rest on the floor, so RequestUserInput parks
+  // were invisible. See chat-panel audit #1 (2026-05-16).
+  const banner = buildOrchestratorBanner(ui.state);
+  if (banner) {
+    shell.appendChild(banner);
+  }
   shell.appendChild(buildComposer(ui.state));
   const nodes: Node[] = [shell];
   // Overlay popups live as siblings of the shell so their fixed
@@ -1387,6 +1397,55 @@ function linkifyFilePaths(root: ParentNode): void {
   }
 }
 
+/**
+ * Render the orchestrator's parked-state surface: the banner notice,
+ * the literal RequestUserInput prompt, the idle-Q&A hint, and an
+ * "awaiting input" status pill. Returns `null` when none of the
+ * fields carry content (the normal running-state) so buildShell can
+ * skip the empty wrapper. Mirrors the rendering blocks in `panel.ts`
+ * around lines 247-278 -- the experimental panel was missing all of
+ * this (chat-panel audit #1, 2026-05-16) so RequestUserInput parks
+ * were invisible to the user.
+ */
+function buildOrchestratorBanner(state: ChatPanelState): HTMLElement | null {
+  const notice = state.notice && state.notice.trim().length > 0 ? state.notice : null;
+  const prompt =
+    state.currentPrompt && state.currentPrompt.trim().length > 0
+      ? state.currentPrompt
+      : null;
+  const idleHint =
+    state.idleQaHint && state.idleQaHint.trim().length > 0 ? state.idleQaHint : null;
+  const showAwaiting = state.awaitingUserInput && !prompt;
+  if (!notice && !prompt && !idleHint && !showAwaiting) {
+    return null;
+  }
+  const root = div("x-orchestrator-banner");
+  if (showAwaiting) {
+    const pill = div("x-orchestrator-awaiting");
+    pill.textContent = "Waiting on you";
+    pill.setAttribute("role", "status");
+    pill.setAttribute("aria-live", "polite");
+    root.appendChild(pill);
+  }
+  if (notice) {
+    const node = div("x-orchestrator-notice", notice);
+    node.setAttribute("role", "status");
+    root.appendChild(node);
+  }
+  if (prompt) {
+    const node = div("x-orchestrator-prompt", prompt);
+    node.setAttribute("role", "status");
+    node.setAttribute("aria-live", "polite");
+    root.appendChild(node);
+  }
+  if (idleHint) {
+    const node = div("x-orchestrator-qa-hint", idleHint);
+    node.setAttribute("role", "note");
+    root.appendChild(node);
+  }
+  return root;
+}
+
 function buildComposer(state: ChatPanelState): HTMLElement {
   const root = div("x-composer");
   // The composer stacks two (or three) rows inside one bordered
@@ -1464,6 +1523,32 @@ function buildComposer(state: ChatPanelState): HTMLElement {
     inputRow.append(area);
   }
   root.appendChild(inputRow);
+  // Followup quick-action chips, when the orchestrator parked at a
+  // RequestUserInput with named follow-ups attached. Placed between
+  // the input row and the action controls so they read as a peer to
+  // typing (each chip submits the same UserMessage the textarea
+  // would). Hidden in viewer mode -- viewers don't write back to the
+  // session. See chat-panel audit #1 (2026-05-16).
+  if (
+    state.pendingFollowups
+    && state.pendingFollowups.length > 0
+    && !state.isViewer
+  ) {
+    const followupsRow = div("x-composer-followups");
+    for (const f of state.pendingFollowups) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "x-composer-followup-chip";
+      chip.textContent = f.label;
+      chip.title = f.action;
+      chip.disabled = state.isStreaming;
+      chip.addEventListener("click", () => {
+        send({ type: "followup-selected", action: f.action, label: f.label });
+      });
+      followupsRow.appendChild(chip);
+    }
+    root.appendChild(followupsRow);
+  }
   root.appendChild(buildComposerControls(state));
   if (state.currentMilestone) {
     const ms = state.currentMilestone;
