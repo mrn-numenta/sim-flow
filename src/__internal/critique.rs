@@ -1079,4 +1079,15 @@ BLOCKER: numeric threshold missing.
         let entry = read_critique_entry(tmp.path(), "DM4b").expect("ok");
         assert!(entry.is_none());
     }
+
+    #[test]
+    fn is_fence_delimiter_recognizes_both_backtick_and_tilde_fences() {
+        assert!(is_fence_delimiter("```"));
+        assert!(is_fence_delimiter("``` rust"));
+        assert!(is_fence_delimiter("~~~"));
+        assert!(is_fence_delimiter("   ```text"));
+        assert!(!is_fence_delimiter("``"));
+        assert!(!is_fence_delimiter("plain line"));
+        assert!(!is_fence_delimiter(""));
+    }
 }
