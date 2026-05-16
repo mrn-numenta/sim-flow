@@ -26,6 +26,29 @@ export default defineConfig({
         // Mock harness lives only to drive other tests.
         "src/mockFlowHarness.ts",
         "src/mockFlowHarness.test.ts",
+        // Webview / iframe entry points. These files run inside the
+        // VS Code webview iframe, not Node; vitest's node
+        // environment can't drive them, and the .ts is consumed
+        // by esbuild to produce a bundled iife in `dist/webview/`.
+        // Excluded from coverage so the denominator reflects
+        // unit-testable surface, not browser-only code. End-to-end
+        // tests against the running webview are the only way to
+        // exercise these paths today; we carve them out
+        // deliberately rather than chase a misleading number.
+        // See chat-panel + orchestrator audits 2026-05-16.
+        "src/chatPanel/panel.ts",
+        "src/chatPanel/panelExperimental.ts",
+        "src/webview/panel.ts",
+        "src/webview/panelExperimental.ts",
+        "src/perfPanel/panel.ts",
+        // Pure type-declaration shim, no runtime code to cover.
+        "src/chatPanel/markdown-it.d.ts",
+        // Re-export index files (`export * from "..."`). Coverage
+        // tools mark the `export` lines uncovered unless every
+        // re-export is touched, which doesn't reflect real
+        // testability of the underlying modules.
+        "src/**/index.ts",
+        "src/**/types.ts",
       ],
       reporter: ["text", "text-summary", "html"],
     },
