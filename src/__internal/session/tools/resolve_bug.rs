@@ -99,6 +99,21 @@ mod tests {
     }
 
     #[test]
+    fn resolve_bug_rejects_missing_or_empty_resolution() {
+        let tmp = tempfile::tempdir().unwrap();
+        crate::bug_log::open(tmp.path(), "DM3c", None, "framework", "x").unwrap();
+        // No resolution arg.
+        let result = ResolveBugTool.invoke(&ctx(tmp.path()), &json!({})).unwrap();
+        assert!(!result.ok);
+        assert!(result.display.contains("missing or empty"));
+        // Whitespace-only resolution.
+        let result = ResolveBugTool
+            .invoke(&ctx(tmp.path()), &json!({"resolution": "   \n"}))
+            .unwrap();
+        assert!(!result.ok);
+    }
+
+    #[test]
     fn resolve_bug_targets_most_recently_opened() {
         let tmp = tempfile::tempdir().unwrap();
         crate::bug_log::open(tmp.path(), "DM3c", None, "framework", "first").unwrap();
