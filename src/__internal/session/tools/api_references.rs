@@ -133,15 +133,15 @@ fn render(
         return format!("[api_references `{query}`]\n\n{banner}\n\n(no references)");
     }
     // Dedup by (path, line) so a hit that reports two character
-    // ranges on the same line doesn't double-list.
+    // ranges on the same line doesn't double-list. `format_location_value`
+    // already includes the 1-based line in the formatted string
+    // (e.g. ``fw:foo.rs:5``), so the formatted string by itself is
+    // a sufficient (path, line) key.
     let mut seen = std::collections::BTreeSet::new();
     let mut rows = Vec::new();
     for loc in locations {
-        let (s, line) = format_location_value(loc, workspace_root);
-        // Use the formatted location string sans line+col as the
-        // key plus the line number for dedup.
-        let key = format!("{s}::{line}");
-        if seen.insert(key) {
+        let (s, _line) = format_location_value(loc, workspace_root);
+        if seen.insert(s.clone()) {
             rows.push(format!("- {s}"));
         }
     }
