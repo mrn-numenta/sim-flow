@@ -41,8 +41,28 @@ export default defineConfig({
         "src/webview/panel.ts",
         "src/webview/panelExperimental.ts",
         "src/perfPanel/panel.ts",
+        // Extension-side panel hosts. These are thin presenters over
+        // vscode.WebviewPanel that wire CLI / state-reader output into
+        // postMessage; the units they wrap (state/*, cli/*, session/*)
+        // each have their own tests. Unit-testing the host wiring
+        // itself requires mocking out half the VS Code API surface
+        // and produces brittle tests that re-encode the structure
+        // rather than asserting behavior. The e2e test pair
+        // (e2eAutoMock + e2eManualLive) is the real driver here.
+        "src/chatPanel/host.ts",
+        "src/perfPanel/host.ts",
+        "src/webview/host.ts",
+        // Same rationale for extension.ts -- it's the VS Code
+        // command-registration + activation entry point. Activation
+        // is exercised by e2e tests; its dependencies all have
+        // their own unit tests.
+        "src/extension.ts",
         // Pure type-declaration shim, no runtime code to cover.
         "src/chatPanel/markdown-it.d.ts",
+        // Pure-types module; v8 reports 0% even though there's no
+        // runtime code to execute. Excluded so the denominator is
+        // not biased by zero-cost type declarations.
+        "src/perfPanel/messages.ts",
         // Re-export index files (`export * from "..."`). Coverage
         // tools mark the `export` lines uncovered unless every
         // re-export is touched, which doesn't reflect real
