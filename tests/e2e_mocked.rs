@@ -106,6 +106,7 @@ fn auto_opts(project: &Path, mode: StepMode) -> AutoOptions {
         // responses across the four docs-only steps would otherwise
         // trip it. 0 disables the check (it requires >= 2).
         max_identical_responses: 0,
+        max_parallel_requests: 0,
         step_mode: mode,
         no_preamble: true,
     }

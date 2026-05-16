@@ -1043,6 +1043,7 @@ fn auto_opts(
         dm0_interactive: false,
         max_llm_requests: 50,
         max_identical_responses: 0,
+        max_parallel_requests: 0,
         step_mode: mode,
         no_preamble: true,
     }

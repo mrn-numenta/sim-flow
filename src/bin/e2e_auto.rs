@@ -542,6 +542,7 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         dm0_interactive: false,
         max_llm_requests: args.max_llm_requests,
         max_identical_responses: args.max_identical_responses,
+        max_parallel_requests: 0,
         step_mode: StepMode::Auto,
         no_preamble: args.no_preamble,
     };

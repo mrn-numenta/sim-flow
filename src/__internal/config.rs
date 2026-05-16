@@ -41,8 +41,30 @@ pub struct Config {
     /// against the live `cargo llvm-cov` report.
     #[serde(default)]
     pub coverage: CoverageSettings,
+    /// LLM-dispatch knobs that aren't backend-specific (the
+    /// per-backend `[claude]` / `[codex]` / `[copilot]` tables hold
+    /// model + tool selection). Currently just the parallelism cap
+    /// for plan-detail walks.
+    #[serde(default)]
+    pub llm: LlmSettings,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub steps: BTreeMap<String, StepOverride>,
+}
+
+/// Backend-agnostic LLM knobs. Today only `max_parallel_requests`
+/// lives here; future fields might include a global rate-limit or a
+/// retry-backoff policy that all backends share.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmSettings {
+    /// Cap on concurrent in-flight LLM Work sessions during
+    /// plan-detail walks (DM2cd / DM3ad / DM4ad). `0` means
+    /// unbounded (every pending stub fires at once). `1` forces the
+    /// legacy serial path. Higher values fan out N stubs in parallel
+    /// up to the cap. Has no effect on execution walks (DM2d / DM3b /
+    /// DM3c / DM4b) which stay serial until the milestone DAG work
+    /// in Phase 3/4 lands.
+    #[serde(default)]
+    pub max_parallel_requests: u32,
 }
 
 /// DM3c coverage acceptance criteria. `threshold_pct` is the
@@ -319,6 +341,38 @@ mod tests {
         assert!(total.contains("\"total\""), "got {total}");
         assert_eq!(CoverageLevel::Module.as_str(), "module");
         assert_eq!(CoverageLevel::Total.as_str(), "total");
+    }
+
+    #[test]
+    fn llm_max_parallel_defaults_to_zero() {
+        let cfg = Config::default();
+        assert_eq!(cfg.llm.max_parallel_requests, 0);
+    }
+
+    #[test]
+    fn llm_settings_round_trip_through_toml() {
+        let dir = tempdir().unwrap();
+        let cfg = Config {
+            llm: LlmSettings {
+                max_parallel_requests: 4,
+            },
+            ..Config::default()
+        };
+        cfg.save(dir.path()).unwrap();
+        let loaded = Config::load(dir.path()).unwrap();
+        assert_eq!(loaded.llm.max_parallel_requests, 4);
+    }
+
+    #[test]
+    fn llm_settings_load_from_legacy_config_without_section() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[client]\nname = \"mock\"\n",
+        )
+        .unwrap();
+        let loaded = Config::load(dir.path()).unwrap();
+        assert_eq!(loaded.llm, LlmSettings::default());
     }
 
     #[test]

@@ -156,6 +156,16 @@ pub struct AutoOptions {
     /// Forwarded to each sub-session. Stuck-loop detection threshold;
     /// default 3.
     pub max_identical_responses: u32,
+    /// Cap on concurrent in-flight LLM Work sessions during
+    /// plan-detail walks (DM2cd / DM3ad / DM4ad). `0` means
+    /// unbounded; `1` collapses to the legacy serial path. Higher
+    /// values fan out pending milestone stubs in parallel up to the
+    /// cap. Has no effect on execution walks (DM2d / DM3b / DM3c /
+    /// DM4b) which stay strictly serial pending the milestone-DAG
+    /// work in Phase 3/4 of the parallel-execution brainstorming
+    /// doc. Resolved at the CLI layer: CLI flag wins, else
+    /// `.sim-flow/config.toml::[llm].max_parallel_requests`, else 0.
+    pub max_parallel_requests: u32,
     /// Initial step-axis mode. `Auto` walks `current_step` to end of
     /// flow without user input. `Manual` parks the orchestrator after
     /// the hello handshake and dispatches sub-sessions only in
@@ -2846,6 +2856,7 @@ mod tests {
             dm0_interactive: false,
             max_llm_requests: 50,
             max_identical_responses: 0,
+            max_parallel_requests: 0,
             step_mode: crate::session::protocol::StepMode::Auto,
             no_preamble: true,
         }

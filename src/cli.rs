@@ -446,6 +446,16 @@ pub(crate) enum Command {
         /// doesn't defeat the check. 0 or 1 disables.
         #[arg(long, default_value_t = 3)]
         max_identical_responses: u32,
+        /// Cap on concurrent in-flight LLM Work sessions during
+        /// plan-detail walks (DM2cd / DM3ad / DM4ad). `0` means
+        /// unbounded; `1` forces the legacy serial path. Higher
+        /// values fan out N pending milestone stubs in parallel up
+        /// to the cap. No effect on execution walks (DM2d / DM3b /
+        /// DM3c / DM4b) which stay serial. CLI value overrides
+        /// `.sim-flow/config.toml::[llm].max_parallel_requests`;
+        /// `None` (flag unset) falls through to the config value.
+        #[arg(long)]
+        max_parallel_requests: Option<u32>,
         /// Default ON. Loads the response-shape convention into
         /// every session's system prompt: tool calls first, prose
         /// last, no recap, no hedging. Cuts qwen3.6 / nemotron

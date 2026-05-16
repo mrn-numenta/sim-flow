@@ -179,6 +179,7 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         dm0_interactive: false,
         max_llm_requests: 50,
         max_identical_responses: 3,
+        max_parallel_requests: 0,
         step_mode: sim_flow::__internal::session::protocol::StepMode::Auto,
         no_preamble: true,
     };

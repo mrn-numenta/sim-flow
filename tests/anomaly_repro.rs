@@ -251,6 +251,7 @@ fn auto_opts(project: &std::path::Path, mode: StepMode) -> AutoOptions {
         // where THOSE caps fail.
         max_llm_requests: 100,
         max_identical_responses: 0,
+        max_parallel_requests: 0,
         step_mode: mode,
         no_preamble: true,
     }
