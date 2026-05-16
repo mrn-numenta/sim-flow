@@ -241,12 +241,18 @@ impl State {
 
     /// In-place flip from DSF to DMF. Preserves DSF gate history under
     /// `archived_gates` so audit is possible.
+    ///
+    /// If `archived_gates["ds"]` already exists (a prior flip-to-DMF
+    /// that was reverted), suffix the new key with a sequence number
+    /// so the older archive isn't silently overwritten. See
+    /// orchestrator audit #9 (2026-05-16).
     pub fn flip_to_dmf(&mut self, dm0_step: &str) {
         if self.flow != Flow::DesignStudy {
             return;
         }
         let prior = std::mem::take(&mut self.gates);
-        self.archived_gates.insert("ds".to_string(), prior);
+        let key = next_archive_key(&self.archived_gates, "ds");
+        self.archived_gates.insert(key, prior);
         self.flow = Flow::DirectModeling;
         self.current_step = dm0_step.to_string();
     }
@@ -262,9 +268,37 @@ impl State {
             return;
         }
         let prior = std::mem::take(&mut self.gates);
-        self.archived_gates.insert("dm".to_string(), prior);
+        // Suffix the archive key if "dm" already exists (a prior
+        // SV-Convert flip that was reverted, e.g. via --force flow
+        // restore). The audit-trail promise -- visible via
+        // `sim-flow status` -- would otherwise be silently
+        // violated. See orchestrator audit #9 (2026-05-16).
+        let key = next_archive_key(&self.archived_gates, "dm");
+        self.archived_gates.insert(key, prior);
         self.flow = Flow::SystemVerilogConvert;
         self.current_step = sv0_step.to_string();
+    }
+}
+
+/// Return a fresh key for `archived_gates` based on `base`:
+/// `<base>` if unused, else `<base>-2`, `<base>-3`, ... Used so
+/// successive flip operations (or a `--force` revert followed by
+/// another flip) don't clobber each other's archive entries.
+fn next_archive_key(archived: &BTreeMap<String, BTreeMap<String, Gate>>, base: &str) -> String {
+    if !archived.contains_key(base) {
+        return base.to_string();
+    }
+    let mut n = 2u32;
+    loop {
+        let candidate = format!("{base}-{n}");
+        if !archived.contains_key(&candidate) {
+            return candidate;
+        }
+        n = n.saturating_add(1);
+        // Pathological upper bound -- nobody flips this many times.
+        if n > 1_000 {
+            return format!("{base}-overflow");
+        }
     }
 }
 
