@@ -27,7 +27,15 @@ fn main() {
     let cli = Cli::parse();
     let project_for_log = resolve_project_dir(&cli);
     install_panic_hook(project_for_log.clone());
-    if let Err(err) = commands::run(&cli) {
+    let result = commands::run(&cli);
+    // Tear down the lazily-spawned rust-analyzer subprocess (if
+    // any) before the process exits. Rust doesn't run Drop on
+    // statics, so without this call the rust-analyzer client
+    // held in the lsp module's static would never receive its
+    // shutdown / exit handshake. Idempotent; safe to call from
+    // the error path below too.
+    sim_flow::__internal::session::lsp::shutdown_client();
+    if let Err(err) = result {
         let reason = format!("error: {err}");
         eprintln!("{reason}");
         if let Some(dir) = project_for_log.as_deref() {
@@ -52,6 +60,12 @@ fn resolve_project_dir(cli: &Cli) -> Option<PathBuf> {
 fn install_panic_hook(project_dir: Option<PathBuf>) {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        // Best-effort: tear down rust-analyzer before the panic
+        // bubbles up. Idempotent so a later `shutdown_client()`
+        // in main is a no-op. Done before `default_hook` so the
+        // backtrace prints AFTER rust-analyzer is gone (its
+        // stderr would otherwise interleave with ours).
+        sim_flow::__internal::session::lsp::shutdown_client();
         default_hook(info);
         if let Some(dir) = project_dir.as_deref() {
             let location = info

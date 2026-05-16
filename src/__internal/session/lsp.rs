@@ -520,6 +520,30 @@ pub fn path_to_uri(p: &Path) -> LspResult<String> {
 
 static CLIENT: Mutex<Option<RustAnalyzerClient>> = Mutex::new(None);
 
+/// Tear down the lazily-spawned `rust-analyzer` subprocess, if any.
+/// Idempotent and panic-safe.
+///
+/// Rust does not run `Drop` on values held inside `static` storage,
+/// so the `RustAnalyzerClient::drop` shutdown sequence (LSP
+/// `shutdown` -> `exit` -> `kill` -> `wait` -> join reader thread)
+/// would otherwise never execute. Without this hook, every
+/// sim-flow run that touched an `api_*` tool exits leaving
+/// rust-analyzer to log "client exited without proper shutdown
+/// sequence" to stderr. Callers in `main` (success path, error
+/// path, panic hook) and the signal handler invoke this so the
+/// subprocess gets a chance to leave gracefully.
+pub fn shutdown_client() {
+    // A poisoned mutex still gives us the inner value; we'd
+    // rather kill rust-analyzer cleanly than skip cleanup
+    // because some unrelated request panicked.
+    let mut guard = match CLIENT.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    // `take()` drops the client in place, running its Drop.
+    let _ = guard.take();
+}
+
 /// Run `f` against the shared `rust-analyzer` client, spawning it
 /// against `workspace_root` on first use. The mutex serializes
 /// every `api_*` tool call; rust-analyzer handles one request at

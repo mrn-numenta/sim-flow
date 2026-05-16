@@ -78,6 +78,12 @@ fn on_signal() {
         }
     }
 
+    // Tear down the lazily-spawned rust-analyzer subprocess so it
+    // receives a clean shutdown sequence instead of being killed
+    // along with the process. Drop on the static client mutex
+    // wouldn't fire under `process::exit` below.
+    crate::__internal::session::lsp::shutdown_client();
+
     // Try to give the user a recognizable exit message before we
     // hand off to `process::exit`. eprintln! is signal-safe-enough
     // for our purposes; if it deadlocks on a poisoned stderr lock
