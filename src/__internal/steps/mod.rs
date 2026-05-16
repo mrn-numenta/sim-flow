@@ -31,6 +31,12 @@ pub const UNIVERSAL_TOOLS: &[&str] = &[
     "log_bug",
     "resolve_bug",
     "record_run",
+    // `api_search` is backed by a lazily-spawned rust-analyzer
+    // subprocess (see `session::lsp`). Hybrid plan in
+    // `docs/brainstorming/rust-analyzer-lsp-discovery.md`: keep
+    // `fw:api/toc.md` for narrative scaffolding, replace deep
+    // page reads with live LSP queries.
+    "api_search",
 ];
 
 #[derive(Debug, Clone)]

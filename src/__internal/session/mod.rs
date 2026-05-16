@@ -18,6 +18,7 @@ pub mod event_tap;
 pub mod host;
 pub mod llm_adapter;
 pub mod llm_metrics;
+pub mod lsp;
 pub mod orchestrator;
 pub mod pdfium_loader;
 pub mod presenter;

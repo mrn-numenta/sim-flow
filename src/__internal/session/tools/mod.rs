@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{Error, Result};
 
+mod api_search;
 mod declare_fix;
 mod declare_hypothesis;
 mod delete_file;
@@ -32,6 +33,7 @@ mod run_cargo;
 mod search;
 mod write_file;
 
+pub use api_search::ApiSearchTool;
 pub use declare_fix::DeclareFixTool;
 pub use declare_hypothesis::DeclareHypothesisTool;
 pub use delete_file::DeleteFileTool;
@@ -369,6 +371,7 @@ pub fn build_dispatcher(names: &[&'static str]) -> Vec<Box<dyn Tool>> {
             "log_bug" => out.push(Box::new(LogBugTool)),
             "resolve_bug" => out.push(Box::new(ResolveBugTool)),
             "record_run" => out.push(Box::new(RecordRunTool)),
+            "api_search" => out.push(Box::new(ApiSearchTool)),
             _ => {} // unknown tool name; skip
         }
     }
