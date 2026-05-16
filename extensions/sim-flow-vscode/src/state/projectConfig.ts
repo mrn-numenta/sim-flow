@@ -141,3 +141,60 @@ export async function writeCoverageSettings(
   await writeConfigTable(projectDir, table);
   return { thresholdPct: clampedPct, level: settings.level };
 }
+
+/**
+ * Backend-agnostic LLM knobs mirror of the Rust `LlmSettings` struct.
+ * Currently just `maxParallelRequests` -- the cap on concurrent
+ * in-flight LLM Work sessions during plan-detail walks (DM2cd /
+ * DM3ad / DM4ad). `0` means unbounded.
+ */
+export interface LlmSettings {
+  /** `0` = unbounded; `1` = legacy serial; higher = bounded fan-out. */
+  maxParallelRequests: number;
+}
+
+export const LLM_DEFAULTS: LlmSettings = {
+  maxParallelRequests: 0,
+};
+
+/**
+ * Read `[llm]` from `.sim-flow/config.toml`. Returns the defaults
+ * when the file or section is missing (orchestrator does the same).
+ */
+export async function readLlmSettings(projectDir: string): Promise<LlmSettings> {
+  const table = await loadConfigTable(projectDir);
+  const section = table["llm"];
+  if (typeof section !== "object" || section === null || Array.isArray(section)) {
+    return { ...LLM_DEFAULTS };
+  }
+  const sectionTable = section as TomlTable;
+  const raw = sectionTable["max_parallel_requests"];
+  const maxParallelRequests =
+    typeof raw === "number" && Number.isFinite(raw) && raw >= 0
+      ? Math.floor(raw)
+      : LLM_DEFAULTS.maxParallelRequests;
+  return { maxParallelRequests };
+}
+
+/**
+ * Write `[llm]` back to `.sim-flow/config.toml`. Clamps the value
+ * to `>= 0` so a typo in the Settings panel can't write a negative
+ * number to disk. All other keys are preserved untouched.
+ */
+export async function writeLlmSettings(
+  projectDir: string,
+  settings: LlmSettings,
+): Promise<LlmSettings> {
+  const clamped = Math.max(0, Math.floor(settings.maxParallelRequests));
+  const table = await loadConfigTable(projectDir);
+  const existing =
+    typeof table["llm"] === "object" && table["llm"] !== null && !Array.isArray(table["llm"])
+      ? (table["llm"] as TomlTable)
+      : {};
+  table["llm"] = {
+    ...existing,
+    max_parallel_requests: clamped,
+  };
+  await writeConfigTable(projectDir, table);
+  return { maxParallelRequests: clamped };
+}

@@ -19,7 +19,9 @@ import { readFlowState } from "../state/flowState";
 import { readPlanProgress } from "../state/planProgress";
 import {
   COVERAGE_DEFAULTS,
+  LLM_DEFAULTS,
   writeCoverageSettings,
+  writeLlmSettings,
 } from "../state/projectConfig";
 import { stepOrderFor, stepsFromOnward } from "../state/stepOrder";
 import type { FlowState } from "../state/types";
@@ -204,6 +206,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           event.affectsConfiguration("sim-flow.coverage.level")
         ) {
           void this.pushCoverageSettingToActiveProject();
+        }
+        if (event.affectsConfiguration("sim-flow.llm.maxParallelRequests")) {
+          void this.pushLlmSettingToActiveProject();
         }
       }),
       vscode.window.onDidChangeActiveTextEditor(() => {
@@ -2430,6 +2435,35 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     } catch (err) {
       void vscode.window.showWarningMessage(
         `sim-flow: failed to push coverage settings to ${projectDir}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Push `sim-flow.llm.maxParallelRequests` into the anchored
+   * project's `.sim-flow/config.toml::[llm]`. The Rust orchestrator
+   * reads this value when constructing `AutoOptions`; the
+   * webview-side setting only takes effect after this writeback +
+   * a new session start (existing sessions keep their old argv).
+   */
+  private async pushLlmSettingToActiveProject(): Promise<void> {
+    const projectDir =
+      this.activePump?.projectDir ?? this.pendingAutoLaunch?.projectDir;
+    if (!projectDir) {
+      return;
+    }
+    const cfg = vscode.workspace.getConfiguration("sim-flow");
+    const maxParallelRequests = cfg.get<number>(
+      "llm.maxParallelRequests",
+      LLM_DEFAULTS.maxParallelRequests,
+    );
+    try {
+      await writeLlmSettings(projectDir, { maxParallelRequests });
+    } catch (err) {
+      void vscode.window.showWarningMessage(
+        `sim-flow: failed to push LLM settings to ${projectDir}: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );

@@ -7,9 +7,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   COVERAGE_DEFAULTS,
+  LLM_DEFAULTS,
   readCoverageSettings,
+  readLlmSettings,
   readSpecPath,
   writeCoverageSettings,
+  writeLlmSettings,
   writeSpecPath,
 } from "./projectConfig";
 
@@ -261,5 +264,107 @@ describe("writeCoverageSettings", () => {
     await writeCoverageSettings(projectDir, { thresholdPct: 80, level: "module" });
     await fsp.rm(configPath());
     expect(await readCoverageSettings(projectDir)).toEqual(COVERAGE_DEFAULTS);
+  });
+});
+
+describe("readLlmSettings", () => {
+  it("returns defaults when config.toml is missing", async () => {
+    expect(await readLlmSettings(projectDir)).toEqual(LLM_DEFAULTS);
+  });
+
+  it("returns defaults when [llm] section is missing", async () => {
+    fs.mkdirSync(path.join(projectDir, ".sim-flow"));
+    fs.writeFileSync(configPath(), '[client]\nname = "mock"\n', "utf8");
+    expect(await readLlmSettings(projectDir)).toEqual(LLM_DEFAULTS);
+  });
+
+  it("reads max_parallel_requests verbatim when present", async () => {
+    fs.mkdirSync(path.join(projectDir, ".sim-flow"));
+    fs.writeFileSync(
+      configPath(),
+      "[llm]\nmax_parallel_requests = 4\n",
+      "utf8",
+    );
+    expect(await readLlmSettings(projectDir)).toEqual({ maxParallelRequests: 4 });
+  });
+
+  it("falls back to default when value is non-numeric", async () => {
+    fs.mkdirSync(path.join(projectDir, ".sim-flow"));
+    fs.writeFileSync(
+      configPath(),
+      '[llm]\nmax_parallel_requests = "lots"\n',
+      "utf8",
+    );
+    expect(await readLlmSettings(projectDir)).toEqual(LLM_DEFAULTS);
+  });
+
+  it("falls back to default when value is negative", async () => {
+    fs.mkdirSync(path.join(projectDir, ".sim-flow"));
+    fs.writeFileSync(
+      configPath(),
+      "[llm]\nmax_parallel_requests = -3\n",
+      "utf8",
+    );
+    expect(await readLlmSettings(projectDir)).toEqual(LLM_DEFAULTS);
+  });
+});
+
+describe("writeLlmSettings", () => {
+  it("creates the file and writes max_parallel_requests", async () => {
+    const echoed = await writeLlmSettings(projectDir, { maxParallelRequests: 8 });
+    expect(echoed).toEqual({ maxParallelRequests: 8 });
+    expect(await readLlmSettings(projectDir)).toEqual({ maxParallelRequests: 8 });
+  });
+
+  it("clamps negative inputs to 0", async () => {
+    const echoed = await writeLlmSettings(projectDir, { maxParallelRequests: -2 });
+    expect(echoed.maxParallelRequests).toBe(0);
+  });
+
+  it("floors non-integer inputs", async () => {
+    const echoed = await writeLlmSettings(projectDir, { maxParallelRequests: 3.7 });
+    expect(echoed.maxParallelRequests).toBe(3);
+  });
+
+  it("preserves unknown sections on round-trip", async () => {
+    fs.mkdirSync(path.join(projectDir, ".sim-flow"));
+    fs.writeFileSync(
+      configPath(),
+      [
+        '[client]',
+        'name = "claude"',
+        '',
+        '[coverage]',
+        "threshold_pct = 85",
+        'level = "module"',
+        '',
+      ].join("\n"),
+      "utf8",
+    );
+    await writeLlmSettings(projectDir, { maxParallelRequests: 2 });
+    const text = fs.readFileSync(configPath(), "utf8");
+    expect(text).toContain('[client]');
+    expect(text).toContain('[coverage]');
+    expect(text).toContain('threshold_pct = 85');
+    expect(text).toContain('[llm]');
+    expect(text).toContain('max_parallel_requests = 2');
+  });
+
+  it("does not clobber sibling [llm] keys", async () => {
+    fs.mkdirSync(path.join(projectDir, ".sim-flow"));
+    fs.writeFileSync(
+      configPath(),
+      [
+        '[llm]',
+        "max_parallel_requests = 1",
+        "some_future_knob = 99",
+        '',
+      ].join("\n"),
+      "utf8",
+    );
+    await writeLlmSettings(projectDir, { maxParallelRequests: 5 });
+    const text = fs.readFileSync(configPath(), "utf8");
+    expect(text).toContain('max_parallel_requests = 5');
+    expect(text).toContain('some_future_knob = 99');
   });
 });
