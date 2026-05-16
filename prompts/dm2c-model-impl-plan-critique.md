@@ -23,12 +23,6 @@ write the critique file.
 
 ## Evaluation
 
-Prefix gate-blocking issues with `BLOCKER:` (DM2cd cannot
-proceed until fixed). Prefix informational notes -- nits,
-follow-up questions, things downstream can work around -- with
-`UNRESOLVED:`. The orchestrator fails the DM2c gate on
-both `BLOCKER:` and `UNRESOLVED:` lines.
-
 {{ critique_kinds }}
 
 This critique reviews the OUTLINE, not the per-milestone task

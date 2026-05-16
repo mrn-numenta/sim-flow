@@ -31,20 +31,15 @@ new work did not regress earlier milestones.
 
 ## Evaluation
 
-Prefix gate-blocking issues with `BLOCKER:` (the flow cannot
-finish until fixed). Prefix informational notes with
-`UNRESOLVED:`. The orchestrator fails the DM4b gate on both `BLOCKER:`
-and `UNRESOLVED:` lines.
+{{ critique_kinds }}
 
 Experiment tracking is in place: the `record_run` agent tool
 writes to `.sim-flow/experiments.db` (the database is created on
-first call). Don't emit a "Phase 4 pending" blocker; if the
+first call). Do not emit a "Phase 4 pending" blocker; if the
 database is missing or empty, the agent skipped its
-`record_run` discipline -- emit `BLOCKER: run-id <id> not in
-experiments.db; agent must call record_run after each cargo run`
-naming the specific cited run-ids that don't appear.
-
-{{ critique_kinds }}
+`record_run` discipline -- raise a `"blocker"` finding whose
+title names the specific cited run-ids that don't appear, with a
+body explaining that `record_run` must follow each `cargo run`.
 
 1. **Plan completion**. Is every task in the
    `perf-milestone-NN-*.md` files either `[x]` or documented as
