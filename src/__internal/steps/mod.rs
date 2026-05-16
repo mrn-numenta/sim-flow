@@ -368,23 +368,76 @@ pub fn find_current_milestone(
 /// pending stubs at once; the serial walker keeps using
 /// [`find_current_milestone`] one-at-a-time.
 ///
-/// Returns an empty vec when the directory is missing, contains no
-/// matching milestone files, or every milestone is already resolved.
-/// (Callers that care about the "no milestones present" vs "all
-/// done" distinction should still use [`find_current_milestone`] --
-/// this helper collapses the two into "nothing to do.")
+/// Return value of [`enumerate_pending_milestones`]. Distinguishes
+/// "directory present" (with a possibly-empty list of pending
+/// milestones) from "directory missing" (probable setup error)
+/// so callers don't have to overload the empty-vec signal. See
+/// [`find_milestone_by_name`] / [`find_current_milestone`] which
+/// surface the same distinction via `CurrentMilestone::NoMilestonesPresent`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingMilestones {
+    /// The milestone directory exists; `pending` is the list of
+    /// milestone-relative paths whose body still matches
+    /// `walk.placeholder_marker`. Empty when every milestone has
+    /// been resolved.
+    Present { pending: Vec<String> },
+    /// The milestone directory the walker is configured for does
+    /// not exist on disk. The caller should treat this as a setup
+    /// error rather than "nothing to do."
+    DirectoryMissing,
+}
+
+impl PendingMilestones {
+    /// Pending list when present, or an empty list when the
+    /// directory is missing. Use this only when "missing" and
+    /// "empty" are equivalent for the caller's purpose. Callers
+    /// that care (e.g. the parallel dispatcher needing to flip to
+    /// manual on a setup error) should match on the variant
+    /// directly.
+    pub fn into_vec(self) -> Vec<String> {
+        match self {
+            PendingMilestones::Present { pending } => pending,
+            PendingMilestones::DirectoryMissing => Vec::new(),
+        }
+    }
+
+    /// Number of pending milestones. Returns 0 when the directory
+    /// is missing.
+    pub fn len(&self) -> usize {
+        match self {
+            PendingMilestones::Present { pending } => pending.len(),
+            PendingMilestones::DirectoryMissing => 0,
+        }
+    }
+
+    /// `true` when there are no pending milestones, whether
+    /// because the directory is missing or because every
+    /// milestone is already resolved.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// Enumerate the pending milestones under `walk`'s configured
+/// directory. Returns `DirectoryMissing` when the directory is
+/// absent, otherwise `Present { pending }` -- with `pending`
+/// possibly empty when every milestone is already resolved.
+/// Mirrors `find_milestone_by_name`'s `NoMilestonesPresent` vs
+/// "found" distinction so callers don't have to overload the
+/// empty-vec signal to mean two structurally different states.
 pub fn enumerate_pending_milestones(
     project_dir: &std::path::Path,
     walk: &MilestoneWalkConfig,
-) -> Vec<String> {
+) -> PendingMilestones {
     let Some(files) = list_milestone_files(project_dir, walk) else {
-        return Vec::new();
+        return PendingMilestones::DirectoryMissing;
     };
-    files
+    let pending = files
         .iter()
         .filter(|(_, path)| milestone_is_pending(walk, path))
         .map(|(name, _)| join_milestone_rel(walk, name))
-        .collect()
+        .collect();
+    PendingMilestones::Present { pending }
 }
 
 /// Look up a specific milestone by its bare filename (e.g.
@@ -1358,18 +1411,21 @@ mod write_path_tests {
         );
         let walk = placeholder_walk();
         let pending = enumerate_pending_milestones(tmp.path(), &walk);
-        assert_eq!(
-            pending,
-            vec![
-                "docs/impl-plan/milestone-02-skeletons.md".to_string(),
-                "docs/impl-plan/milestone-03-decode.md".to_string(),
-            ],
-            "placeholder-mode enumerates stubs in walker order"
-        );
+        match pending {
+            PendingMilestones::Present { pending } => assert_eq!(
+                pending,
+                vec![
+                    "docs/impl-plan/milestone-02-skeletons.md".to_string(),
+                    "docs/impl-plan/milestone-03-decode.md".to_string(),
+                ],
+                "placeholder-mode enumerates stubs in walker order"
+            ),
+            PendingMilestones::DirectoryMissing => panic!("directory exists; expected Present"),
+        }
     }
 
     #[test]
-    fn enumerate_pending_milestones_returns_empty_when_all_resolved() {
+    fn enumerate_pending_milestones_present_but_empty_when_all_resolved() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("docs/impl-plan");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1385,14 +1441,27 @@ mod write_path_tests {
         );
         let walk = placeholder_walk();
         let pending = enumerate_pending_milestones(tmp.path(), &walk);
-        assert!(pending.is_empty(), "no stubs with the placeholder remain");
+        match pending {
+            PendingMilestones::Present { pending } => assert!(
+                pending.is_empty(),
+                "no stubs with the placeholder remain; got {pending:?}"
+            ),
+            PendingMilestones::DirectoryMissing => panic!("directory exists; expected Present"),
+        }
     }
 
     #[test]
-    fn enumerate_pending_milestones_returns_empty_when_dir_missing() {
+    fn enumerate_pending_milestones_returns_directory_missing_when_dir_absent() {
         let tmp = tempfile::tempdir().unwrap();
         let walk = placeholder_walk();
         let pending = enumerate_pending_milestones(tmp.path(), &walk);
+        assert_eq!(
+            pending,
+            PendingMilestones::DirectoryMissing,
+            "missing directory is distinct from present-but-empty"
+        );
+        // Helper `is_empty()` collapses both states for callers
+        // that don't care about the distinction.
         assert!(pending.is_empty());
     }
 

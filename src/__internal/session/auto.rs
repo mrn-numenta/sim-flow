@@ -1281,7 +1281,20 @@ where
     if opts.max_parallel_requests == 1 {
         return Ok(false);
     }
-    let pending = crate::__internal::steps::enumerate_pending_milestones(&opts.project_dir, &walk);
+    let pending =
+        match crate::__internal::steps::enumerate_pending_milestones(&opts.project_dir, &walk) {
+            crate::__internal::steps::PendingMilestones::Present { pending } => pending,
+            crate::__internal::steps::PendingMilestones::DirectoryMissing => {
+                // Probable setup error (e.g. user pointed the
+                // orchestrator at the wrong project dir, or DM2c's
+                // impl-plan output was never produced). Fall through
+                // to the serial walker so it surfaces the standard
+                // "no milestones" diagnostic on the established path
+                // instead of silently treating "missing" as
+                // "nothing-to-do."
+                return Ok(false);
+            }
+        };
     if pending.len() < 2 {
         // One or zero pending stubs: no parallelism win; let the
         // serial walker handle it (it has the established retry
