@@ -510,10 +510,11 @@ function messageBubble(
     typeof entry.meta === "string" &&
     entry.meta.startsWith("orchestrator-");
   const tool = entry.kind === "user" && entry.meta === "orchestrator-tool";
+  const system = entry.kind === "user" && entry.meta === "orchestrator-system";
   const row = div(
     `x-row x-row-${role}${orchestrator ? " x-row-orchestrator" : ""}${
       tool ? " x-row-tool" : ""
-    }`,
+    }${system ? " x-row-system" : ""}`,
   );
   // Stable id so morphdom keeps DOM identity across renders -- this is
   // what makes streaming chunks patch in place instead of rebuilding.
@@ -521,14 +522,15 @@ function messageBubble(
   const bubble = div(
     `x-bubble x-bubble-${role}${orchestrator ? " x-bubble-orchestrator" : ""}${
       tool ? " x-bubble-tool" : ""
-    }`,
+    }${system ? " x-bubble-system" : ""}`,
   );
   if (body.length === 0 && entry.streaming) {
     bubble.appendChild(thinkingDots());
   } else {
-    // Tool calls collapse by default (file dumps would otherwise dwarf
-    // the rest of the turn); everything else opens by default. The
-    // morphdom hook preserves whatever the user toggles.
+    // Tool results and System messages collapse by default so the
+    // standing system prompt and chunky file dumps don't dominate
+    // the scroll. Everything else opens by default. The morphdom
+    // hook preserves whatever the user toggles.
     //
     // Tool results from `read_file` on a markdown file are an
     // exception: we leave `forceCodeBlock` off so the body renders
@@ -540,7 +542,7 @@ function messageBubble(
       bubbleDetails(
         entry.title,
         body,
-        !tool,
+        !tool && !system,
         renderAsCode,
         tokenBadgeFor(entry, body),
       ),

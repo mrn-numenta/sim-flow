@@ -407,6 +407,21 @@ body {
   border-left-color: var(--x-palette-accent);
 }
 
+/* System bubbles: the session-opening prompt. Quieter than the
+ * orchestrator-user prompts (paler stripe, no bg fill) since the
+ * content is "standing context" the user hasn't typed and the
+ * orchestrator didn't dynamically produce. Default-collapsed in
+ * the webview so it doesn't dominate scroll. */
+.x-bubble-user.x-bubble-orchestrator.x-bubble-system {
+  background: transparent;
+  color: var(--vscode-foreground);
+  border-left-color: color-mix(
+    in srgb,
+    var(--x-palette-accent) 60%,
+    transparent
+  );
+}
+
 .x-bubble-assistant {
   background: color-mix(in srgb, var(--x-palette-output) 15%, transparent);
   color: var(--x-assistant-fg);

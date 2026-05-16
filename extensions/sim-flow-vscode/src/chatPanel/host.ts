@@ -1771,13 +1771,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
     const title = labelForLlmRole(args.role);
     const meta = `orchestrator-${args.role}`;
-    // Tool results render inside a collapsible <details> in the
-    // webview, with the role label as the <summary>; drop the inline
-    // prefix so the same text isn't shown twice. User-role messages
-    // already render verbatim. Other non-user roles keep the prefix
-    // because the webview shows them as a plain bubble.
+    // Tool results, user prompts, and the system prompt all render
+    // inside a collapsible <details> in the webview with the role
+    // label as the <summary>; drop the inline prefix so the same
+    // text isn't shown twice. Any other non-user role keeps the
+    // prefix (currently unreachable -- the orchestrator only emits
+    // user / tool / system -- but defensively retained).
     const body =
-      args.role === "user" || args.role === "tool"
+      args.role === "user" || args.role === "tool" || args.role === "system"
         ? args.content
         : `**${title}:**\n\n${args.content}`;
     let conversation = this.readConversation(session.projectDir);

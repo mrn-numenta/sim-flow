@@ -558,15 +558,17 @@ where
             })
             .collect();
 
-        // Surface any non-Assistant / non-System messages that were
-        // appended to the prompt stack since the previous dispatch.
-        // Typically: the initial user message (turn 1) or the tool
-        // result messages added after the prior assistant turn.
-        // System messages are skipped (constant per session, would
-        // dominate the UI). Assistant messages are skipped too --
-        // they were already surfaced via `AssistantText` last turn.
+        // Surface any non-Assistant messages that were appended to
+        // the prompt stack since the previous dispatch. Typically:
+        // System (session-opening system prompt), the initial user
+        // message, or tool result messages added after the prior
+        // assistant turn. The host is expected to render System
+        // bubbles collapsed-by-default so the standing prompt
+        // doesn't dominate the scroll. Assistant messages are
+        // still skipped here because they were already surfaced
+        // via `AssistantText` last turn.
         for msg in &messages[last_emitted_message_index..] {
-            if matches!(msg.role, LlmRole::System | LlmRole::Assistant) {
+            if matches!(msg.role, LlmRole::Assistant) {
                 continue;
             }
             host.send(&Event::LlmRequest {
