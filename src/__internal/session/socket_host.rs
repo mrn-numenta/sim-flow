@@ -12,7 +12,7 @@
 //!
 //! [`Presenter`]: super::presenter::Presenter
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -235,13 +235,57 @@ fn drain_latest_stream(
     }
 }
 
+/// Maximum bytes the socket reader will accumulate into a single
+/// newline-delimited frame. A misbehaving (or malicious) host
+/// that connects and sends an unterminated line would otherwise
+/// stream data into BufReader's String forever, OOMing the
+/// orchestrator. 1 MiB is comfortably above any legitimate
+/// protocol message (the largest event is an LLM-request body,
+/// which the orchestrator caps separately at ~64 KiB) without
+/// being so large that an attacker can still exhaust memory in
+/// a practical timeframe. See orchestrator audit #11
+/// (2026-05-16).
+const SOCKET_MAX_LINE_BYTES: usize = 1024 * 1024;
+
+/// Read one newline-delimited line into `dest`, refusing to grow
+/// past `SOCKET_MAX_LINE_BYTES`. Returns the number of bytes
+/// appended (0 on EOF before any bytes), like `BufRead::read_line`.
+/// Anything larger than the limit produces a Protocol error so a
+/// malicious / wedged sender can't OOM us.
+fn read_line_bounded<R: std::io::BufRead>(reader: &mut R, dest: &mut String) -> Result<usize> {
+    let mut buf = Vec::with_capacity(256);
+    loop {
+        let chunk = reader
+            .fill_buf()
+            .map_err(|err| Error::Protocol(format!("socket-host: read: {err}")))?;
+        if chunk.is_empty() {
+            break; // EOF
+        }
+        let newline_pos = chunk.iter().position(|&b| b == b'\n');
+        let take = newline_pos.map(|i| i + 1).unwrap_or(chunk.len());
+        if buf.len().saturating_add(take) > SOCKET_MAX_LINE_BYTES {
+            return Err(Error::Protocol(format!(
+                "socket-host: refusing line larger than {SOCKET_MAX_LINE_BYTES} bytes (unterminated input or attacker)"
+            )));
+        }
+        buf.extend_from_slice(&chunk[..take]);
+        reader.consume(take);
+        if newline_pos.is_some() {
+            break;
+        }
+    }
+    let appended = buf.len();
+    let s = String::from_utf8(buf)
+        .map_err(|err| Error::Protocol(format!("socket-host: non-UTF8 line: {err}")))?;
+    dest.push_str(&s);
+    Ok(appended)
+}
+
 fn read_attach_hello(reader: &mut BufReader<std::os::unix::net::UnixStream>) -> Result<HostEvent> {
     let mut line = String::new();
     loop {
         line.clear();
-        let n = reader
-            .read_line(&mut line)
-            .map_err(|err| Error::Protocol(format!("socket-host: read attach hello: {err}")))?;
+        let n = read_line_bounded(reader, &mut line)?;
         if n == 0 {
             return Err(Error::HostClosed(
                 "socket-host: client disconnected before hello".into(),
@@ -270,9 +314,7 @@ fn read_host_event(
     let mut line = String::new();
     loop {
         line.clear();
-        let n = reader
-            .read_line(&mut line)
-            .map_err(|err| Error::Protocol(format!("socket-host: read host event: {err}")))?;
+        let n = read_line_bounded(reader, &mut line)?;
         if n == 0 {
             return Ok(None);
         }
@@ -306,6 +348,8 @@ fn write_event_line(writer: &mut std::os::unix::net::UnixStream, event: &Event) 
 
 #[cfg(test)]
 mod tests {
+    use std::io::BufRead;
+
     use super::*;
     use crate::session::protocol::{
         Event, HostEvent, HostInfo, PROTOCOL_VERSION, SessionKindOut, SessionTag, StepDescriptorOut,

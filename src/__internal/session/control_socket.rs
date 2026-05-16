@@ -238,12 +238,45 @@ fn accept_loop(
     }
 }
 
+/// Max bytes the control socket reader will accumulate into one
+/// command line before bailing. A misbehaving local client could
+/// otherwise stream an unterminated line and OOM the
+/// orchestrator -- `reader.lines()` uses `read_line` which grows
+/// its String unbounded. 1 MiB is well above any legitimate
+/// ControlCommand JSON. See orchestrator audit #11 (2026-05-16).
+const CONTROL_SOCKET_MAX_LINE_BYTES: usize = 1024 * 1024;
+
 fn handle_connection(stream: std::os::unix::net::UnixStream, cmd_tx: Sender<ControlCommand>) {
     use std::io::{BufRead, BufReader};
-    let reader = BufReader::new(stream);
-    for line in reader.lines() {
-        let Ok(text) = line else {
-            break;
+    let mut reader = BufReader::new(stream);
+    loop {
+        let mut buf = Vec::with_capacity(256);
+        let exceeded = loop {
+            let chunk = match reader.fill_buf() {
+                Ok(c) => c,
+                Err(_) => return,
+            };
+            if chunk.is_empty() {
+                return; // EOF
+            }
+            let newline_pos = chunk.iter().position(|&b| b == b'\n');
+            let take = newline_pos.map(|i| i + 1).unwrap_or(chunk.len());
+            if buf.len().saturating_add(take) > CONTROL_SOCKET_MAX_LINE_BYTES {
+                // Refuse the oversize line and skip the rest of
+                // this connection -- the client is misbehaving.
+                break true;
+            }
+            buf.extend_from_slice(&chunk[..take]);
+            reader.consume(take);
+            if newline_pos.is_some() {
+                break false;
+            }
+        };
+        if exceeded {
+            return;
+        }
+        let Ok(text) = std::str::from_utf8(&buf) else {
+            continue; // non-UTF8 garbage; skip
         };
         let trimmed = text.trim();
         if trimmed.is_empty() {
@@ -252,7 +285,7 @@ fn handle_connection(stream: std::os::unix::net::UnixStream, cmd_tx: Sender<Cont
         match serde_json::from_str::<ControlCommand>(trimmed) {
             Ok(cmd) => {
                 if cmd_tx.send(cmd).is_err() {
-                    break; // listener has been dropped
+                    return; // listener has been dropped
                 }
             }
             Err(_err) => {
