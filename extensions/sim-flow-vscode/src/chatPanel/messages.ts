@@ -2,6 +2,43 @@ import type { Flow } from "../cli/types";
 import type { LlmSourceTag, StepMode } from "../webview/messages";
 import type { Finding } from "../state/types";
 
+/**
+ * Built-in palette names plus "custom" (driven by the user's
+ * personal 4-colour set). The webview applies a palette by setting
+ * `body[data-palette="<name>"]`; built-ins are declared in CSS,
+ * custom is applied via inline CSS variables on body.
+ */
+export type ChatPalette = "default" | "autumn" | "olive" | "sage" | "custom";
+
+export const CHAT_PALETTE_NAMES: readonly ChatPalette[] = [
+  "default",
+  "autumn",
+  "olive",
+  "sage",
+  "custom",
+];
+
+export interface ChatCustomPalette {
+  /** Brightest -- maps to `--x-palette-input` (input/current step). */
+  input: string;
+  /** Second brightest -- `--x-palette-tool` (tool / passed step). */
+  tool: string;
+  /** Third brightest -- `--x-palette-output` (output). */
+  output: string;
+  /** Darkest -- `--x-palette-accent` (borders / accents). */
+  accent: string;
+}
+
+/** Sensible starting point when the user first picks "Custom" --
+ *  mirrors the Autumn palette so they tweak from a known-good
+ *  baseline instead of an all-#000 set. */
+export const DEFAULT_CUSTOM_PALETTE: ChatCustomPalette = {
+  input: "#add4eb",
+  tool: "#fcf6cf",
+  output: "#bf6f40",
+  accent: "#57290f",
+};
+
 export interface ChatPanelState {
   mode: "live";
   projectLabel: string;
@@ -141,6 +178,19 @@ export interface ChatPanelState {
    * the line is hidden entirely.
    */
   currentMilestone: { title: string; task: string } | null;
+  /**
+   * Active palette name. Persisted in `workspaceState` so it
+   * survives VS Code restarts (in addition to `vscode.setState`
+   * for fast in-session apply).
+   */
+  palette: ChatPalette;
+  /**
+   * User's saved Custom palette colours. Always populated (seeded
+   * from `DEFAULT_CUSTOM_PALETTE` on first read) so the four
+   * pickers in the settings popover always have a value to bind
+   * to even before the user has touched them.
+   */
+  customPalette: ChatCustomPalette;
 }
 
 export type ChatTranscriptEntry =
@@ -278,4 +328,16 @@ export type WebviewMessage =
    * errors so a stale path in old transcript text doesn't crash
    * the panel.
    */
-  | { type: "open-file"; path: string };
+  | { type: "open-file"; path: string }
+  /**
+   * Persist the chat panel palette + the user's custom 4-colour
+   * set across VS Code restarts. Sent from the settings popover
+   * whenever the dropdown or any of the four colour pickers
+   * changes. The webview keeps applying the palette locally for
+   * snappy feedback; this message is purely a persistence ping.
+   */
+  | {
+      type: "set-palette";
+      palette: ChatPalette;
+      customPalette: ChatCustomPalette;
+    };

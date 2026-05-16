@@ -32,10 +32,14 @@ import {
   resolveLlmSource,
 } from "../webview/messages";
 
-import type {
-  ChatPanelState,
-  HostMessage,
-  WebviewMessage,
+import {
+  type ChatCustomPalette,
+  type ChatPalette,
+  type ChatPanelState,
+  CHAT_PALETTE_NAMES,
+  DEFAULT_CUSTOM_PALETTE,
+  type HostMessage,
+  type WebviewMessage,
 } from "./messages";
 import {
   AutoSessionManager,
@@ -154,6 +158,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
    * (not appended to) on every launch.
    */
   private static readonly LAST_PROJECT_KEY = "sim-flow.chatPanel.lastProjectDir";
+  private static readonly PALETTE_KEY = "sim-flow.chatPanel.palette";
+  private static readonly CUSTOM_PALETTE_KEY = "sim-flow.chatPanel.customPalette";
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -504,6 +510,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       case "open-file":
         await this.openFileInEditor(msg.path);
         return;
+      case "set-palette":
+        await this.persistPaletteChoice(msg.palette, msg.customPalette);
+        return;
       default:
         return;
     }
@@ -577,6 +586,63 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         }`,
       );
     }
+  }
+
+  /**
+   * Read the user's saved palette choice from workspaceState. Falls
+   * back to "default" when nothing's been saved -- newly-installed
+   * extensions land on the same starting palette every webview
+   * would otherwise have ended up at via its local persisted state.
+   */
+  private readSavedPalette(): ChatPalette {
+    const raw = this.workspaceState.get<string>(
+      ChatPanelProvider.PALETTE_KEY,
+    );
+    return CHAT_PALETTE_NAMES.find((p) => p === raw) ?? "default";
+  }
+
+  /**
+   * Read the user's saved Custom palette colours from workspaceState.
+   * Always returns a full set -- missing or partially-malformed
+   * stored values fall back to `DEFAULT_CUSTOM_PALETTE` per slot, so
+   * the four pickers in the settings popover always have something
+   * to bind to.
+   */
+  private readSavedCustomPalette(): ChatCustomPalette {
+    const raw = this.workspaceState.get<Partial<ChatCustomPalette>>(
+      ChatPanelProvider.CUSTOM_PALETTE_KEY,
+    );
+    const isHex = (value: unknown): value is string =>
+      typeof value === "string" && /^#[0-9a-fA-F]{3,8}$/.test(value);
+    return {
+      input: isHex(raw?.input) ? raw.input : DEFAULT_CUSTOM_PALETTE.input,
+      tool: isHex(raw?.tool) ? raw.tool : DEFAULT_CUSTOM_PALETTE.tool,
+      output: isHex(raw?.output) ? raw.output : DEFAULT_CUSTOM_PALETTE.output,
+      accent: isHex(raw?.accent) ? raw.accent : DEFAULT_CUSTOM_PALETTE.accent,
+    };
+  }
+
+  /**
+   * Persist the palette dropdown + the four Custom colours across
+   * VS Code restarts. Sent by the webview's settings popover; the
+   * webview applies the palette locally for snappy feedback so we
+   * don't echo a state-update from here unless the values changed.
+   */
+  private async persistPaletteChoice(
+    palette: ChatPalette,
+    custom: ChatCustomPalette,
+  ): Promise<void> {
+    if (!CHAT_PALETTE_NAMES.includes(palette)) {
+      return;
+    }
+    await this.workspaceState.update(
+      ChatPanelProvider.PALETTE_KEY,
+      palette,
+    );
+    await this.workspaceState.update(
+      ChatPanelProvider.CUSTOM_PALETTE_KEY,
+      custom,
+    );
   }
 
   /**
@@ -1740,6 +1806,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       sessionActive:
         !!this.activePump && this.activePump.projectDir === context.projectDir,
       currentMilestone: context.currentMilestone,
+      palette: this.readSavedPalette(),
+      customPalette: this.readSavedCustomPalette(),
     };
   }
 

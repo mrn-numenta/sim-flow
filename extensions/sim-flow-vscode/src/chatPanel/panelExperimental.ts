@@ -13,11 +13,15 @@ import morphdom from "morphdom";
 
 import { stepOrderFor } from "../state/stepOrder";
 import type { Finding } from "../state/types";
-import type {
-  ChatPanelState,
-  ChatTranscriptEntry,
-  HostMessage,
-  WebviewMessage,
+import {
+  type ChatCustomPalette,
+  type ChatPalette,
+  type ChatPanelState,
+  type ChatTranscriptEntry,
+  CHAT_PALETTE_NAMES,
+  DEFAULT_CUSTOM_PALETTE,
+  type HostMessage,
+  type WebviewMessage,
 } from "./messages";
 import {
   inferLangFromContent,
@@ -34,13 +38,14 @@ declare function acquireVsCodeApi(): {
 
 const vscode = acquireVsCodeApi();
 
-type PaletteName = "default" | "autumn" | "olive" | "sage";
+type PaletteName = ChatPalette;
 
 const PALETTES: ReadonlyArray<{ value: PaletteName; label: string }> = [
   { value: "default", label: "Default" },
   { value: "autumn", label: "Autumn" },
   { value: "olive", label: "Olive" },
   { value: "sage", label: "Sage" },
+  { value: "custom", label: "Custom" },
 ];
 
 // "default" disables role tinting entirely (no stripe, no bg) so
@@ -51,10 +56,19 @@ const DEFAULT_PALETTE: PaletteName = "default";
 
 function isPaletteName(value: unknown): value is PaletteName {
   return (
-    value === "default" ||
-    value === "autumn" ||
-    value === "olive" ||
-    value === "sage"
+    typeof value === "string" &&
+    (CHAT_PALETTE_NAMES as readonly string[]).includes(value)
+  );
+}
+
+function isCustomPalette(value: unknown): value is ChatCustomPalette {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Partial<ChatCustomPalette>;
+  return (
+    typeof v.input === "string" &&
+    typeof v.tool === "string" &&
+    typeof v.output === "string" &&
+    typeof v.accent === "string"
   );
 }
 
@@ -69,6 +83,14 @@ interface UiState {
   pinnedToBottom: boolean;
   scrollTop: number;
   palette: PaletteName;
+  /**
+   * Current Custom palette colours. Always populated even when
+   * `palette !== "custom"`, so the four pickers in the settings
+   * popover always have a value to bind to. Saved alongside the
+   * palette name so a quick toggle back to Custom remembers the
+   * last set of colours.
+   */
+  customPalette: ChatCustomPalette;
   /**
    * Whether the toolbar's expand/collapse toggle most recently
    * set bubbles to the expanded state. The toggle icon flips on
@@ -156,6 +178,7 @@ const COLLAPSE_KIND_SELECTORS: Record<Exclude<CollapseKind, "all">, string> = {
 interface PersistedState {
   draft?: string;
   palette?: PaletteName;
+  customPalette?: ChatCustomPalette;
   collapseFilter?: CollapseKind[];
 }
 
@@ -176,6 +199,9 @@ const ui: UiState = {
   pinnedToBottom: true,
   scrollTop: 0,
   palette: isPaletteName(persisted?.palette) ? persisted.palette : DEFAULT_PALETTE,
+  customPalette: isCustomPalette(persisted?.customPalette)
+    ? persisted.customPalette
+    : { ...DEFAULT_CUSTOM_PALETTE },
   bubblesExpanded: true,
   openPopup: null,
   critiqueData: new Map(),
@@ -194,8 +220,55 @@ if (ui.collapseFilter.size === 0) {
 applyPalette();
 installFileLinkDelegation();
 
+/**
+ * Reconcile the webview's local palette state with whatever the
+ * host had stored in workspaceState. The host is the source of
+ * truth across VS Code restarts; the webview's `vscode.setState`
+ * is just a fast-path so the first paint after a panel reload
+ * doesn't flash the old palette. When they disagree we trust the
+ * host and re-apply.
+ */
+function syncPaletteFromHost(state: ChatPanelState): void {
+  let changed = false;
+  if (state.palette && state.palette !== ui.palette) {
+    ui.palette = state.palette;
+    changed = true;
+  }
+  if (
+    state.customPalette &&
+    (state.customPalette.input !== ui.customPalette.input ||
+      state.customPalette.tool !== ui.customPalette.tool ||
+      state.customPalette.output !== ui.customPalette.output ||
+      state.customPalette.accent !== ui.customPalette.accent)
+  ) {
+    ui.customPalette = { ...state.customPalette };
+    changed = true;
+  }
+  if (changed) {
+    persist();
+    applyPalette();
+  }
+}
+
 function applyPalette(): void {
   document.body.dataset.palette = ui.palette;
+  if (ui.palette === "custom") {
+    document.body.style.setProperty("--x-palette-input", ui.customPalette.input);
+    document.body.style.setProperty("--x-palette-tool", ui.customPalette.tool);
+    document.body.style.setProperty(
+      "--x-palette-output",
+      ui.customPalette.output,
+    );
+    document.body.style.setProperty(
+      "--x-palette-accent",
+      ui.customPalette.accent,
+    );
+  } else {
+    document.body.style.removeProperty("--x-palette-input");
+    document.body.style.removeProperty("--x-palette-tool");
+    document.body.style.removeProperty("--x-palette-output");
+    document.body.style.removeProperty("--x-palette-accent");
+  }
 }
 
 /**
@@ -245,6 +318,7 @@ window.addEventListener("message", (event) => {
   }
   if (msg.type === "state-update") {
     ui.state = msg.state;
+    syncPaletteFromHost(msg.state);
     render();
     return;
   }
@@ -306,7 +380,20 @@ function persist(): void {
   vscode.setState({
     draft: ui.draft,
     palette: ui.palette,
+    customPalette: ui.customPalette,
     collapseFilter: Array.from(ui.collapseFilter),
+  });
+}
+
+/** Send the current palette + custom colours to the host for
+ *  cross-restart persistence. The webview's `vscode.setState`
+ *  only survives panel reloads; workspaceState (host-side)
+ *  survives VS Code restarts. */
+function pushPaletteToHost(): void {
+  send({
+    type: "set-palette",
+    palette: ui.palette,
+    customPalette: ui.customPalette,
   });
 }
 
@@ -623,9 +710,17 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
       ui.palette = select.value;
       applyPalette();
       persist();
+      pushPaletteToHost();
     }
   });
   palLabel.appendChild(select);
+
+  // Custom palette colour pickers. Rendered all the time so the
+  // user can prep colours before switching the dropdown to
+  // "Custom", but the row is muted (`disabled` attribute on the
+  // <fieldset>) while a non-custom palette is active so the
+  // accents make it clear the values aren't currently in effect.
+  settingsPanel.appendChild(buildCustomPalettePickers());
 
   settings.appendChild(settingsPanel);
   rightZone.appendChild(settings);
@@ -804,6 +899,62 @@ function toggleCollapseKind(kind: CollapseKind): void {
     }
   }
   persist();
+}
+
+/**
+ * Render the four colour pickers for the Custom palette. Their
+ * labels (Input / Tool / Output / Accent) match the role each
+ * slot drives in the palette anchors at the top of
+ * `chat-panel-experimental.css`. The row stays interactive
+ * regardless of which palette is currently selected, so a user
+ * can preview-edit before switching to Custom -- but a callout
+ * makes it clear the values only take effect with Custom active.
+ */
+function buildCustomPalettePickers(): HTMLElement {
+  const root = div("x-toolbar-settings-row");
+  const heading = document.createElement("div");
+  heading.className = "x-toolbar-settings-sublabel";
+  heading.textContent =
+    ui.palette === "custom"
+      ? "Custom colours"
+      : "Custom colours (preview only — switch palette to Custom to apply)";
+  root.appendChild(heading);
+
+  const grid = div("x-custom-palette-grid");
+  const slots: Array<{ key: keyof ChatCustomPalette; label: string }> = [
+    { key: "input", label: "Input" },
+    { key: "tool", label: "Tool" },
+    { key: "output", label: "Output" },
+    { key: "accent", label: "Accent" },
+  ];
+  for (const slot of slots) {
+    const cell = document.createElement("label");
+    cell.className = "x-custom-palette-cell";
+    const text = document.createElement("span");
+    text.textContent = slot.label;
+    const picker = document.createElement("input");
+    picker.type = "color";
+    picker.className = "x-custom-palette-picker";
+    picker.value = ui.customPalette[slot.key];
+    picker.addEventListener("input", () => {
+      ui.customPalette = {
+        ...ui.customPalette,
+        [slot.key]: picker.value,
+      };
+      // Apply immediately when Custom is the active palette so
+      // the user sees their picks live. Persist regardless so a
+      // switch back to Custom remembers the latest set.
+      if (ui.palette === "custom") {
+        applyPalette();
+      }
+      persist();
+      pushPaletteToHost();
+    });
+    cell.append(text, picker);
+    grid.appendChild(cell);
+  }
+  root.appendChild(grid);
+  return root;
 }
 
 function buildTranscript(state: ChatPanelState): HTMLElement {
