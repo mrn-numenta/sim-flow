@@ -220,4 +220,60 @@ mod tests {
         std::fs::write(dir.path().join("AGENTS.md"), "body two\n").unwrap();
         assert!(verify_client_file_equivalence(dir.path()).is_err());
     }
+
+    #[test]
+    fn client_file_equivalence_returns_ok_when_either_file_missing() {
+        // The verifier is opportunistic -- if either sister file is
+        // missing it succeeds rather than treating the absence as drift.
+        let dir = tempdir().unwrap();
+        // Neither present.
+        verify_client_file_equivalence(dir.path()).unwrap();
+        // Only CLAUDE.md present.
+        std::fs::write(dir.path().join("CLAUDE.md"), "body\n").unwrap();
+        verify_client_file_equivalence(dir.path()).unwrap();
+    }
+
+    #[test]
+    fn validate_project_name_accepts_typical_kebab_and_snake_names() {
+        for ok in ["model", "my-model", "my_model", "model42", "v2.0-alpha"] {
+            assert!(validate_project_name(ok).is_ok(), "{ok}");
+        }
+    }
+
+    #[test]
+    fn strip_sync_note_drops_unclosed_comment_at_eof() {
+        let a = "<!-- unterminated";
+        // Just verify no panic.
+        let _ = strip_sync_note(a);
+    }
+
+    #[test]
+    fn resolve_foundation_path_returns_input_path_unchanged() {
+        use std::path::Path;
+        let foundation = Path::new("/abs/foundation");
+        let destination = Path::new("/abs/somewhere/else");
+        let out = resolve_foundation_path(foundation, destination);
+        // Current impl returns the foundation path verbatim.
+        assert_eq!(out, foundation);
+    }
+
+    #[test]
+    fn placeholder_map_includes_canonical_keys_from_options() {
+        let opts = super::NewModelOptions {
+            project_name: "demo-model".into(),
+            destination: std::path::PathBuf::from("/tmp/dest"),
+            foundation_root: std::path::PathBuf::from("/abs/foundation"),
+            library_path: "../sim-models/library".into(),
+            skip_cargo_check: true,
+        };
+        let m = placeholder_map(&opts);
+        assert_eq!(
+            m.get("project-name").map(String::as_str),
+            Some("demo-model")
+        );
+        assert_eq!(m.get("crate_name").map(String::as_str), Some("demo_model"));
+        assert!(m.contains_key("foundation_path"));
+        assert!(m.contains_key("library_path"));
+        assert!(m.contains_key("timestamp"));
+    }
 }
