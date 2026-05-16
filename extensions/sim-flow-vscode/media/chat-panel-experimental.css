@@ -134,18 +134,31 @@ body {
   );
 }
 
-/* Bubble expand/collapse toggle: icon-only button anchored at the
- * left edge of the toolbar. Padding mirrors the other toolbar
- * buttons (`.x-toolbar button`) so the heights line up; the
- * codicon's 16px line height plus 2px+2px vertical padding gives
- * the same effective size as a "Project: name" text button. */
-.x-toolbar-bubble-toggle {
+/* Icon-only toolbar buttons (bubble-toggle, dashboard, help). All
+ * share the same borderless / transparent treatment as the settings
+ * gear summary so the three icons + the gear read as one row of
+ * peer affordances. Hover paints the same subtle toolbar tint the
+ * settings gear uses. */
+.x-toolbar-bubble-toggle,
+.x-toolbar-dashboard,
+.x-toolbar-help {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 2px 8px;
+  border: none;
+  background: transparent;
   color: var(--vscode-foreground);
   line-height: 1;
+}
+
+.x-toolbar-bubble-toggle:hover,
+.x-toolbar-dashboard:hover,
+.x-toolbar-help:hover {
+  background: var(
+    --vscode-toolbar-hoverBackground,
+    color-mix(in srgb, var(--vscode-foreground) 12%, transparent)
+  );
 }
 
 /* Project switcher: same chrome as the other toolbar controls but
@@ -351,18 +364,6 @@ body {
 @keyframes x-llm-pulse {
   0%, 100% { opacity: 0.85; }
   50% { opacity: 1; }
-}
-
-/* Dashboard button: icon-only, matches bubble-toggle sizing so the
- * three icon buttons (bubble-toggle, dashboard, settings gear)
- * land at the same effective height. */
-.x-toolbar-dashboard {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2px 8px;
-  line-height: 1;
-  color: var(--vscode-foreground);
 }
 
 .x-loading {
@@ -1154,17 +1155,6 @@ body {
 .x-popup-finding-resolved {
   color: var(--x-muted);
   text-decoration: line-through;
-}
-
-/* Help-icon button in the toolbar inherits the existing
- * `.x-toolbar button` reset from earlier in this file; only the
- * icon-button sizing needs a nudge so the codicon centres on the
- * 28px-tall toolbar buttons. */
-.x-toolbar-help {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px 6px;
 }
 
 /* Context-window usage pie. White outline + white-filled sector by

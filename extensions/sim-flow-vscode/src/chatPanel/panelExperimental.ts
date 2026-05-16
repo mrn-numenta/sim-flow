@@ -430,24 +430,9 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   llmGroup.appendChild(llmStatus);
   centerZone.appendChild(llmGroup);
 
-  // ---- RIGHT: help + dashboard + settings + total tokens ----
-
-  // Help button: opens a popup that describes every step in the
-  // step rail. Lives next to the dashboard button so the user
-  // reads them as a help/navigation pair.
-  const helpBtn = document.createElement("button");
-  helpBtn.type = "button";
-  helpBtn.className = "x-toolbar-help";
-  helpBtn.innerHTML = `<i class="codicon codicon-question" aria-hidden="true"></i>`;
-  helpBtn.setAttribute("aria-label", "Help");
-  helpBtn.title = "Open the per-step help guide.";
-  helpBtn.addEventListener("click", () => {
-    // Toggle: a second click on the same icon closes the popup so
-    // the user can dismiss without moving the mouse.
-    ui.openPopup = ui.openPopup?.kind === "help" ? null : { kind: "help" };
-    render();
-  });
-  rightZone.appendChild(helpBtn);
+  // ---- RIGHT: dashboard + help + settings + total tokens ----
+  // Help sits adjacent to settings so the user reads
+  // "info / config" as one pair on the right edge.
 
   // Dashboard button: opens the sim-flow dashboard for the chat
   // panel's current project (no picker; host reads the same
@@ -463,6 +448,21 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
     send({ type: "open-dashboard" });
   });
   rightZone.appendChild(dashboardBtn);
+
+  // Help button: opens a popup describing every step in the rail.
+  const helpBtn = document.createElement("button");
+  helpBtn.type = "button";
+  helpBtn.className = "x-toolbar-help";
+  helpBtn.innerHTML = `<i class="codicon codicon-question" aria-hidden="true"></i>`;
+  helpBtn.setAttribute("aria-label", "Help");
+  helpBtn.title = "Open the per-step help guide.";
+  helpBtn.addEventListener("click", () => {
+    // Toggle: a second click on the same icon closes the popup so
+    // the user can dismiss without moving the mouse.
+    ui.openPopup = ui.openPopup?.kind === "help" ? null : { kind: "help" };
+    render();
+  });
+  rightZone.appendChild(helpBtn);
 
   // Settings gear: <details>-based popover. Clicking the gear
   // toggles `open` and the panel inside is absolutely-positioned
