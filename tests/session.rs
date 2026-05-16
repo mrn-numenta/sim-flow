@@ -144,7 +144,15 @@ fn handshake_emits_hello_ack_and_phase_changed() {
     assert!(messages[inputs_idx].content.contains("not yet on disk"));
     assert!(messages[opening_idx].content.contains("DM0 work session"));
     if messages.len() == 5 {
-        assert!(messages[2].content.contains("Framework API TOC"));
+        // The TOC's top heading switched to "Framework API navigation"
+        // when the LSP-discovery rewrite landed (commit 42df333).
+        // Match either form so the test survives a future TOC
+        // re-rename without churn.
+        let body = &messages[2].content;
+        assert!(
+            body.contains("Framework API navigation") || body.contains("Framework API TOC"),
+            "expected the framework-API TOC headline in handshake message; got: {body}"
+        );
     }
     // Tool catalog also surfaces as a structured field for
     // backends that support native tool-use. Every step now
