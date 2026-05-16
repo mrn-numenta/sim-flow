@@ -14,6 +14,7 @@ let findFilesResults: Array<{ fsPath: string }> = [];
 let quickPickResult: { dir?: string; pickKind?: "project" | "new" } | undefined;
 const errorMessages: string[] = [];
 let getConfigurationValue: string | undefined;
+let activeTextEditorPath: string | undefined;
 
 vi.mock("vscode", () => ({
   workspace: {
@@ -27,7 +28,9 @@ vi.mock("vscode", () => ({
   },
   window: {
     get activeTextEditor() {
-      return undefined;
+      return activeTextEditorPath
+        ? { document: { uri: { fsPath: activeTextEditorPath } } }
+        : undefined;
     },
     showErrorMessage: (msg: string) => {
       errorMessages.push(msg);
@@ -54,9 +57,13 @@ vi.mock("./cli", () => ({
   SimFlowCliError: class SimFlowCliError extends Error {},
 }));
 
-const { PICK_PROJECT_NEW, findProjectCandidates, pickProject, resolveContext } = await import(
-  "./context"
-);
+const {
+  PICK_PROJECT_NEW,
+  findProjectCandidates,
+  pickProject,
+  resolveContext,
+  resolveProjectDir,
+} = await import("./context");
 
 function makeProject(dir: string): void {
   fs.mkdirSync(path.join(dir, ".sim-flow"), { recursive: true });
@@ -72,6 +79,7 @@ beforeEach(() => {
   quickPickResult = undefined;
   errorMessages.length = 0;
   getConfigurationValue = undefined;
+  activeTextEditorPath = undefined;
 });
 
 afterEach(() => {
@@ -124,6 +132,45 @@ describe("findProjectCandidates", () => {
 
     const found = await findProjectCandidates();
     expect(found).toEqual([rootProject]);
+  });
+});
+
+describe("resolveProjectDir", () => {
+  it("walks up from the active editor's file path to find .sim-flow", () => {
+    const proj = path.join(tmpRoot, "model-x");
+    makeProject(proj);
+    // Active editor inside a deeply-nested src/ file.
+    const nestedFile = path.join(proj, "src", "deep", "lib.rs");
+    fs.mkdirSync(path.dirname(nestedFile), { recursive: true });
+    fs.writeFileSync(nestedFile, "// stub\n");
+    activeTextEditorPath = nestedFile;
+    expect(resolveProjectDir()).toBe(proj);
+  });
+
+  it("walks up from a workspace folder when there is no active editor", () => {
+    const proj = path.join(tmpRoot, "model-y");
+    makeProject(proj);
+    workspaceFolders = [{ uri: { fsPath: proj }, name: "model-y", index: 0 }];
+    expect(resolveProjectDir()).toBe(proj);
+  });
+
+  it("falls back to the sole workspace folder when no state.toml is found anywhere", () => {
+    const root = path.join(tmpRoot, "fresh-workspace");
+    fs.mkdirSync(root, { recursive: true });
+    workspaceFolders = [{ uri: { fsPath: root }, name: "fresh-workspace", index: 0 }];
+    expect(resolveProjectDir()).toBe(root);
+  });
+
+  it("returns undefined with no active editor AND multiple workspace folders", () => {
+    workspaceFolders = [
+      { uri: { fsPath: path.join(tmpRoot, "a") }, name: "a", index: 0 },
+      { uri: { fsPath: path.join(tmpRoot, "b") }, name: "b", index: 1 },
+    ];
+    expect(resolveProjectDir()).toBeUndefined();
+  });
+
+  it("returns undefined with no editor and no workspace folders", () => {
+    expect(resolveProjectDir()).toBeUndefined();
   });
 });
 
