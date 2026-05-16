@@ -5004,4 +5004,76 @@ Hope that helps."#;
         let summary = super::tool_args_summary(&call);
         assert!(summary.ends_with("..."), "should truncate: {summary}");
     }
+
+    #[test]
+    fn base64_encode_handles_every_padding_arm() {
+        // Empty input.
+        assert_eq!(super::base64_encode(b""), "");
+        // 1 byte -> 2 padding chars.
+        assert_eq!(super::base64_encode(b"a"), "YQ==");
+        // 2 bytes -> 1 padding char.
+        assert_eq!(super::base64_encode(b"ab"), "YWI=");
+        // 3 bytes -> no padding.
+        assert_eq!(super::base64_encode(b"abc"), "YWJj");
+        // Round-trip via base64 crate-equivalent canonical encoding:
+        // "Hello World" -> "SGVsbG8gV29ybGQ=".
+        assert_eq!(super::base64_encode(b"Hello World"), "SGVsbG8gV29ybGQ=");
+    }
+
+    #[test]
+    fn inline_lang_hint_maps_known_extensions_case_insensitively() {
+        assert_eq!(super::inline_lang_hint("docs/spec.md"), "markdown");
+        assert_eq!(super::inline_lang_hint("src/lib.rs"), "rust");
+        assert_eq!(super::inline_lang_hint("Cargo.toml"), "toml");
+        assert_eq!(super::inline_lang_hint("data.json"), "json");
+        // Uppercase extensions round-trip too.
+        assert_eq!(super::inline_lang_hint("README.MD"), "markdown");
+        // Unknown extension -> "text" fallback.
+        assert_eq!(super::inline_lang_hint("script.py"), "text");
+        // No extension -> "text".
+        assert_eq!(super::inline_lang_hint("Makefile"), "text");
+    }
+
+    #[test]
+    fn is_inlinable_extension_accepts_text_shaped_files_only() {
+        for rel in [
+            "x.md", "x.rs", "x.toml", "x.json", "x.txt", "x.sh", "x.yml", "x.yaml", "no-ext",
+        ] {
+            assert!(super::is_inlinable_extension(rel), "{rel}");
+        }
+        for rel in ["x.png", "x.jpg", "x.pdf", "x.db", "x.so", "x.bin"] {
+            assert!(!super::is_inlinable_extension(rel), "{rel}");
+        }
+    }
+
+    #[test]
+    fn truncate_passes_through_under_cap_and_appends_marker_over() {
+        assert_eq!(super::truncate("hello", 10), "hello");
+        assert_eq!(super::truncate("hello world", 5), "hello\n... (truncated)");
+        // Exactly cap-length: under-equal branch keeps the whole body.
+        assert_eq!(super::truncate("abcde", 5), "abcde");
+    }
+
+    #[test]
+    fn normalize_for_loop_detection_collapses_digit_runs() {
+        // Different numbers should collapse to the same shape.
+        let a = "ran 12345 cycles";
+        let b = "ran 99 cycles";
+        assert_eq!(
+            super::normalize_for_loop_detection(a),
+            super::normalize_for_loop_detection(b),
+        );
+        // The marker form is `<N>` (verify shape).
+        assert!(super::normalize_for_loop_detection("count=42").contains("<N>"));
+    }
+
+    #[test]
+    fn normalize_for_loop_detection_collapses_whitespace_runs() {
+        let a = "hello   world";
+        let b = "hello world";
+        assert_eq!(
+            super::normalize_for_loop_detection(a),
+            super::normalize_for_loop_detection(b),
+        );
+    }
 }
