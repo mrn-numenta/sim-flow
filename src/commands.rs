@@ -2175,7 +2175,7 @@ mod tests {
             tmp.path(),
             &crate::cli::CoverageAction::Set {
                 threshold_pct: Some(80.0),
-                level: Some(crate::cli::CoverageLevelArg::Total),
+                level: Some(crate::cli::actions::CoverageLevelArg::Total),
             },
         );
         assert!(r.is_ok());
