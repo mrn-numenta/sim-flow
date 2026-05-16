@@ -19,7 +19,10 @@ use std::path::{Path, PathBuf};
 
 use crate::{Error, Result};
 
+mod api_common;
 mod api_hover;
+mod api_impls;
+mod api_references;
 mod api_search;
 mod declare_fix;
 mod declare_hypothesis;
@@ -35,6 +38,8 @@ mod search;
 mod write_file;
 
 pub use api_hover::ApiHoverTool;
+pub use api_impls::ApiImplsTool;
+pub use api_references::ApiReferencesTool;
 pub use api_search::ApiSearchTool;
 pub use declare_fix::DeclareFixTool;
 pub use declare_hypothesis::DeclareHypothesisTool;
@@ -375,6 +380,8 @@ pub fn build_dispatcher(names: &[&'static str]) -> Vec<Box<dyn Tool>> {
             "record_run" => out.push(Box::new(RecordRunTool)),
             "api_search" => out.push(Box::new(ApiSearchTool)),
             "api_hover" => out.push(Box::new(ApiHoverTool)),
+            "api_impls" => out.push(Box::new(ApiImplsTool)),
+            "api_references" => out.push(Box::new(ApiReferencesTool)),
             _ => {} // unknown tool name; skip
         }
     }

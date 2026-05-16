@@ -18,6 +18,7 @@
 
 use serde_json::{Value, json};
 
+use super::api_common::{format_uri, symbol_kind_label};
 use super::{Tool, ToolContext, ToolResult};
 use crate::__internal::session::lsp;
 use crate::Result;
@@ -143,7 +144,7 @@ fn format_results(raw: &Value, limit: usize, workspace_root: &std::path::Path) -
             .and_then(|s| s.get("line"))
             .and_then(|v| v.as_u64())
             .map(|l| l + 1); // LSP lines are 0-based; agents read 1-based.
-        let location = format_location(uri, line, workspace_root);
+        let location = format_uri(uri, line, workspace_root);
         let suffix = match container {
             Some(c) => format!(" in `{c}`"),
             None => String::new(),
@@ -156,61 +157,6 @@ fn format_results(raw: &Value, limit: usize, workspace_root: &std::path::Path) -
         format!("{total} matches:\n")
     };
     format!("{header}{}", lines.join("\n"))
-}
-
-/// LSP `SymbolKind` enum -> short human label. Numeric values come
-/// from the LSP spec (1=File ... 26=TypeParameter).
-fn symbol_kind_label(kind: u64) -> &'static str {
-    match kind {
-        1 => "File",
-        2 => "Module",
-        3 => "Namespace",
-        4 => "Package",
-        5 => "Class",
-        6 => "Method",
-        7 => "Property",
-        8 => "Field",
-        9 => "Constructor",
-        10 => "Enum",
-        11 => "Interface",
-        12 => "Function",
-        13 => "Variable",
-        14 => "Constant",
-        15 => "String",
-        16 => "Number",
-        17 => "Boolean",
-        18 => "Array",
-        19 => "Object",
-        20 => "Key",
-        21 => "Null",
-        22 => "EnumMember",
-        23 => "Struct",
-        24 => "Event",
-        25 => "Operator",
-        26 => "TypeParam",
-        _ => "Symbol",
-    }
-}
-
-/// Render `uri` (a `file://` URI from rust-analyzer) as an
-/// `fw:<rel>:<line>` reference when it lives inside `workspace_root`,
-/// or fall back to the raw URI when it doesn't (e.g. a hit inside a
-/// registry crate the agent has no `fw:` access to anyway).
-fn format_location(uri: &str, line: Option<u64>, workspace_root: &std::path::Path) -> String {
-    let path = uri.strip_prefix("file://").unwrap_or(uri);
-    let abs = std::path::PathBuf::from(path);
-    if let Ok(rel) = abs.strip_prefix(workspace_root) {
-        let rel_str = rel.to_string_lossy();
-        match line {
-            Some(n) => format!("`fw:{rel_str}:{n}`"),
-            None => format!("`fw:{rel_str}`"),
-        }
-    } else {
-        match line {
-            Some(n) => format!("`{path}:{n}`"),
-            None => format!("`{path}`"),
-        }
-    }
 }
 
 #[cfg(test)]

@@ -147,6 +147,49 @@ impl RustAnalyzerClient {
         )
     }
 
+    /// `textDocument/implementation` request. For a position on a
+    /// trait declaration, rust-analyzer returns every `impl` of
+    /// that trait; for a position on a generic type, it returns
+    /// the concrete instantiations. Response is a `Location[]` (or
+    /// `Null` when there's nothing to point at).
+    pub fn text_document_implementation(
+        &mut self,
+        uri: &str,
+        line: u64,
+        character: u64,
+    ) -> LspResult<Value> {
+        self.request(
+            "textDocument/implementation",
+            json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character },
+            }),
+            REQUEST_TIMEOUT,
+        )
+    }
+
+    /// `textDocument/references` request. Returns `Location[]` for
+    /// every reference to the symbol at the given position.
+    /// `include_declaration=true` keeps the definition site in the
+    /// result; agents usually want to see it for orientation.
+    pub fn text_document_references(
+        &mut self,
+        uri: &str,
+        line: u64,
+        character: u64,
+        include_declaration: bool,
+    ) -> LspResult<Value> {
+        self.request(
+            "textDocument/references",
+            json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character },
+                "context": { "includeDeclaration": include_declaration },
+            }),
+            REQUEST_TIMEOUT,
+        )
+    }
+
     fn handshake(&mut self) -> LspResult<()> {
         let root_uri = path_to_uri(&self.workspace_root)?;
         let params = json!({

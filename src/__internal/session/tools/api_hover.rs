@@ -15,6 +15,7 @@
 
 use serde_json::{Value, json};
 
+use super::api_common::{SymbolHit, format_uri, pick_best_hit, symbol_kind_label};
 use super::{Tool, ToolContext, ToolResult};
 use crate::__internal::session::lsp;
 use crate::Result;
@@ -101,66 +102,11 @@ enum HoverOutcome {
     },
 }
 
-#[derive(Debug, Clone)]
-struct SymbolHit {
-    name: String,
-    kind: u64,
-    container: Option<String>,
-    uri: String,
-    line: u64,
-    character: u64,
-}
-
-/// Pick the most useful entry from a `workspace/symbol` response
-/// when the agent passed a name and we need to choose. Preference:
-/// exact name match wins; otherwise the first hit. We never look
-/// past the first 50 entries -- if the agent's query was so broad
-/// that the right answer is past #50, the right move is to refine
-/// via `api_search` first.
-fn pick_best_hit(raw: &Value, query: &str) -> Option<SymbolHit> {
-    let items = raw.as_array()?;
-    let scan = items.iter().take(50);
-    let mut first: Option<SymbolHit> = None;
-    for item in scan {
-        let hit = extract_hit(item)?;
-        if hit.name == query {
-            return Some(hit);
-        }
-        if first.is_none() {
-            first = Some(hit);
-        }
-    }
-    first
-}
-
-fn extract_hit(item: &Value) -> Option<SymbolHit> {
-    let name = item.get("name")?.as_str()?.to_string();
-    let kind = item.get("kind")?.as_u64()?;
-    let container = item
-        .get("containerName")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    let location = item.get("location")?;
-    let uri = location.get("uri")?.as_str()?.to_string();
-    let start = location.get("range")?.get("start")?;
-    let line = start.get("line")?.as_u64()?;
-    let character = start.get("character")?.as_u64()?;
-    Some(SymbolHit {
-        name,
-        kind,
-        container,
-        uri,
-        line,
-        character,
-    })
-}
-
 fn render(query: &str, outcome: &HoverOutcome, workspace_root: &std::path::Path) -> String {
     match outcome {
         HoverOutcome::NoMatch => format!("[api_hover `{query}`]\n\n(no results)"),
         HoverOutcome::Resolved { hit, total, hover } => {
-            let location = format_location(&hit.uri, hit.line + 1, workspace_root);
+            let location = format_uri(&hit.uri, Some(hit.line + 1), workspace_root);
             let kind = symbol_kind_label(hit.kind);
             let container = match &hit.container {
                 Some(c) => format!(" in `{c}`"),
@@ -232,34 +178,6 @@ fn format_marked_string_entry(v: &Value) -> String {
         }
     }
     v.to_string()
-}
-
-fn format_location(uri: &str, one_based_line: u64, workspace_root: &std::path::Path) -> String {
-    let path = uri.strip_prefix("file://").unwrap_or(uri);
-    let abs = std::path::PathBuf::from(path);
-    if let Ok(rel) = abs.strip_prefix(workspace_root) {
-        format!("`fw:{}:{one_based_line}`", rel.to_string_lossy())
-    } else {
-        format!("`{path}:{one_based_line}`")
-    }
-}
-
-/// Subset of LSP `SymbolKind` we expect from rust-analyzer; kept
-/// inline rather than reusing `api_search`'s copy so each tool's
-/// formatting stays self-contained.
-fn symbol_kind_label(kind: u64) -> &'static str {
-    match kind {
-        2 => "Module",
-        5 => "Class",
-        6 => "Method",
-        10 => "Enum",
-        11 => "Trait",
-        12 => "Function",
-        14 => "Constant",
-        22 => "EnumMember",
-        23 => "Struct",
-        _ => "Symbol",
-    }
 }
 
 #[cfg(test)]

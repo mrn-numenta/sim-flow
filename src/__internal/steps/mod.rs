@@ -38,6 +38,8 @@ pub const UNIVERSAL_TOOLS: &[&str] = &[
     // page reads with live LSP queries.
     "api_search",
     "api_hover",
+    "api_impls",
+    "api_references",
 ];
 
 #[derive(Debug, Clone)]
