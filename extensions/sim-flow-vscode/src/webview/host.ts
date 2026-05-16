@@ -1321,6 +1321,8 @@ export class DashboardHost {
         currentTask: null,
         currentTaskFilePath: null,
         currentTaskLine: null,
+        currentTaskIndex: null,
+        currentTaskTotal: null,
       };
     }
   }
@@ -1339,6 +1341,8 @@ export class DashboardHost {
         currentTask: null,
         currentTaskFilePath: null,
         currentTaskLine: null,
+        currentTaskIndex: null,
+        currentTaskTotal: null,
       });
       return {
         impl: empty("impl"),

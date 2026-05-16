@@ -84,4 +84,13 @@ export interface PlanProgress {
   currentTaskFilePath: string | null;
   /** Line within `currentTaskFilePath` for click-to-open. */
   currentTaskLine: number | null;
+  /**
+   * 1-based position of the current pending task within its
+   * milestone's full task list (counts done + deferred + pending
+   * rows). `null` when no current task. */
+  currentTaskIndex: number | null;
+  /** Total task rows in the current task's milestone (denominator
+   *  for `t / T` progress indicators). `null` when no current
+   *  task. */
+  currentTaskTotal: number | null;
 }

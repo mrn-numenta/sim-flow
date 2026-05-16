@@ -177,7 +177,16 @@ export interface ChatPanelState {
    * renders this as a single line under the step rail; when null,
    * the line is hidden entirely.
    */
-  currentMilestone: { title: string; task: string } | null;
+  currentMilestone: {
+    title: string;
+    task: string;
+    /** 1-based position of `task` within the milestone's full
+     *  task-row list (counts done + deferred + pending). `null`
+     *  when the task can't be located in the file. */
+    taskIndex: number | null;
+    /** Total task rows in the milestone. `null` when unknown. */
+    taskTotal: number | null;
+  } | null;
   /**
    * Active palette name. Persisted in `workspaceState` so it
    * survives VS Code restarts (in addition to `vscode.setState`

@@ -2581,7 +2581,12 @@ interface PanelContext {
    * specific pending task within it. Null when the current step
    * has no plan (DM0/DM1/DM2a/DM2b) or no pending task remains.
    */
-  currentMilestone: { title: string; task: string } | null;
+  currentMilestone: {
+    title: string;
+    task: string;
+    taskIndex: number | null;
+    taskTotal: number | null;
+  } | null;
   /** Resolved backend kind. `server:<name>` references already
    *  mapped to the entry's `kind`. */
   source: LlmSourceTag;
@@ -2791,7 +2796,12 @@ async function readFlowStateSafe(
 async function readCurrentMilestoneSafe(
   projectDir: string,
   currentStep: string,
-): Promise<{ title: string; task: string } | null> {
+): Promise<{
+  title: string;
+  task: string;
+  taskIndex: number | null;
+  taskTotal: number | null;
+} | null> {
   try {
     const progress = await readPlanProgress(projectDir, currentStep);
     if (progress.kind === "none" || progress.currentTask === null) {
@@ -2803,7 +2813,12 @@ async function readCurrentMilestoneSafe(
     if (!owner) {
       return null;
     }
-    return { title: owner.title, task: progress.currentTask };
+    return {
+      title: owner.title,
+      task: progress.currentTask,
+      taskIndex: progress.currentTaskIndex,
+      taskTotal: progress.currentTaskTotal,
+    };
   } catch {
     return null;
   }

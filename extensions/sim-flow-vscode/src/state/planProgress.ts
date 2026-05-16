@@ -44,6 +44,8 @@ const EMPTY: PlanProgress = {
   currentTask: null,
   currentTaskFilePath: null,
   currentTaskLine: null,
+  currentTaskIndex: null,
+  currentTaskTotal: null,
 };
 
 /**
@@ -220,10 +222,17 @@ async function readMilestoneDirPlan(
       currentTask: null,
       currentTaskFilePath: null,
       currentTaskLine: null,
+      currentTaskIndex: null,
+      currentTaskTotal: null,
     };
   }
   const target = milestones[targetIdx];
-  let task: { text: string; line: number } | null = null;
+  let task: {
+    text: string;
+    line: number;
+    taskIndex: number;
+    taskTotal: number;
+  } | null = null;
   try {
     const body = await fs.readFile(target.filePath, "utf8");
     task = firstPendingRow(body);
@@ -236,6 +245,8 @@ async function readMilestoneDirPlan(
     currentTask: task?.text ?? null,
     currentTaskFilePath: task ? target.filePath : null,
     currentTaskLine: task?.line ?? null,
+    currentTaskIndex: task?.taskIndex ?? null,
+    currentTaskTotal: task?.taskTotal ?? null,
   };
 }
 
@@ -267,17 +278,44 @@ function countCheckboxes(text: string): CheckboxCounts {
 }
 
 /**
- * Return the first `- [ ]` row in `text`: its text (without the
- * checkbox prefix) and its 0-indexed line number. `null` when none
- * remain.
+ * Return the first `- [ ]` row in `text` plus task-list positional
+ * info: its text (without the checkbox prefix), its 0-indexed line
+ * number, its 1-based task index across all checkbox rows (counting
+ * `- [x]`, `- [-]`, and `- [ ]` together), and the total task-row
+ * count for the milestone. `null` when no pending row remains.
  */
-function firstPendingRow(text: string): { text: string; line: number } | null {
+function firstPendingRow(
+  text: string,
+): {
+  text: string;
+  line: number;
+  taskIndex: number;
+  taskTotal: number;
+} | null {
   const lines = text.split("\n");
-  const re = /^\s*[-*]\s+\[\s\]\s+(.+)$/;
+  const taskRowRe = /^\s*[-*]\s+\[([ xX-])\]\s+(.+)$/;
+  // First pass: tally total task rows so the caller has the denominator
+  // even when the milestone is fully checked off.
+  let total = 0;
+  for (const line of lines) {
+    if (taskRowRe.test(line)) {
+      total++;
+    }
+  }
+  let seen = 0;
   for (let i = 0; i < lines.length; i++) {
-    const m = re.exec(lines[i]);
-    if (m) {
-      return { text: m[1].trim(), line: i };
+    const m = taskRowRe.exec(lines[i]);
+    if (!m) {
+      continue;
+    }
+    seen++;
+    if (m[1] === " ") {
+      return {
+        text: m[2].trim(),
+        line: i,
+        taskIndex: seen,
+        taskTotal: total,
+      };
     }
   }
   return null;
