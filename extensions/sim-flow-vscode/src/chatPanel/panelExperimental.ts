@@ -103,11 +103,70 @@ interface UiState {
    * itself there. A click anywhere else closes the menu.
    */
   openContextMenu: { step: string; x: number; y: number } | null;
+  /**
+   * Bubble kinds the next left-click on the collapse/expand toggle
+   * should target. "all" covers everything (the default); the
+   * remaining kinds let the user filter the toggle to specific
+   * roles via the toggle's right-click context menu. "all" plus
+   * anything else is mutually-exclusive -- selecting any concrete
+   * kind drops "all"; selecting "all" clears the others.
+   */
+  collapseFilter: Set<CollapseKind>;
+  /**
+   * Right-click context menu on the collapse toggle. `null` when
+   * nothing is open; otherwise carries the click coordinates so
+   * the overlay can place itself there.
+   */
+  openCollapseMenu: { x: number; y: number } | null;
 }
+
+type CollapseKind = "all" | "system" | "user" | "assistant" | "tools";
+
+const COLLAPSE_KIND_ORDER: readonly CollapseKind[] = [
+  "all",
+  "system",
+  "user",
+  "assistant",
+  "tools",
+];
+
+const COLLAPSE_KIND_LABELS: Record<CollapseKind, string> = {
+  all: "All",
+  system: "System",
+  user: "User",
+  assistant: "Assistant",
+  tools: "Tools",
+};
+
+/**
+ * CSS selector pinning each filter kind to the matching bubble
+ * `<details>` element. `system` covers any orchestrator-driven
+ * row that isn't a tool; `user` excludes orchestrator-flavoured
+ * users (those are the synthetic prompt-stack messages, not
+ * keystrokes from the human).
+ */
+const COLLAPSE_KIND_SELECTORS: Record<Exclude<CollapseKind, "all">, string> = {
+  system: ".x-row-system details.x-bubble-details",
+  user:
+    ".x-row-user:not(.x-row-orchestrator) details.x-bubble-details",
+  assistant: ".x-row-assistant details.x-bubble-details",
+  tools: ".x-row-tool details.x-bubble-details",
+};
 
 interface PersistedState {
   draft?: string;
   palette?: PaletteName;
+  collapseFilter?: CollapseKind[];
+}
+
+function isCollapseKind(value: unknown): value is CollapseKind {
+  return (
+    value === "all" ||
+    value === "system" ||
+    value === "user" ||
+    value === "assistant" ||
+    value === "tools"
+  );
 }
 
 const persisted = vscode.getState<PersistedState>();
@@ -121,7 +180,16 @@ const ui: UiState = {
   openPopup: null,
   critiqueData: new Map(),
   openContextMenu: null,
+  collapseFilter: new Set<CollapseKind>(
+    Array.isArray(persisted?.collapseFilter)
+      ? persisted.collapseFilter.filter(isCollapseKind)
+      : ["all"],
+  ),
+  openCollapseMenu: null,
 };
+if (ui.collapseFilter.size === 0) {
+  ui.collapseFilter.add("all");
+}
 
 applyPalette();
 installFileLinkDelegation();
@@ -235,7 +303,11 @@ function send(message: WebviewMessage): void {
 }
 
 function persist(): void {
-  vscode.setState({ draft: ui.draft, palette: ui.palette });
+  vscode.setState({
+    draft: ui.draft,
+    palette: ui.palette,
+    collapseFilter: Array.from(ui.collapseFilter),
+  });
 }
 
 function render(): void {
@@ -343,6 +415,10 @@ function buildShell(): Node[] {
   if (ctxMenu) {
     nodes.push(ctxMenu);
   }
+  const collapseMenu = buildCollapseMenu();
+  if (collapseMenu) {
+    nodes.push(collapseMenu);
+  }
   return nodes;
 }
 
@@ -374,16 +450,24 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   toggleBtn.innerHTML = ui.bubblesExpanded
     ? TOGGLE_BUBBLES_COLLAPSE_ICON
     : TOGGLE_BUBBLES_EXPAND_ICON;
+  const filterScope = describeCollapseFilter();
   toggleBtn.setAttribute(
     "aria-label",
-    ui.bubblesExpanded ? "Collapse all bubbles" : "Expand all bubbles",
+    ui.bubblesExpanded
+      ? `Collapse ${filterScope} bubbles`
+      : `Expand ${filterScope} bubbles`,
   );
-  toggleBtn.title = ui.bubblesExpanded
-    ? "Collapse all message bubbles in the transcript."
-    : "Expand all message bubbles in the transcript.";
+  toggleBtn.title =
+    `${ui.bubblesExpanded ? "Collapse" : "Expand"} ${filterScope} message bubbles. ` +
+    "Right-click to choose which roles this button targets.";
   toggleBtn.addEventListener("click", () => {
     ui.bubblesExpanded = !ui.bubblesExpanded;
-    setAllBubblesOpen(ui.bubblesExpanded);
+    setFilteredBubblesOpen(ui.bubblesExpanded);
+    render();
+  });
+  toggleBtn.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    ui.openCollapseMenu = { x: event.clientX, y: event.clientY };
     render();
   });
   leftZone.appendChild(toggleBtn);
@@ -649,17 +733,77 @@ function buildContextPie(
  * sticks. New entries that arrive after the click fall back to their
  * per-kind default (tool collapsed, others open).
  */
-function setAllBubblesOpen(open: boolean): void {
+/**
+ * Apply `open` to whichever `<details>` bubbles the current
+ * `ui.collapseFilter` covers. "all" → every bubble. Any concrete
+ * kind set → only the matching role's rows (via per-kind
+ * selectors defined alongside the filter type).
+ */
+function setFilteredBubblesOpen(open: boolean): void {
   const transcript = document.querySelector<HTMLElement>(".x-transcript");
   if (!transcript) {
     return;
   }
-  const details = transcript.querySelectorAll<HTMLDetailsElement>(
-    "details.x-bubble-details",
-  );
-  for (const node of Array.from(details)) {
-    node.open = open;
+  const selectors = collectCollapseSelectors();
+  for (const sel of selectors) {
+    const details = transcript.querySelectorAll<HTMLDetailsElement>(sel);
+    for (const node of Array.from(details)) {
+      node.open = open;
+    }
   }
+}
+
+/** Selectors for whichever bubble kinds the filter currently
+ *  targets. `all` short-circuits to the catch-all selector. */
+function collectCollapseSelectors(): string[] {
+  if (ui.collapseFilter.has("all")) {
+    return ["details.x-bubble-details"];
+  }
+  const out: string[] = [];
+  for (const kind of COLLAPSE_KIND_ORDER) {
+    if (kind === "all") {
+      continue;
+    }
+    if (ui.collapseFilter.has(kind)) {
+      out.push(COLLAPSE_KIND_SELECTORS[kind]);
+    }
+  }
+  return out;
+}
+
+/** Short human-readable description of the active filter, used in
+ *  the toggle button's aria-label + tooltip ("All", "User",
+ *  "User + Tools", etc.). */
+function describeCollapseFilter(): string {
+  if (ui.collapseFilter.has("all")) {
+    return "all";
+  }
+  const labels = COLLAPSE_KIND_ORDER.filter(
+    (k) => k !== "all" && ui.collapseFilter.has(k),
+  ).map((k) => COLLAPSE_KIND_LABELS[k]);
+  if (labels.length === 0) {
+    return "all";
+  }
+  return labels.join(" + ");
+}
+
+/** Toggle a kind in the filter set, enforcing the "all is
+ *  mutually exclusive with concrete kinds" rule. */
+function toggleCollapseKind(kind: CollapseKind): void {
+  if (kind === "all") {
+    ui.collapseFilter = new Set<CollapseKind>(["all"]);
+  } else {
+    ui.collapseFilter.delete("all");
+    if (ui.collapseFilter.has(kind)) {
+      ui.collapseFilter.delete(kind);
+    } else {
+      ui.collapseFilter.add(kind);
+    }
+    if (ui.collapseFilter.size === 0) {
+      ui.collapseFilter.add("all");
+    }
+  }
+  persist();
 }
 
 function buildTranscript(state: ChatPanelState): HTMLElement {
@@ -1675,6 +1819,62 @@ function buildContextMenu(): HTMLElement | null {
     render();
   });
   menu.appendChild(resetItem);
+
+  backdrop.appendChild(menu);
+  return backdrop;
+}
+
+/**
+ * Render the collapse-toggle right-click menu as a fixed overlay.
+ * Multi-select checkboxes for All / System / User / Assistant /
+ * Tools; the "all + concrete" exclusivity rule is enforced by
+ * `toggleCollapseKind`. The menu stays open while the user
+ * checks/unchecks rows; a click outside (or on the gear's escape
+ * close affordance) dismisses it.
+ */
+function buildCollapseMenu(): HTMLElement | null {
+  const open = ui.openCollapseMenu;
+  if (!open) {
+    return null;
+  }
+  const backdrop = div("x-ctxmenu-backdrop");
+  backdrop.addEventListener("click", () => {
+    ui.openCollapseMenu = null;
+    render();
+  });
+  backdrop.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    ui.openCollapseMenu = null;
+    render();
+  });
+  const menu = div("x-ctxmenu");
+  menu.style.left = `${open.x}px`;
+  menu.style.top = `${open.y}px`;
+  menu.setAttribute("role", "menu");
+  menu.addEventListener("click", (e) => e.stopPropagation());
+
+  for (const kind of COLLAPSE_KIND_ORDER) {
+    const item = document.createElement("label");
+    item.className = "x-ctxmenu-item x-ctxmenu-check";
+    item.setAttribute("role", "menuitemcheckbox");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = ui.collapseFilter.has(kind);
+    checkbox.className = "x-ctxmenu-checkbox";
+    const text = document.createElement("span");
+    text.textContent = COLLAPSE_KIND_LABELS[kind];
+    item.append(checkbox, text);
+    item.title =
+      kind === "all"
+        ? "Target every message bubble (selecting this clears the role checkboxes)."
+        : `Target ${COLLAPSE_KIND_LABELS[kind]} bubbles only.`;
+    item.addEventListener("click", (e) => {
+      e.preventDefault();
+      toggleCollapseKind(kind);
+      render();
+    });
+    menu.appendChild(item);
+  }
 
   backdrop.appendChild(menu);
   return backdrop;

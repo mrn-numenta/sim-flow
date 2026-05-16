@@ -1254,6 +1254,20 @@ body {
   outline: none;
 }
 
+/* Checkbox-shaped menu items (collapse-toggle filter). The label
+ * wraps the input + text and stretches across the full menu width
+ * so clicking anywhere on the row toggles the value. */
+.x-ctxmenu-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.x-ctxmenu-checkbox {
+  margin: 0;
+  pointer-events: none;
+}
+
 /* File-path links inside chat bodies. `code.x-file-link` keeps the
  * monospace style the markdown renderer applied; the textLink
  * colour + underline-on-hover differentiates clickable paths from
