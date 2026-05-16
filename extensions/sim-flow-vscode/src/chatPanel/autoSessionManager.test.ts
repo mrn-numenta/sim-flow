@@ -373,6 +373,74 @@ describe("chatPanel/autoSessionManager", () => {
     expect(settledCalled).toBe(false);
   });
 
+  it("attach hydrates a session from a stored record and persists it", async () => {
+    const pump = new FakePump();
+    pump.nextSettle = Promise.resolve({ status: "awaiting-input" });
+    const stored = {
+      sessionId: "old-session",
+      socketPath: "/tmp/old.sock",
+      projectDir: "/tmp/attach-proj",
+      awaitingInput: true,
+      sourceTag: "ollama",
+      model: "x",
+      sessionMode: "auto" as const,
+      stepRef: null,
+      launchSpecPath: undefined,
+      updatedAtMs: 1,
+    };
+    const session = await manager.attach(stored, pump as never, noopDelegate);
+    expect(session.sessionId).toBe("old-session");
+    expect(session.awaitingInput).toBe(true);
+    expect(manager.readStoredRecord("/tmp/attach-proj")).toMatchObject({
+      sessionId: "old-session",
+      awaitingInput: true,
+    });
+  });
+
+  it("waitForDrive resolves once the in-flight drivePromise settles", async () => {
+    const pump = new FakePump();
+    let resolveSettle: (r: SettleResult) => void = () => {};
+    pump.nextSettle = new Promise((r) => {
+      resolveSettle = r;
+    });
+    const session = await manager.launch(
+      {
+        sessionId: "wait-1",
+        socketPath: "/tmp/wait.sock",
+        projectDir: "/tmp/wait",
+        pump: pump as never,
+        sourceTag: "ollama",
+        model: "x",
+        sessionMode: "auto",
+        stepRef: null,
+        launchSpecPath: undefined,
+      },
+      noopDelegate,
+    );
+    let resolved = false;
+    const waiter = manager.waitForDrive(session).then(() => {
+      resolved = true;
+    });
+    expect(resolved).toBe(false);
+    resolveSettle({ status: "awaiting-input" });
+    await waiter;
+    expect(resolved).toBe(true);
+  });
+
+  it("waitForDrive is a no-op when there is no in-flight drive", async () => {
+    // No launch -> no drivePromise -> awaitForDrive resolves immediately.
+    const pump = new FakePump();
+    // Fake a session shape with drivePromise=null.
+    const session = {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      pump: pump as any,
+      drivePromise: null,
+      projectDir: "/tmp/no-drive",
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await manager.waitForDrive(session as any);
+  });
+
   it("dispose() tears down the active session and clears listeners", async () => {
     const { pump } = await launchOne();
     let disposed = false;
