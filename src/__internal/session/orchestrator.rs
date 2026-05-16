@@ -5076,4 +5076,105 @@ Hope that helps."#;
             super::normalize_for_loop_detection(b),
         );
     }
+
+    #[test]
+    fn tool_call_persists_output_only_for_mutating_tools() {
+        for name in ["write_file", "edit_file", "delete_file"] {
+            assert!(super::tool_call_persists_output(name), "{name}");
+        }
+        for name in ["read_file", "list_dir", "search", "run_cargo", "log_bug"] {
+            assert!(!super::tool_call_persists_output(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn can_auto_wind_down_clean_work_session_logic() {
+        // No prior blockers AND no writes -> wind-down OK.
+        assert!(super::can_auto_wind_down_clean_work_session(false, false));
+        // No prior blockers, writes happened -> wind-down OK.
+        assert!(super::can_auto_wind_down_clean_work_session(false, true));
+        // Prior blockers but writes happened -> wind-down OK (the
+        // session at least attempted a fix).
+        assert!(super::can_auto_wind_down_clean_work_session(true, true));
+        // Prior blockers and NO writes -> wind-down NOT OK (agent
+        // bypassed the issues without actually fixing them).
+        assert!(!super::can_auto_wind_down_clean_work_session(true, false));
+    }
+
+    #[test]
+    fn resolve_native_tool_mode_defaults_to_native_when_env_unset() {
+        // SAFETY: tests run with serial env mutation; this matches the
+        // existing test-suite pattern.
+        // Snapshot + restore so we don't bleed state to other tests.
+        let prior = std::env::var("SIM_FLOW_TOOL_MODE").ok();
+        unsafe {
+            std::env::remove_var("SIM_FLOW_TOOL_MODE");
+        }
+        assert!(super::resolve_native_tool_mode());
+        for v in [
+            "native",
+            "native-tool-calls",
+            "NATIVE",
+            " native ",
+            "anything",
+        ] {
+            unsafe {
+                std::env::set_var("SIM_FLOW_TOOL_MODE", v);
+            }
+            assert!(super::resolve_native_tool_mode(), "{v}");
+        }
+        for v in ["fenced", "fenced-blocks", "off", "0", "false", "OFF"] {
+            unsafe {
+                std::env::set_var("SIM_FLOW_TOOL_MODE", v);
+            }
+            assert!(!super::resolve_native_tool_mode(), "{v}");
+        }
+        // Restore.
+        unsafe {
+            match prior {
+                Some(v) => std::env::set_var("SIM_FLOW_TOOL_MODE", v),
+                None => std::env::remove_var("SIM_FLOW_TOOL_MODE"),
+            }
+        }
+    }
+
+    #[test]
+    fn salvage_critique_json_finds_first_well_formed_object_matching_step() {
+        let text = r#"
+            preamble blah blah
+            ```json
+            {"step":"DM0","summary":"good","findings":[]}
+            ```
+            and some other braces { unrelated: true }
+        "#;
+        let got = super::salvage_critique_json(text, "DM0");
+        assert!(got.is_some(), "got {got:?}");
+        let inner = got.unwrap();
+        assert!(inner.contains("\"step\":\"DM0\""));
+    }
+
+    #[test]
+    fn salvage_critique_json_skips_objects_with_wrong_step_id() {
+        let text = r#"{"step":"DM1","summary":"x","findings":[]}"#;
+        assert!(super::salvage_critique_json(text, "DM0").is_none());
+    }
+
+    #[test]
+    fn salvage_critique_json_returns_none_when_no_object_matches() {
+        assert!(super::salvage_critique_json("no json here", "DM0").is_none());
+        assert!(super::salvage_critique_json("{", "DM0").is_none());
+    }
+
+    #[test]
+    fn scan_balanced_json_handles_nested_braces_and_escapes() {
+        let body = br#"{"a": {"b": 1}, "s": "with \"quoted\" and {brace} chars"}"#;
+        let end = super::scan_balanced_json(body, 0);
+        assert_eq!(end, Some(body.len()));
+        // Unbalanced -> None.
+        let body = br#"{"a": 1"#;
+        assert!(super::scan_balanced_json(body, 0).is_none());
+        // String with no closing quote runs to EOF -> None.
+        let body = br#"{"a": "never closed"#;
+        assert!(super::scan_balanced_json(body, 0).is_none());
+    }
 }
