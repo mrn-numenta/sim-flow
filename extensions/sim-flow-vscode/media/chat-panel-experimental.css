@@ -688,6 +688,64 @@ details[open] > .x-transcript-step-summary::before {
   align-items: center;
 }
 
+/* -- Collapsed reasoning block ------------------------------------
+ * Sits above the assistant's visible answer on turns where the
+ * orchestrator captured `assistant-reasoning` deltas (qwen3.6's
+ * thinking output, etc.). Collapsed by default; expands to a
+ * monospace pre block so stream-of-consciousness text reads
+ * comfortably without markdown surprise.
+ */
+.x-bubble-reasoning {
+  margin: 0 0 8px 0;
+  padding: 4px 8px;
+  border-left: 2px solid var(--x-muted);
+  background: var(--vscode-editorWidget-background, transparent);
+  opacity: 0.85;
+}
+
+.x-bubble-reasoning > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--x-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+
+.x-bubble-reasoning > summary::-webkit-details-marker {
+  display: none;
+}
+
+.x-bubble-reasoning > summary::before {
+  content: "▸";
+  font-size: 10px;
+  transition: transform 0.12s ease-out;
+}
+
+.x-bubble-reasoning[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.x-bubble-reasoning-label {
+  font-style: italic;
+}
+
+.x-bubble-reasoning-body {
+  margin: 6px 0 0 0;
+  padding: 6px 8px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--x-muted);
+  background: transparent;
+  border: none;
+}
+
 /* -- Context-eviction indicator ------------------------------------
  * Gated by `body[data-show-context-state="on"]` so the visual only
  * appears when the user has the chat-panel setting on. The

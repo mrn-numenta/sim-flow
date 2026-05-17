@@ -272,6 +272,20 @@ export type ChatTranscriptEntry =
       requestTokensEstimate?: number;
       responseTokensEstimate?: number;
       streaming?: boolean;
+      /** Assistant-only: the model's reasoning (thinking) text for
+       *  this turn, captured from the orchestrator's
+       *  `assistant-reasoning` event stream (which the openai-compat
+       *  agent populates from vLLM's `reasoning_content` channel).
+       *  Rendered as a collapsed-by-default `<details>` block above
+       *  the visible answer. Absent when the turn produced no
+       *  reasoning (e.g. backends without thinking mode, or
+       *  non-reasoning critique turns). */
+      reasoning?: string;
+      /** Assistant-only: true while reasoning is still streaming;
+       *  flips false on the `assistant-reasoning` final-chunk event.
+       *  The collapsed block can show a small "thinking..."
+       *  indicator while this is true. */
+      reasoningStreaming?: boolean;
       /** Step id this entry was generated under. Set by the chat
        *  panel host at append time from the pump's
        *  `subSessionStep` (falling back to the orchestrator's

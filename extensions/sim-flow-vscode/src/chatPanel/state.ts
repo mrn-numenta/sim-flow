@@ -246,6 +246,67 @@ export function appendAssistantChunk(
   };
 }
 
+/**
+ * Append a reasoning-chunk to the assistant turn identified by
+ * `assistantId`. Mirrors `appendAssistantChunk` but writes into the
+ * separate `reasoning` field instead of `body`. Marks the entry as
+ * still streaming reasoning so the panel can show a "thinking..."
+ * indicator until `completeAssistantReasoning` is called.
+ *
+ * Empty `text` short-circuits to support the close-only event
+ * pattern (`{ text: "", final_chunk: true }`).
+ */
+export function appendAssistantReasoningChunk(
+  state: ChatConversationState,
+  assistantId: string,
+  text: string,
+): ChatConversationState {
+  if (text.length === 0) {
+    return state;
+  }
+  return {
+    transcript: state.transcript.map((entry) => {
+      if (entry.kind !== "assistant" || entry.id !== assistantId) {
+        return entry;
+      }
+      const next = (entry.reasoning ?? "") + text;
+      return {
+        ...entry,
+        reasoning: next,
+        reasoningStreaming: true,
+      };
+    }),
+    nextId: state.nextId,
+  };
+}
+
+/**
+ * Mark the reasoning stream for `assistantId` as complete (flips
+ * `reasoningStreaming` to false). Triggered by the orchestrator's
+ * `assistant-reasoning { final_chunk: true }` close event. No-op
+ * when the entry never collected any reasoning.
+ */
+export function completeAssistantReasoning(
+  state: ChatConversationState,
+  assistantId: string,
+): ChatConversationState {
+  return {
+    transcript: state.transcript.map((entry) => {
+      if (entry.kind !== "assistant" || entry.id !== assistantId) {
+        return entry;
+      }
+      if (entry.reasoning === undefined) {
+        return entry;
+      }
+      return {
+        ...entry,
+        reasoningStreaming: false,
+      };
+    }),
+    nextId: state.nextId,
+  };
+}
+
 export function completeAssistantTurn(
   state: ChatConversationState,
   assistantId: string,

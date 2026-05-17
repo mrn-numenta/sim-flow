@@ -358,6 +358,29 @@
             "type": "object"
           },
           {
+            "description": "A chunk of assistant *reasoning* text -- the model's internal thinking captured separately from its visible answer. vLLM with `--reasoning-parser qwen3` (and OpenAI's reasoning-effort API) splits `<think>...</think>` content into a parallel channel that streams as `delta.reasoning_content`; the orchestrator forwards those deltas here so the chat panel can render a collapsed-by-default reasoning block. `final_chunk: true` with `text: \"\"` closes the reasoning bubble at end-of-turn.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "assistant-reasoning"
+                ],
+                "type": "string"
+              },
+              "final_chunk": {
+                "type": "boolean"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "event",
+              "final_chunk",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
             "description": "A non-Assistant message the orchestrator added to the LLM prompt stack just before dispatching turn `turn_index`. Used by experimental hosts to render the running \"prompts sent to the LLM\" alongside the assistant replies, giving the user a full transparent view of the model conversation. The orchestrator skips System role messages (they're constant per session and would be noisy); User and Tool role messages are emitted.",
             "properties": {
               "content": {

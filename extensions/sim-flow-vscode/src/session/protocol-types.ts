@@ -23,6 +23,11 @@ export type Event =
       tool_calls?: LlmToolCall[];
     }
   | {
+      event: "assistant-reasoning";
+      final_chunk: boolean;
+      text: string;
+    }
+  | {
       content: string;
       event: "llm-request";
       /**

@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   appendAssistantChunk,
   appendAssistantPlaceholder,
+  appendAssistantReasoningChunk,
   appendAssistantTurnEntry,
   appendNote,
   appendOrchestratorUserEntry,
   appendUserPrompt,
   clearConversationState,
+  completeAssistantReasoning,
   completeAssistantTurn,
   createConversationState,
   filterPresentationEntries,
@@ -313,6 +315,63 @@ describe("chatPanel/state", () => {
     const after = appendAssistantChunk(placeholder.state, placeholder.assistantId, "");
     // No identity guarantees -- but contents shouldn't change.
     expect(after.transcript).toEqual(placeholder.state.transcript);
+  });
+
+  it("appendAssistantReasoningChunk accumulates into a separate reasoning field", () => {
+    const placeholder = appendAssistantPlaceholder(
+      clearConversationState(),
+      "Assistant",
+      undefined,
+    );
+    let s = appendAssistantReasoningChunk(
+      placeholder.state,
+      placeholder.assistantId,
+      "Let me think... ",
+    );
+    s = appendAssistantReasoningChunk(s, placeholder.assistantId, "6 * 7 = 42.");
+    // Reasoning accumulates; body stays empty.
+    const entry = s.transcript[0];
+    expect(entry).toMatchObject({
+      kind: "assistant",
+      body: "",
+      reasoning: "Let me think... 6 * 7 = 42.",
+      reasoningStreaming: true,
+    });
+  });
+
+  it("completeAssistantReasoning flips reasoningStreaming to false when reasoning exists", () => {
+    const placeholder = appendAssistantPlaceholder(
+      clearConversationState(),
+      "Assistant",
+      undefined,
+    );
+    let s = appendAssistantReasoningChunk(
+      placeholder.state,
+      placeholder.assistantId,
+      "step 1",
+    );
+    s = completeAssistantReasoning(s, placeholder.assistantId);
+    expect(s.transcript[0]).toMatchObject({
+      kind: "assistant",
+      reasoning: "step 1",
+      reasoningStreaming: false,
+    });
+  });
+
+  it("completeAssistantReasoning is a no-op when no reasoning was collected", () => {
+    const placeholder = appendAssistantPlaceholder(
+      clearConversationState(),
+      "Assistant",
+      undefined,
+    );
+    const after = completeAssistantReasoning(
+      placeholder.state,
+      placeholder.assistantId,
+    );
+    // Entry preserved verbatim -- no spurious `reasoningStreaming: false`
+    // on assistant turns that never had thinking.
+    expect(after.transcript[0]).not.toHaveProperty("reasoning");
+    expect(after.transcript[0]).not.toHaveProperty("reasoningStreaming");
   });
 
   it("completeAssistantTurn substitutes the fallback when the body is empty whitespace", () => {

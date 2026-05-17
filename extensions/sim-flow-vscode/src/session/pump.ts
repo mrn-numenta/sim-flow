@@ -149,6 +149,20 @@ export interface PumpRenderer {
     finalChunk: boolean;
     toolCalls: Array<{ id?: string; name: string; argumentsJson: string }>;
   }): void;
+  /**
+   * Optional, experimental: assistant *reasoning* delta -- the
+   * model's internal thinking captured separately from the visible
+   * answer. vLLM with `--reasoning-parser qwen3` (and OpenAI's
+   * reasoning-effort API) splits thinking into a parallel
+   * `reasoning_content` channel; the orchestrator forwards those
+   * deltas here so the chat panel can render a collapsed-by-default
+   * reasoning block alongside the prose answer. Renderers that
+   * don't implement this drop reasoning silently.
+   *
+   * `finalChunk: true` with `text: ""` closes the reasoning bubble
+   * at end-of-turn.
+   */
+  assistantReasoning?(args: { text: string; finalChunk: boolean }): void;
 }
 
 export interface LiveSessionTransport {
@@ -561,6 +575,13 @@ export class SessionPump {
         } else if (event.text.length > 0) {
           this.currentRenderer?.markdown(event.text);
         }
+        break;
+      }
+      case "assistant-reasoning": {
+        this.currentRenderer?.assistantReasoning?.({
+          text: event.text,
+          finalChunk: event.final_chunk,
+        });
         break;
       }
       case "llm-request":

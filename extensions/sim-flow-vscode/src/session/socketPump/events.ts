@@ -148,6 +148,18 @@ export function handleEvent(ctx: EventDispatchContext, event: ProtocolEvent): vo
       }
       break;
     }
+    case "assistant-reasoning": {
+      // Thinking-channel delta from vLLM's `--reasoning-parser qwen3`
+      // (or any other backend that splits `<think>` content into
+      // `reasoning_content`). Renderers that don't implement the
+      // optional hook drop it -- the legacy chat-participant has no
+      // surface for a collapsed reasoning bubble.
+      ctx.currentRenderer?.assistantReasoning?.({
+        text: event.text,
+        finalChunk: event.final_chunk,
+      });
+      break;
+    }
     case "llm-request":
       // Experimental: surface every non-Assistant message the
       // orchestrator added to the prompt stack so hosts can render

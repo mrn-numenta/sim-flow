@@ -59,10 +59,12 @@ import {
 import {
   appendAssistantChunk,
   appendAssistantPlaceholder,
+  appendAssistantReasoningChunk,
   appendNote,
   appendOrchestratorUserEntry,
   appendUserPrompt,
   clearConversationState,
+  completeAssistantReasoning,
   completeAssistantTurn,
   createConversationState,
   filterPresentationEntries,
@@ -2325,10 +2327,72 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         }
         this.appendOrchestratorAssistantTurn(session, args);
       },
+      assistantReasoning: (session, args) => {
+        // Reasoning is an experimental-panel-only render surface --
+        // the standard panel has no collapsed "thinking" block, so
+        // we drop deltas there. Within the experimental panel we
+        // need the same placeholder discipline the prose path uses:
+        // open a placeholder on the first non-empty delta so
+        // subsequent reasoning chunks have an `assistantId` to
+        // attach to (the prose stream may not have started yet --
+        // reasoning often precedes visible text on qwen3.6).
+        if (!isExperimentalChatPanel()) {
+          return;
+        }
+        this.appendOrchestratorAssistantReasoning(session, args);
+      },
       settled: async (session, result) => {
         await this.onManagedSessionSettled(session, result);
       },
     };
+  }
+
+  /**
+   * Experimental: assistant-reasoning renderer. Each delta appends
+   * to the current assistant turn's `reasoning` field; the close
+   * event (`final_chunk: true`, empty text) flips the entry's
+   * `reasoningStreaming` to false so the webview can clear the
+   * "thinking..." indicator on the collapsed `<details>` block.
+   *
+   * If reasoning arrives before any prose has streamed (typical
+   * for qwen3.6 -- the model thinks first, then answers), this
+   * opens the placeholder so the reasoning has a bubble to attach
+   * to. The subsequent prose stream then writes into the same
+   * placeholder's `body`.
+   */
+  private appendOrchestratorAssistantReasoning(
+    session: ManagedAutoSessionState,
+    args: { text: string; finalChunk: boolean },
+  ): void {
+    if (!this.activePump || this.activePump !== session) {
+      return;
+    }
+    let conversation = this.readConversation(session.projectDir);
+    // Open the placeholder if reasoning arrives before prose. The
+    // prose path will reuse the same `session.assistantId`.
+    if (!session.assistantId && args.text.length > 0) {
+      const started = appendAssistantPlaceholder(
+        conversation,
+        "Assistant",
+        "orchestrator",
+        undefined,
+        this.transcriptStepFor(session),
+      );
+      session.assistantId = started.assistantId;
+      conversation = started.state;
+    }
+    if (args.text.length > 0 && session.assistantId) {
+      conversation = appendAssistantReasoningChunk(
+        conversation,
+        session.assistantId,
+        args.text,
+      );
+    }
+    if (args.finalChunk && session.assistantId) {
+      conversation = completeAssistantReasoning(conversation, session.assistantId);
+    }
+    this.rememberConversation(session.projectDir, conversation);
+    void this.postStateForProject(session.projectDir, conversation);
   }
 
   /**

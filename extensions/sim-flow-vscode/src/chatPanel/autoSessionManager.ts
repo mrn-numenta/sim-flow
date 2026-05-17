@@ -125,6 +125,16 @@ export interface AutoSessionDriveDelegate {
       toolCalls: Array<{ id?: string; name: string; argumentsJson: string }>;
     },
   ): void;
+  /**
+   * Experimental: assistant reasoning delta -- the model's internal
+   * thinking captured separately from its visible answer (vLLM's
+   * `reasoning_content` channel). The chat panel collects these into
+   * a collapsed-by-default block alongside the assistant prose.
+   */
+  assistantReasoning?(
+    session: ManagedAutoSessionState,
+    args: { text: string; finalChunk: boolean },
+  ): void;
   settled(
     session: ManagedAutoSessionState,
     result: PumpSettleResult,
@@ -488,6 +498,11 @@ export class AutoSessionManager implements vscode.Disposable {
       assistantTurn: delegate.assistantTurn
         ? (args) => {
             delegate.assistantTurn!(session, args);
+          }
+        : undefined,
+      assistantReasoning: delegate.assistantReasoning
+        ? (args) => {
+            delegate.assistantReasoning!(session, args);
           }
         : undefined,
     };

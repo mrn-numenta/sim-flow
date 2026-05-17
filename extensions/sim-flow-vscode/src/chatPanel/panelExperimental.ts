@@ -1299,6 +1299,21 @@ function messageBubble(
       tool ? " x-bubble-tool" : ""
     }${system ? " x-bubble-system" : ""}${evicted ? " x-bubble-evicted" : ""}`,
   );
+  // Assistant turns with captured reasoning render a small collapsed
+  // <details> above the visible answer so the user can peek at what
+  // the model thought before deciding. The reasoning bubble is
+  // independent of the main body's open/closed state -- this is
+  // exactly what we want: prose stays expanded by default, reasoning
+  // stays hidden until the user clicks.
+  if (
+    entry.kind === "assistant" &&
+    typeof entry.reasoning === "string" &&
+    entry.reasoning.length > 0
+  ) {
+    bubble.appendChild(
+      reasoningDetails(entry.reasoning, entry.reasoningStreaming === true),
+    );
+  }
   if (body.length === 0 && entry.streaming) {
     bubble.appendChild(thinkingDots());
   } else {
@@ -1325,6 +1340,32 @@ function messageBubble(
   }
   row.appendChild(bubble);
   return row;
+}
+
+/**
+ * Collapsed `<details>` block holding the model's thinking output.
+ * Sits above the visible-answer body on assistant turns. Renders as
+ * plain text (not markdown) because reasoning is usually free-form
+ * stream-of-consciousness and code-fence parsing tends to misread
+ * partial fragments. While `streaming` is true, the summary shows a
+ * small "(thinking...)" indicator the user can collapse-toggle to
+ * watch fill in live.
+ */
+function reasoningDetails(text: string, streaming: boolean): HTMLElement {
+  const details = document.createElement("details");
+  details.className = "x-bubble-reasoning";
+  const summary = document.createElement("summary");
+  summary.className = "x-bubble-reasoning-summary";
+  const label = document.createElement("span");
+  label.className = "x-bubble-reasoning-label";
+  label.textContent = streaming ? "Thinking…" : "Reasoning";
+  summary.appendChild(label);
+  details.appendChild(summary);
+  const body = document.createElement("pre");
+  body.className = "x-bubble-reasoning-body";
+  body.textContent = text;
+  details.appendChild(body);
+  return details;
 }
 
 /**
