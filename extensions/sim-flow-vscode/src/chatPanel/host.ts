@@ -500,6 +500,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     this.disposed = true;
     this.refreshQueued = false;
     this.view = undefined;
+    // Flush any scheduled-but-not-yet-fired conversation persist
+    // timers BEFORE we drop disposables -- otherwise an extension-
+    // host shutdown that interrupts the 250ms debounce loses
+    // whatever chat events arrived in that window.
+    this.flushPendingPersistsSync();
     if (this.subSessionListenerDispose) {
       this.subSessionListenerDispose();
       this.subSessionListenerDispose = null;
@@ -2192,7 +2197,62 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     projectDir: string | null,
     conversation: ChatConversationState,
   ): void {
-    this.conversations.set(conversationStorageKey(projectDir), conversation);
+    const key = conversationStorageKey(projectDir);
+    this.conversations.set(key, conversation);
+    // Schedule a debounced persist so streaming chat events survive an
+    // unexpected extension-host death (the typical Developer: Reload
+    // Window case). Without this, mid-session events live only in
+    // memory: `onManagedSessionSettled` does persist at the park /
+    // end boundary, but the user's transcript-up-to-the-park is gone
+    // if they reload before then.
+    //
+    // Debouncing (one persist per ~250ms regardless of event volume)
+    // keeps the workspaceState writes coarse-grained even when the
+    // orchestrator streams hundreds of per-token assistant chunks.
+    // The flush-on-deactivate hook in `dispose` covers the rare case
+    // where the timer hasn't fired yet when the extension is being
+    // torn down.
+    this.schedulePersist(projectDir);
+  }
+
+  private pendingPersistTimers: Map<string, NodeJS.Timeout> = new Map();
+
+  private schedulePersist(projectDir: string | null): void {
+    const key = conversationStorageKey(projectDir);
+    const existing = this.pendingPersistTimers.get(key);
+    if (existing) {
+      clearTimeout(existing);
+    }
+    const timer = setTimeout(() => {
+      this.pendingPersistTimers.delete(key);
+      const cached = this.conversations.get(key);
+      if (cached) {
+        void this.persistConversation(projectDir, cached);
+      }
+    }, 250);
+    this.pendingPersistTimers.set(key, timer);
+  }
+
+  private flushPendingPersistsSync(): void {
+    // Best-effort: drain any scheduled timers immediately. Used by
+    // `dispose` so a reload that hits within the 250ms debounce window
+    // still persists the latest in-memory conversation. The persist
+    // itself is async (queued via `queueConversationWrite`); we can't
+    // synchronously block here, so the dispose path also awaits the
+    // queue separately via `waitForPendingConversationWrites`.
+    for (const [key, timer] of this.pendingPersistTimers) {
+      clearTimeout(timer);
+      const cached = this.conversations.get(key);
+      if (cached) {
+        const projectDir = key.replace(
+          /^sim-flow\.chatPanel\.conversation\./,
+          "",
+        );
+        const resolvedDir = projectDir === "__workspace__" ? null : projectDir;
+        void this.persistConversation(resolvedDir, cached);
+      }
+    }
+    this.pendingPersistTimers.clear();
   }
 
   private async persistConversation(
