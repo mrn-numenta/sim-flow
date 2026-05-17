@@ -110,6 +110,7 @@ pub fn dispatch_chat_with_tools(
                         },
                     })
                     .collect(),
+                reasoning_content: m.reasoning.as_deref(),
             })
             .collect(),
         stream: false,

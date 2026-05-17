@@ -791,6 +791,7 @@ mod tests {
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
+                reasoning: None,
             },
             LlmMessage {
                 role: LlmRole::User,
@@ -798,6 +799,7 @@ mod tests {
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
+                reasoning: None,
             },
         ];
         let rendered = render_messages_for_terminal(&messages);

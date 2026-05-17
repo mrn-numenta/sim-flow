@@ -642,6 +642,7 @@ mod tests {
             attachments: Vec::<LlmAttachment>::new(),
             tool_call_id: None,
             tool_calls: Vec::new(),
+            reasoning: None,
         }];
         let tools = vec![ToolAdvertise {
             name: "list_dir".into(),

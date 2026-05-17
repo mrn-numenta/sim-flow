@@ -393,6 +393,7 @@ mod tests {
                     name: tool.to_string(),
                     arguments_json: arg_json.to_string(),
                 }],
+                reasoning: None,
             },
         )
     }
@@ -406,6 +407,7 @@ mod tests {
                 attachments: vec![],
                 tool_call_id: Some(call_id.to_string()),
                 tool_calls: vec![],
+                reasoning: None,
             },
         )
     }
@@ -419,6 +421,7 @@ mod tests {
                 attachments: vec![],
                 tool_call_id: None,
                 tool_calls: vec![],
+                reasoning: None,
             },
         )
     }

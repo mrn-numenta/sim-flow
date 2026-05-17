@@ -182,6 +182,7 @@ mod tests {
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
+                reasoning: None,
             },
             LlmMessage {
                 role: LlmRole::User,
@@ -189,6 +190,7 @@ mod tests {
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
+                reasoning: None,
             },
         ]);
         assert!(prompt.starts_with("[SYSTEM]\nrules"));

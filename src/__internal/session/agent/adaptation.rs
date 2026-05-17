@@ -295,6 +295,12 @@ pub fn apply_reasoning_history_policy(
             attachments: message.attachments.clone(),
             tool_call_id: message.tool_call_id.clone(),
             tool_calls: message.tool_calls.clone(),
+            // DropPriorReasoning: don't replay this turn's reasoning
+            // back to the model. Families with this policy
+            // (gemma4, claude_messages) prefer a clean visible-answer-
+            // only history; reasoning would either confuse the chat
+            // template or double-render in the next turn's thinking.
+            reasoning: None,
         })
         .collect()
 }
@@ -331,6 +337,7 @@ pub fn merge_leading_system_messages(messages: &[LlmMessage], separator: &str) -
         attachments: merged_attachments,
         tool_call_id: None,
         tool_calls: Vec::new(),
+        reasoning: None,
     });
     out.extend(messages.iter().skip(leading_system_count).cloned());
     out
@@ -426,6 +433,7 @@ mod tests {
             attachments: Vec::new(),
             tool_call_id: None,
             tool_calls: Vec::new(),
+            reasoning: None,
         }
     }
 
@@ -531,6 +539,7 @@ mod tests {
                 attachments: vec![a.clone()],
                 tool_call_id: None,
                 tool_calls: Vec::new(),
+                reasoning: None,
             },
             LlmMessage {
                 role: LlmRole::System,
@@ -538,6 +547,7 @@ mod tests {
                 attachments: vec![b.clone()],
                 tool_call_id: None,
                 tool_calls: Vec::new(),
+                reasoning: None,
             },
             msg(LlmRole::User, "hi"),
         ];

@@ -101,6 +101,15 @@ pub(super) struct RequestMessage<'a> {
     /// tool calls (fence-mode or plain text).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) tool_calls: Vec<RequestToolCall<'a>>,
+    /// On `role = "assistant"` messages: the model's prior reasoning
+    /// (thinking) text, threaded back into the next request so the
+    /// model has continuity of thought across turns. vLLM with
+    /// `--reasoning-parser qwen3` accepts this field on assistant
+    /// messages; other servers either honor it or ignore it as an
+    /// unknown key. Skipped when the prior turn produced no
+    /// reasoning (or for non-assistant roles).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) reasoning_content: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Serialize)]

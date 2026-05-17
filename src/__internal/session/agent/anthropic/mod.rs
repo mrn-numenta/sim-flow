@@ -906,6 +906,7 @@ mod tests {
             attachments: Vec::new(),
             tool_call_id: None,
             tool_calls: Vec::new(),
+            reasoning: None,
         }
     }
 
@@ -1048,6 +1049,7 @@ mod tests {
                 name: "list_dir".into(),
                 arguments_json: r#"{"path":"."}"#.into(),
             }],
+            reasoning: None,
         }];
         let (_system, convo) = split_system_and_messages(&messages);
         assert_eq!(convo.len(), 1);
@@ -1075,6 +1077,7 @@ mod tests {
                 attachments: Vec::new(),
                 tool_call_id: Some("toolu_a".into()),
                 tool_calls: Vec::new(),
+                reasoning: None,
             },
             LlmMessage {
                 role: LlmRole::Tool,
@@ -1082,6 +1085,7 @@ mod tests {
                 attachments: Vec::new(),
                 tool_call_id: Some("toolu_b".into()),
                 tool_calls: Vec::new(),
+                reasoning: None,
             },
             LlmMessage {
                 role: LlmRole::User,
@@ -1089,6 +1093,7 @@ mod tests {
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
+                reasoning: None,
             },
         ];
         let (_system, convo) = split_system_and_messages(&messages);

@@ -1015,6 +1015,7 @@ where
                     attachments: Vec::new(),
                     tool_call_id: None,
                     tool_calls: Vec::new(),
+                    reasoning: None,
                 });
                 empty_response_retries += 1;
                 continue;
@@ -1044,12 +1045,26 @@ where
             // so the next outbound request shows the model its own
             // prior call requests. OpenAI's spec requires this for
             // the next-turn tool-result messages to bind correctly.
+            //
+            // `reasoning` carries the model's thinking text captured
+            // from `delta.reasoning_content` during this turn. Backends
+            // that thread reasoning back on the wire (openai_compat
+            // with `--reasoning-parser qwen3`) replay it as the
+            // assistant message's `reasoning_content` field on the
+            // NEXT request so the model has continuity of thought.
+            // Backends that flatten messages drop it.
+            let assistant_reasoning = if streamed_reasoning.is_empty() {
+                None
+            } else {
+                Some(streamed_reasoning.clone())
+            };
             messages.push(LlmMessage {
                 role: LlmRole::Assistant,
                 content: assistant_text.clone(),
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: native_tool_calls.clone(),
+                reasoning: assistant_reasoning,
             });
 
             // 5d. Extract artifacts and write them.
@@ -1231,6 +1246,7 @@ where
                         attachments: Vec::new(),
                         tool_call_id: None,
                         tool_calls: Vec::new(),
+                        reasoning: None,
                     });
                     continue;
                 }
@@ -1386,6 +1402,7 @@ where
                     attachments: Vec::new(),
                     tool_call_id: None,
                     tool_calls: Vec::new(),
+                    reasoning: None,
                 });
                 continue;
             }
@@ -1545,6 +1562,7 @@ where
                         attachments: Vec::new(),
                         tool_call_id: native.id.clone(),
                         tool_calls: Vec::new(),
+                        reasoning: None,
                     });
                 }
                 // Bundle fenced-mode replies (no id binding) plus any
@@ -1573,6 +1591,7 @@ where
                         attachments: tool_attachments,
                         tool_call_id: None,
                         tool_calls: Vec::new(),
+                        reasoning: None,
                     });
                 } else if !tool_attachments.is_empty() {
                     // Native-only turn that produced attachments
@@ -1586,6 +1605,7 @@ where
                         attachments: tool_attachments,
                         tool_call_id: None,
                         tool_calls: Vec::new(),
+                        reasoning: None,
                     });
                 }
 
@@ -1681,6 +1701,7 @@ where
                                     attachments: Vec::new(),
                                     tool_call_id: None,
                                     tool_calls: Vec::new(),
+                                    reasoning: None,
                                 });
                             }
                             Some(HostEvent::Cancel) | None => {
@@ -1921,6 +1942,7 @@ where
                                     attachments: Vec::new(),
                                     tool_call_id: None,
                                     tool_calls: Vec::new(),
+                                    reasoning: None,
                                 });
                                 continue;
                             }
@@ -2028,6 +2050,7 @@ where
                             attachments: Vec::new(),
                             tool_call_id: None,
                             tool_calls: Vec::new(),
+                            reasoning: None,
                         });
                         continue; // Don't ask the user; agent retries.
                     }
@@ -2239,6 +2262,7 @@ where
                     attachments: Vec::new(),
                     tool_call_id: None,
                     tool_calls: Vec::new(),
+                    reasoning: None,
                 });
                 continue;
             }
@@ -2297,6 +2321,7 @@ where
                     attachments: Vec::new(),
                     tool_call_id: None,
                     tool_calls: Vec::new(),
+                    reasoning: None,
                 });
                 empty_response_retries = 0;
             }
@@ -3087,6 +3112,7 @@ pub fn build_initial_messages(
         attachments: Vec::new(),
         tool_call_id: None,
         tool_calls: Vec::new(),
+        reasoning: None,
     });
     if !llm_tools.is_empty() {
         let write_paths = crate::steps::allowed_write_paths(step, opts.kind);
@@ -3103,6 +3129,7 @@ pub fn build_initial_messages(
             attachments: Vec::new(),
             tool_call_id: None,
             tool_calls: Vec::new(),
+            reasoning: None,
         });
     }
     // Stable-first ordering: project-stable TOCs (spec, framework
@@ -3119,6 +3146,7 @@ pub fn build_initial_messages(
             attachments: Vec::new(),
             tool_call_id: None,
             tool_calls: Vec::new(),
+            reasoning: None,
         });
     }
     if let Some(root) = framework_docs_root.as_deref()
@@ -3130,6 +3158,7 @@ pub fn build_initial_messages(
             attachments: Vec::new(),
             tool_call_id: None,
             tool_calls: Vec::new(),
+            reasoning: None,
         });
     }
     if let Some(inputs) = build_session_inputs(
@@ -3144,6 +3173,7 @@ pub fn build_initial_messages(
             attachments: Vec::new(),
             tool_call_id: None,
             tool_calls: Vec::new(),
+            reasoning: None,
         });
         if let Some(volatile) = inputs.volatile {
             messages.push(LlmMessage {
@@ -3152,6 +3182,7 @@ pub fn build_initial_messages(
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
+                reasoning: None,
             });
         }
     }
@@ -3167,6 +3198,7 @@ pub fn build_initial_messages(
         attachments: Vec::new(),
         tool_call_id: None,
         tool_calls: Vec::new(),
+        reasoning: None,
     });
 
     Ok(MessageBundle {

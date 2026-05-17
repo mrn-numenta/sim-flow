@@ -414,6 +414,18 @@ pub struct LlmMessage {
     /// support them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<LlmToolCall>,
+    /// On `role = Assistant` messages: the model's reasoning
+    /// (thinking) text for this turn, captured from
+    /// `delta.reasoning_content` and threaded back into subsequent
+    /// requests so the model retains continuity of thought across
+    /// turns. Backends that support thinking pass this through on
+    /// the wire (vLLM with `--reasoning-parser qwen3` accepts it on
+    /// assistant messages; Anthropic threads it as a thinking
+    /// content block); subprocess CLIs that flatten messages to
+    /// plain text drop it. `None` on any non-assistant role or when
+    /// the turn produced no reasoning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
 }
 
 impl Default for LlmMessage {
@@ -424,6 +436,7 @@ impl Default for LlmMessage {
             attachments: Vec::new(),
             tool_call_id: None,
             tool_calls: Vec::new(),
+            reasoning: None,
         }
     }
 }

@@ -239,6 +239,7 @@ fn msg(role: LlmRole, content: &str) -> LlmMessage {
         attachments: Vec::new(),
         tool_call_id: None,
         tool_calls: Vec::new(),
+        reasoning: None,
     }
 }
 
@@ -334,6 +335,61 @@ fn decode_choice_falls_back_to_reasoning_when_content_empty() {
     assert_eq!(
         decode_choice(Some(c), &GEMMA4_MODEL_FAMILY).unwrap(),
         "thinking text"
+    );
+}
+
+#[test]
+fn request_body_threads_reasoning_content_on_assistant_messages() {
+    // The wire shape pins where reasoning re-enters the model's
+    // context. When the orchestrator pushes a prior assistant turn
+    // back into messages, vLLM with `--reasoning-parser qwen3` reads
+    // `reasoning_content` on the assistant message to restore the
+    // model's thinking continuity. Skipped when None so non-thinking
+    // history stays byte-identical to the pre-Phase wire body.
+    let messages = vec![LlmMessage {
+        role: LlmRole::Assistant,
+        content: "The answer is 42.".into(),
+        attachments: Vec::new(),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+        reasoning: Some("Let me think... 6 * 7 = 42.".into()),
+    }];
+    let prepared = prepare_messages_for_openai_compat(&messages, &QWEN3_6_MODEL_FAMILY);
+    let request_messages: Vec<super::wire::RequestMessage<'_>> = prepared
+        .iter()
+        .map(|m| super::wire::RequestMessage {
+            role: role_str(m.role),
+            content: m.content.as_ref(),
+            tool_call_id: m.tool_call_id.as_deref(),
+            tool_calls: Vec::new(),
+            reasoning_content: m.reasoning.as_deref(),
+        })
+        .collect();
+    let json = serde_json::to_string(&request_messages).unwrap();
+    assert!(
+        json.contains("\"reasoning_content\":\"Let me think... 6 * 7 = 42.\""),
+        "json: {json}",
+    );
+    // User-role messages don't carry reasoning -- field stays absent.
+    let user_msg = LlmMessage {
+        role: LlmRole::User,
+        content: "hi".into(),
+        attachments: Vec::new(),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+        reasoning: None,
+    };
+    let user_wire = super::wire::RequestMessage {
+        role: role_str(user_msg.role),
+        content: user_msg.content.as_ref(),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+        reasoning_content: None,
+    };
+    let user_json = serde_json::to_string(&user_wire).unwrap();
+    assert!(
+        !user_json.contains("reasoning_content"),
+        "user json should omit reasoning_content: {user_json}",
     );
 }
 

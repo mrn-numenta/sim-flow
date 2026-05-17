@@ -97,6 +97,7 @@ pub fn dispatch_chat_with_tools_streaming(
                         },
                     })
                     .collect(),
+                reasoning_content: m.reasoning.as_deref(),
             })
             .collect(),
         stream: true,

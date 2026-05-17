@@ -328,6 +328,7 @@ mod tests {
             attachments: Vec::new(),
             tool_call_id: None,
             tool_calls: Vec::new(),
+            reasoning: None,
         }
     }
     fn system(text: &str) -> LlmMessage {
@@ -337,6 +338,7 @@ mod tests {
             attachments: Vec::new(),
             tool_call_id: None,
             tool_calls: Vec::new(),
+            reasoning: None,
         }
     }
     fn assistant(text: &str) -> LlmMessage {
@@ -346,6 +348,7 @@ mod tests {
             attachments: Vec::new(),
             tool_call_id: None,
             tool_calls: Vec::new(),
+            reasoning: None,
         }
     }
 

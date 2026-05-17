@@ -121,6 +121,7 @@ fn ollama_agent_round_trips_against_mock_chat_completions_server() {
             attachments: Vec::new(),
             tool_call_id: None,
             tool_calls: Vec::new(),
+            reasoning: None,
         }],
     )
     .expect("agent dispatch should succeed against mock server");
