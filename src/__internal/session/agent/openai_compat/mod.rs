@@ -45,6 +45,7 @@ pub struct OpenAiCompatAgent {
     model: String,
     model_family_id: Option<String>,
     runtime_profile: RuntimeCapabilityProfile,
+    cancel_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl OpenAiCompatAgent {
@@ -53,6 +54,16 @@ impl OpenAiCompatAgent {
         model: Option<String>,
         model_family_id: Option<String>,
         runtime_profile_id: Option<String>,
+    ) -> Self {
+        Self::new_with_cancel(base_url, model, model_family_id, runtime_profile_id, None)
+    }
+
+    pub fn new_with_cancel(
+        base_url: Option<String>,
+        model: Option<String>,
+        model_family_id: Option<String>,
+        runtime_profile_id: Option<String>,
+        cancel_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> Self {
         let runtime_profile = resolve_runtime_profile(
             runtime_profile_id.as_deref(),
@@ -65,6 +76,7 @@ impl OpenAiCompatAgent {
             model: model.unwrap_or_else(|| DEFAULT_MODEL.into()),
             model_family_id,
             runtime_profile,
+            cancel_flag,
         }
     }
 
@@ -102,6 +114,7 @@ impl CliAgent for OpenAiCompatAgent {
         dispatch_chat(
             OpenAiCompatibleRequest::new(&self.base_url, &self.model, messages)
                 .with_model_family_id(self.model_family_id.as_deref()),
+            self.cancel_flag.clone(),
         )
     }
 
@@ -127,7 +140,7 @@ impl CliAgent for OpenAiCompatAgent {
         let req = OpenAiCompatibleRequest::new(&self.base_url, &self.model, messages)
             .with_model_family_id(self.model_family_id.as_deref())
             .with_tools(wire_tools, Some("auto"));
-        let resp = dispatch_chat_with_tools(req)?;
+        let resp = dispatch_chat_with_tools(req, self.cancel_flag.clone())?;
         let calls = resp
             .tool_calls
             .into_iter()

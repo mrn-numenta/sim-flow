@@ -23,6 +23,7 @@
 
 mod adaptation;
 mod anthropic;
+mod cancel;
 mod claude;
 mod codex;
 mod gh_copilot;
@@ -179,6 +180,24 @@ pub struct AgentConfig {
     pub base_url: Option<String>,
     pub ollama_base_url: Option<String>,
     pub openai_base_url: Option<String>,
+    /// Shared cancellation flag. Set by the control-socket listener
+    /// (see `SocketPresenter`) when the dashboard pushes a cancel
+    /// while an LLM dispatch is mid-call. Backends that support
+    /// mid-dispatch cancellation (subprocess: kill the child; HTTP:
+    /// abandon the ureq call) check this on a short polling cadence
+    /// and return `Error::Cancelled` when it flips. Backends that
+    /// don't implement mid-call cancellation simply ignore the
+    /// flag; their cancel still arrives via the main protocol
+    /// socket's `HostEvent::Cancel` at the next `host.recv()`
+    /// boundary. The orchestrator routes `Error::Cancelled` from
+    /// dispatch through the same SessionEnd::Cancelled path it
+    /// uses for that wire event, so both routes converge.
+    ///
+    /// Optional so existing callers (tests, in-process unit tests,
+    /// any code path that doesn't construct a control socket) keep
+    /// working without changes -- `None` is "no cancellation
+    /// channel", equivalent to a permanently-false flag.
+    pub cancel_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// Default OpenAI-compatible base URL for a vLLM server. vLLM
@@ -227,26 +246,34 @@ pub(crate) fn resolved_base_url(name: &str, config: &AgentConfig) -> Option<Stri
 pub fn build_cli_agent(name: &str, config: AgentConfig) -> Option<Box<dyn CliAgent>> {
     let resolved = resolved_base_url(name, &config);
     match name {
-        "anthropic" | "anthropic-api" => Some(Box::new(AnthropicAgent::new(
+        "anthropic" | "anthropic-api" => Some(Box::new(AnthropicAgent::new_with_cancel(
             // `anthropic` always talks to api.anthropic.com unless
             // the caller supplied an explicit `--llm-base-url`
             // (rare; useful only for proxies / mock servers).
             resolved,
             config.model,
             config.model_family_id,
+            config.cancel_flag.clone(),
         ))),
-        "claude" | "claude-cli" => Some(Box::new(ClaudeAgent::new(
+        "claude" | "claude-cli" => Some(Box::new(ClaudeAgent::new_with_cancel(
             config.model,
             config.model_family_id,
             config.runtime_profile_id,
+            config.cancel_flag.clone(),
         ))),
-        "codex" | "codex-cli" => Some(Box::new(CodexAgent::new(config.model))),
-        "gh-copilot" | "gh_copilot" => Some(Box::new(GhCopilotAgent::new())),
-        "ollama" => Some(Box::new(OllamaAgent::new(
+        "codex" | "codex-cli" => Some(Box::new(CodexAgent::new_with_cancel(
+            config.model,
+            config.cancel_flag.clone(),
+        ))),
+        "gh-copilot" | "gh_copilot" => Some(Box::new(GhCopilotAgent::new_with_cancel(
+            config.cancel_flag.clone(),
+        ))),
+        "ollama" => Some(Box::new(OllamaAgent::new_with_cancel(
             resolved,
             config.model,
             config.model_family_id,
             config.runtime_profile_id,
+            config.cancel_flag.clone(),
         ))),
         // LM Studio uses the OpenAI-compat agent with its
         // conventional `:1234/v1` default. Aliasing it explicitly
@@ -255,11 +282,12 @@ pub fn build_cli_agent(name: &str, config: AgentConfig) -> Option<Box<dyn CliAge
         // vLLM uses the same OpenAI-compat path with a `:8000/v1`
         // default that `resolved_base_url` substitutes.
         "lmstudio" | "lm-studio" | "vllm" | "openai-compat" | "openai_compat" | "openai" => {
-            Some(Box::new(OpenAiCompatAgent::new(
+            Some(Box::new(OpenAiCompatAgent::new_with_cancel(
                 resolved,
                 config.model,
                 config.model_family_id,
                 config.runtime_profile_id,
+                config.cancel_flag.clone(),
             )))
         }
         _ => None,
@@ -297,6 +325,7 @@ mod tests {
             base_url: base.map(String::from),
             ollama_base_url: ollama.map(String::from),
             openai_base_url: openai.map(String::from),
+            cancel_flag: None,
         }
     }
 
@@ -618,6 +647,7 @@ mod tests {
             base_url: None,
             ollama_base_url: None,
             openai_base_url: None,
+            cancel_flag: None,
         };
         assert!(build_cli_agent("not-a-real-backend", cfg).is_none());
     }

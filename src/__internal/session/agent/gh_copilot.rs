@@ -14,16 +14,25 @@
 
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
+use super::cancel::wait_with_cancel;
 use super::{CliAgent, LlmCallMetrics};
 use crate::session::protocol::{LlmMessage, LlmRole};
 use crate::{Error, Result};
 
-pub struct GhCopilotAgent;
+pub struct GhCopilotAgent {
+    cancel_flag: Option<Arc<AtomicBool>>,
+}
 
 impl GhCopilotAgent {
     pub fn new() -> Self {
-        Self
+        Self::new_with_cancel(None)
+    }
+
+    pub fn new_with_cancel(cancel_flag: Option<Arc<AtomicBool>>) -> Self {
+        Self { cancel_flag }
     }
 
     fn render_prompt(messages: &[LlmMessage]) -> String {
@@ -80,9 +89,9 @@ impl CliAgent for GhCopilotAgent {
         }
         drop(child.stdin.take());
 
-        let output = child
-            .wait_with_output()
-            .map_err(|err| Error::Client(format!("gh-copilot: wait failed: {err}")))?;
+        // Cancel-aware wait; polls the shared cancel flag and
+        // SIGTERMs the `gh` subprocess on Stop click.
+        let output = wait_with_cancel(child, self.cancel_flag.clone())?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(Error::Client(format!(

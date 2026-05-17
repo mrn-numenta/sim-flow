@@ -38,6 +38,8 @@
 
 pub mod tool_use;
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -45,6 +47,7 @@ use serde::{Deserialize, Serialize};
 use self::tool_use::{
     AnthropicToolDescriptor, AssistantContentBlock, ResponseContentBlock, UserContentBlock,
 };
+use super::cancel::run_cancellable;
 use super::{
     AdvertisedToolCall, AgentAdaptationSummary, CliAgent, LlmCallMetrics, ToolAdvertise,
     apply_reasoning_history_policy, resolve_model_family,
@@ -72,6 +75,12 @@ pub struct AnthropicAgent {
     model: String,
     model_family_id: Option<String>,
     api_key: Option<String>,
+    /// Shared mid-dispatch cancel flag. Polled by `run_cancellable`
+    /// while the `ureq::post(...).send_json(...)` worker thread is
+    /// outstanding. On flip the worker is abandoned (the response
+    /// body eventually arrives at the orphaned thread and is
+    /// dropped) and the dispatcher returns `Error::Cancelled`.
+    cancel_flag: Option<Arc<AtomicBool>>,
 }
 
 impl AnthropicAgent {
@@ -89,6 +98,15 @@ impl AnthropicAgent {
         model: Option<String>,
         model_family_id: Option<String>,
     ) -> Self {
+        Self::new_with_cancel(api_url, model, model_family_id, None)
+    }
+
+    pub fn new_with_cancel(
+        api_url: Option<String>,
+        model: Option<String>,
+        model_family_id: Option<String>,
+        cancel_flag: Option<Arc<AtomicBool>>,
+    ) -> Self {
         let api_key = resolve_api_key(Provider::Anthropic)
             .ok()
             .flatten()
@@ -98,6 +116,7 @@ impl AnthropicAgent {
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             model_family_id,
             api_key,
+            cancel_flag,
         }
     }
 
@@ -148,24 +167,38 @@ impl AnthropicAgent {
             tools,
         };
 
-        let response_text = ureq::post(&self.api_url)
-            .set("content-type", "application/json")
-            .set("x-api-key", api_key)
-            .set("anthropic-version", DEFAULT_API_VERSION)
-            .send_json(&body);
-
-        let resp = match response_text {
-            Ok(r) => r,
-            Err(ureq::Error::Status(code, resp)) => {
-                let body = resp.into_string().unwrap_or_default();
-                return Err(Error::Client(format!(
-                    "anthropic api returned HTTP {code}: {body}"
-                )));
-            }
-            Err(err) => {
-                return Err(Error::Client(format!("anthropic api transport: {err}")));
-            }
-        };
+        // Serialize the request body once in the main thread so the
+        // worker closure below doesn't need to borrow `body` (whose
+        // 'a lifetime would tie the worker to this stack frame). Send
+        // the resulting bytes via `send_bytes` instead of `send_json`.
+        let body_bytes = serde_json::to_vec(&body)
+            .map_err(|err| Error::Client(format!("anthropic api: serialize body: {err}")))?;
+        let url = self.api_url.clone();
+        let api_key_owned = api_key.to_string();
+        // Wrap the blocking ureq call in `run_cancellable` so the
+        // shared cancel flag can abort the dispatch from the
+        // control-socket thread mid-call. The worker thread is
+        // abandoned on cancel; its eventual response is dropped.
+        let resp = run_cancellable(
+            self.cancel_flag.clone(),
+            move || -> Result<ureq::Response> {
+                match ureq::post(&url)
+                    .set("content-type", "application/json")
+                    .set("x-api-key", &api_key_owned)
+                    .set("anthropic-version", DEFAULT_API_VERSION)
+                    .send_bytes(&body_bytes)
+                {
+                    Ok(r) => Ok(r),
+                    Err(ureq::Error::Status(code, resp)) => {
+                        let body = resp.into_string().unwrap_or_default();
+                        Err(Error::Client(format!(
+                            "anthropic api returned HTTP {code}: {body}"
+                        )))
+                    }
+                    Err(err) => Err(Error::Client(format!("anthropic api transport: {err}"))),
+                }
+            },
+        )?;
         let body: MessagesResponseBody = resp
             .into_json()
             .map_err(|err| Error::Client(format!("anthropic api: decode response: {err}")))?;

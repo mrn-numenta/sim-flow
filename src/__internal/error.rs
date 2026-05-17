@@ -66,6 +66,17 @@ pub enum Error {
     #[error("instruction file not found: {0}")]
     InstructionMissing(PathBuf),
 
+    /// LLM dispatch aborted mid-call because the shared cancel flag
+    /// flipped (the dashboard pushed a cancel through the control
+    /// socket while a dispatch was in flight). Distinct from `Llm`
+    /// so the orchestrator's turn loop can route this back through
+    /// its SessionEnd::Cancelled path -- semantically identical to
+    /// the user-typed `/end-session` or the wire-level
+    /// `HostEvent::Cancel`, just observed by the agent itself
+    /// instead of by `host.recv()`.
+    #[error("llm dispatch cancelled mid-call")]
+    Cancelled,
+
     #[error("foundation root could not be resolved: {0}")]
     FoundationRoot(String),
 

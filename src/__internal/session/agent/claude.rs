@@ -11,7 +11,10 @@
 
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
+use super::cancel::wait_with_cancel;
 use super::{
     AgentAdaptationSummary, CLAUDE_CLI_RUNTIME, CliAgent, LlmCallMetrics, RuntimeCapabilityProfile,
     apply_reasoning_history_policy, resolve_model_family, resolve_runtime_profile,
@@ -23,6 +26,12 @@ pub struct ClaudeAgent {
     model: Option<String>,
     model_family_id: Option<String>,
     runtime_profile: RuntimeCapabilityProfile,
+    /// Shared mid-dispatch cancel flag. Set by the control-socket
+    /// listener (see `SocketPresenter`) when the dashboard pushes
+    /// a Stop click while a dispatch is in flight; `wait_with_cancel`
+    /// polls it and `SIGTERM`s the child to return `Error::Cancelled`
+    /// promptly instead of waiting for `claude -p` to finish.
+    cancel_flag: Option<Arc<AtomicBool>>,
 }
 
 impl ClaudeAgent {
@@ -30,6 +39,15 @@ impl ClaudeAgent {
         model: Option<String>,
         model_family_id: Option<String>,
         runtime_profile_id: Option<String>,
+    ) -> Self {
+        Self::new_with_cancel(model, model_family_id, runtime_profile_id, None)
+    }
+
+    pub fn new_with_cancel(
+        model: Option<String>,
+        model_family_id: Option<String>,
+        runtime_profile_id: Option<String>,
+        cancel_flag: Option<Arc<AtomicBool>>,
     ) -> Self {
         let runtime_profile = resolve_runtime_profile(
             runtime_profile_id.as_deref(),
@@ -41,6 +59,7 @@ impl ClaudeAgent {
             model,
             model_family_id,
             runtime_profile,
+            cancel_flag,
         }
     }
 
@@ -136,9 +155,12 @@ impl CliAgent for ClaudeAgent {
         // Drop the stdin handle so claude's read_to_end completes.
         drop(child.stdin.take());
 
-        let output = child
-            .wait_with_output()
-            .map_err(|err| Error::Client(format!("claude CLI: wait failed: {err}")))?;
+        // wait_with_cancel mirrors wait_with_output but polls the
+        // shared cancel flag on a 50ms cadence; on flip it SIGTERMs
+        // the child and returns Error::Cancelled. With cancel_flag =
+        // None (no control socket wired), it's equivalent to
+        // wait_with_output.
+        let output = wait_with_cancel(child, self.cancel_flag.clone())?;
         if !output.status.success() {
             // Include BOTH stdout and stderr because `claude` writes
             // some failures (e.g. "unknown model") to stdout and the

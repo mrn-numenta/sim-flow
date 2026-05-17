@@ -3,10 +3,14 @@
 //! decode the first choice, and surface a clear error for the
 //! `finish_reason == "length"` truncation case.
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+
 use super::super::super::super::agent::LlmCallMetrics;
 use super::super::super::super::agent::{
     normalize_response_text, prepare_messages_for_openai_compat, resolve_model_family,
 };
+use super::super::super::cancel::run_cancellable;
 use super::super::tool_calls::NativeToolCall;
 use crate::session::protocol::LlmRole;
 use crate::{Error, Result};
@@ -31,7 +35,10 @@ pub struct ChatResponse {
 /// the model emitted. The transport stays decoupled from the tool
 /// registry: it just hands the raw OpenAI tool-call records back so
 /// the orchestrator can map them through the `Tool` dispatcher.
-pub fn dispatch_chat_with_tools(req: OpenAiCompatibleRequest<'_>) -> Result<ChatResponse> {
+pub fn dispatch_chat_with_tools(
+    req: OpenAiCompatibleRequest<'_>,
+    cancel_flag: Option<Arc<AtomicBool>>,
+) -> Result<ChatResponse> {
     let started = std::time::Instant::now();
     let model_family = resolve_model_family(req.model_family_id, Some(req.model));
     let prepared_messages = prepare_messages_for_openai_compat(req.messages, model_family);
@@ -131,50 +138,64 @@ pub fn dispatch_chat_with_tools(req: OpenAiCompatibleRequest<'_>) -> Result<Chat
             body.tool_choice,
         );
     }
+    // Serialize the body in the main thread (no lifetimes leak into
+    // the worker closure) and move the resulting bytes plus the
+    // (cloned) URL / api-key into the cancellable worker.
+    let body_value = serde_json::to_value(&body)
+        .map_err(|e| Error::Client(format!("openai-compat: serialize request: {e}")))?;
+    let body_bytes = serde_json::to_vec(&body_value)
+        .map_err(|e| Error::Client(format!("openai-compat: serialize request: {e}")))?;
     let url = format!("{}/chat/completions", trim_trailing_slash(req.base_url));
-    let mut request = ureq::post(&url)
-        .set("content-type", "application/json")
-        .set("accept", "application/json");
-    if let Some(key) = req.api_key {
-        request = request.set("authorization", &format!("Bearer {key}"));
-    }
-    // ureq returns 4xx/5xx as `Error::Status(code, Response)`. The
-    // status arm of `send_json`'s Result therefore doesn't reach the
-    // success path's status check below; pull the body out of the
-    // status error explicitly so vLLM / LM Studio's actual complaint
-    // (e.g. "max_tokens exceeds max_model_len", "model not found")
-    // surfaces in the LlmError diagnostic instead of a bare "status
-    // code 400".
-    let response = match request.send_json(
-        serde_json::to_value(&body)
-            .map_err(|e| Error::Client(format!("openai-compat: serialize request: {e}")))?,
-    ) {
-        Ok(resp) => resp,
-        Err(ureq::Error::Status(code, resp)) => {
-            let body = resp.into_string().unwrap_or_default();
+    let api_key_owned: Option<String> = req.api_key.map(|k| k.to_string());
+    let max_response_bytes = req.max_response_bytes;
+    // Wrap the blocking ureq round-trip in `run_cancellable` so the
+    // shared cancel flag can abort the dispatch via the control
+    // socket while we're mid-call. The worker thread is abandoned on
+    // cancel; its eventual response is dropped. The whole
+    // request -> response-body-read happens inside the closure so a
+    // cancel can interrupt either the network round-trip or the body
+    // streaming read.
+    let buf = run_cancellable(cancel_flag, move || -> Result<String> {
+        let mut request = ureq::post(&url)
+            .set("content-type", "application/json")
+            .set("accept", "application/json");
+        if let Some(ref key) = api_key_owned {
+            request = request.set("authorization", &format!("Bearer {key}"));
+        }
+        // ureq returns 4xx/5xx as `Error::Status(code, Response)`.
+        // Pull the body out of the status error explicitly so vLLM
+        // / LM Studio's actual complaint (e.g. "max_tokens exceeds
+        // max_model_len", "model not found") surfaces in the
+        // LlmError diagnostic instead of a bare "status code 400".
+        let response = match request.send_bytes(&body_bytes) {
+            Ok(resp) => resp,
+            Err(ureq::Error::Status(code, resp)) => {
+                let body = resp.into_string().unwrap_or_default();
+                return Err(Error::Client(format!(
+                    "openai-compat: server returned {code}: {}",
+                    tail(&body, 2048),
+                )));
+            }
+            Err(e) => {
+                return Err(Error::Client(format!("openai-compat: HTTP error: {e}")));
+            }
+        };
+        if !(200..300).contains(&response.status()) {
+            let status = response.status();
+            let body = response.into_string().unwrap_or_default();
             return Err(Error::Client(format!(
-                "openai-compat: server returned {code}: {}",
-                tail(&body, 2048),
+                "openai-compat: server returned {status}: {body}"
             )));
         }
-        Err(e) => {
-            return Err(Error::Client(format!("openai-compat: HTTP error: {e}")));
-        }
-    };
-    if !(200..300).contains(&response.status()) {
-        let status = response.status();
-        let body = response.into_string().unwrap_or_default();
-        return Err(Error::Client(format!(
-            "openai-compat: server returned {status}: {body}"
-        )));
-    }
-    // Limit response body size so a misbehaving server can't OOM us.
-    let mut reader = response.into_reader().take(req.max_response_bytes as u64);
-    let mut buf = String::new();
-    use std::io::Read;
-    reader
-        .read_to_string(&mut buf)
-        .map_err(|e| Error::Client(format!("openai-compat: read body: {e}")))?;
+        // Limit response body size so a misbehaving server can't OOM us.
+        let mut reader = response.into_reader().take(max_response_bytes as u64);
+        let mut buf = String::new();
+        use std::io::Read;
+        reader
+            .read_to_string(&mut buf)
+            .map_err(|e| Error::Client(format!("openai-compat: read body: {e}")))?;
+        Ok(buf)
+    })?;
     let parsed: ChatResponseBody = serde_json::from_str(&buf).map_err(|e| {
         Error::Client(format!(
             "openai-compat: failed to parse response: {e}\nbody tail: {}",

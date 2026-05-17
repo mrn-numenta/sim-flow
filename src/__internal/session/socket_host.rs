@@ -14,11 +14,12 @@
 
 use std::io::{BufReader, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::session::presenter::Presenter;
 use crate::session::protocol::{Event, HostEvent};
@@ -26,6 +27,10 @@ use crate::{Error, Result};
 
 pub struct SocketPresenter {
     socket_path: PathBuf,
+    /// `<socket_path>.control`. Listener for the side-channel cancel
+    /// socket; populated only when `bind_with_cancel` was used. Drop
+    /// removes this file too.
+    control_socket_path: Option<PathBuf>,
     accept_rx: Receiver<std::os::unix::net::UnixStream>,
     history: Vec<Event>,
     active_reader: Option<BufReader<std::os::unix::net::UnixStream>>,
@@ -33,10 +38,34 @@ pub struct SocketPresenter {
     pending_hello: Option<HostEvent>,
     shutdown_flag: Arc<Mutex<bool>>,
     _accept_thread: JoinHandle<()>,
+    /// Accept thread for the control socket. Kept alive for the
+    /// pump's lifetime; exits when `shutdown_flag` flips during
+    /// Drop. `None` when no cancel channel was wired (legacy
+    /// `bind` callers, tests).
+    _control_accept_thread: Option<JoinHandle<()>>,
 }
 
 impl SocketPresenter {
     pub fn bind(path: PathBuf) -> Result<Self> {
+        Self::bind_inner(path, None)
+    }
+
+    /// Bind the main protocol socket AND a side-channel control
+    /// socket at `<path>.control`. The control socket reads
+    /// newline-delimited commands from the dashboard while a
+    /// dispatch is in flight; the only command today is `cancel`,
+    /// which flips the shared `cancel_flag` so LLM backends can
+    /// abort their blocking call (subprocess: SIGTERM the child;
+    /// HTTP: abandon the ureq worker thread).
+    ///
+    /// The legacy `bind()` constructor calls this with `None` so
+    /// existing tests / non-cancellable paths keep working without
+    /// changes; the flag is permanently false in that case.
+    pub fn bind_with_cancel(path: PathBuf, cancel_flag: Arc<AtomicBool>) -> Result<Self> {
+        Self::bind_inner(path, Some(cancel_flag))
+    }
+
+    fn bind_inner(path: PathBuf, cancel_flag: Option<Arc<AtomicBool>>) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|err| {
                 Error::State(format!(
@@ -65,8 +94,45 @@ impl SocketPresenter {
             .map_err(|err| Error::State(format!("socket-host: accept thread: {err}")))?;
 
         info!(socket = %path.display(), "socket-host bound");
+
+        // Bring up the control socket only when a cancel_flag was
+        // supplied. Path is `<main>.control` so callers that need
+        // to find it can compute it from the main path. Listener
+        // is a long-lived thread that accepts connections and
+        // drains a tiny line-based protocol on each one; the only
+        // command today is `cancel\n` (case-insensitive), which
+        // sets the shared flag. Multiple connections over the
+        // session's lifetime are fine -- the dashboard reconnects
+        // on every Stop click.
+        let (control_socket_path, control_accept_thread) = if let Some(flag) = cancel_flag {
+            let control_path = control_socket_path_for(&path);
+            let _ = std::fs::remove_file(&control_path);
+            let control_listener =
+                std::os::unix::net::UnixListener::bind(&control_path).map_err(|err| {
+                    Error::State(format!(
+                        "socket-host: bind control socket `{}` failed: {err}",
+                        control_path.display()
+                    ))
+                })?;
+            control_listener.set_nonblocking(true).map_err(|err| {
+                Error::State(format!("socket-host: control set_nonblocking: {err}"))
+            })?;
+            let shutdown_for_control = shutdown_flag.clone();
+            let handle = thread::Builder::new()
+                .name("sim-flow-session-control-accept".into())
+                .spawn(move || control_accept_loop(control_listener, flag, shutdown_for_control))
+                .map_err(|err| {
+                    Error::State(format!("socket-host: control accept thread: {err}"))
+                })?;
+            info!(socket = %control_path.display(), "socket-host control socket bound");
+            (Some(control_path), Some(handle))
+        } else {
+            (None, None)
+        };
+
         Ok(Self {
             socket_path: path,
+            control_socket_path,
             accept_rx,
             history: Vec::new(),
             active_reader: None,
@@ -74,6 +140,7 @@ impl SocketPresenter {
             pending_hello: None,
             shutdown_flag,
             _accept_thread: accept_thread,
+            _control_accept_thread: control_accept_thread,
         })
     }
 
@@ -189,7 +256,21 @@ impl Drop for SocketPresenter {
             *g = true;
         }
         let _ = std::fs::remove_file(&self.socket_path);
+        if let Some(p) = self.control_socket_path.as_ref() {
+            let _ = std::fs::remove_file(p);
+        }
     }
+}
+
+/// Compute the control socket path from the main protocol socket
+/// path. We append `.control` to the file name so a single directory
+/// can hold both endpoints side-by-side -- no need to coordinate a
+/// separate runtime dir. The dashboard derives the same path on its
+/// end (see `socketPump.ts`'s control-socket helper).
+pub fn control_socket_path_for(main: &std::path::Path) -> PathBuf {
+    let mut s: std::ffi::OsString = main.as_os_str().to_owned();
+    s.push(".control");
+    PathBuf::from(s)
 }
 
 fn accept_loop(
@@ -217,6 +298,78 @@ fn accept_loop(
             }
             Err(_) => {
                 thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+}
+
+/// Control socket accept loop. Listens for short-lived dashboard
+/// connections, reads newline-delimited commands (only `cancel`
+/// is recognized today), and flips the shared `cancel_flag` on
+/// match. Threaded so the main protocol socket's `accept_loop` and
+/// the orchestrator's `host.recv()` keep their existing semantics
+/// untouched while a side-channel cancel can land mid-LLM-dispatch.
+///
+/// Connections close after one command; the dashboard reconnects
+/// for each Stop click, which keeps the handshake stateless. A
+/// caller that sends multiple commands per connection still works
+/// (the loop reads until the peer closes), but the dashboard side
+/// only sends `cancel\n` then disconnects.
+fn control_accept_loop(
+    listener: std::os::unix::net::UnixListener,
+    cancel_flag: Arc<AtomicBool>,
+    shutdown_flag: Arc<Mutex<bool>>,
+) {
+    use std::io::{BufRead, BufReader};
+    use std::time::Duration;
+
+    loop {
+        if let Ok(g) = shutdown_flag.lock()
+            && *g
+        {
+            break;
+        }
+        let stream = match listener.accept() {
+            Ok((s, _)) => s,
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(50));
+                continue;
+            }
+            Err(err) => {
+                warn!(error = %err, "control accept loop: accept failed; retrying");
+                thread::sleep(Duration::from_millis(50));
+                continue;
+            }
+        };
+        // Switch to blocking so BufReader doesn't spin on WouldBlock;
+        // the read returns naturally when the peer disconnects.
+        if let Err(err) = stream.set_nonblocking(false) {
+            warn!(error = %err, "control accept loop: clear nonblocking failed");
+            continue;
+        }
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break, // peer closed
+                Ok(_) => {
+                    let cmd = line.trim().to_ascii_lowercase();
+                    match cmd.as_str() {
+                        "cancel" => {
+                            info!("control socket: cancel received -- setting flag");
+                            cancel_flag.store(true, Ordering::Release);
+                        }
+                        "" => {} // empty line; tolerate
+                        other => {
+                            warn!(cmd = other, "control socket: unknown command (ignoring)");
+                        }
+                    }
+                }
+                Err(err) => {
+                    warn!(error = %err, "control socket read failed; dropping connection");
+                    break;
+                }
             }
         }
     }
@@ -532,5 +685,57 @@ mod tests {
         }
 
         writer.join().unwrap();
+    }
+
+    #[test]
+    fn control_socket_flips_cancel_flag_on_cancel_line() {
+        // End-to-end: bind a SocketPresenter with a cancel flag, connect
+        // to the side-channel control socket as the dashboard would,
+        // write `cancel\n`, observe the flag flip. This is the wire
+        // contract subprocess + HTTP backends poll during dispatch to
+        // abort blocking calls.
+        let path = temp_socket_path("control");
+        let flag = std::sync::Arc::new(AtomicBool::new(false));
+        let host = SocketPresenter::bind_with_cancel(path.clone(), flag.clone())
+            .expect("bind socket with cancel");
+
+        let control_path = control_socket_path_for(&path);
+        // The control accept thread is spawned inside bind; give it a
+        // moment to call set_nonblocking + reach its first accept()
+        // before the dashboard dials. Without the small sleep the
+        // connect can race and fail with ENOENT on a fast machine.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let mut stream = std::os::unix::net::UnixStream::connect(&control_path)
+            .expect("connect to control socket");
+        use std::io::Write as _;
+        stream.write_all(b"cancel\n").unwrap();
+        stream.flush().unwrap();
+        // Polling cadence inside the control listener is 50 ms (it's
+        // non-blocking accept + sleep). Give the flag time to flip;
+        // 500 ms is comfortable headroom on CI.
+        let start = std::time::Instant::now();
+        while !flag.load(Ordering::Acquire) {
+            if start.elapsed() > std::time::Duration::from_millis(500) {
+                panic!("control socket: cancel flag did not flip within 500ms");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // Drop SocketPresenter -> Drop impl removes both socket files.
+        drop(host);
+        assert!(
+            !control_path.exists(),
+            "Drop should remove the control socket file at {}",
+            control_path.display()
+        );
+    }
+
+    #[test]
+    fn control_socket_path_appends_dot_control_suffix() {
+        let main = std::path::PathBuf::from("/tmp/foo/bar.sock");
+        let control = control_socket_path_for(&main);
+        assert_eq!(
+            control,
+            std::path::PathBuf::from("/tmp/foo/bar.sock.control")
+        );
     }
 }

@@ -831,6 +831,14 @@ fn auto_cmd(
     // transport. `critique_llm_*` and `qa_llm_*` overrides are
     // informational metadata only -- per-kind routing requires
     // multiple agents, which v1 of the split doesn't model.
+    //
+    // Cancel flag: shared between the agent (which polls it during
+    // its blocking LLM call) and the SocketPresenter's control-socket
+    // listener (which sets it on a dashboard Stop click). Only the
+    // socket transport opens a control socket; the JSONL stdio
+    // transport leaves the flag false and the agent's polling is a
+    // no-op until the wire-level Cancel arrives between turns.
+    let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let agent_config = sim_flow::__internal::session::AgentConfig {
         model: llm_model.map(String::from),
         model_family_id: llm_model_family.map(String::from),
@@ -842,6 +850,7 @@ fn auto_cmd(
         // covers both via `AgentConfig::base_url` precedence.
         ollama_base_url: None,
         openai_base_url: None,
+        cancel_flag: Some(cancel_flag.clone()),
     };
     let mut agent = match sim_flow::__internal::session::build_cli_agent(llm_backend, agent_config)
     {
@@ -854,7 +863,7 @@ fn auto_cmd(
         }
     };
     if let Some(socket_path) = transport_socket {
-        run_with_socket_session_end(socket_path, |host| match watch_tap {
+        run_with_socket_session_end_cancel(socket_path, cancel_flag, |host| match watch_tap {
             Some(tap) => {
                 let mut tapped = sim_flow::__internal::session::TappedPresenter::new(host, tap);
                 sim_flow::__internal::session::run_auto(opts, &mut tapped, agent.as_mut())
@@ -1078,6 +1087,10 @@ fn session_cmd(
     // After the Presenter / LlmAdapter split the orchestrator
     // dispatches LLM calls in-process; every transport (socket /
     // jsonl / terminal) needs the agent built here from `--llm-*`.
+    // Cancel flag: see `auto_cmd` for the rationale; only the socket
+    // transport wires it to a control socket, the others leave it as
+    // a permanently-false flag.
+    let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let agent_config = sim_flow::__internal::session::AgentConfig {
         model: llm_model.map(String::from),
         model_family_id: llm_model_family.map(String::from),
@@ -1086,6 +1099,7 @@ fn session_cmd(
         base_url: llm_base_url.map(String::from),
         ollama_base_url: ollama_base_url.map(String::from),
         openai_base_url: openai_base_url.map(String::from),
+        cancel_flag: Some(cancel_flag.clone()),
     };
     let mut agent = match sim_flow::__internal::session::build_cli_agent(llm_backend, agent_config)
     {
@@ -1098,7 +1112,7 @@ fn session_cmd(
         }
     };
     if let Some(socket_path) = transport_socket {
-        run_with_socket_session_end(socket_path, |host| {
+        run_with_socket_session_end_cancel(socket_path, cancel_flag, |host| {
             sim_flow::__internal::session::run_session(opts, host, agent.as_mut())
         })
     } else if jsonl {
@@ -1119,14 +1133,29 @@ fn session_cmd(
     }
 }
 
-fn run_with_socket_session_end<F>(socket_path: &Path, run: F) -> sim_flow::Result<()>
+/// Bind a SocketPresenter with a side-channel control socket at
+/// `<socket_path>.control`. The dashboard can connect to that
+/// out-of-band path and write `cancel\n` while the orchestrator is
+/// mid-LLM-dispatch; the listener flips the shared `cancel_flag`,
+/// which the agents (built in the caller's `AgentConfig`) poll on a
+/// 50 ms cadence and use to abort their blocking call with
+/// `Error::Cancelled`. The wrapper emits a clarifying `SessionEnd`
+/// on error so terminating bugs don't leave the dashboard hanging
+/// without a cause.
+fn run_with_socket_session_end_cancel<F>(
+    socket_path: &Path,
+    cancel_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    run: F,
+) -> sim_flow::Result<()>
 where
     F: FnOnce(
         &mut SessionEndTrackingPresenter<sim_flow::__internal::session::SocketPresenter>,
     ) -> sim_flow::Result<()>,
 {
-    let socket_host =
-        sim_flow::__internal::session::SocketPresenter::bind(socket_path.to_path_buf())?;
+    let socket_host = sim_flow::__internal::session::SocketPresenter::bind_with_cancel(
+        socket_path.to_path_buf(),
+        cancel_flag,
+    )?;
     let mut host = SessionEndTrackingPresenter::new(socket_host);
     run_with_error_session_end(&mut host, run)
 }

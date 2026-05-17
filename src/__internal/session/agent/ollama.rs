@@ -16,6 +16,7 @@ pub struct OllamaAgent {
     model: String,
     model_family_id: Option<String>,
     runtime_profile: RuntimeCapabilityProfile,
+    cancel_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl OllamaAgent {
@@ -24,6 +25,16 @@ impl OllamaAgent {
         model: Option<String>,
         model_family_id: Option<String>,
         runtime_profile_id: Option<String>,
+    ) -> Self {
+        Self::new_with_cancel(base_url, model, model_family_id, runtime_profile_id, None)
+    }
+
+    pub fn new_with_cancel(
+        base_url: Option<String>,
+        model: Option<String>,
+        model_family_id: Option<String>,
+        runtime_profile_id: Option<String>,
+        cancel_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> Self {
         let runtime_profile = resolve_runtime_profile(
             runtime_profile_id.as_deref(),
@@ -36,6 +47,7 @@ impl OllamaAgent {
             model: model.unwrap_or_else(|| DEFAULT_MODEL.into()),
             model_family_id,
             runtime_profile,
+            cancel_flag,
         }
     }
 
@@ -73,6 +85,7 @@ impl CliAgent for OllamaAgent {
         dispatch_chat(
             OpenAiCompatibleRequest::new(&self.base_url, &self.model, messages)
                 .with_model_family_id(self.model_family_id.as_deref()),
+            self.cancel_flag.clone(),
         )
     }
 

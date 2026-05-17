@@ -30,8 +30,13 @@ use crate::session::agent::LlmCallMetrics;
 /// `<base_url>/chat/completions`.
 ///
 /// Back-compat shim. Callers that need tool_calls should switch to
-/// `dispatch_chat_with_tools`.
-pub fn dispatch_chat(req: OpenAiCompatibleRequest<'_>) -> Result<(String, LlmCallMetrics)> {
-    let resp = dispatch_chat_with_tools(req)?;
+/// `dispatch_chat_with_tools`. `cancel_flag = None` skips the
+/// control-socket cancellation channel, equivalent to a permanently
+/// false flag.
+pub fn dispatch_chat(
+    req: OpenAiCompatibleRequest<'_>,
+    cancel_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<(String, LlmCallMetrics)> {
+    let resp = dispatch_chat_with_tools(req, cancel_flag)?;
     Ok((resp.text, resp.metrics))
 }

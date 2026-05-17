@@ -14,18 +14,26 @@
 
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
+use super::cancel::wait_with_cancel;
 use super::{CliAgent, LlmCallMetrics};
 use crate::session::protocol::{LlmMessage, LlmRole};
 use crate::{Error, Result};
 
 pub struct CodexAgent {
     model: Option<String>,
+    cancel_flag: Option<Arc<AtomicBool>>,
 }
 
 impl CodexAgent {
     pub fn new(model: Option<String>) -> Self {
-        Self { model }
+        Self::new_with_cancel(model, None)
+    }
+
+    pub fn new_with_cancel(model: Option<String>, cancel_flag: Option<Arc<AtomicBool>>) -> Self {
+        Self { model, cancel_flag }
     }
 
     /// Render the full message stack into a single `codex exec`
@@ -83,9 +91,10 @@ impl CliAgent for CodexAgent {
         }
         drop(child.stdin.take());
 
-        let output = child
-            .wait_with_output()
-            .map_err(|err| Error::Client(format!("codex: wait failed: {err}")))?;
+        // Cancel-aware wait: polls the shared flag on a 50ms cadence
+        // and SIGTERMs the child if the dashboard pushes Stop via
+        // the control socket while we're blocked here.
+        let output = wait_with_cancel(child, self.cancel_flag.clone())?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(Error::Client(format!(

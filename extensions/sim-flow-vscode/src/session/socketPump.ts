@@ -314,6 +314,29 @@ export class SocketSessionPump implements LiveSessionTransport {
     if (this.options.viewer) {
       return;
     }
+    // Two paths converge to SessionEnd::Cancelled on the orchestrator
+    // side:
+    //
+    //   1. Main protocol socket: `cancel` is read at the next
+    //      `host.recv()`. Between turns this is immediate; mid-LLM-
+    //      dispatch it sits in the kernel buffer until the dispatch
+    //      finishes (the orchestrator's wire reader isn't running on
+    //      its own thread).
+    //
+    //   2. Side-channel control socket at `<socketPath>.control`: a
+    //      dedicated rust-side listener thread reads `cancel\n` and
+    //      flips a shared `Arc<AtomicBool>` that the LLM agents poll
+    //      every 50ms. Subprocess backends SIGTERM the child; HTTP
+    //      backends abandon the ureq worker. Either way dispatch
+    //      returns `Error::Cancelled` and the orchestrator emits
+    //      `SessionEnd::Cancelled` -- the same outcome as path 1, just
+    //      latency-bounded by the polling cadence instead of by the
+    //      LLM's response time.
+    //
+    // Sending both makes the cancel work whether the orchestrator
+    // happens to be parked or mid-dispatch. Best-effort on the
+    // control socket: connect-fail is silently swallowed because
+    // older orchestrators (pre-control-socket) don't open one.
     void this.connectionReady
       .then(() => {
         this.sendHostEvent({ event: "cancel" });
@@ -321,6 +344,55 @@ export class SocketSessionPump implements LiveSessionTransport {
       .catch(() => {
         // ignore; caller will observe the terminal state
       });
+    void this.sendControlCancel();
+  }
+
+  /**
+   * Connect to the side-channel control socket, write `cancel\n`,
+   * disconnect. Mirrors the rust-side listener's expectation of
+   * short-lived one-shot connections. Errors are swallowed so the
+   * dashboard doesn't surface a "Stop failed" toast when the
+   * orchestrator is an older build that doesn't open a control
+   * socket -- in that case path 1 still works on its own cadence.
+   */
+  private async sendControlCancel(): Promise<void> {
+    // socketPath is the main protocol socket; the rust side opens
+    // the control socket at <main>.control (see
+    // `SocketPresenter::bind_with_cancel`). Mirror that path
+    // computation here so the host doesn't need to publish it.
+    const controlPath = `${this.options.socketPath}.control`;
+    await new Promise<void>((resolve) => {
+      const sock = net.createConnection(controlPath);
+      let settled = false;
+      const settle = (): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        try {
+          sock.destroy();
+        } catch {
+          // already destroyed
+        }
+        resolve();
+      };
+      sock.once("error", () => {
+        // No control socket here (older orchestrator). Swallow.
+        settle();
+      });
+      sock.once("connect", () => {
+        sock.write("cancel\n", () => {
+          // Half-close so the rust-side BufReader's read_line returns
+          // 0 on EOF and the listener loop closes cleanly.
+          sock.end();
+          settle();
+        });
+      });
+      // Hard deadline: if neither connect nor error fires within
+      // 200ms, abandon. Avoids the dashboard pinning a hung
+      // connection if something is wedged at the socket layer.
+      setTimeout(settle, 200);
+    });
   }
 
   /**

@@ -674,6 +674,23 @@ where
 
         let dispatch_result = llm.dispatch_with_tools(&messages, &advertise);
 
+        // `Error::Cancelled` from the LLM adapter means the control
+        // socket flipped the cancel flag while a dispatch was in
+        // flight (subprocess SIGTERM'd, HTTP worker abandoned). The
+        // semantic is identical to a `HostEvent::Cancel` received at
+        // the next `host.recv()` boundary: end the session cleanly
+        // with `SessionEnd::Cancelled`. Doing so here -- before the
+        // generic `agent-failed` error path -- avoids a misleading
+        // "LLM error" diagnostic for what's actually a user-driven
+        // cancel.
+        if matches!(dispatch_result, Err(crate::Error::Cancelled)) {
+            host.send(&Event::SessionEnd {
+                reason: SessionEndReason::Cancelled,
+                message: Some("cancelled mid-dispatch via control socket".into()),
+            })?;
+            return Ok(());
+        }
+
         let mut assistant_text = String::new();
         let mut native_tool_calls: Vec<crate::session::protocol::LlmToolCall> = Vec::new();
         let mut llm_failed = false;
