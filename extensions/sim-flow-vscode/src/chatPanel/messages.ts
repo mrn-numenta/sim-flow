@@ -247,6 +247,14 @@ export type ChatTranscriptEntry =
       title: string;
       body: string;
       tone: "info" | "error";
+      /** Step id this entry was generated under. Set by the chat
+       *  panel host at append time from the pump's
+       *  `subSessionStep` (falling back to the orchestrator's
+       *  current step from `state.toml` for entries appended
+       *  between brackets). Used by the panel to group consecutive
+       *  entries into a collapsible per-step section. Absent for
+       *  entries that pre-date the per-step grouping feature. */
+      step?: string;
     }
   | {
       id: string;
@@ -264,6 +272,14 @@ export type ChatTranscriptEntry =
       requestTokensEstimate?: number;
       responseTokensEstimate?: number;
       streaming?: boolean;
+      /** Step id this entry was generated under. Set by the chat
+       *  panel host at append time from the pump's
+       *  `subSessionStep` (falling back to the orchestrator's
+       *  current step from `state.toml` for entries appended
+       *  between brackets). Used by the panel to group consecutive
+       *  entries into a collapsible per-step section. Absent for
+       *  entries that pre-date the per-step grouping feature. */
+      step?: string;
     };
 
 export type HostMessage =

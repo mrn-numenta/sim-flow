@@ -2158,6 +2158,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     });
   }
 
+  /**
+   * Resolve the step a transcript entry should be tagged with when
+   * it's appended. Preference order: the pump's currently-open
+   * sub-session bracket (the bubble was produced inside that step's
+   * Work / Critique session), then the orchestrator's overall
+   * `current_step` from `state.toml` (idle entries appended between
+   * brackets, e.g. user prompts the user typed while parked). Returns
+   * `undefined` when neither source has a value -- the panel
+   * renders such entries ungrouped at the top of the transcript.
+   */
+  private transcriptStepFor(
+    session: ManagedAutoSessionState,
+    context?: PanelContext,
+  ): string | undefined {
+    return (
+      session.pump.subSessionStep ?? context?.currentStep ?? undefined
+    );
+  }
+
   private async sendPumpPrompt(
     context: PanelContext,
     prompt: string,
@@ -2175,6 +2194,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       prompt,
       userMeta(context),
       assistantMeta(context),
+      undefined,
+      this.transcriptStepFor(session, context),
     );
     session.assistantId = started.assistantId;
     session.pendingPromptEntryId = started.userId;
@@ -2320,6 +2341,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       title,
       meta,
       args.messageId,
+      this.transcriptStepFor(session),
     );
     conversation = next;
     this.rememberConversation(session.projectDir, conversation);
@@ -2356,6 +2378,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       conversation,
       body,
       "orchestrator",
+      this.transcriptStepFor(session),
     );
     conversation = next;
     this.rememberConversation(session.projectDir, conversation);
@@ -2420,6 +2443,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         "sim-flow",
         "orchestrator",
         session.pendingRequestTokensEstimate ?? undefined,
+        this.transcriptStepFor(session),
       );
       session.assistantId = started.assistantId;
       session.pendingRequestTokensEstimate = null;

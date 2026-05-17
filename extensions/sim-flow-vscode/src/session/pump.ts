@@ -206,6 +206,16 @@ export interface LiveSessionTransport {
   readonly inSubSession?: boolean;
   onSubSessionChanged?(listener: (inSubSession: boolean) => void): () => void;
   /**
+   * Step id of the currently-open sub-session bracket, or null
+   * between brackets. The chat panel host snapshots this when
+   * appending a transcript entry so each bubble carries the step
+   * it was generated under -- the panel groups consecutive bubbles
+   * with the same step into a collapsible section. Only the JSONL
+   * transport implements this; PTY / mock transports omit it and
+   * callers fall back to undefined (no step tag).
+   */
+  readonly subSessionStep?: string | null;
+  /**
    * Subscribe to `request-user-input` events. Notifies with the
    * prompt + placeholder text the orchestrator embedded in the
    * event so the host can render a banner above its composer.

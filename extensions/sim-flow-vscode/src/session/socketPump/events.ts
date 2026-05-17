@@ -86,6 +86,14 @@ export interface EventDispatchContext {
   currentStepMode: StepMode | null;
   inSubSessionFlag: boolean;
   awaitingUserInputFlag: boolean;
+  /**
+   * Step id of the currently-open sub-session bracket. Set on
+   * `sub-session-started`, cleared on `sub-session-ended`. Null
+   * between brackets. Used by the chat panel to tag each transcript
+   * entry with the step it belongs to so the panel can group
+   * consecutive bubbles into a collapsible per-step section.
+   */
+  currentSubSessionStep: string | null;
   /** Derived view: `inSubSessionFlag && !awaitingUserInputFlag`. */
   readonly inSubSession: boolean;
   markTerminated(result: PumpSettleResult): void;
@@ -274,12 +282,14 @@ export function handleEvent(ctx: EventDispatchContext, event: ProtocolEvent): vo
       // new one starts before any active-work event).
       ctx.inSubSessionFlag = true;
       ctx.awaitingUserInputFlag = false;
+      ctx.currentSubSessionStep = event.step;
       break;
     case "sub-session-ended":
       // Bracket close. Dashboard listeners re-enable per-step
       // buttons (subject to disk-state preconditions).
       ctx.inSubSessionFlag = false;
       ctx.awaitingUserInputFlag = false;
+      ctx.currentSubSessionStep = null;
       break;
     default: {
       const exhaustive: never = event;

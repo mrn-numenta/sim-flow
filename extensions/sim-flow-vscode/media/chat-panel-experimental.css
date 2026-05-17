@@ -477,6 +477,64 @@ body {
   padding: 24px 12px;
 }
 
+/* Per-step grouping: each <details> wraps the bubbles produced inside
+ * one flow step (work + critique sub-sessions, plus any user prompts
+ * appended while parked on that step). The summary line carries the
+ * step id; the current step is rendered open by default, prior steps
+ * collapsed. Visual treatment is intentionally light -- a thin
+ * horizontal rule above the summary plus a slight tint on the
+ * summary text -- so the collapse affordance is discoverable without
+ * the groups competing with the bubble palette for attention. */
+.x-transcript-step-group {
+  display: block;
+  width: 100%;
+  border-top: 1px solid var(--x-border, rgba(255, 255, 255, 0.08));
+}
+
+.x-transcript-step-group:first-child {
+  border-top: none;
+}
+
+.x-transcript-step-summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 6px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--x-muted);
+  background: color-mix(in srgb, var(--vscode-foreground) 4%, transparent);
+  user-select: none;
+}
+
+.x-transcript-step-summary::-webkit-details-marker {
+  display: none;
+}
+
+.x-transcript-step-summary::before {
+  content: "▸";
+  display: inline-block;
+  width: 14px;
+  font-weight: normal;
+  font-size: 10px;
+  transform: translateY(-1px);
+}
+
+details[open] > .x-transcript-step-summary::before {
+  content: "▾";
+}
+
+.x-transcript-step-summary:hover {
+  color: var(--vscode-foreground);
+}
+
+.x-transcript-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
 /* Each turn fills the panel width and is distinguished by background
  * color rather than left/right placement -- a denser, terminal-log
  * style read that suits the long tool-heavy turns this panel surfaces. */

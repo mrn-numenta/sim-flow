@@ -125,6 +125,14 @@ export class SocketSessionPump implements LiveSessionTransport {
    * the per-step buttons stay disabled until the user resumes.
    */
   private awaitingUserInputFlag = false;
+  /**
+   * Step id of the currently-open sub-session bracket
+   * (`sub-session-started.step`), null between brackets. The chat
+   * panel host reads this when appending transcript entries so each
+   * bubble carries a `step` tag, letting the panel group consecutive
+   * bubbles into a collapsible per-step section.
+   */
+  private currentSubSessionStep: string | null = null;
 
   constructor(
     private readonly options: SocketSessionPumpOptions,
@@ -332,6 +340,17 @@ export class SocketSessionPump implements LiveSessionTransport {
    */
   get stepMode(): StepMode | null {
     return this.currentStepMode;
+  }
+
+  /**
+   * Step id of the currently-open sub-session bracket. Tracks
+   * `sub-session-started.step` and clears on `sub-session-ended`.
+   * The chat panel host snapshots this when appending a transcript
+   * entry so each bubble carries the step it belongs to; consecutive
+   * bubbles with the same step render inside one collapsible group.
+   */
+  get subSessionStep(): string | null {
+    return this.currentSubSessionStep;
   }
 
   /**

@@ -1122,9 +1122,61 @@ function buildTranscript(state: ChatPanelState): HTMLElement {
   // tiny (one entry per evicted message), so this is cheap.
   const evictions = new Map<string, string>(state.evictedMessages);
 
+  // Group consecutive entries by step into a collapsible <details>
+  // section. Entries without a step (older transcript rows from
+  // before per-bubble step tagging, plus cross-step notes like
+  // "Session ended") render ungrouped, inline. The current step's
+  // section is rendered open by default; prior steps render
+  // collapsed so the panel doesn't drown the user in history when
+  // they scroll back through a multi-step run. Toggling state is
+  // preserved across re-renders by morphdom's `<details>` open-bit
+  // guard in render().
+  //
+  // The transcript array is already in append order, which mirrors
+  // the orchestrator's bracket order, so single-pass grouping is
+  // sufficient -- no need to reorder.
+  let currentGroup: HTMLElement | null = null;
+  let currentGroupStep: string | undefined = undefined;
+  let groupContent: HTMLElement | null = null;
+  const startGroup = (step: string | undefined): void => {
+    if (step === undefined) {
+      currentGroup = null;
+      currentGroupStep = undefined;
+      groupContent = null;
+      return;
+    }
+    const isCurrent = state.currentStep === step;
+    const details = document.createElement("details");
+    details.className = "x-transcript-step-group";
+    if (isCurrent) {
+      details.setAttribute("open", "");
+    }
+    details.setAttribute("data-step", step);
+    const summary = document.createElement("summary");
+    summary.className = "x-transcript-step-summary";
+    summary.textContent = isCurrent ? `${step} (current)` : step;
+    details.appendChild(summary);
+    const content = div("x-transcript-step-body");
+    details.appendChild(content);
+    root.appendChild(details);
+    currentGroup = details;
+    currentGroupStep = step;
+    groupContent = content;
+  };
+  const appendToActiveContainer = (node: HTMLElement): void => {
+    if (groupContent) {
+      groupContent.appendChild(node);
+    } else {
+      root.appendChild(node);
+    }
+  };
+
   for (const entry of state.transcript) {
+    if (entry.step !== currentGroupStep) {
+      startGroup(entry.step);
+    }
     if (entry.kind === "note") {
-      root.appendChild(noteRow(entry));
+      appendToActiveContainer(noteRow(entry));
       continue;
     }
     const body = renderableBody(entry);
@@ -1136,14 +1188,19 @@ function buildTranscript(state: ChatPanelState): HTMLElement {
     const evictionReason = entry.messageId
       ? (evictions.get(entry.messageId) ?? null)
       : null;
-    root.appendChild(messageBubble(entry, body, evictionReason));
+    appendToActiveContainer(messageBubble(entry, body, evictionReason));
   }
+  // Silence unused-locals lint for the bookkeeping variables; they
+  // exist for readability but only their side effects matter.
+  void currentGroup;
 
   // If the orchestrator says streaming but the latest assistant entry
   // hasn't materialised yet (between Generate Work and the first chunk,
   // or during tool-call stretches), synthesize a thinking bubble.
+  // The thinking bubble joins the current step's group when one is
+  // open (we're mid-bracket); otherwise it falls outside any group.
   if (state.isStreaming && !hasStreamingAssistantTail(state.transcript)) {
-    root.appendChild(thinkingBubble());
+    appendToActiveContainer(thinkingBubble());
   }
 
   return root;

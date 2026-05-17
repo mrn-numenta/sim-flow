@@ -57,6 +57,7 @@ export function appendNote(
   title: string,
   body: string,
   tone: "info" | "error" = "info",
+  step?: string,
 ): ChatConversationState {
   return {
     transcript: [
@@ -67,6 +68,7 @@ export function appendNote(
         title,
         body,
         tone,
+        ...(step !== undefined ? { step } : {}),
       },
     ],
     nextId: state.nextId + 1,
@@ -79,6 +81,7 @@ export function appendUserPrompt(
   userMeta: string | undefined,
   assistantMeta: string | undefined,
   requestTokensEstimate?: number,
+  step?: string,
 ): { state: ChatConversationState; userId: string; assistantId: string } {
   const userId = entryId(state.nextId);
   const assistantId = entryId(state.nextId + 1);
@@ -95,6 +98,7 @@ export function appendUserPrompt(
           body: prompt,
           meta: userMeta,
           requestTokensEstimate,
+          ...(step !== undefined ? { step } : {}),
         },
         {
           id: assistantId,
@@ -103,6 +107,7 @@ export function appendUserPrompt(
           body: "",
           meta: assistantMeta,
           streaming: true,
+          ...(step !== undefined ? { step } : {}),
         },
       ],
       nextId: state.nextId + 2,
@@ -123,6 +128,7 @@ export function appendOrchestratorUserEntry(
   title: string,
   meta: string,
   messageId: string | null = null,
+  step?: string,
 ): { state: ChatConversationState; userId: string } {
   const userId = entryId(state.nextId);
   return {
@@ -144,6 +150,7 @@ export function appendOrchestratorUserEntry(
           // per-bubble badge surfaces a non-zero (length-derived)
           // count.
           requestTokensEstimate: estimateTextTokens(body),
+          ...(step !== undefined ? { step } : {}),
         },
       ],
       nextId: state.nextId + 1,
@@ -163,6 +170,7 @@ export function appendAssistantTurnEntry(
   state: ChatConversationState,
   body: string,
   meta: string,
+  step?: string,
 ): { state: ChatConversationState; assistantId: string } {
   const assistantId = entryId(state.nextId);
   return {
@@ -178,6 +186,7 @@ export function appendAssistantTurnEntry(
           meta,
           streaming: false,
           responseTokensEstimate: estimateTextTokens(body),
+          ...(step !== undefined ? { step } : {}),
         },
       ],
       nextId: state.nextId + 1,
@@ -190,6 +199,7 @@ export function appendAssistantPlaceholder(
   title: string,
   assistantMeta: string | undefined,
   requestTokensEstimate?: number,
+  step?: string,
 ): { state: ChatConversationState; assistantId: string } {
   const assistantId = entryId(state.nextId);
   return {
@@ -205,6 +215,7 @@ export function appendAssistantPlaceholder(
           meta: assistantMeta,
           requestTokensEstimate,
           streaming: true,
+          ...(step !== undefined ? { step } : {}),
         },
       ],
       nextId: state.nextId + 1,
