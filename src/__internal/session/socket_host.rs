@@ -27,9 +27,12 @@ use crate::{Error, Result};
 
 pub struct SocketPresenter {
     socket_path: PathBuf,
-    /// `<socket_path>.control`. Listener for the side-channel cancel
+    /// `<socket_path>.ctl`. Listener for the side-channel cancel
     /// socket; populated only when `bind_with_cancel` was used. Drop
-    /// removes this file too.
+    /// removes this file too. Suffix is `.ctl` (not `.control`) so
+    /// the path fits inside macOS's 104-byte `sockaddr_un.sun_path`
+    /// when Node's `os.tmpdir()` returns the long
+    /// `/var/folders/<2>/<28>/T/` darwin-user tmpdir.
     control_socket_path: Option<PathBuf>,
     accept_rx: Receiver<std::os::unix::net::UnixStream>,
     history: Vec<Event>,
@@ -51,7 +54,7 @@ impl SocketPresenter {
     }
 
     /// Bind the main protocol socket AND a side-channel control
-    /// socket at `<path>.control`. The control socket reads
+    /// socket at `<path>.ctl`. The control socket reads
     /// newline-delimited commands from the dashboard while a
     /// dispatch is in flight; the only command today is `cancel`,
     /// which flips the shared `cancel_flag` so LLM backends can
@@ -96,7 +99,7 @@ impl SocketPresenter {
         info!(socket = %path.display(), "socket-host bound");
 
         // Bring up the control socket only when a cancel_flag was
-        // supplied. Path is `<main>.control` so callers that need
+        // supplied. Path is `<main>.ctl` so callers that need
         // to find it can compute it from the main path. Listener
         // is a long-lived thread that accepts connections and
         // drains a tiny line-based protocol on each one; the only
@@ -263,13 +266,22 @@ impl Drop for SocketPresenter {
 }
 
 /// Compute the control socket path from the main protocol socket
-/// path. We append `.control` to the file name so a single directory
+/// path. We append `.ctl` to the file name so a single directory
 /// can hold both endpoints side-by-side -- no need to coordinate a
 /// separate runtime dir. The dashboard derives the same path on its
 /// end (see `socketPump.ts`'s control-socket helper).
+///
+/// Suffix length matters: macOS caps `sockaddr_un.sun_path` at 104
+/// bytes, and Node's `os.tmpdir()` already burns 49 of those on the
+/// per-user `/var/folders/<2>/<28>/T/` darwin tmpdir. The data
+/// socket `sim-flow-<UUID>.sock` lands at 99 bytes; the older
+/// 8-char `.control` suffix pushed the control socket to 107 bytes
+/// and bind failed with `path must be shorter than SUN_LEN`,
+/// orchestrator exited 1, chat panel never came up. `.ctl` keeps
+/// the worst case at 102 bytes.
 pub fn control_socket_path_for(main: &std::path::Path) -> PathBuf {
     let mut s: std::ffi::OsString = main.as_os_str().to_owned();
-    s.push(".control");
+    s.push(".ctl");
     PathBuf::from(s)
 }
 
@@ -730,12 +742,37 @@ mod tests {
     }
 
     #[test]
-    fn control_socket_path_appends_dot_control_suffix() {
+    fn control_socket_path_appends_dot_ctl_suffix() {
         let main = std::path::PathBuf::from("/tmp/foo/bar.sock");
         let control = control_socket_path_for(&main);
-        assert_eq!(
-            control,
-            std::path::PathBuf::from("/tmp/foo/bar.sock.control")
+        assert_eq!(control, std::path::PathBuf::from("/tmp/foo/bar.sock.ctl"));
+    }
+
+    /// Regression check: the macOS darwin-user tmpdir Node's
+    /// `os.tmpdir()` returns can push paths close to the 104-byte
+    /// `sockaddr_un.sun_path` cap, and `path must be shorter than
+    /// SUN_LEN` is the actual symptom that crashed the chat panel
+    /// before the suffix shortened from `.control` to `.ctl`. This
+    /// test pins the boundary so a future "rename `.ctl` back to
+    /// `.control` because it's more readable" change fails loudly
+    /// instead of crashing only on real Macs.
+    #[test]
+    fn control_socket_path_fits_under_sun_len_on_darwin_tmpdir() {
+        // Reproduces the failing path from the chat-log report:
+        // /var/folders/<2>/<28>/T/sim-flow-<UUID>.sock + ".ctl".
+        let main = std::path::PathBuf::from(
+            "/var/folders/wj/hfblrhdj2jj6q6xzh2262d5h0000gq/T/sim-flow-1fd3dc92-e4ca-4fdf-ae62-7c1aad8130e2.sock",
+        );
+        let control = control_socket_path_for(&main);
+        let len = control.as_os_str().as_encoded_bytes().len();
+        // macOS sun_path is sized 104 bytes including the trailing
+        // NUL, so 103 bytes of path is the practical ceiling for the
+        // bind syscall.
+        assert!(
+            len <= 103,
+            "control socket path is {len} bytes; macOS sun_path caps at 104 (including NUL). \
+             Path: {}",
+            control.display()
         );
     }
 }

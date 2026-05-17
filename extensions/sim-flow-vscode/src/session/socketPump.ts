@@ -323,7 +323,7 @@ export class SocketSessionPump implements LiveSessionTransport {
     //      finishes (the orchestrator's wire reader isn't running on
     //      its own thread).
     //
-    //   2. Side-channel control socket at `<socketPath>.control`: a
+    //   2. Side-channel control socket at `<socketPath>.ctl`: a
     //      dedicated rust-side listener thread reads `cancel\n` and
     //      flips a shared `Arc<AtomicBool>` that the LLM agents poll
     //      every 50ms. Subprocess backends SIGTERM the child; HTTP
@@ -357,10 +357,18 @@ export class SocketSessionPump implements LiveSessionTransport {
    */
   private async sendControlCancel(): Promise<void> {
     // socketPath is the main protocol socket; the rust side opens
-    // the control socket at <main>.control (see
+    // the control socket at <main>.ctl (see
     // `SocketPresenter::bind_with_cancel`). Mirror that path
     // computation here so the host doesn't need to publish it.
-    const controlPath = `${this.options.socketPath}.control`;
+    //
+    // Suffix is `.ctl` (not `.control`) so the full path fits inside
+    // macOS's 104-byte `sockaddr_un.sun_path`. `os.tmpdir()` here
+    // already burns 49 bytes on the darwin `/var/folders/...` user
+    // tmpdir, and `.control` pushed bind over the cap, dropping
+    // every chat-panel launch on macOS. See `control_socket_path_for`
+    // in `tools/sim-flow/src/__internal/session/socket_host.rs` for
+    // the rust-side budget breakdown.
+    const controlPath = `${this.options.socketPath}.ctl`;
     await new Promise<void>((resolve) => {
       const sock = net.createConnection(controlPath);
       let settled = false;
