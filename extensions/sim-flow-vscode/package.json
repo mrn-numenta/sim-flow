@@ -358,8 +358,8 @@
         },
         "sim-flow.dashboard.experimentalUi": {
           "type": "boolean",
-          "default": false,
-          "description": "Use the experimental Flow Dashboard UI instead of the standard UI. Intended for side-by-side workflow trials before changes are adopted as the default."
+          "default": true,
+          "description": "Use the experimental Flow Dashboard UI (now the default; the original UI is preserved behind this toggle for fallback during the transition)."
         },
         "sim-flow.dashboard.showFullyAutomated": {
           "type": "boolean",

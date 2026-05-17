@@ -2911,15 +2911,19 @@ where
              direct-modeling flow at step `{current_step}` and is asking you a \
              question or requesting guidance.\n\n\
              Project root: `{}`\n\n\
-             Answer concisely. The user is in control of the flow -- they will \
-             click a step command (Run Step, Advance, etc.) when ready to \
-             resume; that exits this side conversation.\n\n\
+             Answer concisely. The user is in control of the flow -- when ready \
+             to resume, they click the chat panel's Play button (the orchestrator \
+             picks the next action: work, critique, or advance). The chat panel \
+             also has a Manual/Auto mode toggle and a Reset Step action. Don't \
+             invent button names like \"Run Step\" or \"Advance\" -- there's a \
+             single Play button that drives all forward progress in manual mode. \
+             Answering exits this side conversation.\n\n\
              NOTE: Tool execution is not yet wired for Q&A turns. You can answer \
              from the conversation context you have, but cannot read project \
              files, run cargo, or write changes in this turn. If the user asks \
              for an investigation or edit, summarize what should be done and \
-             have them click a step command (or run the relevant cargo / git \
-             query manually) to take the action.",
+             have them click Play to resume work (or run the relevant cargo / \
+             git query manually) to take the action.",
             opts.project_dir.display(),
         ),
         ..LlmMessage::default()
