@@ -1618,14 +1618,18 @@ function buildComposer(state: ChatPanelState): HTMLElement {
     // Re-evaluate the send button's disabled state. canSend reads
     // `ui.draft.trim().length`, which only updates here -- not on
     // a host state-update -- so without this hook the click-target
-    // stays disabled until the next render.
+    // stays disabled until the next render. Only the Send variant
+    // depends on draft length; the Stop variant follows canStop,
+    // which doesn't change with typing.
     const s = ui.state;
-    if (!s) {
+    if (!s || s.isStreaming) {
       return;
     }
-    const live = document.querySelector<HTMLButtonElement>("#x-composer-send");
-    if (live) {
-      live.disabled = s.isStreaming ? !s.canStop : !canSend(s);
+    const liveSend = document.querySelector<HTMLButtonElement>(
+      "#x-composer-send",
+    );
+    if (liveSend) {
+      liveSend.disabled = !canSend(s);
     }
   });
   area.addEventListener("keydown", (event) => {
@@ -1813,35 +1817,48 @@ function buildComposerControls(state: ChatPanelState): HTMLElement {
   root.appendChild(modeBtn);
 
   // ---- Send / Stop button ----
+  // Two distinct elements (different ids + handlers) so morphdom does
+  // a full replace when the mode flips, instead of mutating the
+  // existing button's attributes while leaving its old click handler
+  // attached. Each handler is hardcoded to a single action and is bound
+  // off the build-time state, so the user always gets the action that
+  // matches the glyph they were looking at when they clicked: a state
+  // flip between render and click swaps the element in/out wholesale
+  // rather than morphing one button's semantics under the cursor.
+  // (See the "manual mode: ignored unexpected host event: Cancel"
+  // regression: the old dual-purpose handler read `ui.state` at click
+  // time, so a quick LLM dispatch flipping isStreaming mid-click turned
+  // the user's send into a stop.)
   const sendBtn = document.createElement("button");
   sendBtn.type = "button";
-  sendBtn.id = "x-composer-send";
-  sendBtn.className = state.isStreaming ? "x-send x-send-stop" : "x-send";
-  sendBtn.textContent = state.isStreaming ? "■" : "↑";
-  sendBtn.setAttribute(
-    "aria-label",
-    state.isStreaming ? "Stop the current activity" : "Send message",
-  );
-  sendBtn.title = state.isStreaming
-    ? "Stop the current activity and drop to Manual mode. The session stays attached -- this is not End session."
-    : "Send";
-  sendBtn.disabled = state.isStreaming ? !state.canStop : !canSend(state);
-  sendBtn.addEventListener("click", () => {
-    const s = ui.state;
-    if (!s) {
-      return;
-    }
-    if (s.isStreaming) {
-      if (s.canStop) {
-        send({ type: "stop-conversation" });
+  if (state.isStreaming) {
+    sendBtn.id = "x-composer-stop";
+    sendBtn.className = "x-send x-send-stop";
+    sendBtn.textContent = "■";
+    sendBtn.setAttribute("aria-label", "Stop the current activity");
+    sendBtn.title =
+      "Stop the current activity and drop to Manual mode. The session stays attached -- this is not End session.";
+    sendBtn.disabled = !state.canStop;
+    sendBtn.addEventListener("click", () => {
+      if (sendBtn.disabled) {
+        return;
       }
-      return;
-    }
-    if (!canSend(s)) {
-      return;
-    }
-    submitPrompt();
-  });
+      send({ type: "stop-conversation" });
+    });
+  } else {
+    sendBtn.id = "x-composer-send";
+    sendBtn.className = "x-send";
+    sendBtn.textContent = "↑";
+    sendBtn.setAttribute("aria-label", "Send message");
+    sendBtn.title = "Send";
+    sendBtn.disabled = !canSend(state);
+    sendBtn.addEventListener("click", () => {
+      if (sendBtn.disabled) {
+        return;
+      }
+      submitPrompt();
+    });
+  }
   root.appendChild(sendBtn);
 
   return root;

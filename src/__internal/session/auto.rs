@@ -3497,6 +3497,30 @@ impl<P: Presenter + ?Sized> Presenter for AutoPresenter<'_, P> {
             self.consume_session_end = false;
             return Ok(());
         }
+        // Suppress `RequestUserInput` when a Cancel is already pending
+        // from the cap-exceeded path. The sub-session is about to bail
+        // on its next `recv` (it'll pop the Cancel, emit SessionEnd,
+        // and return), so this park signal is obsolete the moment it
+        // fires. Forwarding it to the dashboard makes the panel-side
+        // drive promise settle on this transient park; the outer manual
+        // loop then re-emits `RequestUserInput`, which lands in the
+        // pump's `queuedEvents` (currentRenderer is null after the
+        // settle). The next user prompt's drive triggers
+        // `flushQueuedEvents`, which fires the queued park's "settled"
+        // bus event before the orchestrator can dispatch the LLM call --
+        // the panel sees its own prompt completed with "No response
+        // received." and the LLM's actual reply lands in a separate
+        // bubble much later (and is briefly hidden by an isStreaming
+        // flicker that exposes the dual-purpose Send/Stop button to a
+        // mis-click).
+        if matches!(event, Event::RequestUserInput { .. })
+            && self
+                .pending_reads
+                .iter()
+                .any(|h| matches!(h, HostEvent::Cancel))
+        {
+            return Ok(());
+        }
         self.inner.send(event)
     }
 
@@ -4201,6 +4225,77 @@ not a finding
         // orchestrator terminates immediately.
         let r = host.recv().unwrap();
         assert!(matches!(r, Some(HostEvent::Cancel)));
+    }
+
+    #[test]
+    fn cap_exceeded_path_suppresses_redundant_request_user_input() {
+        // After the cap diagnostic queues a Cancel, the orchestrator's
+        // next emit is a `RequestUserInput` (the cap-exceeded path
+        // falls through to the same "park for user input" tail used by
+        // the no-artifact branch). That park signal is obsolete -- the
+        // sub-session is about to bail on the next `recv` -- and
+        // forwarding it makes the dashboard's drive settle on a
+        // transient state; the next user prompt then races the queued
+        // park back through `flushQueuedEvents` and gets stamped with
+        // "No response received." before the LLM has even dispatched.
+        // Suppress it here so the only park the dashboard sees comes
+        // from the outer manual loop, which is the canonical one.
+        let mut inner = TestHost::new();
+        let (mut host, _flag) = auto_host_with_mode(StepMode::Auto, &mut inner);
+        host.in_subsession = true;
+        // 1. Cap fires.
+        host.send(&Event::Diagnostic {
+            level: DiagnosticLevel::Error,
+            message: "auto: DM2d hit no-progress cap (max_auto_iters=6): ...".into(),
+        })
+        .unwrap();
+        assert!(host.cap_exceeded);
+        // 2. Orchestrator's fall-through emits RequestUserInput.
+        host.send(&Event::RequestUserInput {
+            prompt: None,
+            placeholder: None,
+        })
+        .unwrap();
+        // The dashboard must NOT see the transient park.
+        assert!(
+            !inner
+                .written
+                .iter()
+                .any(|e| matches!(e, Event::RequestUserInput { .. })),
+            "cap-exceeded path should suppress the inner RequestUserInput; \
+             dashboard sees: {:?}",
+            inner.written,
+        );
+        // The cap diagnostic itself still reaches the dashboard.
+        assert!(
+            inner
+                .written
+                .iter()
+                .any(|e| matches!(e, Event::Diagnostic { .. })),
+        );
+    }
+
+    #[test]
+    fn request_user_input_passes_through_when_no_cancel_pending() {
+        // Sanity: the suppression is gated on a queued Cancel. A plain
+        // RequestUserInput emitted in a non-cap-exceeded sub-session
+        // (e.g. delete_file scope-override prompt, normal user-input
+        // park) must still reach the dashboard.
+        let mut inner = TestHost::new();
+        let (mut host, _flag) = auto_host_with_mode(StepMode::Auto, &mut inner);
+        host.in_subsession = true;
+        host.send(&Event::RequestUserInput {
+            prompt: Some("scope override?".into()),
+            placeholder: None,
+        })
+        .unwrap();
+        assert!(
+            inner
+                .written
+                .iter()
+                .any(|e| matches!(e, Event::RequestUserInput { .. })),
+            "RequestUserInput must pass through without a queued Cancel",
+        );
     }
 
     #[test]

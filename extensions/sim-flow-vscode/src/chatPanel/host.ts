@@ -449,7 +449,27 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         // Followups belonged to the previous parked state; the
         // new sub-session may or may not produce more.
         current.pendingFollowups = [];
-        if (!current.awaitingInput) {
+        // Drop the session-level "awaiting input" flag synchronously.
+        // This listener is dispatched synchronously from
+        // `handleEvent("sub-session-started")`, but the microtask that
+        // sets `awaitingInput=true` (via `onManagedSessionSettled` ->
+        // `markAwaitingInput`) for the PREVIOUS park can still be
+        // pending: when `RequestUserInput` and `SubSessionStarted`
+        // arrive in the same wire chunk, settle's `onSettled` listener
+        // synchronously resolves the drive promise, but
+        // `delegate.settled` only runs as a microtask -- AFTER this
+        // listener executes. Without a synchronous clear, that pending
+        // microtask sets `awaitingInput=true` while `pump.inSubSession`
+        // is also true (the bracket flags were just flipped by the
+        // event), and the next postState surfaces the "WAITING ON YOU"
+        // pill + Stop button + disabled Play stuck state. The previous
+        // `resumeDriveOnly` call could not cover this because its own
+        // `if (session.drivePromise) return` early-exit also fires in
+        // the microtask-gap window (the `.finally()` that clears
+        // `drivePromise` is itself a microtask).
+        const wasAwaiting = current.awaitingInput;
+        current.awaitingInput = false;
+        if (!wasAwaiting) {
           // Drive is already running (e.g. the session never
           // parked); the cleared fields will surface on the next
           // postState. Nothing else to do.
