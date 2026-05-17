@@ -101,6 +101,11 @@ export type Event =
   | {
       event: "next-action-hint";
       label?: string | null;
+    }
+  | {
+      event: "context-evicted";
+      ids: string[];
+      reason: ContextEvictionReason;
     };
 /**
  * Mirror of `client::SessionKind` exposed in the protocol. Kept independent of the internal type so the wire format stays stable even if the internal representation changes.
@@ -122,6 +127,17 @@ export type SessionEndReason =
  * Step-axis mode of the orchestrator. Wire-stable enum serialized as `"auto"` / `"manual"`. See `docs/brainstorming/manual-step-mode.md`.
  */
 export type StepMode = "auto" | "manual";
+/**
+ * Why the orchestrator evicted a turn from the prompt stack. The chat panel uses this for the eviction-indicator tooltip so the user can understand *why* a turn dropped out of context.
+ */
+export type ContextEvictionReason =
+  | "superseded-by-dedup"
+  | "invalidated-by-mutation"
+  | "phase-boundary"
+  | "ttl-expired"
+  | "agent-forget"
+  | "summarized-range"
+  | "overflow-trim";
 
 export interface SessionTag {
   candidate?: string | null;

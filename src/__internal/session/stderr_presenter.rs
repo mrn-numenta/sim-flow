@@ -240,6 +240,11 @@ where
                 // Display hint for chat-panel hosts; not useful in a
                 // raw terminal session.
             }
+            Event::ContextEvicted { .. } => {
+                // Chat-panel-only signal driving the "no longer in
+                // context" indicator on transcript rows. Stderr has
+                // no transcript to mark.
+            }
         }
         Ok(())
     }

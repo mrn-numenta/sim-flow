@@ -873,6 +873,7 @@ fn handle_event(
         }
         Event::LlmRequest { .. } => Ok(phase),
         Event::NextActionHint { .. } => Ok(phase),
+        Event::ContextEvicted { .. } => Ok(phase),
     }
     .and_then(|new_phase| {
         // After a sub-session ends, dispatch the next command in the

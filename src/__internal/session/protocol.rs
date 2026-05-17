@@ -164,6 +164,45 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         label: Option<String>,
     },
+    /// One or more prompt-stack messages have been evicted from the
+    /// orchestrator's working set (deterministic compaction:
+    /// dedup, mutation invalidation, phase-boundary cleanup, or
+    /// summarization replacement). Hosts can mark the matching
+    /// transcript rows with a "no longer in context" indicator.
+    /// `ids` matches `LlmMessage::id` values previously surfaced
+    /// via `LlmRequestStack` events. The transcript itself is not
+    /// modified -- this is a visibility hint, not a content edit.
+    ContextEvicted {
+        ids: Vec<String>,
+        reason: ContextEvictionReason,
+    },
+}
+
+/// Why the orchestrator evicted a turn from the prompt stack. The
+/// chat panel uses this for the eviction-indicator tooltip so the
+/// user can understand *why* a turn dropped out of context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ContextEvictionReason {
+    /// A later turn requested the same artifact (same path, same
+    /// tool, same args). The earlier copy is redundant.
+    SupersededByDedup,
+    /// The file referenced by this turn was subsequently mutated by
+    /// the agent. The cached content is now misleading.
+    InvalidatedByMutation,
+    /// Sub-session bracket / milestone boundary cleanup. Tool
+    /// results from the prior phase aren't referenced going forward.
+    PhaseBoundary,
+    /// Per-tool TTL elapsed without a citation. Reserved for the
+    /// reference-counting compactor.
+    TtlExpired,
+    /// Agent explicitly dropped the turn via a `forget` tool call.
+    AgentForget,
+    /// Range was replaced by a summarisation turn.
+    SummarizedRange,
+    /// Overflow safety net: the stack was over budget and the oldest
+    /// disposable turns were trimmed to fit.
+    OverflowTrim,
 }
 
 /// Event direction: host -> orchestrator.

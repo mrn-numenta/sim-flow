@@ -219,6 +219,7 @@ fn event_kind(event: &Event) -> &'static str {
         Event::SubSessionEnded { .. } => "SubSessionEnded",
         Event::LlmRequest { .. } => "LlmRequest",
         Event::NextActionHint { .. } => "NextActionHint",
+        Event::ContextEvicted { .. } => "ContextEvicted",
     }
 }
 

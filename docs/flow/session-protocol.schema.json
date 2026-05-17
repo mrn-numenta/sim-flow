@@ -6,6 +6,60 @@
       "schema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "definitions": {
+          "ContextEvictionReason": {
+            "description": "Why the orchestrator evicted a turn from the prompt stack. The chat panel uses this for the eviction-indicator tooltip so the user can understand *why* a turn dropped out of context.",
+            "oneOf": [
+              {
+                "description": "A later turn requested the same artifact (same path, same tool, same args). The earlier copy is redundant.",
+                "enum": [
+                  "superseded-by-dedup"
+                ],
+                "type": "string"
+              },
+              {
+                "description": "The file referenced by this turn was subsequently mutated by the agent. The cached content is now misleading.",
+                "enum": [
+                  "invalidated-by-mutation"
+                ],
+                "type": "string"
+              },
+              {
+                "description": "Sub-session bracket / milestone boundary cleanup. Tool results from the prior phase aren't referenced going forward.",
+                "enum": [
+                  "phase-boundary"
+                ],
+                "type": "string"
+              },
+              {
+                "description": "Per-tool TTL elapsed without a citation. Reserved for the reference-counting compactor.",
+                "enum": [
+                  "ttl-expired"
+                ],
+                "type": "string"
+              },
+              {
+                "description": "Agent explicitly dropped the turn via a `forget` tool call.",
+                "enum": [
+                  "agent-forget"
+                ],
+                "type": "string"
+              },
+              {
+                "description": "Range was replaced by a summarisation turn.",
+                "enum": [
+                  "summarized-range"
+                ],
+                "type": "string"
+              },
+              {
+                "description": "Overflow safety net: the stack was over budget and the oldest disposable turns were trimmed to fit.",
+                "enum": [
+                  "overflow-trim"
+                ],
+                "type": "string"
+              }
+            ]
+          },
           "DiagnosticLevel": {
             "enum": [
               "info",
@@ -685,6 +739,32 @@
             },
             "required": [
               "event"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "One or more prompt-stack messages have been evicted from the orchestrator's working set (deterministic compaction: dedup, mutation invalidation, phase-boundary cleanup, or summarization replacement). Hosts can mark the matching transcript rows with a \"no longer in context\" indicator. `ids` matches `LlmMessage::id` values previously surfaced via `LlmRequestStack` events. The transcript itself is not modified -- this is a visibility hint, not a content edit.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "context-evicted"
+                ],
+                "type": "string"
+              },
+              "ids": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "reason": {
+                "$ref": "#/definitions/ContextEvictionReason"
+              }
+            },
+            "required": [
+              "event",
+              "ids",
+              "reason"
             ],
             "type": "object"
           }

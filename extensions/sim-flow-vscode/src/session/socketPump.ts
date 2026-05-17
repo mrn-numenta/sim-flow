@@ -461,6 +461,26 @@ export class SocketSessionPump implements LiveSessionTransport {
   }
 
   /**
+   * Subscribe to context-eviction events. Each callback fires once
+   * per `ContextEvicted` wire event from the orchestrator (one
+   * compaction pass can emit multiple ids in a single payload).
+   */
+  onContextEvicted(
+    listener: (msg: {
+      ids: string[];
+      reason: import("./protocol-types").ContextEvictionReason;
+    }) => void,
+  ): () => void {
+    const wrapped = (msg: SocketPumpBusEvent) => {
+      if (msg.type === "context-evicted") {
+        listener({ ids: msg.ids, reason: msg.reason });
+      }
+    };
+    this.bus.on("msg", wrapped);
+    return () => this.bus.off("msg", wrapped);
+  }
+
+  /**
    * Manual-mode host commands. Each one fires-and-forgets — the
    * orchestrator emits `Diagnostic` if the command is rejected (auto
    * mode owns step execution, sub-session in flight, etc.) and that

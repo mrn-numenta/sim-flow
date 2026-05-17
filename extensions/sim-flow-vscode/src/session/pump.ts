@@ -237,6 +237,20 @@ export interface LiveSessionTransport {
     listener: (msg: { label: string | null }) => void,
   ): () => void;
   /**
+   * Subscribe to prompt-stack compaction events. Each call carries
+   * the message ids the orchestrator just evicted plus the reason
+   * (dedup / mutation-invalidation / phase-boundary / etc.). The
+   * chat panel uses this to mark matching transcript rows with a
+   * "no longer in context" indicator -- the transcript itself is
+   * never modified. Absent on stdio / mock transports.
+   */
+  onContextEvicted?(
+    listener: (msg: {
+      ids: string[];
+      reason: import("./protocol-types").ContextEvictionReason;
+    }) => void,
+  ): () => void;
+  /**
    * True when this pump is attached as a read-only observer to a
    * `--watch-socket` tap. Dashboard / chat panel use this to
    * disable command surfaces (Run Step / Run Critique / Send /
@@ -610,6 +624,11 @@ export class SessionPump {
         // Stdio pump doesn't drive the chat panel's Continue button;
         // the socketPump translates this into a bus event for the
         // chat panel. Debug log already records it above.
+        break;
+      case "context-evicted":
+        // Chat-panel-only signal; the socketPump translates it
+        // into a bus event so the experimental UI can mark the
+        // matching transcript rows. Stdio has no transcript.
         break;
       default: {
         const exhaustive: never = event;

@@ -59,6 +59,16 @@ export type SocketPumpBusEvent =
       // action available, render Continue as disabled."
       type: "next-action-hint";
       label: string | null;
+    }
+  | {
+      // Prompt-stack compaction signal: the listed message ids
+      // are no longer carried in the orchestrator's working set.
+      // The chat panel marks the matching transcript rows with a
+      // "no longer in context" indicator; transcript content
+      // itself is preserved verbatim.
+      type: "context-evicted";
+      ids: string[];
+      reason: import("../protocol-types").ContextEvictionReason;
     };
 
 /**
@@ -220,6 +230,13 @@ export function handleEvent(ctx: EventDispatchContext, event: ProtocolEvent): vo
       ctx.bus.emit("msg", {
         type: "next-action-hint",
         label: event.label ?? null,
+      } as SocketPumpBusEvent);
+      break;
+    case "context-evicted":
+      ctx.bus.emit("msg", {
+        type: "context-evicted",
+        ids: event.ids,
+        reason: event.reason,
       } as SocketPumpBusEvent);
       break;
     case "diagnostic":
