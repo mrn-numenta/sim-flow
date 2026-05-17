@@ -2215,7 +2215,7 @@ describe("mocked dashboard/chat harness", () => {
     // manual mode, but keep the session alive. The note text and
     // session retention reflect that.
     expect(transcriptBodies(state!)).toContain(
-      "Stopped the current activity and switched to Manual mode. The session is still attached -- click Continue or type to drive the next step.",
+      "Cancel requested and step mode set to Manual. The orchestrator finishes the in-flight LLM turn before it parks, so this can take a few seconds; the chat indicator will switch to \"Waiting on you\" once the cancel lands.",
     );
 
     // A subsequent run-auto for the SAME project / spec should
@@ -2337,7 +2337,7 @@ describe("mocked dashboard/chat harness", () => {
     expect(
       countOccurrences(
         bodies,
-        "Stopped the current activity and switched to Manual mode. The session is still attached -- click Continue or type to drive the next step.",
+        "Cancel requested and step mode set to Manual. The orchestrator finishes the in-flight LLM turn before it parks, so this can take a few seconds; the chat indicator will switch to \"Waiting on you\" once the cancel lands.",
       ),
     ).toBe(1);
   });
@@ -2399,7 +2399,7 @@ describe("mocked dashboard/chat harness", () => {
     expect(bodies).toContain("Advanced past `DM0`; current step is now `DM1`.");
     expect(bodies).toContain("Preparing the DM1 follow-up work.");
     expect(bodies).toContain(
-      "Stopped the current activity and switched to Manual mode. The session is still attached -- click Continue or type to drive the next step.",
+      "Cancel requested and step mode set to Manual. The orchestrator finishes the in-flight LLM turn before it parks, so this can take a few seconds; the chat indicator will switch to \"Waiting on you\" once the cancel lands.",
     );
   });
 

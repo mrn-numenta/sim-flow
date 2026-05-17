@@ -1261,14 +1261,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
     session.pump.cancel();
 
-    // Persist the operator-visible note. The orchestrator will
-    // settle the cancelled sub-session via its normal settle path
-    // (drive loop -> delegate.settled) and the panel will refresh
-    // to show the parked state.
+    // Persist the operator-visible note. The cancel byte is in the
+    // socket buffer NOW but the orchestrator only services wire
+    // events between LLM turns, so a mid-dispatch cancel waits for
+    // the current `dispatch_with_tools` call to return -- which can
+    // take seconds for a long tool-loop turn. Word the note honestly
+    // so the user understands "Stop" is a request, not a synchronous
+    // halt; the second `request-user-input` from the manual loop is
+    // the signal that the cancel has actually landed (the panel
+    // re-enables the Stop button at that point via stopRequested
+    // clearing in onManagedSessionSettled).
     conversation = appendNote(
       conversation,
-      "Cancelled",
-      "Stopped the current activity and switched to Manual mode. The session is still attached -- click Continue or type to drive the next step.",
+      "Stopping",
+      "Cancel requested and step mode set to Manual. The orchestrator finishes the in-flight LLM turn before it parks, so this can take a few seconds; the chat indicator will switch to \"Waiting on you\" once the cancel lands.",
     );
     await this.persistConversation(context.projectDir, conversation);
     await this.postState(context, conversation);
@@ -2023,8 +2029,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           ? (this.activePump.pump.session?.kind ?? null)
           : null,
       supportsPromptEntry,
+      // The Stop button is "available" while there's a live (or
+      // launching) session to stop AND we haven't already shipped a
+      // cancel. Once `stopRequested` is true the orchestrator has
+      // received the cancel byte on the wire but the cancel might
+      // not take effect for seconds (the wire reader only services
+      // events between LLM turns, so a mid-dispatch cancel waits
+      // for the current `dispatch_with_tools` to return). Disabling
+      // here gives honest visual feedback that the click was
+      // registered; the flag clears in `onManagedSessionSettled`
+      // when the orchestrator confirms it's parked.
       canStop:
-        !!this.activePump ||
+        (!!this.activePump &&
+          this.activePump.projectDir === context.projectDir &&
+          !this.activePump.stopRequested) ||
         (!!this.pendingAutoLaunch &&
           this.pendingAutoLaunch.projectDir === context.projectDir),
       currentStepMode:
