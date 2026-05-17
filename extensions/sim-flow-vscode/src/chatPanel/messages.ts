@@ -207,6 +207,15 @@ export interface ChatPanelState {
    */
   showContextState: boolean;
   /**
+   * Real context window (in tokens) of the model the orchestrator
+   * is dispatching to, queried at session-attach time via the
+   * backend's models / show endpoint. `null` when the backend
+   * doesn't expose it (Anthropic without API key plumbing, or a
+   * source we haven't wired yet); the webview pie falls back to a
+   * cosmetic constant for visual scaling in that case.
+   */
+  contextWindow: number | null;
+  /**
    * Active palette name. Persisted in `workspaceState` so it
    * survives VS Code restarts (in addition to `vscode.setState`
    * for fast in-session apply).

@@ -12,6 +12,7 @@ import {
   resolveProjectDir,
 } from "../context";
 import type { LlmSource, SecretStorage } from "../llm";
+import { queryContextWindow } from "../llm/contextWindow";
 import { type PumpLlmConfig } from "../session/pump";
 import { SocketSessionPump } from "../session/socketPump";
 import {
@@ -1754,6 +1755,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         },
         this.autoSessionDelegate(),
       );
+      // Fire-and-forget query the backend for its actual context
+      // window so the chat panel's "% context used" pie reflects
+      // reality (vLLM `max_model_len`, LM Studio
+      // `loaded_context_length`, Ollama `<arch>.context_length`).
+      // No-op for sources that don't expose it; the webview falls
+      // back to its cosmetic default in that case.
+      void this.kickContextWindowQuery(ctx.projectDir, llmConfig);
     } finally {
       if (
         this.pendingAutoLaunch?.projectDir === ctx.projectDir &&
@@ -1983,6 +1991,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         vscode.workspace
           .getConfiguration("sim-flow")
           .get<boolean>("chatPanel.showContextState") === true,
+      contextWindow:
+        this.activePump?.projectDir === context.projectDir
+          ? this.activePump.contextWindow
+          : null,
       palette: this.readSavedPalette(),
       customPalette: this.readSavedCustomPalette(),
     };
@@ -2438,6 +2450,51 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       pump,
       this.autoSessionDelegate(),
     );
+    void this.kickContextWindowQuery(projectDir, reconnectLlm);
+  }
+
+  /**
+   * Best-effort: query the backend for its actual context window
+   * once the session has attached, then stash the result on the
+   * active session + refresh so the chat-panel pie picks it up.
+   * Errors and missing-field responses both resolve to no-op
+   * (the pie keeps its cosmetic 128k default). Anthropic is
+   * skipped here because it needs an API key the orchestrator
+   * already pulled but we haven't surfaced into this code path;
+   * adding it later is an additive change.
+   */
+  private async kickContextWindowQuery(
+    projectDir: string,
+    llmConfig: PumpLlmConfig,
+  ): Promise<void> {
+    const model = (llmConfig.model ?? "").trim();
+    if (model.length === 0) {
+      return;
+    }
+    const source = llmConfig.source as LlmSourceTag;
+    const baseUrl =
+      llmConfig.baseUrl ??
+      (source === "lmstudio"
+        ? llmConfig.lmstudioBaseUrl
+        : source === "ollama"
+          ? llmConfig.ollamaBaseUrl
+          : undefined);
+    const tokens = await queryContextWindow({
+      source,
+      baseUrl,
+      model,
+    });
+    if (tokens === null) {
+      return;
+    }
+    const session = this.activePump;
+    if (!session || session.projectDir !== projectDir) {
+      // The user disconnected / switched projects while the query
+      // was in flight. Drop the result.
+      return;
+    }
+    session.contextWindow = tokens;
+    void this.refresh();
   }
 
   private async reconcileModeSwitches(): Promise<void> {

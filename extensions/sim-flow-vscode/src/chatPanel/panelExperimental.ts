@@ -806,9 +806,16 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   if (state.sessionActive) {
     const usedTokens =
       state.totalInputTokensEstimate + state.totalOutputTokensEstimate;
-    const fraction = Math.max(0, Math.min(1, usedTokens / LLM_CONTEXT_WINDOW));
+    // Prefer the real context window the host queried from the
+    // backend (Anthropic /v1/models, vLLM max_model_len, LM Studio
+    // loaded_context_length, Ollama context_length); fall back to
+    // the cosmetic constant only when the query was unsupported.
+    const windowTokens = state.contextWindow ?? LLM_CONTEXT_WINDOW;
+    const fraction = Math.max(0, Math.min(1, usedTokens / windowTokens));
     const pct = Math.round(fraction * 100);
-    rightZone.appendChild(buildContextPie(fraction, pct, usedTokens));
+    rightZone.appendChild(
+      buildContextPie(fraction, pct, usedTokens, windowTokens),
+    );
   }
 
   const totals = document.createElement("span");
@@ -825,10 +832,12 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
 }
 
 /**
- * Reference context window for the context-used pie indicator in
- * the toolbar. Most current frontier models support at least this
- * much; smaller local models will over-report (still informative
- * as a trend, just not absolute).
+ * Cosmetic fallback for the context-usage pie when the host hasn't
+ * yet queried the real window from the backend (Anthropic without
+ * an API key, source we haven't wired, query timed out). 128k is
+ * a sensible mid-range for frontier models; smaller local models
+ * will over-report and larger will under-report -- both informative
+ * as a trend.
  */
 const LLM_CONTEXT_WINDOW = 128_000;
 
@@ -842,6 +851,7 @@ function buildContextPie(
   fraction: number,
   pct: number,
   usedTokens: number,
+  windowTokens: number,
 ): HTMLElement {
   const NS = "http://www.w3.org/2000/svg";
   const wrap = document.createElement("span");
@@ -849,9 +859,13 @@ function buildContextPie(
   if (pct >= 80) {
     wrap.classList.add("x-toolbar-context-pie-warn");
   }
+  const windowSource =
+    windowTokens === LLM_CONTEXT_WINDOW
+      ? "estimated reference window"
+      : "queried from the backend";
   wrap.title =
-    `Approximate context usage: ${pct}% (${usedTokens} tokens estimated against a ${formatTokens(LLM_CONTEXT_WINDOW)} reference window). ` +
-    "Cumulative across the whole conversation; actual usage per LLM call depends on the model's context size.";
+    `Approximate context usage: ${pct}% (${usedTokens} tokens estimated against a ${formatTokens(windowTokens)}-token window, ${windowSource}). ` +
+    "Cumulative across the whole conversation; actual usage per LLM call depends on the model's effective context size.";
   const svg = document.createElementNS(NS, "svg");
   svg.setAttribute("viewBox", "0 0 16 16");
   svg.setAttribute("width", "14");

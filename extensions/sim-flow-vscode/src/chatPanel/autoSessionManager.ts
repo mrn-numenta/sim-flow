@@ -58,6 +58,16 @@ export interface ManagedAutoSessionState {
    * Continue as disabled in that case too.
    */
   nextActionHint: string | null | undefined;
+  /**
+   * Real context window of the model the orchestrator is dispatching
+   * to. Resolved at session-attach time via `queryContextWindow`
+   * (Anthropic /v1/models, vLLM /v1/models max_model_len, LM Studio
+   * /api/v0/models loaded_context_length, Ollama /api/show). `null`
+   * when the backend doesn't expose it or the query failed -- the
+   * webview falls back to a cosmetic constant for the toolbar pie
+   * in that case.
+   */
+  contextWindow: number | null;
 }
 
 export interface StoredAutoSessionRecord {
@@ -211,6 +221,7 @@ export class AutoSessionManager implements vscode.Disposable {
       stepRef: options.stepRef,
       launchSpecPath: options.launchSpecPath,
       nextActionHint: undefined,
+      contextWindow: null,
     };
     this.activeSession = session;
     this.notifyActiveSessionChanged();
@@ -408,6 +419,7 @@ export class AutoSessionManager implements vscode.Disposable {
       stepRef: record.stepRef,
       launchSpecPath: record.launchSpecPath,
       nextActionHint: undefined,
+      contextWindow: null,
     };
     this.activeSession = session;
     this.notifyActiveSessionChanged();
