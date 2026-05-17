@@ -1386,6 +1386,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
    * spec path is left undefined so DM0 parks at its
    * `RequestUserInput` (the chat panel surfaces that through the
    * existing `currentPrompt` channel).
+   *
+   * Step-mode is forced to `manual` regardless of the workspace
+   * `sim-flow.flow.stepMode` setting: the click is "open the chat
+   * tab on this project so I can poke around," not "start grinding
+   * the next gate." A user who wants Auto can flip the toggle in
+   * the toolbar once the panel is up. Mirrors `tryAutoResume`'s
+   * `forceStepMode: "manual"` for the same reason.
    */
   private async startSession(): Promise<void> {
     if (this.activePump) {
@@ -1411,7 +1418,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       ChatPanelProvider.LAST_PROJECT_KEY,
     );
     if (remembered && candidates.includes(remembered)) {
-      await this.launchAutoSession(undefined, remembered);
+      await this.launchAutoSession(undefined, remembered, {
+        forceStepMode: "manual",
+      });
       return;
     }
     const picked = await pickProject(candidates, { allowNew: true });
@@ -1423,7 +1432,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       await vscode.commands.executeCommand("sim-flow.newProject");
       return;
     }
-    await this.launchAutoSession(undefined, picked);
+    await this.launchAutoSession(undefined, picked, {
+      forceStepMode: "manual",
+    });
   }
 
   async launchAutoSession(
