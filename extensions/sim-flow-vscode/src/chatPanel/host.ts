@@ -3030,12 +3030,36 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       shouldReconcileProjectSwitch &&
       requestedProjectDir !== this.activePump.projectDir
     ) {
-      await this.stopActivePumpSession(
-        this.activePump,
-        "Project switched",
-        `Stopped the running sim-flow session because the active project changed${requestedProjectDir ? ` to \`${path.basename(requestedProjectDir)}\`` : ""}.`,
-      );
-      return;
+      // Only treat this as a real project switch when the active
+      // editor itself resolves to a DIFFERENT sim-flow project.
+      // `resolveProjectDirForPanel` falls back to
+      // `findProjectCandidates()[0]` when the active editor is
+      // undefined (e.g. the user just clicked into the chat-panel
+      // webview, which makes `vscode.window.activeTextEditor` go
+      // null). In a workspace with multiple sim-flow projects that
+      // fallback can resolve to a project OTHER than the active
+      // pump's, and the kill-the-pump branch below would tear down
+      // a healthy session every time the user clicked into the chat
+      // composer to type. Guard on the direct editor resolution
+      // (`resolveProjectDir`) so the "switch" verb requires the
+      // user to actually be inside a different project's file.
+      const directProjectDir = resolveProjectDir();
+      if (
+        directProjectDir &&
+        directProjectDir !== this.activePump.projectDir
+      ) {
+        await this.stopActivePumpSession(
+          this.activePump,
+          "Project switched",
+          `Stopped the running sim-flow session because the active project changed to \`${path.basename(directProjectDir)}\`.`,
+        );
+        return;
+      }
+      // No definitive switch -- keep the existing session and let
+      // `requestedProjectDir`'s panel-anchor fallback resolve to the
+      // active pump on the way through `readPanelContext`. The
+      // pre-existing fallthrough below handles the LLM-source-
+      // changed case the same way it did before.
     }
 
     if (
