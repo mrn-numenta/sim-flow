@@ -197,6 +197,16 @@ export interface ChatPanelState {
    */
   verilogEnabled: boolean;
   /**
+   * Whether `sim-flow.chatPanel.showContextState` is on. When true,
+   * transcript turns that the orchestrator has evicted from its
+   * prompt stack render with a red ✗ + explanatory tooltip; when
+   * false, the transcript shows the full history without any
+   * eviction indicator. The transcript itself always retains every
+   * turn regardless of this setting -- the indicator is purely
+   * visual.
+   */
+  showContextState: boolean;
+  /**
    * Active palette name. Persisted in `workspaceState` so it
    * survives VS Code restarts (in addition to `vscode.setState`
    * for fast in-session apply).
@@ -366,6 +376,13 @@ export type WebviewMessage =
    * SVF rail appears / disappears in response.
    */
   | { type: "set-verilog-enabled"; enabled: boolean }
+  /**
+   * Toggle `sim-flow.chatPanel.showContextState`. Same shape as
+   * `set-verilog-enabled`: the host writes the workspace setting
+   * and the configuration listener refreshes the panel so the
+   * eviction indicators appear / disappear.
+   */
+  | { type: "set-show-context-state"; enabled: boolean }
   /**
    * Flip the anchored project from DirectModeling into the
    * SystemVerilog conversion flow at SV0. Sent from the Continue

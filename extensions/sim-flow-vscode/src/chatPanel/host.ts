@@ -230,6 +230,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           // value without waiting for the next state-update.
           void this.refresh();
         }
+        if (
+          event.affectsConfiguration("sim-flow.chatPanel.showContextState")
+        ) {
+          // Toggling the indicator should flip immediately, not at
+          // the next file-watcher tick.
+          void this.refresh();
+        }
       }),
       vscode.window.onDidChangeActiveTextEditor(() => {
         this.projectSwitchPending = true;
@@ -557,6 +564,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           .getConfiguration("sim-flow")
           .update(
             "verilog.enabled",
+            msg.enabled,
+            vscode.ConfigurationTarget.Workspace,
+          );
+        return;
+      case "set-show-context-state":
+        await vscode.workspace
+          .getConfiguration("sim-flow")
+          .update(
+            "chatPanel.showContextState",
             msg.enabled,
             vscode.ConfigurationTarget.Workspace,
           );
@@ -1963,6 +1979,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         vscode.workspace
           .getConfiguration("sim-flow")
           .get<boolean>("verilog.enabled") === true,
+      showContextState:
+        vscode.workspace
+          .getConfiguration("sim-flow")
+          .get<boolean>("chatPanel.showContextState") === true,
       palette: this.readSavedPalette(),
       customPalette: this.readSavedCustomPalette(),
     };

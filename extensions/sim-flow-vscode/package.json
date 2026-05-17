@@ -404,6 +404,11 @@
           "default": false,
           "description": "When enabled, the chat panel shows the SystemVerilog conversion step rail (SV0 → SV3) underneath the DirectModeling rail and offers a 'Convert to SystemVerilog' continue action once DM4b has passed (which flips the project into the systemverilog-convert flow via `sim-flow convert-sv`). When disabled, DM4b is the terminal step."
         },
+        "sim-flow.chatPanel.showContextState": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, the chat panel marks transcript turns that have been evicted from the orchestrator's prompt stack (via dedup, mutation invalidation, phase-boundary cleanup, or explicit summarization) with a red ✗ icon and an explanatory tooltip. The transcript itself always retains the full history regardless of this setting; this only controls whether the visual indicator is shown."
+        },
         "sim-flow.auto.maxWorkIterations": {
           "type": "integer",
           "minimum": 1,

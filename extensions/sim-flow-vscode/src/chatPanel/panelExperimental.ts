@@ -788,6 +788,12 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   // the configuration listener triggers a refresh.
   settingsPanel.appendChild(buildVerilogToggle(state));
 
+  // Show context state: companion checkmark row. When on, transcript
+  // turns evicted from the orchestrator's prompt stack render with
+  // a red ✗ + tooltip. Default off; the transcript stays
+  // full-history regardless of the toggle.
+  settingsPanel.appendChild(buildShowContextStateToggle(state));
+
   settings.appendChild(settingsPanel);
   rightZone.appendChild(settings);
 
@@ -1047,6 +1053,35 @@ function buildVerilogToggle(state: ChatPanelState): HTMLElement {
     : "Show the SystemVerilog conversion rail under the DM rail and let DM4b advance into the SV flow.";
   row.addEventListener("click", () => {
     send({ type: "set-verilog-enabled", enabled: !state.verilogEnabled });
+  });
+  return row;
+}
+
+/**
+ * "Show context state" checkmark row. When on, transcript turns
+ * the orchestrator has evicted from its prompt stack render with
+ * a red ✗ and a tooltip explaining why. Default off so most users
+ * see a clean transcript; turn it on to debug what the agent
+ * actually still remembers.
+ */
+function buildShowContextStateToggle(state: ChatPanelState): HTMLElement {
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "x-toolbar-settings-checkrow";
+  const check = document.createElement("span");
+  check.className = "x-toolbar-settings-check";
+  check.textContent = state.showContextState ? "✓" : " ";
+  const label = document.createElement("span");
+  label.textContent = "Show context state";
+  row.append(check, label);
+  row.title = state.showContextState
+    ? "Context-state indicators are on. Evicted turns render with a red ✗ + tooltip explaining the eviction reason. Turn off to see a clean transcript."
+    : "Show a red ✗ on transcript turns the orchestrator has evicted from its prompt stack (dedup / mutation / phase boundary / summarization). The transcript itself always keeps the full history.";
+  row.addEventListener("click", () => {
+    send({
+      type: "set-show-context-state",
+      enabled: !state.showContextState,
+    });
   });
   return row;
 }
