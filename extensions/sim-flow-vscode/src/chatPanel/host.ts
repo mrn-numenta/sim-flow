@@ -985,9 +985,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (!ok) {
       return;
     }
-    for (const step of targets) {
-      session.pump.reset(step);
-    }
+    // Single reset event with the user's target step; the Rust side
+    // (`State::reset` + `clear_step_collateral_forward`) already
+    // cascades the gate flags + collateral deletion to every
+    // downstream step. We used to loop `pump.reset(target)` for
+    // each step in `targets`, but each successive Reset overwrote
+    // `current_step` with the *latest* step in the cascade, so a
+    // reset-from-DM0 would land state.toml at DM4b instead of DM0.
+    // `targets` stays valuable for `confirmReset`'s modal copy.
+    session.pump.reset(flowState.current_step);
   }
 
   /**
@@ -1016,9 +1022,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (!ok) {
       return;
     }
-    for (const target of targets) {
-      session.pump.reset(target);
-    }
+    // See `resetCurrentStep`: single reset event, Rust side
+    // cascades. Looping `pump.reset(target)` walks current_step
+    // forward to the last step in `targets`.
+    session.pump.reset(step);
   }
 
   /**
@@ -1066,9 +1073,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (!ok) {
       return;
     }
-    for (const step of targets) {
-      session.pump.reset(step);
-    }
+    // See `resetCurrentStep`: single reset event, Rust side
+    // cascades. Looping `pump.reset(target)` walks current_step
+    // forward to the last step in `targets`.
+    session.pump.reset(picked.label);
   }
 
   /**
