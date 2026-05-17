@@ -14,6 +14,7 @@ import {
 import type { LlmSource, SecretStorage } from "../llm";
 import { queryContextWindow } from "../llm/contextWindow";
 import { type PumpLlmConfig } from "../session/pump";
+import { clearStalePumpLockForSession } from "../session/pumpLock";
 import { SocketSessionPump } from "../session/socketPump";
 import {
   SimFlowCli,
@@ -2825,6 +2826,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       // "Start session" again. `preserveConversation` keeps the
       // chat transcript from the prior session visible; the new
       // orchestrator's startup note is appended to it.
+      //
+      // Also clear the per-project pump lock if it still claims
+      // this dead session. macOS recycles the extension-host pid
+      // after a reload, so the lock's `isProcessAlive` check sees
+      // some unrelated Code Helper utility process on that pid and
+      // refuses to reclaim -- the new orchestrator would fail to
+      // bind and `pump.ready()` would throw on the relaunch too,
+      // bouncing the user back to "Start session" forever. Matching
+      // on the lock's `sessionId` is race-free: only the now-dead
+      // session knew that id, so we're not stealing a fresh
+      // sibling's lock.
+      clearStalePumpLockForSession(projectDir, record.sessionId);
       await this.autoSessions.forgetStoredRecord(projectDir);
       // Set the relaunch anchor synchronously so this refresh's
       // postState anchors the panel to the right project and renders

@@ -4,7 +4,12 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { tmpdir } from "node:os";
 
-import { acquirePumpLock, type AcquireFailure, type AcquireResult } from "./pumpLock";
+import {
+  acquirePumpLock,
+  clearStalePumpLockForSession,
+  type AcquireFailure,
+  type AcquireResult,
+} from "./pumpLock";
 
 let projectDir: string;
 
@@ -233,5 +238,51 @@ describe("acquirePumpLock", () => {
     expectAcquired(result);
     const record = JSON.parse(fs.readFileSync(lockPath(), "utf8")) as { sessionId: string };
     expect(record.sessionId).toBe("complete");
+  });
+});
+
+describe("clearStalePumpLockForSession", () => {
+  it("deletes the lock when the recorded sessionId matches", () => {
+    // Simulate a lock file written by a now-dead extension host whose
+    // pid got recycled to some unrelated process. Without
+    // sessionId-keyed cleanup, the `isProcessAlive` check would say
+    // the lock is held and refuse to reclaim.
+    fs.mkdirSync(path.join(projectDir, ".sim-flow"), { recursive: true });
+    fs.writeFileSync(
+      lockPath(),
+      JSON.stringify({
+        pid: 99999, // pid that could be alive (recycled) or dead
+        sessionId: "dead-session",
+        acquiredAtMs: Date.now() - 60_000,
+        nonce: "deadnonce",
+      }),
+      "utf8",
+    );
+    clearStalePumpLockForSession(projectDir, "dead-session");
+    expect(fs.existsSync(lockPath())).toBe(false);
+  });
+
+  it("leaves the lock alone when the sessionId doesn't match", () => {
+    // A fresh sibling has acquired the lock under a different
+    // sessionId; the stale-clear path must not steal it.
+    fs.mkdirSync(path.join(projectDir, ".sim-flow"), { recursive: true });
+    fs.writeFileSync(
+      lockPath(),
+      JSON.stringify({
+        pid: process.pid,
+        sessionId: "fresh-sibling",
+        acquiredAtMs: Date.now(),
+        nonce: "freshnonce",
+      }),
+      "utf8",
+    );
+    clearStalePumpLockForSession(projectDir, "different-session");
+    expect(fs.existsSync(lockPath())).toBe(true);
+  });
+
+  it("is a no-op when the lock file is missing", () => {
+    // Defensive: clearing twice (or on a project that never had a
+    // session) should not throw.
+    expect(() => clearStalePumpLockForSession(projectDir, "any")).not.toThrow();
   });
 });

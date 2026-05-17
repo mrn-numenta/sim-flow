@@ -133,6 +133,41 @@ export function acquirePumpLock(
   };
 }
 
+/**
+ * Forcibly delete the per-project pump lock when its recorded
+ * `sessionId` matches the given one. Used by the chat-panel's
+ * Reload-Window recovery path: when we know a session is dead
+ * (because `pump.ready()` threw trying to reattach to it), the lock
+ * file's pid-liveness check is unreliable -- macOS recycles the
+ * extension-host pid after reload, so the new extension host sees
+ * the lock's pid still alive (as some unrelated Code Helper utility
+ * process) and refuses to claim. Matching on sessionId is a
+ * narrower, race-free signal: only the session that wrote the lock
+ * knows the sessionId, and we just confirmed that session is gone.
+ *
+ * No-op when the lock file is missing or its sessionId doesn't
+ * match (we don't want to steal a fresh sibling lock).
+ */
+export function clearStalePumpLockForSession(
+  projectDir: string,
+  sessionId: string,
+): void {
+  const lockPath = path.join(projectDir, LOCK_FILE);
+  const existing = readLockRecord(lockPath);
+  if (!existing || existing.sessionId !== sessionId) {
+    return;
+  }
+  try {
+    fs.unlinkSync(lockPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.error(
+        `sim-flow: failed to clear stale pump lock: ${(err as Error).message}`,
+      );
+    }
+  }
+}
+
 function makeLock(lockPath: string, ourNonce: string): PumpLock {
   let released = false;
   return {
