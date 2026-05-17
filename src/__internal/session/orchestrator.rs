@@ -617,10 +617,23 @@ where
         // existed at that slot, but the LLM no longer carries the
         // original body forward. `Event::ContextEvicted` lets the
         // chat panel mark the matching transcript rows.
+        //
+        // Rule order matters: dedup runs first (replaces older
+        // duplicate reads with stubs), then mutation invalidation
+        // (replaces pre-write reads with stubs). Order doesn't
+        // matter for correctness today since the rules target
+        // different message subsets, but keeping dedup first
+        // means a duplicate read of a path that's later mutated
+        // gets the dedup stub, not the mutation stub -- which is
+        // closer to "the live read is current" than "the live
+        // read is also now stale", which it is, because anything
+        // before the mutation isn't authoritative.
         {
             use crate::session::compaction::{
-                dedup_reason, position_id_index, position_pairs, run_path_keyed_dedup,
+                dedup_reason, mutation_reason, position_id_index, position_pairs,
+                run_mutation_invalidation, run_path_keyed_dedup,
             };
+            // Dedup pass.
             let pairs = position_pairs(&messages);
             let report = run_path_keyed_dedup(&pairs);
             if !report.is_empty() {
@@ -634,6 +647,25 @@ where
                 host.send(&Event::ContextEvicted {
                     ids: report.dropped.clone(),
                     reason: dedup_reason(),
+                })?;
+            }
+            // Mutation-invalidation pass. Recompute pairs because
+            // dedup may have rewritten content, though it doesn't
+            // affect this rule's matching (which keys on assistant
+            // tool calls + path arg, not on the tool result body).
+            let pairs = position_pairs(&messages);
+            let report = run_mutation_invalidation(&pairs);
+            if !report.is_empty() {
+                for (id, stub) in &report.stubs {
+                    if let Some(idx) = position_id_index(id)
+                        && idx < messages.len()
+                    {
+                        messages[idx].content = stub.clone();
+                    }
+                }
+                host.send(&Event::ContextEvicted {
+                    ids: report.dropped.clone(),
+                    reason: mutation_reason(),
                 })?;
             }
         }

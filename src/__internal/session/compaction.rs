@@ -247,6 +247,129 @@ pub fn dedup_reason() -> ContextEvictionReason {
     ContextEvictionReason::SupersededByDedup
 }
 
+/// Reason stamp for the mutation-invalidation rule.
+pub fn mutation_reason() -> ContextEvictionReason {
+    ContextEvictionReason::InvalidatedByMutation
+}
+
+/// Tool calls that *mutate* a path on disk. A `read_file` result
+/// for any path mutated later in the session is now misleading --
+/// the cached body shows the pre-edit content the agent might
+/// re-edit. The rule below scans for these and evicts.
+fn mutation_path_tool(name: &str) -> Option<&'static str> {
+    match name {
+        "write_file" => Some("path"),
+        "edit_file" => Some("path"),
+        "delete_file" => Some("path"),
+        _ => None,
+    }
+}
+
+/// Walk the (id, message) pairs and evict `read_file` Tool-role
+/// results whose path was subsequently mutated by a `write_file` /
+/// `edit_file` / `delete_file` call. The stub points at the
+/// mutation turn so the agent knows the cached read is no longer
+/// authoritative.
+///
+/// Same semantics as `run_path_keyed_dedup`: pure, no I/O,
+/// in-place caller mutation via the returned stubs.
+pub fn run_mutation_invalidation(messages: &[(String, &LlmMessage)]) -> EvictionReport {
+    use std::collections::{HashMap, HashSet};
+
+    let mut report = EvictionReport::default();
+
+    // Phase 1: collect the set of mutated paths and the FIRST
+    // turn index at which each path was mutated (by message
+    // position in the slice). A later mutation doesn't invalidate
+    // a later read; only earlier reads are stale.
+    let mut first_mutated_at: HashMap<String, usize> = HashMap::new();
+    for (idx, (_id, msg)) in messages.iter().enumerate() {
+        if msg.role != LlmRole::Assistant {
+            continue;
+        }
+        for call in &msg.tool_calls {
+            let Some(arg_name) = mutation_path_tool(&call.name) else {
+                continue;
+            };
+            let Some(arg_value) = extract_arg(call, arg_name) else {
+                continue;
+            };
+            first_mutated_at.entry(arg_value).or_insert(idx);
+        }
+    }
+
+    if first_mutated_at.is_empty() {
+        return report;
+    }
+
+    // Phase 2: index every assistant `read_file` call by its
+    // tool_call_id so we can correlate Tool-role results back to
+    // an assistant call + path + position.
+    let mut read_calls: HashMap<String, (usize, String)> = HashMap::new();
+    for (idx, (_id, msg)) in messages.iter().enumerate() {
+        if msg.role != LlmRole::Assistant {
+            continue;
+        }
+        for call in &msg.tool_calls {
+            if call.name != "read_file" {
+                continue;
+            }
+            let Some(arg_value) = extract_arg(call, "path") else {
+                continue;
+            };
+            let Some(call_id) = call.id.as_ref() else {
+                continue;
+            };
+            read_calls.insert(call_id.clone(), (idx, arg_value));
+        }
+    }
+
+    // Phase 3: for each Tool-role read result, evict when its
+    // path appears in `first_mutated_at` AND the read happened
+    // BEFORE that mutation. We track ids we've already evicted
+    // via dedup separately -- callers run dedup before mutation
+    // invalidation, so a `read_file` already stubbed by dedup
+    // won't be re-evicted here (the stub content doesn't match
+    // an assistant read_call any more).
+    let mut already_evicted: HashSet<String> = HashSet::new();
+    for (tool_id, msg) in messages {
+        if msg.role != LlmRole::Tool {
+            continue;
+        }
+        let Some(call_id) = msg.tool_call_id.as_ref() else {
+            continue;
+        };
+        let Some((read_at, path)) = read_calls.get(call_id) else {
+            continue;
+        };
+        let Some(mutated_at) = first_mutated_at.get(path) else {
+            continue;
+        };
+        if *read_at >= *mutated_at {
+            // Read happened at or after the mutation; the cached
+            // content is fine.
+            continue;
+        }
+        if !already_evicted.insert(tool_id.clone()) {
+            continue;
+        }
+        report.dropped.push(tool_id.clone());
+        report
+            .stubs
+            .push((tool_id.clone(), invalidation_stub(path)));
+    }
+
+    report
+}
+
+fn invalidation_stub(path: &str) -> String {
+    format!(
+        "<invalidated: a later turn wrote / edited `{path}`; \
+         the cached read result no longer reflects disk content; \
+         compacted out of context.>"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,5 +544,100 @@ mod tests {
     #[test]
     fn dedup_reason_constant_is_set() {
         assert_eq!(dedup_reason(), ContextEvictionReason::SupersededByDedup);
+    }
+
+    #[test]
+    fn mutation_reason_constant_is_set() {
+        assert_eq!(
+            mutation_reason(),
+            ContextEvictionReason::InvalidatedByMutation
+        );
+    }
+
+    #[test]
+    fn mutation_invalidation_no_writes_is_noop() {
+        let msgs = vec![
+            assistant_with_call("a1", "c1", "read_file", r#"{"path":"src/lib.rs"}"#),
+            tool_result("t1", "c1", "body"),
+        ];
+        let report = run_mutation_invalidation(&as_refs(&msgs));
+        assert!(report.is_empty());
+    }
+
+    #[test]
+    fn mutation_invalidation_evicts_pre_write_read() {
+        let msgs = vec![
+            assistant_with_call("a1", "c1", "read_file", r#"{"path":"src/lib.rs"}"#),
+            tool_result("t1", "c1", "pre-edit body"),
+            assistant_with_call(
+                "a2",
+                "c2",
+                "write_file",
+                r#"{"path":"src/lib.rs","content":"new"}"#,
+            ),
+            tool_result("t2", "c2", "ok"),
+        ];
+        let report = run_mutation_invalidation(&as_refs(&msgs));
+        assert_eq!(report.dropped, vec!["t1".to_string()]);
+        assert_eq!(report.stubs.len(), 1);
+        assert!(report.stubs[0].1.contains("invalidated"));
+        assert!(report.stubs[0].1.contains("src/lib.rs"));
+    }
+
+    #[test]
+    fn mutation_invalidation_keeps_post_write_read() {
+        let msgs = vec![
+            assistant_with_call(
+                "a1",
+                "c1",
+                "write_file",
+                r#"{"path":"src/lib.rs","content":"new"}"#,
+            ),
+            tool_result("t1", "c1", "ok"),
+            assistant_with_call("a2", "c2", "read_file", r#"{"path":"src/lib.rs"}"#),
+            tool_result("t2", "c2", "fresh body"),
+        ];
+        let report = run_mutation_invalidation(&as_refs(&msgs));
+        assert!(report.is_empty(), "the read happened AFTER the write");
+    }
+
+    #[test]
+    fn mutation_invalidation_handles_edit_and_delete() {
+        let msgs = vec![
+            assistant_with_call("a1", "c1", "read_file", r#"{"path":"a.md"}"#),
+            tool_result("t1", "c1", "a body"),
+            assistant_with_call("a2", "c2", "read_file", r#"{"path":"b.md"}"#),
+            tool_result("t2", "c2", "b body"),
+            assistant_with_call(
+                "a3",
+                "c3",
+                "edit_file",
+                r#"{"path":"a.md","old":"x","new":"y"}"#,
+            ),
+            tool_result("t3", "c3", "ok"),
+            assistant_with_call("a4", "c4", "delete_file", r#"{"path":"b.md"}"#),
+            tool_result("t4", "c4", "ok"),
+        ];
+        let report = run_mutation_invalidation(&as_refs(&msgs));
+        assert_eq!(report.dropped.len(), 2);
+        assert!(report.dropped.contains(&"t1".to_string()));
+        assert!(report.dropped.contains(&"t2".to_string()));
+    }
+
+    #[test]
+    fn mutation_invalidation_does_not_touch_unrelated_paths() {
+        let msgs = vec![
+            assistant_with_call("a1", "c1", "read_file", r#"{"path":"a.md"}"#),
+            tool_result("t1", "c1", "body"),
+            assistant_with_call(
+                "a2",
+                "c2",
+                "write_file",
+                r#"{"path":"b.md","content":"new"}"#,
+            ),
+            tool_result("t2", "c2", "ok"),
+        ];
+        let report = run_mutation_invalidation(&as_refs(&msgs));
+        assert!(report.is_empty(), "different paths; read is still valid");
     }
 }
