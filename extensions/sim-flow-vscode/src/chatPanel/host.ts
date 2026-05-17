@@ -1106,7 +1106,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       canSelectFiles: true,
       canSelectFolders: true,
       canSelectMany: false,
-      openLabel: "Insert path",
+      openLabel: "Use as source spec",
       filters: {
         "Spec (markdown, text, PDF)": [
           "md",
@@ -1124,23 +1124,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
     const pickedPath = picked[0]!.fsPath;
-    // Hand the path to the orchestrator BEFORE inserting it into the
-    // textarea so ingest_spec_file runs while the user is still
-    // typing. The DM0 system prompt expects
-    // `.sim-flow/spec-pages/<NNN>.md` to exist by the time the agent
-    // reads the user's reply -- without this, the agent reaches for
-    // `read_file` on the raw PDF and fails on the binary content.
-    // UI is MVP: we only signal intent; the orchestrator runs the
-    // ingest, writes config.toml::spec_path, and emits a Diagnostic
-    // we render normally.
+    // Two things happen here:
+    //   1. `pump.setSpec` ships the path to the orchestrator first
+    //      so `ingest_spec_file` starts paginating
+    //      `.sim-flow/spec-pages/<NNN>.md` immediately.
+    //   2. `sendPrompt` auto-sends the path as a user message so the
+    //      user sees confirmation in the transcript (and the agent's
+    //      DM0 turn picks up the message via the standard chat
+    //      flow). Without (2) the picker dialog dismissed silently
+    //      and the user had no signal that the pick took effect
+    //      until they hit Send themselves.
+    // UI stays MVP: each step only signals intent. The orchestrator
+    // runs the ingest, writes config.toml::spec_path, emits a
+    // Diagnostic, and processes the UserMessage in arrival order
+    // (so ingest completes before the agent's next turn dispatches).
     const pump = this.activePump?.pump;
     if (pump && typeof pump.setSpec === "function") {
       pump.setSpec(pickedPath);
     }
-    await this.view.webview.postMessage({
-      type: "file-picked",
-      path: pickedPath,
-    });
+    await this.sendPrompt(pickedPath);
   }
 
   /**
