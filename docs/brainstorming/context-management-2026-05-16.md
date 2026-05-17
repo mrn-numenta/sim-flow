@@ -1,15 +1,24 @@
 # Context-management brainstorm — 2026-05-16
 
 How sim-flow should keep prompt-stacks below the model's context
-window without losing fidelity. Current state: zero pre-flight
+window without losing fidelity. Original problem: zero pre-flight
 budgeting, no compaction, no per-tool caps beyond `read_file`'s
 16 KB. Overflow → server 4xx → orchestrator parks with Retry /
 Cancel; `/retry` re-sends the same too-large stack and fails
-identically. Recovery requires `/end-session`. See
+identically. Recovery required `/end-session`. See
 `orchestrator-bug-audit-2026-05-16.md` for the bug-side picture.
 
-This doc is the design discussion, not a fix plan. Implementation
-phasing at the bottom.
+**Implementation status (2026-05-16):** Phases 1a (steps 1-5a) +
+1b + 3 are shipped (`10 commits`, sequenced below). Phase 2 was
+reassessed mid-implementation and deferred — the duplication it
+targeted turned out to be smaller than the brainstorm assumed; see
+`context-management-phase-2-reassessment-2026-05-16.md` for the
+evidence + alternative directions. Phase 1a step 5b
+(phase-boundary cleanup) is also deferred.
+
+The rest of this doc is the original design discussion. Skip to
+[Implementation status](#implementation-status) at the bottom for
+what actually shipped.
 
 ---
 
@@ -166,3 +175,71 @@ transcript on disk stays untouched.
 
 This decouples "what the agent remembers" from "what the user can
 see" — which is the correct asymmetry.
+
+---
+
+## Implementation status
+
+Snapshot at end of the 2026-05-16 push. Each commit landed green
+on `cargo test -p sim-flow --lib` (modulo the pre-existing flaky
+`__internal::prompts::tests::all_dm_prompts_render_in_both_modes`)
+and `npm test` (525 passed / 1 skipped, 41 test files).
+
+### Shipped
+
+| Commit | Phase | What |
+|-|-|-|
+| `8ec0c63` | preflight | Setting `sim-flow.chatPanel.showContextState` + popover toggle (default off). |
+| `34bc2ae` | 3 | Real context-window query per backend (vLLM `max_model_len`, LM Studio `loaded_context_length`, Ollama `<arch>.context_length`, OpenAI-compat). Replaces the cosmetic 128 k constant in the toolbar pie. |
+| `310d0c5` | 1a / 1 | Protocol surface for `Event::ContextEvicted { ids, reason }` + `ContextEvictionReason` enum + bus translator + transport subscriber. |
+| `e1c1b33` | 1a / 2 | Pure `run_path_keyed_dedup` rule. 9 unit tests covering supersession, chains, distinct paths/tools, malformed args. |
+| `5ec01f2` | 1a / 3 | Wire dedup into `run_session` dispatch loop. Position-based ids (`msg-N`) correlate stack slots to wire-event payloads. |
+| `e82b9c6` | 1a / 4 | `run_mutation_invalidation` rule + wiring. 6 additional unit tests. Compaction module total: 15 tests. |
+| `5335bae` | 1a / 5a | Universal 16 KB tool-output cap at the central `invoke_tool` dispatch site. Defence in depth above per-tool caps. |
+| `5c8c78c` | 1b | End-to-end correlation: per-message id on `Event::LlmRequest`, transcript entries carry the id, chat panel renders evicted bubbles dimmed + grayscale with a red ✗ overlay + native-title eviction tooltip. CSS gated on `body[data-show-context-state="on"]`. |
+| `4ede7a9` | — | [Phase 2 reassessment](./context-management-phase-2-reassessment-2026-05-16.md): the original "pull critical content out of the stack" plan no longer pencils out given the actual prompt-assembly layout. Deferred. |
+
+### Deferred
+
+- **Phase 1a step 5b** — phase-boundary cleanup at sub-session
+  end. Requires citation analysis (which paths / symbols later
+  turns reference). False-negative risk is real; weight shed is
+  modest over what the existing dedup + mutation rules already
+  catch.
+- **Phase 2** — re-architect critical bucket. See the
+  reassessment doc; the duplication this targeted isn't actually
+  in the prompt stack today, so the payoff doesn't match the
+  invasiveness.
+- **Phase 4** — agent-driven discards (`forget(refs)` /
+  `note_to_self(text)`). Not started; pre-requisites land first.
+- **Phase 5** — summarization fallback. Not started; reserved as
+  last-resort lever.
+
+### Visible runtime behaviour after these commits
+
+1. Chat panel toolbar pie reads from the real backend context
+   window for vLLM / LM Studio / Ollama / OpenAI-compat sources
+   (falls back to the cosmetic 128 k constant for Anthropic and
+   `vscode` source since those need API-key plumbing).
+2. When the agent re-reads a path that was previously read, the
+   orchestrator silently swaps the older `Tool` body for a
+   `<superseded: a later turn re-invoked …>` stub. The slot
+   stays in the stack as a placeholder so the agent knows the
+   read existed.
+3. When the agent writes / edits / deletes a path that was
+   previously read, the prior `read_file` result is swapped for
+   an `<invalidated: a later turn wrote / edited …>` stub.
+4. Any tool result whose body exceeds 16 KB is truncated at a
+   UTF-8 char boundary with an "orchestrator output cap" marker.
+5. The chat panel transcript always keeps the full history; with
+   "Show context state" turned on in the gear popover, evicted
+   rows render dimmed with a red ✗ + a hover tooltip explaining
+   the eviction reason.
+
+### Validation suggestion
+
+Run a real session with `RUST_LOG=sim_flow::session=info`
+(or check the debug-log file) and observe the `ContextEvicted`
+events. Frequent evictions → the deterministic rules are doing
+work. Few evictions → tune (or reconsider whether overflow
+remains a real problem before adding more compaction).
