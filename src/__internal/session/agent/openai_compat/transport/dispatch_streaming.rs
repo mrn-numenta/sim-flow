@@ -349,6 +349,20 @@ fn handle_openai_compat_sse_chunk(
         text.push_str(content);
         on_chunk(StreamingChunk::Text(content.to_string()));
     }
+    // vLLM with `--reasoning-parser qwen3` (and OpenAI's reasoning-
+    // effort API) splits the model's `<think>...</think>` output into
+    // a separate channel that streams as `delta.reasoning_content`.
+    // Some proxies / older builds use the shorter `delta.reasoning`
+    // name; accept either to stay tolerant of server-side variation.
+    let reasoning_delta = delta
+        .get("reasoning_content")
+        .and_then(|v| v.as_str())
+        .or_else(|| delta.get("reasoning").and_then(|v| v.as_str()));
+    if let Some(piece) = reasoning_delta
+        && !piece.is_empty()
+    {
+        on_chunk(StreamingChunk::Reasoning(piece.to_string()));
+    }
     if let Some(tc_array) = delta.get("tool_calls").and_then(|v| v.as_array()) {
         for tc in tc_array {
             let Some(index) = tc.get("index").and_then(|v| v.as_u64()) else {
@@ -385,8 +399,10 @@ mod tests {
         let mut completion: Option<u32> = None;
         let mut finish: Option<String> = None;
         let mut chunks: Vec<String> = Vec::new();
+        let mut reasoning_chunks: Vec<String> = Vec::new();
         let mut on_chunk = |c: StreamingChunk| match c {
             StreamingChunk::Text(t) => chunks.push(t),
+            StreamingChunk::Reasoning(t) => reasoning_chunks.push(t),
         };
         for data in [
             r#"{"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}"#,
@@ -408,10 +424,66 @@ mod tests {
         }
         assert_eq!(text, "Hello, world!");
         assert_eq!(chunks, vec!["Hello".to_string(), ", world!".to_string()]);
+        assert!(reasoning_chunks.is_empty());
         assert_eq!(prompt, Some(12));
         assert_eq!(completion, Some(4));
         assert_eq!(finish.as_deref(), Some("stop"));
         assert!(tool_calls.is_empty());
+    }
+
+    #[test]
+    fn sse_chunk_handler_emits_reasoning_chunks_from_reasoning_content_field() {
+        // vLLM with `--reasoning-parser qwen3` streams the model's
+        // thinking text as `delta.reasoning_content` deltas, interleaved
+        // with `delta.content` once the visible answer begins. The
+        // parser must surface both channels distinctly so the
+        // orchestrator can forward them to separate UI surfaces.
+        let mut text = String::new();
+        let mut tool_calls = std::collections::BTreeMap::new();
+        let mut prompt: Option<u32> = None;
+        let mut completion: Option<u32> = None;
+        let mut finish: Option<String> = None;
+        let mut text_chunks: Vec<String> = Vec::new();
+        let mut reasoning_chunks: Vec<String> = Vec::new();
+        let mut on_chunk = |c: StreamingChunk| match c {
+            StreamingChunk::Text(t) => text_chunks.push(t),
+            StreamingChunk::Reasoning(t) => reasoning_chunks.push(t),
+        };
+        for data in [
+            r#"{"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"Let me "}}]}"#,
+            r#"{"choices":[{"index":0,"delta":{"reasoning_content":"think..."}}]}"#,
+            r#"{"choices":[{"index":0,"delta":{"content":"The answer "}}]}"#,
+            r#"{"choices":[{"index":0,"delta":{"content":"is 42."}}]}"#,
+            // Alias path: some proxies use the shorter `reasoning`
+            // field name; treat it identically.
+            r#"{"choices":[{"index":0,"delta":{"reasoning":" (afterthought)"}}]}"#,
+            r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
+        ] {
+            handle_openai_compat_sse_chunk(
+                data,
+                &mut text,
+                &mut tool_calls,
+                &mut prompt,
+                &mut completion,
+                &mut finish,
+                &mut on_chunk,
+            )
+            .unwrap();
+        }
+        assert_eq!(text, "The answer is 42.");
+        assert_eq!(
+            text_chunks,
+            vec!["The answer ".to_string(), "is 42.".to_string()]
+        );
+        assert_eq!(
+            reasoning_chunks,
+            vec![
+                "Let me ".to_string(),
+                "think...".to_string(),
+                " (afterthought)".to_string(),
+            ]
+        );
+        assert_eq!(finish.as_deref(), Some("stop"));
     }
 
     #[test]
@@ -424,6 +496,7 @@ mod tests {
         let mut chunks: Vec<String> = Vec::new();
         let mut on_chunk = |c: StreamingChunk| match c {
             StreamingChunk::Text(t) => chunks.push(t),
+            StreamingChunk::Reasoning(_) => {}
         };
         for data in [
             // First delta carries id + name + opening args fragment.

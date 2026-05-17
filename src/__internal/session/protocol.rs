@@ -52,6 +52,15 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         tool_calls: Vec<LlmToolCall>,
     },
+    /// A chunk of assistant *reasoning* text -- the model's internal
+    /// thinking captured separately from its visible answer. vLLM with
+    /// `--reasoning-parser qwen3` (and OpenAI's reasoning-effort API)
+    /// splits `<think>...</think>` content into a parallel channel
+    /// that streams as `delta.reasoning_content`; the orchestrator
+    /// forwards those deltas here so the chat panel can render a
+    /// collapsed-by-default reasoning block. `final_chunk: true` with
+    /// `text: ""` closes the reasoning bubble at end-of-turn.
+    AssistantReasoning { text: String, final_chunk: bool },
     /// A non-Assistant message the orchestrator added to the LLM
     /// prompt stack just before dispatching turn `turn_index`. Used by
     /// experimental hosts to render the running "prompts sent to the
@@ -567,6 +576,26 @@ mod tests {
                 assert_eq!(text, "hello");
                 assert!(final_chunk);
                 assert!(tool_calls.is_empty());
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn assistant_reasoning_round_trips() {
+        let e = Event::AssistantReasoning {
+            text: "step 1: ...".into(),
+            final_chunk: false,
+        };
+        let s = serde_json::to_string(&e).unwrap();
+        assert!(s.contains("\"event\":\"assistant-reasoning\""));
+        assert!(s.contains("\"text\":\"step 1: ...\""));
+        assert!(s.contains("\"final_chunk\":false"));
+        let parsed: Event = serde_json::from_str(&s).unwrap();
+        match parsed {
+            Event::AssistantReasoning { text, final_chunk } => {
+                assert_eq!(text, "step 1: ...");
+                assert!(!final_chunk);
             }
             other => panic!("unexpected variant: {:?}", other),
         }

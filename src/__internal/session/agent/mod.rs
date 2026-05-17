@@ -152,6 +152,17 @@ pub enum StreamingChunk {
     /// callers (or a fallback through `dispatch_with_tools`) see
     /// the complete response.
     Text(String),
+    /// Incremental reasoning text emitted alongside the visible
+    /// response. vLLM with `--reasoning-parser qwen3` (and OpenAI's
+    /// reasoning-effort API) splits the model's `<think>...</think>`
+    /// output into a separate `reasoning_content` channel; backends
+    /// surface those deltas as `Reasoning` chunks so the chat panel
+    /// can render a collapsed-by-default reasoning block and the
+    /// orchestrator can thread the prior turn's thinking back into
+    /// history. Unlike `Text`, reasoning is NOT accumulated into the
+    /// `dispatch_streaming` return tuple -- the orchestrator buffers
+    /// it from the chunk stream directly.
+    Reasoning(String),
 }
 
 pub trait CliAgent: Send + Sync {

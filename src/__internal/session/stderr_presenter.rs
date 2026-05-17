@@ -245,6 +245,12 @@ where
                 // context" indicator on transcript rows. Stderr has
                 // no transcript to mark.
             }
+            Event::AssistantReasoning { .. } => {
+                // Chat-panel renders this in a collapsed-by-default
+                // block; a terminal session deliberately drops it
+                // (the model's visible answer is what the user
+                // actually wants to read on stdout).
+            }
         }
         Ok(())
     }

@@ -204,6 +204,7 @@ fn event_kind(event: &Event) -> &'static str {
     match event {
         Event::HelloAck { .. } => "HelloAck",
         Event::AssistantText { .. } => "AssistantText",
+        Event::AssistantReasoning { .. } => "AssistantReasoning",
         Event::ArtifactWritten { .. } => "ArtifactWritten",
         Event::ToolInvoked { .. } => "ToolInvoked",
         Event::PhaseChanged { .. } => "PhaseChanged",

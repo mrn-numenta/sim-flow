@@ -683,8 +683,10 @@ where
         // chunk after the buffered dispatch -- semantically a no-op
         // for those callers.
         let mut streamed_text = String::new();
+        let mut streamed_reasoning = String::new();
         let dispatch_result = {
             let host_for_chunks = &mut *host;
+            let streamed_reasoning_for_chunks = &mut streamed_reasoning;
             let mut on_chunk = |chunk: crate::session::agent::StreamingChunk| match chunk {
                 crate::session::agent::StreamingChunk::Text(t) => {
                     streamed_text.push_str(&t);
@@ -697,6 +699,13 @@ where
                         text: t,
                         final_chunk: false,
                         tool_calls: Vec::new(),
+                    });
+                }
+                crate::session::agent::StreamingChunk::Reasoning(t) => {
+                    streamed_reasoning_for_chunks.push_str(&t);
+                    let _ = host_for_chunks.send(&Event::AssistantReasoning {
+                        text: t,
+                        final_chunk: false,
                     });
                 }
             };
@@ -799,6 +808,22 @@ where
                     }
                     remainder
                 };
+                // Close the reasoning bubble before the assistant
+                // text bubble. Reasoning is streamed exclusively via
+                // `StreamingChunk::Reasoning` (no return-tuple
+                // component), so all the body has already been
+                // forwarded as incremental `final_chunk: false`
+                // events. This empty `final_chunk: true` flips the
+                // panel's `streaming: false` so the collapsed
+                // bubble's "thinking..." indicator clears. Emit only
+                // when the turn actually produced reasoning so
+                // turns from non-thinking backends stay quiet.
+                if !streamed_reasoning.is_empty() {
+                    host.send(&Event::AssistantReasoning {
+                        text: String::new(),
+                        final_chunk: true,
+                    })?;
+                }
                 host.send(&Event::AssistantText {
                     text: final_text,
                     final_chunk: true,

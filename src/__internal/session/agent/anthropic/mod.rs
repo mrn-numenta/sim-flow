@@ -1212,6 +1212,7 @@ mod tests {
         let mut chunks: Vec<String> = Vec::new();
         let mut on_chunk = |c: StreamingChunk| match c {
             StreamingChunk::Text(t) => chunks.push(t),
+            StreamingChunk::Reasoning(_) => {}
         };
 
         for (event, data) in [
@@ -1276,6 +1277,7 @@ mod tests {
         let mut chunks: Vec<String> = Vec::new();
         let mut on_chunk = |c: StreamingChunk| match c {
             StreamingChunk::Text(t) => chunks.push(t),
+            StreamingChunk::Reasoning(_) => {}
         };
         for (event, data) in [
             (
