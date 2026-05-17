@@ -1707,7 +1707,7 @@ function buildComposerControls(state: ChatPanelState): HTMLElement {
   modeBtn.type = "button";
   modeBtn.id = "x-composer-mode";
   modeBtn.className = "x-mode-toggle";
-  modeBtn.textContent = isAuto ? "Auto" : "Manual";
+  modeBtn.textContent = isAuto ? "Auto mode" : "Manual mode";
   modeBtn.disabled = modeDisabled;
   modeBtn.title = isAuto
     ? "Auto (orchestrator runs sub-sessions to completion). Click to switch to Manual."
