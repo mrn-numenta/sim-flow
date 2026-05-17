@@ -25,5 +25,6 @@ pub mod steps;
 pub mod template;
 pub mod test_validation;
 pub mod tracking;
+pub mod worktree;
 
 pub use error::{Error, Result};
