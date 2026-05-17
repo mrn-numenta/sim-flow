@@ -236,7 +236,11 @@ pub fn prune_orphans(main_project_dir: &Path) {
 /// session has ended; aggregation then folds the contributions into
 /// a single main-tree critique JSON and copies the milestone file
 /// back into the main project.
-#[derive(Debug)]
+///
+/// `Clone` so the dispatcher can hand a copy to
+/// [`merge_contributions`] while still holding the original (paired
+/// with the live `Worktree`) for cleanup at scope exit.
+#[derive(Debug, Clone)]
 pub struct WorktreeContribution {
     /// The worker's worktree path (whence we read).
     pub worktree_path: PathBuf,

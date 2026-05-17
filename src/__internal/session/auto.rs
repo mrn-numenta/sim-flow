@@ -1346,6 +1346,46 @@ where
 
     let step_id_owned = step.id.to_string();
     let n_pending = pending.len();
+
+    // Try the Phase-A worktree path first: each worker gets its
+    // own git worktree off HEAD so concurrent Work + Critique
+    // sessions can't race on the shared per-step critique JSON.
+    // Falls back to the in-place V1 path when the project isn't a
+    // git work tree (or `git` is missing) -- both paths handle
+    // the same correctness invariants; worktrees just give us
+    // parallel critiques too.
+    match crate::__internal::worktree::WorktreeManager::create_for_step(
+        &opts.project_dir,
+        &step_id_owned,
+    ) {
+        Ok(manager) => {
+            auto_host.send(&Event::Diagnostic {
+                level: DiagnosticLevel::Info,
+                message: format!(
+                    "auto: {step_id_owned} parallel plan-detail walk: {n_pending} pending stub(s), \
+                     dispatching up to {cap} concurrent workers with per-milestone worktrees"
+                ),
+            })?;
+            return run_plan_detail_walk_worktrees(
+                opts, step, auto_host, llm, manager, pending, cap,
+            );
+        }
+        Err(err) => {
+            // Not a git repo / `git` missing -- annotate and fall
+            // through to the in-place V1 path. The annotation is
+            // Info because the fallback is fully supported, just
+            // doesn't get the Phase-A wins (parallel critique,
+            // per-worker target/).
+            auto_host.send(&Event::Diagnostic {
+                level: DiagnosticLevel::Info,
+                message: format!(
+                    "auto: {step_id_owned} parallel plan-detail walk: worktree path unavailable \
+                     ({err}); falling back to in-place fan-out"
+                ),
+            })?;
+        }
+    }
+
     auto_host.send(&Event::Diagnostic {
         level: DiagnosticLevel::Info,
         message: format!(
@@ -1554,6 +1594,223 @@ where
             break;
         }
     }
+    Ok(true)
+}
+
+/// Phase-A path: each worker checks out its own git worktree off
+/// HEAD, runs Work + Critique back-to-back inside that worktree,
+/// and reports a [`WorktreeContribution`] back to the coordinator.
+/// After all workers complete the coordinator merges every worker's
+/// milestone file back into the main project tree and aggregates
+/// the per-worker critique JSONs into a single main-tree JSON via
+/// [`crate::__internal::worktree::merge_contributions`]. Per-worker
+/// filesystem isolation kills Bug 1 (per-step critique JSON
+/// overwrite) by construction and unlocks parallel critique --
+/// no need for the V1 in-place path's serial Phase-2 loop.
+#[allow(clippy::too_many_arguments)]
+fn run_plan_detail_walk_worktrees<P, L>(
+    opts: &AutoOptions,
+    step: &crate::__internal::steps::StepDescriptor,
+    auto_host: &mut AutoPresenter<P>,
+    llm: &mut L,
+    manager: crate::__internal::worktree::WorktreeManager,
+    pending: Vec<String>,
+    cap: usize,
+) -> Result<bool>
+where
+    P: Presenter + ?Sized,
+    L: LlmAdapter + ?Sized,
+{
+    use crate::__internal::worktree::{Worktree, WorktreeContribution};
+
+    let queue = Arc::new(std::sync::Mutex::new(pending.clone()));
+    let (tx, rx) = std::sync::mpsc::channel::<Event>();
+    let cap_exceeded_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    // Per-worker contributions accumulated as workers finish. The
+    // `Worktree` value stays in the vec so the worktree directory
+    // outlives the coordinator's merge pass; both drop together
+    // at the bottom of this function.
+    type Contrib = (Worktree, WorktreeContribution);
+    let contributions: Arc<std::sync::Mutex<Vec<Contrib>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    let llm_shared: &L = &*llm;
+    let opts_ref: &AutoOptions = opts;
+    let step_id_ref: &str = step.id;
+    let manager_ref: &crate::__internal::worktree::WorktreeManager = &manager;
+
+    let work_result: Result<()> = std::thread::scope(|scope| -> Result<()> {
+        let mut handles: Vec<std::thread::ScopedJoinHandle<'_, Result<()>>> =
+            Vec::with_capacity(cap);
+        for _ in 0..cap {
+            let tx_w = tx.clone();
+            let queue_w = Arc::clone(&queue);
+            let opts_w = opts_ref;
+            let step_id_w = step_id_ref;
+            let llm_w = llm_shared;
+            let cap_flag_w = Arc::clone(&cap_exceeded_flag);
+            let manager_w = manager_ref;
+            let contribs_w = Arc::clone(&contributions);
+            handles.push(scope.spawn(move || -> Result<()> {
+                loop {
+                    if cap_flag_w.load(std::sync::atomic::Ordering::Acquire) {
+                        break;
+                    }
+                    let stub = match queue_w.lock() {
+                        Ok(mut guard) => guard.pop(),
+                        Err(poisoned) => poisoned.into_inner().pop(),
+                    };
+                    let Some(milestone_rel) = stub else { break };
+                    let bare_name = std::path::Path::new(&milestone_rel)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(String::from)
+                        .unwrap_or_else(|| milestone_rel.clone());
+
+                    // Check out the per-worker worktree off HEAD and
+                    // point this session's `project_dir` at it.
+                    // `Worktree::Drop` cleans the directory up; we
+                    // park the value in `contributions` so it lives
+                    // long enough for the coordinator's merge pass
+                    // to read the worker's files.
+                    let wt = manager_w.checkout(&bare_name)?;
+                    let mut worker_opts = opts_w.clone();
+                    worker_opts.project_dir = wt.path().to_path_buf();
+
+                    // Work + Critique inside the worktree -- the
+                    // critique reads the milestone file the work
+                    // session just wrote, and writes its JSON to
+                    // the worktree's `docs/critiques/`, isolated
+                    // from every other worker.
+                    {
+                        let mut sink = ChannelPresenter::new(tx_w.clone());
+                        let mode = Arc::new(AtomicU8::new(step_mode_to_u8(opts_w.step_mode)));
+                        let mut worker_host = AutoPresenter::new(&mut sink, mode);
+                        let mut adapter = RefAdapter(llm_w);
+                        run_subsession_scoped(
+                            &worker_opts,
+                            step_id_w,
+                            crate::client::SessionKind::Work,
+                            /*auto=*/ true,
+                            &mut worker_host,
+                            /*consume_end=*/ true,
+                            /*synth_hello=*/ true,
+                            &mut adapter,
+                            Some(bare_name.clone()),
+                        )?;
+                    }
+                    {
+                        let mut sink = ChannelPresenter::new(tx_w.clone());
+                        let mode = Arc::new(AtomicU8::new(step_mode_to_u8(opts_w.step_mode)));
+                        let mut worker_host = AutoPresenter::new(&mut sink, mode);
+                        let mut adapter = RefAdapter(llm_w);
+                        run_subsession_scoped(
+                            &worker_opts,
+                            step_id_w,
+                            crate::client::SessionKind::Critique,
+                            /*auto=*/ true,
+                            &mut worker_host,
+                            /*consume_end=*/ true,
+                            /*synth_hello=*/ true,
+                            &mut adapter,
+                            Some(bare_name.clone()),
+                        )?;
+                    }
+
+                    let contribution = WorktreeContribution {
+                        worktree_path: wt.path().to_path_buf(),
+                        milestone_name: bare_name,
+                        milestone_rel_path: milestone_rel.clone(),
+                    };
+                    let mut guard = match contribs_w.lock() {
+                        Ok(g) => g,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    guard.push((wt, contribution));
+                }
+                Ok(())
+            }));
+        }
+        drop(tx);
+
+        let mut first_err: Option<crate::Error> = None;
+        while let Ok(event) = rx.recv() {
+            if let Event::Diagnostic { level, message } = &event
+                && matches!(level, DiagnosticLevel::Error)
+                && (message.contains("max_auto_iters") || message.contains("max_critique_iters"))
+                && !cap_exceeded_flag.load(std::sync::atomic::Ordering::Acquire)
+            {
+                cap_exceeded_flag.store(true, std::sync::atomic::Ordering::Release);
+            }
+            if first_err.is_some() {
+                continue;
+            }
+            if let Err(e) = auto_host.send(&event) {
+                first_err = Some(e);
+            }
+        }
+        for h in handles {
+            match h.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    if first_err.is_none() {
+                        first_err = Some(e);
+                    }
+                }
+                Err(panic) => {
+                    let msg = panic
+                        .downcast_ref::<&str>()
+                        .copied()
+                        .or_else(|| panic.downcast_ref::<String>().map(|s| s.as_str()))
+                        .unwrap_or("(unknown panic payload)");
+                    if first_err.is_none() {
+                        first_err = Some(crate::Error::State(format!(
+                            "parallel plan-detail worker (worktree) panicked: {msg}"
+                        )));
+                    }
+                }
+            }
+        }
+        if let Some(e) = first_err {
+            return Err(e);
+        }
+        Ok(())
+    });
+    work_result?;
+
+    // Coordinator merge: copy each worker's milestone file back to
+    // the main project tree and aggregate per-worker critique JSONs
+    // into a single main-tree JSON. The aggregated `Critique` view
+    // is returned for diagnostics; the caller's `read_gate_findings`
+    // call later in `run_auto_loop` re-reads the on-disk JSON to
+    // decide advance vs. flip-to-manual.
+    // All workers have dropped their Arc clones (scope returned).
+    // `try_unwrap` should always succeed here; if it doesn't,
+    // something held on to a clone past the scope -- bail rather
+    // than silently leak worktrees.
+    let contribs_vec = Arc::try_unwrap(contributions)
+        .map_err(|_| {
+            crate::Error::State(
+                "parallel walk: worker thread retained Arc<contributions> past scope return".into(),
+            )
+        })?
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let contribs_only: Vec<WorktreeContribution> =
+        contribs_vec.iter().map(|(_, c)| c.clone()).collect();
+    let _aggregated = crate::__internal::worktree::merge_contributions(
+        &opts.project_dir,
+        step.id,
+        &contribs_only,
+    )?;
+    // `contribs_vec` drops here -- Worktree::Drop cleans each one
+    // up via `git worktree remove --force`.
+    drop(contribs_vec);
+    // Manager drop removes the output_root.
+    drop(manager);
+
     Ok(true)
 }
 
