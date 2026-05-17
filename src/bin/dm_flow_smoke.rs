@@ -182,6 +182,7 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         max_parallel_requests: 0,
         step_mode: sim_flow::__internal::session::protocol::StepMode::Auto,
         no_preamble: true,
+        cancel_flag: None,
     };
 
     println!("dm_flow_smoke: launching run_auto via TerminalHost + ClaudeAgent...");

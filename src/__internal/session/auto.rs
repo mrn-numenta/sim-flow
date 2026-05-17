@@ -178,6 +178,26 @@ pub struct AutoOptions {
     /// system prompt so verbose-CoT models lead with tool calls
     /// instead of preamble.
     pub no_preamble: bool,
+    /// Shared cancellation flag. Same `Arc<AtomicBool>` that the
+    /// agent's `AgentConfig::cancel_flag` holds (constructed once in
+    /// `commands::run_auto`), so the control-socket listener, the
+    /// LLM agent's poll loop, and this driver all see the same bit.
+    ///
+    /// The driver clears the flag at sub-session boundaries (before
+    /// dispatching a manual Q&A turn, before each manual RunStep /
+    /// RunCritique, etc.) so a cancel that ended the previous
+    /// sub-session doesn't bleed into the next dispatch as an
+    /// instant `Error::Cancelled`. Without this, clicking Stop on a
+    /// live LLM call leaves the flag set permanently; the next user
+    /// prompt opens a new sub-session whose first poll returns
+    /// `Cancelled`, the orchestrator emits a Diagnostic, and the
+    /// chat panel renders "No response received." for every
+    /// follow-up turn.
+    ///
+    /// Optional so test harnesses that don't construct a control
+    /// socket (and didn't pass a flag through `AgentConfig`) keep
+    /// working unchanged: `None` is "no cancellation channel".
+    pub cancel_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 pub fn run_auto<P, L>(opts: AutoOptions, host: &mut P, llm: &mut L) -> Result<()>
@@ -1106,6 +1126,11 @@ where
     host.cap_exceeded = false;
     host.in_subsession = true;
     host.in_subsession_parked = false;
+    // Clear any lingering "true" from a Stop on the previous
+    // sub-session. Same reason as [`reset_cancel_flag`] in the
+    // manual path: an unreset flag would abort the very first poll
+    // of this sub-session's first LLM dispatch.
+    reset_cancel_flag(opts);
     let kind_out = session_kind_to_protocol(kind);
     info!(step = step_id, kind = ?kind_out, auto, "sub-session starting");
     // Bracket the inner run_session with SubSessionStarted /
@@ -2386,6 +2411,22 @@ where
     }
 }
 
+/// Clear the shared LLM-cancellation flag, if any. Called at the
+/// start of every command that's about to dispatch a fresh LLM call
+/// from the manual loop (Q&A turn, RunStep, RunCritique, Advance,
+/// ContinueFlow). Without this reset, a Stop click that flipped the
+/// flag during the previous sub-session would still be `true` when
+/// the agent polls during the next dispatch -- the call would return
+/// `Error::Cancelled` immediately, the orchestrator would emit a
+/// Diagnostic, and the chat panel would render "No response received."
+/// for the user's follow-up prompt. The flag's "true" state must not
+/// outlive the sub-session it cancelled.
+fn reset_cancel_flag(opts: &AutoOptions) {
+    if let Some(flag) = opts.cancel_flag.as_ref() {
+        flag.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 fn run_manual_subsession<P, L>(
     opts: &AutoOptions,
     step_id: &str,
@@ -2400,6 +2441,9 @@ where
     if !validate_step_id(opts, step_id, kind_label_for_manual(kind), auto_host)? {
         return Ok(());
     }
+    // (Cancel-flag reset is centralized in `run_subsession_scoped`
+    // a few frames down -- one reset per sub-session, regardless of
+    // whether we got here via the manual loop or the auto loop.)
     // Swallow the inner run_session's SessionEnd. The host treats
     // SessionEnd as "the orchestrator process is gone" and clears
     // its `activeSession` reference (see `socketPump.ts` →
@@ -2829,6 +2873,11 @@ where
     P: Presenter + ?Sized,
     L: LlmAdapter + ?Sized,
 {
+    // A previous Stop click may have left the shared cancel flag at
+    // `true`; clear it so this fresh dispatch isn't aborted on its
+    // first poll. See [`reset_cancel_flag`] for the regression this
+    // guards against.
+    reset_cancel_flag(opts);
     // Determine the current step for the bracket payload + system
     // prompt context. If state.toml is unreadable we still run Q&A,
     // just without the step anchor.
@@ -3655,6 +3704,7 @@ mod tests {
             max_parallel_requests: 0,
             step_mode: crate::session::protocol::StepMode::Auto,
             no_preamble: true,
+            cancel_flag: None,
         }
     }
 
@@ -4946,5 +4996,57 @@ not a finding
         // Unknown u8 falls back to Manual (the "safer" side: don't
         // silently keep auto-driving on a corrupted flag).
         assert_eq!(step_mode_from_u8(0xff), StepMode::Manual);
+    }
+
+    // ---- reset_cancel_flag ----
+
+    /// Pins the user-visible regression that prompted this fix:
+    /// clicking Stop on a live LLM response sets the shared cancel
+    /// flag to true; without resetting before the next sub-session,
+    /// the user's follow-up prompt is aborted on its first poll and
+    /// the chat panel renders "No response received." for every
+    /// subsequent turn.
+    #[test]
+    fn reset_cancel_flag_clears_a_set_flag_on_subsequent_dispatch() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let flag = Arc::new(AtomicBool::new(true));
+        let opts = AutoOptions {
+            cancel_flag: Some(flag.clone()),
+            ..options_with_llm("mock", None, None)
+        };
+        reset_cancel_flag(&opts);
+        assert!(
+            !flag.load(Ordering::Acquire),
+            "reset_cancel_flag should clear a sticky `true` from a prior cancel"
+        );
+    }
+
+    #[test]
+    fn reset_cancel_flag_is_a_noop_when_no_flag_is_configured() {
+        // Test harnesses (and the JSONL stdio transport) construct
+        // AutoOptions with `cancel_flag: None`. The reset must be
+        // safe to call unconditionally; the orchestrator doesn't
+        // know which transport is in front of it.
+        let opts = AutoOptions {
+            cancel_flag: None,
+            ..options_with_llm("mock", None, None)
+        };
+        reset_cancel_flag(&opts); // must not panic.
+    }
+
+    #[test]
+    fn reset_cancel_flag_leaves_an_already_false_flag_alone() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let flag = Arc::new(AtomicBool::new(false));
+        let opts = AutoOptions {
+            cancel_flag: Some(flag.clone()),
+            ..options_with_llm("mock", None, None)
+        };
+        reset_cancel_flag(&opts);
+        assert!(!flag.load(Ordering::Acquire));
     }
 }

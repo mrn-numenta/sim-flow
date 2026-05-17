@@ -254,6 +254,7 @@ fn auto_opts(project: &std::path::Path, mode: StepMode) -> AutoOptions {
         max_parallel_requests: 0,
         step_mode: mode,
         no_preamble: true,
+        cancel_flag: None,
     }
 }
 

@@ -545,6 +545,7 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         max_parallel_requests: 0,
         step_mode: StepMode::Auto,
         no_preamble: args.no_preamble,
+        cancel_flag: None,
     };
 
     // Optional JSONL capture for the model-robustness study. The

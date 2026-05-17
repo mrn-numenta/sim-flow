@@ -768,6 +768,14 @@ fn auto_cmd(
         };
     }
 
+    // Shared cancellation flag, constructed BEFORE AutoOptions so
+    // the orchestrator and the agent both hold clones of the same
+    // `Arc`. The control-socket listener flips it on `cancel`; the
+    // agent polls it during dispatch; the auto driver clears it at
+    // sub-session boundaries so a Stop on one turn doesn't bleed
+    // into the next.
+    let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
     // JSONL host path: extension drives sim-flow over stdin/stdout.
     let opts = sim_flow::__internal::session::AutoOptions {
         project_dir: project.to_path_buf(),
@@ -797,6 +805,7 @@ fn auto_cmd(
         max_parallel_requests: resolve_max_parallel_requests(max_parallel_requests, project)?,
         step_mode,
         no_preamble,
+        cancel_flag: Some(cancel_flag.clone()),
     };
     // Optional read-only event broadcast. When `--watch-socket` is
     // set, every event the orchestrator emits is mirrored to the
@@ -833,12 +842,16 @@ fn auto_cmd(
     // multiple agents, which v1 of the split doesn't model.
     //
     // Cancel flag: shared between the agent (which polls it during
-    // its blocking LLM call) and the SocketPresenter's control-socket
-    // listener (which sets it on a dashboard Stop click). Only the
-    // socket transport opens a control socket; the JSONL stdio
-    // transport leaves the flag false and the agent's polling is a
-    // no-op until the wire-level Cancel arrives between turns.
-    let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // its blocking LLM call), the SocketPresenter's control-socket
+    // listener (which sets it on a dashboard Stop click), and the
+    // auto driver (which clears it at sub-session boundaries -- see
+    // `AutoOptions::cancel_flag`). All three clone the same Arc
+    // constructed earlier in this function; the reset path lives in
+    // the driver because that's the only component with a coherent
+    // "new sub-session is starting now" boundary. Only the socket
+    // transport opens a control socket; the JSONL stdio transport
+    // leaves the flag false and the agent's polling is a no-op
+    // until the wire-level Cancel arrives between turns.
     let agent_config = sim_flow::__internal::session::AgentConfig {
         model: llm_model.map(String::from),
         model_family_id: llm_model_family.map(String::from),
