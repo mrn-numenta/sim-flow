@@ -1,8 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import * as net from "node:net";
-import * as os from "node:os";
-import * as path from "node:path";
+
+import { augmentPathForCargo } from "../childEnv";
 
 import { DebugLog } from "./debug-log";
 import { removePidRecord, writePidRecord } from "./processRegistry";
@@ -967,38 +967,3 @@ function delay(ms: number): Promise<void> {
   });
 }
 
-/**
- * Prepend likely cargo install locations to the orchestrator child's
- * PATH so its `run_cargo` tool can spawn cargo even when VS Code's
- * extension host inherited a PATH without `~/.cargo/bin` (the
- * common case when VS Code is launched from Finder/Dock instead of a
- * terminal). The user's shell login dotfiles aren't loaded by the
- * extension host, so the rustup-managed cargo install location is
- * missing from process.env.PATH.
- *
- * Order: rustup default (~/.cargo/bin) -> system Rust (/usr/local/bin
- * on macOS, /usr/bin on Linux) -> whatever the inherited PATH had.
- * Duplicates are de-duplicated to keep the env clean. We don't shell
- * out to `which cargo` because the child's actual cargo invocation
- * (`run_cargo`) does its own lookup against the merged PATH; we just
- * need to make sure the directories ARE on the list.
- */
-function augmentPathForCargo(inheritedPath: string | undefined): string {
-  const sep = process.platform === "win32" ? ";" : ":";
-  const additions = [
-    path.join(os.homedir(), ".cargo", "bin"),
-    process.platform === "darwin" ? "/usr/local/bin" : "/usr/bin",
-    "/opt/homebrew/bin",
-  ];
-  const existing = (inheritedPath ?? "").split(sep).filter((p) => p.length > 0);
-  const merged: string[] = [];
-  const seen = new Set<string>();
-  for (const dir of [...additions, ...existing]) {
-    if (seen.has(dir)) {
-      continue;
-    }
-    seen.add(dir);
-    merged.push(dir);
-  }
-  return merged.join(sep);
-}

@@ -5,6 +5,8 @@
 import { execFile as nodeExecFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import { augmentPathForCargo } from "../childEnv";
+
 export interface ExecResult {
   stdout: string;
   stderr: string;
@@ -25,6 +27,13 @@ export const defaultExecute: Execute = async (bin, args) => {
     // Generous buffer so long `runs --json` outputs do not truncate.
     maxBuffer: 16 * 1024 * 1024,
     windowsHide: true,
+    // sim-flow's `new model` / `gate` / `record-run` paths shell out
+    // to cargo. VS Code launched from Finder/Dock inherits a GUI
+    // environment whose PATH lacks ~/.cargo/bin, so the child's
+    // `Command::new("cargo")` fails with ENOENT. Augmenting PATH here
+    // makes one-shot CLI invocations succeed the same way the
+    // orchestrator pump's spawn does (session/socketPump.ts).
+    env: { ...process.env, PATH: augmentPathForCargo(process.env.PATH) },
   });
   return { stdout, stderr };
 };
