@@ -583,6 +583,25 @@ export class SocketSessionPump implements LiveSessionTransport {
   }
 
   /**
+   * Subscribe to `state-advanced` events. Fires whenever
+   * `current_step` moves -- forward via Advance, backward via
+   * Reset. The chat-panel host uses this to repaint the step rail
+   * after a context-menu Reset (without it, the rail stays pinned
+   * to the pre-reset step until the next unrelated refresh).
+   */
+  onStateAdvanced(
+    listener: (msg: { from: string; to: string | null }) => void,
+  ): () => void {
+    const wrapped = (msg: SocketPumpBusEvent) => {
+      if (msg.type === "state-advanced") {
+        listener({ from: msg.from, to: msg.to });
+      }
+    };
+    this.bus.on("msg", wrapped);
+    return () => this.bus.off("msg", wrapped);
+  }
+
+  /**
    * Manual-mode host commands. Each one fires-and-forgets — the
    * orchestrator emits `Diagnostic` if the command is rejected (auto
    * mode owns step execution, sub-session in flight, etc.) and that

@@ -2794,6 +2794,11 @@ fn run_manual_reset<P: Presenter + ?Sized>(
         })?;
         return Ok(());
     };
+    // Capture the pre-reset current_step so the StateAdvanced event
+    // below can name what we rewound from -- chat-panel hosts use
+    // the `from` field plus a state.toml re-read to repaint the step
+    // rail after a reset.
+    let from_step = state.current_step.clone();
 
     // Step 1: delete generated collateral (artifacts + critiques)
     // for `step_id` and every downstream step. Shared with the
@@ -2811,6 +2816,15 @@ fn run_manual_reset<P: Presenter + ?Sized>(
         return Ok(());
     }
     state.save(&dot)?;
+    // Tell hosts that `current_step` moved so they can re-read
+    // state.toml and repaint UI affordances (the chat panel's step
+    // rail, the dashboard's gate pills, etc.). Reuses the existing
+    // StateAdvanced event shape -- semantically "current_step moved
+    // from X to Y" covers both forward advance and backward reset.
+    auto_host.send(&Event::StateAdvanced {
+        from: from_step,
+        to: Some(step_id.to_string()),
+    })?;
 
     // Step 3: report.
     let cleared_count = order.len() - idx;

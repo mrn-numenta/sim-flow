@@ -125,8 +125,12 @@ pub enum Event {
         clean: bool,
         failures: Vec<GateFailureOut>,
     },
-    /// The orchestrator advanced `current_step` from one step to
-    /// another. Emitted right after `mark_passed` + `save`.
+    /// `current_step` moved. Forward case: emitted right after
+    /// `mark_passed` + `save` when an `Advance` succeeds (`from` is
+    /// the just-passed step, `to` is the next step in the flow or
+    /// `None` if `from` was the terminal step). Backward case:
+    /// emitted after a `Reset` rewinds `current_step` (`from` is
+    /// the pre-reset step, `to` is the reset target).
     StateAdvanced { from: String, to: Option<String> },
     /// Suggested next action for the host to render as a quick-pick
     /// button. Optional capability; hosts that don't advertise

@@ -281,6 +281,17 @@ export interface LiveSessionTransport {
     }) => void,
   ): () => void;
   /**
+   * Subscribe to `state-advanced` events. Fires whenever the
+   * orchestrator's `current_step` moves -- forward via `Advance`,
+   * backward via `Reset`. Chat-panel hosts use this to repaint the
+   * step rail after a context-menu Reset (`state.toml` is on disk
+   * already; subscribers re-read it on each callback). Absent on
+   * stdio / mock transports.
+   */
+  onStateAdvanced?(
+    listener: (msg: { from: string; to: string | null }) => void,
+  ): () => void;
+  /**
    * True when this pump is attached as a read-only observer to a
    * `--watch-socket` tap. Dashboard / chat panel use this to
    * disable command surfaces (Run Step / Run Critique / Send /

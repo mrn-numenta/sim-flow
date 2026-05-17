@@ -189,6 +189,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
    * bubbles when `showContextState` is on.
    */
   private contextEvictedListenerDispose: (() => void) | null = null;
+  /**
+   * Subscription to the active pump's `onStateAdvanced`. Fires when
+   * the orchestrator's `current_step` moves (forward via Advance,
+   * backward via Reset). We trigger `refresh()` so the next
+   * `readPanelContext` re-reads `state.toml` and the step rail
+   * repaints. Without this, a context-menu Reset leaves the rail
+   * pinned to the pre-reset step until some other event happens to
+   * trigger a refresh.
+   */
+  private stateAdvancedListenerDispose: (() => void) | null = null;
 
   /**
    * workspaceState key for the most recently launched project dir.
@@ -292,6 +302,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         this.attachStepModeListener(session);
         this.attachNextActionHintListener(session);
         this.attachContextEvictedListener(session);
+        this.attachStateAdvancedListener(session);
         // A newly attached/replaced session changes the panel's anchor
         // immediately; refresh so OFFLINE flips to VIEWING/STREAMING
         // without waiting for the next pump event. We intentionally do
@@ -398,6 +409,32 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         void this.refresh();
       },
     );
+  }
+
+  private attachStateAdvancedListener(
+    session: ManagedAutoSessionState | undefined,
+  ): void {
+    if (this.stateAdvancedListenerDispose) {
+      this.stateAdvancedListenerDispose();
+      this.stateAdvancedListenerDispose = null;
+    }
+    if (!session || typeof session.pump.onStateAdvanced !== "function") {
+      return;
+    }
+    this.stateAdvancedListenerDispose = session.pump.onStateAdvanced(() => {
+      // `current_step` moved on disk (forward Advance or backward
+      // Reset). Refresh so `readPanelContext` -> `readFlowStateSafe`
+      // re-reads `state.toml` and the step rail repaints. Without
+      // this, the rail stays on the pre-move step until some
+      // unrelated event happens to trigger a refresh -- which the
+      // user noticed after a context-menu Reset: the popup
+      // confirmed, the orchestrator did the work, but the rail
+      // didn't follow.
+      if (!this.activePump) {
+        return;
+      }
+      void this.refresh();
+    });
   }
 
   private attachRequestUserInputListener(
@@ -524,6 +561,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (this.nextActionHintListenerDispose) {
       this.nextActionHintListenerDispose();
       this.nextActionHintListenerDispose = null;
+    }
+    if (this.contextEvictedListenerDispose) {
+      this.contextEvictedListenerDispose();
+      this.contextEvictedListenerDispose = null;
+    }
+    if (this.stateAdvancedListenerDispose) {
+      this.stateAdvancedListenerDispose();
+      this.stateAdvancedListenerDispose = null;
     }
     for (const d of this.disposables) {
       d.dispose();

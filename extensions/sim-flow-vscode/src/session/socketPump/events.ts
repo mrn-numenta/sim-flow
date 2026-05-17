@@ -69,6 +69,16 @@ export type SocketPumpBusEvent =
       type: "context-evicted";
       ids: string[];
       reason: import("../protocol-types").ContextEvictionReason;
+    }
+  | {
+      // The orchestrator's `current_step` moved (forward via
+      // Advance, backward via Reset). Subscribers re-read
+      // state.toml to repaint flow-position-dependent UI like the
+      // step rail. `from` is the pre-move step; `to` is the new
+      // current_step (`null` when the flow has ended).
+      type: "state-advanced";
+      from: string;
+      to: string | null;
     };
 
 /**
@@ -238,6 +248,15 @@ export function handleEvent(ctx: EventDispatchContext, event: ProtocolEvent): vo
       ctx.currentRenderer?.markdown(
         `\n**Advanced past \`${event.from}\`${event.to ? `; current step is now \`${event.to}\`.` : ` (final step in this flow).`}**\n`,
       );
+      // Fan out a bus event so the chat-panel host can re-read
+      // state.toml and repaint the step rail. Reset uses the same
+      // wire shape, so the rail also updates after a context-menu
+      // reset (it would otherwise stay on the pre-reset step).
+      ctx.bus.emit("msg", {
+        type: "state-advanced",
+        from: event.from,
+        to: event.to ?? null,
+      } as SocketPumpBusEvent);
       break;
     case "followup":
       // Still surface the suggestion in the transcript for any
