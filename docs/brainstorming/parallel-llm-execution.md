@@ -174,31 +174,69 @@ incompatible with concurrent LLM calls. Parallel execution
 only applies to `per-step` session policy. The matrix gains a
 new dimension or the `single` cell stays single-threaded.
 
-## 4. Proposal -- four-phase rollout
+## 4. Proposal -- phased rollout
 
-**Phase 1: Pipeline Work / Critique within a walk.** One extra
-concurrent session slot. No plan-format change. No DAG. Smallest
-diff. Roughly 2x on every walk step. Establishes the concurrency
-primitive (a session-slot pool plus a way to launch a Work
-session while a Critique is in flight) that later phases reuse.
+> **History:** the original phases 1+2 collapsed into a single
+> "in-place parallel walk over plan-detail steps" feature that
+> landed in commits 06e7e13..ab229b3. Post-implementation review
+> (`parallel-llm-execution-bug-review.md`) surfaced Bug 1: the
+> serial Phase-2 critique loop writes to the same per-step JSON
+> path, so only the LAST critique's findings survive. The
+> worktree-based design below was triggered by that bug and the
+> realization that per-worker filesystem isolation kills it by
+> construction. The in-place implementation stays as a fallback
+> for non-git projects.
 
-**Phase 2: Parallelize plan-detail steps (DM2cd / DM3ad /
-DM4ad).** Each stub is an independent LLM call writing to its
-own file. Concurrency bounded by `--max-parallel` flag (default
-4, raisable). Largest absolute speedup because these steps
-often have 10-25 stubs and each is a separate round trip today.
+**Phase A: Worktrees for plan-detail walks (DM2cd / DM3ad /
+DM4ad).** Each worker runs in its own `git worktree` off the
+current HEAD. The worker performs BOTH Work and Critique
+back-to-back inside its worktree, so each milestone gets its own
+filesystem -- including its own `docs/critiques/<step>-critique.json`.
+The coordinator reads each worktree's critique JSON, aggregates
+findings across milestones (no overwrite race), and merges each
+worktree's milestone file back into the main working tree. Bug 1
+disappears by construction. Bug 9 (stale per-step JSON from a
+crashed prior run) disappears too because every Phase-A run writes
+to fresh worktrees.
 
-**Phase 3: Add `depends-on:` and `touches:` to milestone
-frontmatter.** Teach the plan-author prompts (DM2c, DM3a, DM4a)
-and detail prompts to populate them. The walker reads them but
-does not yet schedule concurrently -- this phase only proves the
-metadata is being filled in correctly and gates pass under the
-old serial walker.
+Why this is the natural Phase A: none of the plan-detail steps
+WRITE to `src/`, and DM3ad / DM4ad don't even READ it -- their
+prompts list only `docs/` inputs. DM2cd reads `docs/spec.md` plus
+`docs/analysis/*` and writes only to `docs/impl-plan/`. So the
+merge is exclusively over disjoint `docs/` files plus an
+aggregated critique JSON. No conflict resolution logic needed.
 
-**Phase 4: DAG-aware walker.** Consume the metadata; schedule
-independent milestones concurrently. Roll out per step in the
-order DM3c -> DM4b -> DM3b -> DM2d. Each rollout is a flag flip
-plus a milestone-cap increase, not a code change.
+**Phase B: Worktrees + `touches:` for execution walks (DM2d /
+DM3b / DM3c / DM4b).** Adds the milestone-frontmatter dependency
+metadata so the orchestrator can schedule disjoint milestones
+concurrently. Each worker runs in its own worktree (own
+`target/` too -- parallel cargo builds for free), and the
+coordinator merges via git's three-way merge. Milestones that
+declare overlapping `touches:` paths fall back to serial.
+DM3c first (smoke/edge/stress/random categories are naturally
+disjoint), then DM4b, then DM3b, then DM2d with a tight cap.
+
+```yaml
+---
+milestone: 04
+title: Decode stage
+depends-on: [02, 03]       # payload types + module skeletons
+touches:   [src/model/decode/, src/model/payloads.rs]
+---
+```
+
+**Phase C: cross-step speculative execution.** While DM2d
+finishes its last milestone, speculatively start DM3a planning
+against the in-progress source tree. Risky -- DM3a's outputs
+get invalidated if DM2d revises. Almost certainly overkill;
+flag for later.
+
+**Fallback path: in-place parallel walk (already landed in V1).**
+Non-git projects or projects where `git worktree add` fails
+keep the in-place serial-Phase-2 path from commits
+06e7e13..ab229b3. Bug 1's fix in that path is to check findings
+after EACH Phase-2 critique and halt on the first blocker. The
+worktree path is preferred when available.
 
 ## 5. State-model changes
 
@@ -221,32 +259,53 @@ contract already exists today via `milestones_all_implemented`
 in `dm.rs` -- this phase just makes the per-milestone state
 explicit so the scheduler can reason about it.
 
-## 6. Filesystem contention -- the open question
+## 6. Filesystem contention -- worktrees are now the primary mechanism
 
-Tier 3's biggest risk is parallel LLM agents writing to the
-same source file. `touches:` is an advisory list the plan
-author has to predict accurately. Two strategies, not
-mutually exclusive:
+Earlier this section debated `touches:` advisories vs.
+worktrees. Phase A's rollout flips that: **worktrees are the
+default**, `touches:` becomes a Phase-B scheduling hint that
+only kicks in when worktree merges would conflict.
 
-**A. Strict `touches:` enforcement.** The orchestrator computes
-the intersection of `touches:` across in-flight milestones. If
-a candidate milestone's `touches:` overlaps any active set, it
-waits. Cheap, but only as good as the plan author's prediction.
-False negatives (the agent wrote to a file it didn't declare)
-produce silent conflicts.
+**Per-milestone git worktrees.** Each parallel worker runs in
+its own `git worktree` off the current HEAD (typically at
+`.sim-flow/worktrees/<step>-<milestone>/`). The worker performs
+its full Work + Critique pair inside the worktree -- so every
+worker writes to its own filesystem, including its own
+`docs/critiques/<step>-critique.json`. Reads from upstream
+artifacts (`docs/spec.md`, `docs/analysis/*`, etc.) are
+concurrent-safe because they're unmodified during the walk.
+Strong isolation; correct by construction. Phase-A plan-detail
+walks NEVER conflict at merge time -- each worker contributes
+exactly one detailed milestone file plus an aggregated critique
+JSON.
 
-**B. Per-milestone git worktrees.** Each parallel milestone runs
-in its own worktree off the same base commit. The orchestrator
-merges results after all in-flight milestones at the current
-DAG level land. Strong isolation; correct by construction. The
-cost is merge complexity for milestones that genuinely do
-touch the same file (and merge conflicts that an agent has to
-resolve).
+**`touches:` advisory (Phase B).** Once execution walks join
+the parallel path, milestones that genuinely touch the same
+source file (Cargo.toml, src/lib.rs) can't safely fan out even
+with worktrees -- git's three-way merge fails on overlapping
+edits. The orchestrator computes the intersection of `touches:`
+across in-flight milestones and serializes any overlap.
+`touches:` becomes the scheduling hint that decides which
+milestones can cohabit a parallel batch.
 
-Recommendation: ship `touches:` enforcement first (Phase 4) with
-DM3c and DM4b -- both have naturally disjoint outputs. Defer
-worktrees to a follow-up if DM3b / DM2d need them. They may
-not, if `touches:` predictions are accurate enough.
+**Phase A's merge logic** is trivial precisely because the
+plan-detail steps write to disjoint paths:
+
+- DM2cd writes only to `docs/impl-plan/milestone-NN-*.md`
+- DM3ad writes only to `docs/test-plan/{tb,test}-milestone-NN-*.md`
+- DM4ad writes only to `docs/perf-plan/perf-milestone-NN-*.md`
+
+Plus each worker writes `docs/critiques/<step>-critique.json`.
+The coordinator copies each worker's milestone file back to
+main, aggregates the critique JSONs into one main-tree JSON,
+then renders the markdown. No merge driver, no conflict
+resolution.
+
+**Worktree lifecycle.** Create on Phase-A entry, destroy on
+exit. On crash, `git worktree prune` on next startup cleans up
+orphans. Disk cost is bounded by `max_parallel_requests` ×
+working-tree size; the shared `.git/` object store means it's
+cheaper than N independent clones.
 
 ## 7. What we explicitly don't parallelize
 
@@ -279,22 +338,39 @@ To know whether each phase is paying off:
 
 ## 9. Open questions
 
-1. **Does the AI client abstraction multiplex?** Each client
-   currently spawns a subprocess (`session/clients/claude.rs`,
-   `codex.rs`, `gh_copilot.rs`). For Tier 1 parallelism we
-   need to spawn N at once. Concurrent stdio capture, control
-   socket routing, and event-tap channel keying all assume one
-   active session -- audit needed.
-2. **How does `auto.rs`'s milestone-walk loop become a scheduler?**
-   It is currently a sequential `while pending > 0` loop. The
-   conversion to a level-by-level DAG scheduler is the largest
-   single piece of new code in Phase 4.
-3. **Where does the parallelism cap live?** Per-step in
-   `StepDescriptor`, per-run on the CLI, or both?
-4. **Does the dashboard need a multi-session view?** Today the
-   step-rail tile shows one active session. Phase 4 implies N
-   active tiles at once.
-5. **Cost cap interaction.** `docs/api-cost-management.md`
+1. ~~Does the AI client abstraction multiplex?~~ **Answered by
+   V1 implementation:** `LlmAdapter` now requires `Send + Sync`
+   and the in-place dispatcher shares one adapter across worker
+   threads via `RefAdapter`. Carries forward to Phase A
+   unchanged.
+2. **Worktree path resolution inside the orchestrator.** The
+   orchestrator reads `opts.project_dir` for state, prompts,
+   artifact writes. For Phase A workers it must point at the
+   per-worker worktree path, not the main project. We already
+   thread `milestone_name` into `OrchestratorOptions`; the
+   worktree path likely lives alongside it (or `opts.project_dir`
+   is just overwritten per worker, which is simpler).
+3. **`.sim-flow/` propagation into worktrees.** Workers need
+   `state.toml`, `config.toml`, prompts, and the project
+   templates. Simplest: copy `.sim-flow/state.toml` and
+   `.sim-flow/config.toml` into the worktree on create; the
+   worker reads them but doesn't write state (state advances
+   happen on the main thread post-merge). The rest of `.sim-flow/`
+   (logs, critiques, etc.) is per-worktree by design.
+4. **Critique JSON aggregation schema.** When the coordinator
+   merges N per-worker critique JSONs into one main-tree JSON,
+   the aggregation rule needs to compose with the existing
+   `Critique::load` gate parser. Probably "concatenate findings
+   arrays, tag each with its source milestone." Confirm against
+   `src/__internal/critique.rs`.
+5. **Dashboard multi-session view.** Today the step-rail tile
+   shows one active session. Phase A workers all emit
+   `SubSessionStarted` / `SubSessionEnded` through the shared
+   coordinator-side mpsc; the dashboard currently expects
+   nested singletons. May render fine (just rapid in/out
+   bracketing); may need a per-worker swimlane. Worth verifying
+   before declaring Phase A user-facing.
+6. **Cost cap interaction.** `docs/api-cost-management.md`
    tracks per-run spend. Concurrent calls don't change total
    spend but they spike instantaneous rate; the cap should
    measure cumulative tokens, not parallelism.
@@ -304,11 +380,30 @@ To know whether each phase is paying off:
 ## 10. Summary
 
 The DMF has substantial unused LLM parallelism: plan-detail
-steps with N independent stubs (Tier 1), multi-artifact
-non-walk steps (Tier 2), and milestone-level execution within
-walk steps once dependencies are declared (Tier 3). Phases 1
-and 2 are orchestrator-only and pay off immediately. Phase 3
-introduces a minimal `depends-on:` / `touches:` extension to
-the milestone format. Phase 4 turns the milestone-walk loop
-into a DAG scheduler. Each phase is independently shippable
-and reversible.
+steps with N independent stubs, multi-artifact non-walk steps,
+and milestone-level execution within walk steps once
+dependencies are declared. V1 landed an in-place parallel
+walker (commits 06e7e13..ab229b3) and surfaced one critical
+correctness bug (per-step critique JSON overwrite, see
+`parallel-llm-execution-bug-review.md` Bug 1).
+
+The revised rollout uses git worktrees as the primary
+isolation mechanism:
+
+- **Phase A**: worktrees for plan-detail walks (DM2cd /
+  DM3ad / DM4ad). Each worker runs Work + Critique inside
+  its own worktree, eliminating the critique-JSON race by
+  construction. Merge is trivial because plan-detail steps
+  write to disjoint `docs/` files.
+- **Phase B**: worktrees + `touches:` for execution walks
+  (DM2d / DM3b / DM3c / DM4b). `touches:` schedules disjoint
+  milestones into parallel batches; worktrees handle the
+  filesystem isolation. Per-worktree `target/` directories
+  parallelize cargo builds for free.
+- **Phase C**: cross-step speculative execution. Flagged for
+  later; almost certainly overkill.
+
+V1's in-place implementation stays as a fallback for non-git
+projects and as the supported `max_parallel_requests = 1`
+behavior. Each phase is independently shippable and
+reversible.
