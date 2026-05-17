@@ -1688,7 +1688,16 @@ function buildOrchestratorBanner(state: ChatPanelState): HTMLElement | null {
   const idleHint =
     state.idleQaHint && state.idleQaHint.trim().length > 0 ? state.idleQaHint : null;
   const showAwaiting = state.awaitingUserInput && !prompt;
-  if (!notice && !prompt && !idleHint && !showAwaiting) {
+  const rail = buildStepRail(state);
+  const milestoneLine = buildMilestoneStatusLine(state);
+  if (
+    !notice &&
+    !prompt &&
+    !idleHint &&
+    !showAwaiting &&
+    !rail &&
+    !milestoneLine
+  ) {
     return null;
   }
   const root = div("x-orchestrator-banner");
@@ -1715,17 +1724,50 @@ function buildOrchestratorBanner(state: ChatPanelState): HTMLElement | null {
     node.setAttribute("role", "note");
     root.appendChild(node);
   }
+  // Step rail + milestone status live here (above the composer) so
+  // the user sees flow position right next to the orchestrator's
+  // prompts / notices instead of crammed between the textarea and
+  // the action controls. Both render only when there's something to
+  // show (rail = flow is anchored; milestone line = current step
+  // has a milestone breakdown with a pending task).
+  if (rail) {
+    root.appendChild(rail);
+  }
+  if (milestoneLine) {
+    root.appendChild(milestoneLine);
+  }
   return root;
+}
+
+/**
+ * Render the milestone + task status line ("(3/8) Milestone 06:
+ * pipeline-state") or return null when the current step doesn't
+ * have a milestone breakdown. The progress prefix is omitted when
+ * `taskIndex`/`taskTotal` aren't available.
+ */
+function buildMilestoneStatusLine(state: ChatPanelState): HTMLElement | null {
+  if (!state.currentMilestone) {
+    return null;
+  }
+  const ms = state.currentMilestone;
+  const progress =
+    ms.taskIndex !== null && ms.taskTotal !== null
+      ? `(${ms.taskIndex}/${ms.taskTotal}) `
+      : "";
+  const sub = div("x-step-rail-substep");
+  sub.textContent = `${progress}${ms.title}: ${ms.task}`;
+  sub.title = sub.textContent;
+  return sub;
 }
 
 function buildComposer(state: ChatPanelState): HTMLElement {
   const root = div("x-composer");
-  // The composer stacks two (or three) rows inside one bordered
-  // container:
+  // The composer stacks two rows inside one bordered container:
   //   1. textarea (+ Browse on DM0)
-  //   2. controls: [▶ play | step rail | Manual/Auto | Send/Stop]
-  //   3. milestone+task hint (only when a milestone-driven step is
-  //      processing a pending task)
+  //   2. controls: [▶ play | spacer | Manual/Auto | Send/Stop]
+  // The step rail + milestone+task hint that used to live here
+  // moved up into the orchestrator banner (above the composer) so
+  // all flow-position UI sits in one consolidated status box.
   const area = document.createElement("textarea");
   area.className = "x-composer-input";
   area.id = "x-composer-textarea";
@@ -1820,28 +1862,20 @@ function buildComposer(state: ChatPanelState): HTMLElement {
     root.appendChild(followupsRow);
   }
   root.appendChild(buildComposerControls(state));
-  if (state.currentMilestone) {
-    const ms = state.currentMilestone;
-    const progress =
-      ms.taskIndex !== null && ms.taskTotal !== null
-        ? `(${ms.taskIndex}/${ms.taskTotal}) `
-        : "";
-    const sub = div("x-step-rail-substep");
-    sub.textContent = `${progress}${ms.title}: ${ms.task}`;
-    sub.title = sub.textContent;
-    root.appendChild(sub);
-  }
   return root;
 }
 
 /**
  * Consolidated control row anchored at the bottom of the composer:
- *   [▶ play] [step rail] [Manual/Auto] [Send/Stop]
+ *   [▶ play] [spacer] [Manual/Auto] [Send/Stop]
  * - Play forwards `ContinueFlow` to the orchestrator (icon only;
  *   the orchestrator picks the next action, so a single glyph
  *   suffices). Disabled when there's no next action.
- * - Rail (built by `buildStepRail`) takes the flex middle slot
- *   and shrinks neighbours when a tile is hovered open.
+ * - Spacer takes the flex middle slot so the right-side controls
+ *   stay anchored to the right edge. The step rail used to live
+ *   here; it moved up into the orchestrator banner (above the
+ *   composer) so flow-position UI sits in one consolidated status
+ *   box next to the orchestrator's prompts / notices.
  * - Manual/Auto toggles step mode.
  * - Send/Stop submits the draft (or cancels the current activity).
  */
@@ -1909,16 +1943,14 @@ function buildComposerControls(state: ChatPanelState): HTMLElement {
   });
   root.appendChild(playBtn);
 
-  // ---- Step rail (middle, flex-grow) ----
-  const rail = buildStepRail(state);
-  if (rail) {
-    root.appendChild(rail);
-  } else {
-    // Spacer keeps the row's columns stable when no flow is
-    // anchored yet -- play stays on the left edge, mode + send
-    // stay on the right edge.
-    root.appendChild(div("x-composer-controls-spacer"));
-  }
+  // The step rail used to live here between Play and the
+  // Manual/Auto toggle. It moved up into the orchestrator banner
+  // (above the composer) so all flow-position UI sits next to the
+  // orchestrator's prompts / notices in one consolidated status
+  // box. A spacer keeps the row's columns stable so the right-side
+  // controls (Manual/Auto, Send/Stop) stay anchored to the right
+  // edge instead of bunching up next to Play.
+  root.appendChild(div("x-composer-controls-spacer"));
 
   // ---- Manual / Auto toggle ----
   const isAuto = state.currentStepMode === "auto";
