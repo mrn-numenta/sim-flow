@@ -642,6 +642,20 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
     projectBtn.title = state.isViewer
       ? "Leave viewer mode and start a fresh sim-flow session on the chosen project. Detaches the current viewer attachment."
       : "Switch the chat panel to a different sim-flow project. Stops the active session and launches a fresh one on the chosen project.";
+  } else if (state.sessionLaunching) {
+    // Auto-resume is spawning an orchestrator for this project.
+    // Show the target project's label so the user knows what's
+    // loading; disable the button so a stray click doesn't try to
+    // double-launch.
+    const projectName =
+      state.projectLabel && state.projectLabel.length > 0
+        ? state.projectLabel
+        : "project";
+    projectBtn.textContent = `Launching ${projectName}…`;
+    projectBtn.classList.add("x-toolbar-project-launching");
+    projectBtn.disabled = true;
+    projectBtn.title =
+      "sim-flow is spawning a fresh orchestrator for the previously-anchored project. It will land in manual mode so you can review before kicking off the next sub-session.";
   } else {
     projectBtn.textContent = "Start session";
     projectBtn.classList.add("x-toolbar-project-start");
@@ -652,9 +666,11 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
     const live = ui.state;
     if (live?.sessionActive) {
       send({ type: "switch-project" });
-    } else {
+    } else if (!live?.sessionLaunching) {
       send({ type: "start-session" });
     }
+    // sessionLaunching: ignore the click; the auto-resume is in
+    // flight and will resolve to a connected session shortly.
   });
   leftZone.appendChild(projectBtn);
 
@@ -671,11 +687,21 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   let statusText: string;
   let statusTitle: string;
   if (!state.sessionActive) {
-    stateClass = "x-llm-offline";
-    statusGlyph = "○";
-    statusText = "No session";
-    statusTitle =
-      "No sim-flow pump is anchored to this project. Click \"Start session\" to start one.";
+    if (state.sessionLaunching) {
+      // Auto-resume in flight: read as "connection coming online"
+      // rather than "no session here" so the user doesn't reflex-
+      // click Start session.
+      stateClass = "x-llm-working";
+      statusGlyph = "◐";
+      statusText = `Launching · ${state.sourceLabel}`;
+      statusTitle = `sim-flow is spawning the orchestrator for ${state.sourceLabel}. The session will be ready in a moment.`;
+    } else {
+      stateClass = "x-llm-offline";
+      statusGlyph = "○";
+      statusText = "No session";
+      statusTitle =
+        "No sim-flow pump is anchored to this project. Click \"Start session\" to start one.";
+    }
   } else if (state.isStreaming) {
     stateClass = "x-llm-working";
     statusGlyph = "●";

@@ -169,6 +169,17 @@ export interface ChatPanelState {
    */
   sessionActive: boolean;
   /**
+   * True between "the host decided to spawn an orchestrator for this
+   * project" and "the orchestrator has finished its Hello handshake
+   * + the panel anchored to the live pump." The webview reads this
+   * to render a "Launching…" pill in place of the empty-state
+   * "Start session" button so the cold-start auto-resume reads as
+   * progress rather than as "no project anchored." Goes false once
+   * `sessionActive` flips true (or the launch fails and the empty
+   * state legitimately returns).
+   */
+  sessionLaunching: boolean;
+  /**
    * Milestone the orchestrator is presently working on, plus the
    * specific pending task within it. Only populated when the
    * current step drives a plan (DM2c/DM2d, DM3a-c, DM4a/DM4b) and

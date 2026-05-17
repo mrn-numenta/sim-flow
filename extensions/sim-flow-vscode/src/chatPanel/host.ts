@@ -115,6 +115,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
    */
   private projectSwitchPending = false;
 
+  /**
+   * Project the host has just decided to auto-relaunch (because the
+   * previously-stored auto-session record was dead -- the
+   * orchestrator child got killed by Developer: Reload Window). Set
+   * synchronously inside `restoreActiveAutoSessionIfNeeded`'s catch
+   * BEFORE the fire-and-forget `launchAutoSession` so this refresh's
+   * `postState` anchors the panel to the right project and renders
+   * the "Launching…" indicator instead of flashing the empty-state
+   * "Start session" button. Cleared when the launch's
+   * `pendingAutoLaunch` takes over (its first awaits resolve and it
+   * sets its own anchor) or when the launch fails entirely.
+   */
+  private pendingRelaunchAnchor: string | null = null;
+
   private get activePump(): ManagedAutoSessionState | undefined {
     return this.autoSessions.getActiveSession();
   }
@@ -1283,17 +1297,43 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   /**
    * Project the chat panel should be displaying RIGHT NOW. Anchors to
-   * the live session's project (active pump > pending launch) so the
-   * panel doesn't auto-follow the user's active text editor when
-   * there's already a session attached. Without this anchor,
-   * switching files between sim-flow projects in the workspace flips
-   * the panel's transcript out from under a running session.
+   * the live session's project (active pump > pending launch >
+   * relaunch anchor) so the panel doesn't auto-follow the user's
+   * active text editor when there's already a session attached.
+   * Without this anchor, switching files between sim-flow projects
+   * in the workspace flips the panel's transcript out from under a
+   * running session.
+   *
+   * The `pendingRelaunchAnchor` slot is dedicated to the
+   * Reload-Window auto-recovery path:
+   * `restoreActiveAutoSessionIfNeeded`'s catch sets it synchronously
+   * BEFORE the fire-and-forget `launchAutoSession`, so this refresh's
+   * `postState` anchors to the right project from the very first
+   * paint. Without it the toolbar would briefly read "No project
+   * selected" during the window between catch firing and
+   * `launchAutoSession` setting its own `pendingAutoLaunch`.
    */
   private anchoredProjectDir(): string | null {
     return (
       this.activePump?.projectDir ??
       this.pendingAutoLaunch?.projectDir ??
+      this.pendingRelaunchAnchor ??
       null
+    );
+  }
+
+  /**
+   * True while a fresh orchestrator is being spawned for the panel
+   * (the `pendingAutoLaunch` window OR the brief window between
+   * `restoreActiveAutoSessionIfNeeded`'s catch firing the relaunch
+   * and `launchAutoSession` setting its own anchor). The webview
+   * reads this to render a "Launching…" indicator instead of the
+   * empty-state "Start session" button so the cold-start auto-
+   * resume reads as progress rather than as "no project anchored."
+   */
+  private isSessionLaunching(): boolean {
+    return (
+      this.pendingAutoLaunch !== undefined || this.pendingRelaunchAnchor !== null
     );
   }
 
@@ -1338,15 +1378,36 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   /**
    * Auto-resume the previously-active project when the chat panel
    * mounts. Silent and side-effect-light: no picker, no errors --
-   * if we don't have a remembered project, or if the project is
-   * no longer on disk, we leave the panel idle and the user clicks
-   * "Start session" themselves. Forces Manual mode regardless of
-   * the workspace `sim-flow.flow.stepMode` setting so the
-   * orchestrator parks at `wait_for_command` instead of plowing
-   * forward unattended.
+   * the goal is "the panel opens on the last project, sitting idle
+   * in manual mode, so the user clicks Play to start work." When no
+   * candidate project can be inferred, falls through to the
+   * empty-state "Start session" button so the user can pick one.
+   *
+   * Forces Manual mode regardless of the workspace
+   * `sim-flow.flow.stepMode` setting so the orchestrator parks at
+   * `wait_for_command` instead of plowing forward unattended.
+   *
+   * Two responsibilities are kept separate:
+   *   - When the previous orchestrator process is dead (Reload
+   *     Window), `restoreActiveAutoSessionIfNeeded`'s catch fires
+   *     its own auto-relaunch for the same project. tryAutoResume
+   *     doesn't need to handle that case -- by the time it runs,
+   *     `pendingAutoLaunch` or `pendingRelaunchAnchor` is set and
+   *     the first-line guard short-circuits.
+   *   - When NO auto-session record exists at all (fresh extension
+   *     install / workspaceState cleared / very first chat-panel
+   *     use), tryAutoResume picks the remembered project and
+   *     launches it. When the record exists and is non-terminal,
+   *     restoreActiveAutoSessionIfNeeded owned that path and either
+   *     succeeded or kicked its own relaunch -- in either case
+   *     activePump or the relaunch anchor is set and we skip.
    */
   private async tryAutoResume(): Promise<void> {
-    if (this.activePump || this.pendingAutoLaunch) {
+    if (
+      this.activePump ||
+      this.pendingAutoLaunch ||
+      this.pendingRelaunchAnchor
+    ) {
       return;
     }
     const remembered = this.workspaceState.get<string>(
@@ -1355,16 +1416,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (!remembered) {
       return;
     }
-    // If the auto-session record for `remembered` is still on disk,
-    // restoreActiveAutoSessionIfNeeded inside `refresh()` will attach
-    // to that pump. tryAutoResume runs AFTER `await refresh()` returns,
-    // but the attach delegate's `activePump` mutation may not yet be
-    // visible -- attach is observer-driven via onActiveSessionChanged,
-    // and the change might land a microtask after refresh resolves.
-    // Skip launching a fresh pump in that case so we don't race a
-    // second pump alongside the restored one. See chat-panel audit #7
-    // (2026-05-16).
     const existingRecord = this.autoSessions.readStoredRecord(remembered);
+    // When the record is still on disk and non-terminal, the restore
+    // path inside `refresh()` owned this project -- either it
+    // attached (activePump set, gate above caught it) or its catch
+    // launched a fresh pump (pendingRelaunchAnchor / pendingAutoLaunch
+    // set, gate above caught it). Skip so we don't race a second
+    // pump alongside the restored one, and don't override an active
+    // user-driven project switch (a workspace switch since the
+    // previous run should keep the existing "follow the workspace"
+    // semantics). See chat-panel audit #7 (2026-05-16) for the
+    // original race-mitigation rationale; the workspace-switch
+    // requirement is pinned by the
+    // `restores the newly active project and source after reload`
+    // test in mockFlowHarness.
     if (existingRecord && !isTerminalLlmSource(existingRecord.sourceTag)) {
       return;
     }
@@ -2068,6 +2133,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           : null,
       sessionActive:
         !!this.activePump && this.activePump.projectDir === context.projectDir,
+      sessionLaunching:
+        this.isSessionLaunching() &&
+        (this.pendingAutoLaunch?.projectDir === context.projectDir ||
+          this.pendingRelaunchAnchor === context.projectDir),
       currentMilestone: context.currentMilestone,
       verilogEnabled:
         vscode.workspace
@@ -2714,7 +2783,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       await this.autoSessions.forgetStoredRecord(projectDir);
       return;
     }
-    const priorConversation = this.readConversation(projectDir);
     const config = vscode.workspace.getConfiguration("sim-flow");
     const reconnectLlm = buildReconnectableLlmConfig(
       ctx,
@@ -2732,13 +2800,28 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     try {
       await pump.ready();
     } catch {
-      const conversation = appendNote(
-        priorConversation,
-        "Session no longer live",
-        "The previous sim-flow session could not be reattached. Relaunch it from the dashboard to continue.",
-      );
+      // The orchestrator child that owned this session is gone (the
+      // common case after Developer: Reload Window kills the
+      // extension host's children). Forget the dead record and
+      // immediately launch a fresh pump for the same project in
+      // manual mode -- preserves the user's project anchor and keeps
+      // them in the same workflow without making them click
+      // "Start session" again.
       await this.autoSessions.forgetStoredRecord(projectDir);
-      await this.persistConversation(projectDir, conversation);
+      this.rememberConversation(projectDir, clearConversationState());
+      // Set the relaunch anchor synchronously so this refresh's
+      // postState anchors the panel to the right project and renders
+      // the "Launching…" indicator. The void launchAutoSession below
+      // will clear the anchor in its `finally` so we never leak
+      // the marker into a stuck state.
+      this.pendingRelaunchAnchor = projectDir;
+      void this.launchAutoSession(undefined, projectDir, {
+        forceStepMode: "manual",
+      }).finally(() => {
+        if (this.pendingRelaunchAnchor === projectDir) {
+          this.pendingRelaunchAnchor = null;
+        }
+      });
       return;
     }
     await this.persistConversation(projectDir, clearConversationState());
