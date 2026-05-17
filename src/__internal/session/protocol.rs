@@ -285,6 +285,20 @@ pub enum HostEvent {
     /// dispatching one of `RunStep` / `RunCritique` / `Advance`
     /// directly, but with the choice deferred to the orchestrator.
     ContinueFlow,
+    /// Host picked a source-spec file (md / txt / PDF) and wants
+    /// the orchestrator to ingest it before the next LLM turn. The
+    /// orchestrator runs `ingest_spec_file`, writes the paginated
+    /// pages under `.sim-flow/spec-pages/`, and persists
+    /// `config.toml::spec_path` so subsequent runs find it without
+    /// re-uploading. Emits a `Diagnostic` summarizing the ingest
+    /// (page count, ingest skipped because already up-to-date, or
+    /// ingest error). The chat panel's "Upload Spec" button sends
+    /// this immediately after the file picker resolves so the
+    /// agent's DM0 system prompt -- which assumes
+    /// `.sim-flow/spec-pages/<NNN>.md` is already populated -- can
+    /// proceed without the agent trying to `read_file` the binary
+    /// PDF directly.
+    SetSpec { path: String },
 }
 
 /// Terminal state of a `SessionEnd` event. Closed-set enum so hosts

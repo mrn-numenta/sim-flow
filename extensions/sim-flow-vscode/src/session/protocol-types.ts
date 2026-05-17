@@ -239,6 +239,10 @@ export type HostEvent =
     }
   | {
       event: "continue-flow";
+    }
+  | {
+      event: "set-spec";
+      path: string;
     };
 
 export interface HostInfo {

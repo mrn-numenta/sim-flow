@@ -642,6 +642,11 @@ export class SocketSessionPump implements LiveSessionTransport {
     this.sendHostEventAfterReady({ event: "continue-flow" });
   }
 
+  setSpec(path: string): void {
+    if (this.options.viewer) return;
+    this.sendHostEventAfterReady({ event: "set-spec", path });
+  }
+
   shutdown(): void {
     if (this.options.viewer) return;
     this.sendHostEventAfterReady({ event: "shutdown" });

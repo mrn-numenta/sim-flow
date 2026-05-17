@@ -1123,9 +1123,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (!this.view || this.disposed) {
       return;
     }
+    const pickedPath = picked[0]!.fsPath;
+    // Hand the path to the orchestrator BEFORE inserting it into the
+    // textarea so ingest_spec_file runs while the user is still
+    // typing. The DM0 system prompt expects
+    // `.sim-flow/spec-pages/<NNN>.md` to exist by the time the agent
+    // reads the user's reply -- without this, the agent reaches for
+    // `read_file` on the raw PDF and fails on the binary content.
+    // UI is MVP: we only signal intent; the orchestrator runs the
+    // ingest, writes config.toml::spec_path, and emits a Diagnostic
+    // we render normally.
+    const pump = this.activePump?.pump;
+    if (pump && typeof pump.setSpec === "function") {
+      pump.setSpec(pickedPath);
+    }
     await this.view.webview.postMessage({
       type: "file-picked",
-      path: picked[0]!.fsPath,
+      path: pickedPath,
     });
   }
 

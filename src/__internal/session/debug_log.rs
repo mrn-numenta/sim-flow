@@ -238,6 +238,7 @@ fn host_event_kind(event: &HostEvent) -> &'static str {
         HostEvent::SetStepMode { .. } => "SetStepMode",
         HostEvent::Shutdown => "Shutdown",
         HostEvent::ContinueFlow => "ContinueFlow",
+        HostEvent::SetSpec { .. } => "SetSpec",
     }
 }
 

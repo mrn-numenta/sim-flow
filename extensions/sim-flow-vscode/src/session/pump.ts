@@ -199,6 +199,17 @@ export interface LiveSessionTransport {
    */
   continueFlow?(): void;
   /**
+   * Hand the orchestrator a source-spec file path (md / txt / PDF)
+   * so it can run `ingest_spec_file` and persist `spec_path` in
+   * `.sim-flow/config.toml`. The chat panel's "Upload Spec" button
+   * uses this immediately after the native file picker resolves,
+   * so the agent's DM0 system prompt -- which assumes
+   * `.sim-flow/spec-pages/<NNN>.md` is already populated -- finds
+   * the ingested pages on its next turn instead of trying to
+   * `read_file` a binary PDF.
+   */
+  setSpec?(path: string): void;
+  /**
    * Graceful-then-forceful disconnect. Sends `shutdown`, waits for
    * the orchestrator child to exit cleanly, escalates to SIGTERM,
    * then SIGKILL. Returns the path that ended the child. Only the
