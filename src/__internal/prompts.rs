@@ -636,6 +636,17 @@ mod tests {
             .expect("critique-json-schema fragment must exist");
         let critique_kinds = load_template(foundation_root, "critique-kinds")
             .expect("critique-kinds fragment must exist");
+        let critique_output_block_body = load_template(foundation_root, "critique-output-block")
+            .expect("critique-output-block fragment must exist");
+        let coding_requirements = load_template(foundation_root, "coding-requirements")
+            .expect("coding-requirements fragment must exist");
+        let coding_requirements_checks =
+            load_template(foundation_root, "coding-requirements-checks")
+                .expect("coding-requirements-checks fragment must exist");
+        let pre_stop_hygiene = load_template(foundation_root, "pre-stop-hygiene")
+            .expect("pre-stop-hygiene fragment must exist");
+        let order_jumping_deferring = load_template(foundation_root, "order-jumping-deferring")
+            .expect("order-jumping-deferring fragment must exist");
 
         let project_dir = PathBuf::new();
         let mut tested = 0;
@@ -668,6 +679,22 @@ mod tests {
             let critique_schema =
                 render_prompt("critique-json-schema", &critique_schema_body, &frag_ctx)
                     .expect("critique-json-schema renders with step_id");
+            // Mirror orchestrator.rs's pre-render of
+            // `critique-output-block`: takes `step_id` and the
+            // already-rendered `critique_json_schema` and produces
+            // the trailer block every critique prompt splices in.
+            // The outer prompt render does not recurse into
+            // substituted strings, so we have to render this
+            // fragment here too.
+            let mut output_block_ctx = PromptContext::new();
+            output_block_ctx.insert("step_id".into(), step_id.clone());
+            output_block_ctx.insert("critique_json_schema".into(), critique_schema.clone());
+            let critique_output_block = render_prompt(
+                "critique-output-block",
+                &critique_output_block_body,
+                &output_block_ctx,
+            )
+            .expect("critique-output-block renders with step_id + schema");
 
             let build_ctx = |intro: &str| -> PromptContext {
                 let mut c = PromptContext::new();
@@ -679,6 +706,20 @@ mod tests {
                 );
                 c.insert("critique_json_schema".into(), critique_schema.clone());
                 c.insert("critique_kinds".into(), critique_kinds.clone());
+                c.insert(
+                    "critique_output_block".into(),
+                    critique_output_block.clone(),
+                );
+                c.insert("coding_requirements".into(), coding_requirements.clone());
+                c.insert(
+                    "coding_requirements_checks".into(),
+                    coding_requirements_checks.clone(),
+                );
+                c.insert("pre_stop_hygiene".into(), pre_stop_hygiene.clone());
+                c.insert(
+                    "order_jumping_deferring".into(),
+                    order_jumping_deferring.clone(),
+                );
                 c
             };
             for intro in [&fenced, &native] {
