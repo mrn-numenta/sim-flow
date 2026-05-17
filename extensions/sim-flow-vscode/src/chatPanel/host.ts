@@ -1507,7 +1507,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   async launchAutoSession(
     specPath: string | undefined,
     projectDirHint: string | undefined,
-    options: { forceStepMode?: "auto" | "manual" } = {},
+    options: {
+      forceStepMode?: "auto" | "manual";
+      /**
+       * Keep the existing chat transcript instead of clearing it
+       * before the new orchestrator's startup note. Used by the
+       * Reload-Window auto-relaunch path so the user comes back to
+       * the same conversation they were looking at before the
+       * window reload, with a fresh launch note appended.
+       */
+      preserveConversation?: boolean;
+    } = {},
   ): Promise<void> {
     // Resolve the target project BEFORE revealing the chat view so we
     // can anchor the panel and pre-clear its transcript cache. The
@@ -1572,23 +1582,29 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     // Anchor + reset the conversation cache for ctx.projectDir, then
     // reveal the view. `startAutoSession` will overwrite this cache
     // entry with the launch note + post the full state.
+    //
+    // `preserveConversation` skips the cache wipe so the auto-
+    // relaunch on Reload Window doesn't blow away the prior session's
+    // transcript -- the launch note is appended to whatever's already
+    // there.
     this.pendingAutoLaunch = {
       projectDir: ctx.projectDir,
       launchSpecPath: trimmedSpec,
       sourceTag: settings.source,
       model: settings.model,
     };
-    this.rememberConversation(ctx.projectDir, clearConversationState());
+    if (!options.preserveConversation) {
+      this.rememberConversation(ctx.projectDir, clearConversationState());
+    }
 
     await vscode.commands.executeCommand(
       `workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`,
     );
 
-    await this.startAutoSession(
-      ctx,
-      trimmedSpec,
-      { resetConversation: true, forceStepMode: options.forceStepMode },
-    );
+    await this.startAutoSession(ctx, trimmedSpec, {
+      resetConversation: !options.preserveConversation,
+      forceStepMode: options.forceStepMode,
+    });
   }
 
   /**
@@ -2806,9 +2822,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       // immediately launch a fresh pump for the same project in
       // manual mode -- preserves the user's project anchor and keeps
       // them in the same workflow without making them click
-      // "Start session" again.
+      // "Start session" again. `preserveConversation` keeps the
+      // chat transcript from the prior session visible; the new
+      // orchestrator's startup note is appended to it.
       await this.autoSessions.forgetStoredRecord(projectDir);
-      this.rememberConversation(projectDir, clearConversationState());
       // Set the relaunch anchor synchronously so this refresh's
       // postState anchors the panel to the right project and renders
       // the "Launching…" indicator. The void launchAutoSession below
@@ -2817,6 +2834,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.pendingRelaunchAnchor = projectDir;
       void this.launchAutoSession(undefined, projectDir, {
         forceStepMode: "manual",
+        preserveConversation: true,
       }).finally(() => {
         if (this.pendingRelaunchAnchor === projectDir) {
           this.pendingRelaunchAnchor = null;
