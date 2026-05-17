@@ -338,6 +338,18 @@ fn decode_choice_falls_back_to_reasoning_when_content_empty() {
 }
 
 #[test]
+fn response_message_deserializes_reasoning_content_alias() {
+    // vLLM with `--reasoning-parser qwen3` emits the thinking
+    // text in a field called `reasoning_content`, not
+    // `reasoning`. Without the serde alias, serde drops the
+    // field silently and we lose the thinking output entirely.
+    let body = r#"{"content":null,"reasoning_content":"step 1: ..."}"#;
+    let msg: ResponseMessage = serde_json::from_str(body).unwrap();
+    assert_eq!(msg.content, None);
+    assert_eq!(msg.reasoning.as_deref(), Some("step 1: ..."));
+}
+
+#[test]
 fn decode_choice_strips_qwen_think_tags_from_content() {
     let c = choice(Some("<think>plan</think>final answer"), None, Some("stop"));
     assert_eq!(

@@ -153,11 +153,16 @@ pub(super) struct Choice {
 /// for the missing-field case) tolerates both shapes; the dispatch
 /// path then prefers `content`, falls back to `reasoning`, and
 /// surfaces a clear error when both are empty.
+///
+/// vLLM with `--reasoning-parser qwen3` (and OpenAI's reasoning-effort
+/// API) names the field `reasoning_content`, not `reasoning`. The
+/// alias accepts both shapes so a server change between minor
+/// versions doesn't silently drop thinking output.
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct ResponseMessage {
     #[serde(default)]
     pub(super) content: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "reasoning_content")]
     pub(super) reasoning: Option<String>,
     /// Native tool calls returned by `--enable-auto-tool-choice` /
     /// OpenAI's tool-use endpoint. May be empty or omitted on
