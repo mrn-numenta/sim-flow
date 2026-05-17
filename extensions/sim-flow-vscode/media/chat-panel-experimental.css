@@ -1145,9 +1145,43 @@ body {
 }
 
 .x-step-rail-step-current {
-  /* Slight bump so the active step reads as the focal point
-   * even when the rail is wide. */
-  box-shadow: 0 0 0 1px var(--x-palette-accent);
+  /* Two stacked accents:
+   *   1. a 1px palette-accent outline so the tile reads as the
+   *      focal point even on a wide rail;
+   *   2. 2px white inset stripes along the left + right edges so
+   *      the active step is recognisable across any palette
+   *      (Default / Autumn / Olive / Sage / Custom). */
+  box-shadow:
+    0 0 0 1px var(--x-palette-accent),
+    inset 2px 0 0 #fff,
+    inset -2px 0 0 #fff;
+}
+
+/* Pulse the current step while the orchestrator is idle (session
+ * attached but not actively streaming). The pulse is a soft outer
+ * glow + brightness lift -- visible without distracting from
+ * transcript reading. Removed automatically when the orchestrator
+ * starts streaming, so an actively-working pump reads as static. */
+@keyframes x-step-rail-current-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px var(--x-palette-accent),
+      inset 2px 0 0 #fff,
+      inset -2px 0 0 #fff,
+      0 0 0 0 color-mix(in srgb, var(--x-palette-output) 70%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px var(--x-palette-accent),
+      inset 2px 0 0 #fff,
+      inset -2px 0 0 #fff,
+      0 0 6px 2px color-mix(in srgb, var(--x-palette-output) 70%, transparent);
+  }
+}
+
+.x-step-rail-step-current-pulse {
+  animation: x-step-rail-current-pulse 1.6s ease-in-out infinite;
 }
 
 .x-step-rail-step:focus-visible {

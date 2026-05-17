@@ -1509,16 +1509,10 @@ function buildComposer(state: ChatPanelState): HTMLElement {
   area.className = "x-composer-input";
   area.id = "x-composer-textarea";
   area.rows = 1;
-  area.placeholder = state.isViewer
-    ? "Read-only viewer — input disabled."
-    : state.currentPlaceholder && state.currentPlaceholder.trim().length > 0
-      ? state.currentPlaceholder
-      : state.supportsPromptEntry
-        ? "Send a message..."
-        : "This backend runs in a terminal, not in the panel chat.";
   area.value = ui.draft;
   area.disabled =
     state.isViewer || !state.supportsPromptEntry || state.isStreaming;
+  area.placeholder = area.disabled ? "Busy..." : "Available: Send a message...";
   autoResize(area);
   area.addEventListener("input", () => {
     ui.draft = area.value;
@@ -1879,6 +1873,15 @@ function renderRailForFlow(
   if (!active) {
     rail.classList.add("x-step-rail-preview");
   }
+  // Pulse the current step whenever the orchestrator is attached
+  // but not actively streaming. A working pump reads as static
+  // (no need to draw the user's eye); an idle / parked pump
+  // pulses so the user notices it's their turn.
+  const pulseCurrent =
+    active &&
+    state.sessionActive &&
+    !state.isStreaming &&
+    !state.isViewer;
   for (const stepId of order) {
     const tile = document.createElement("button");
     tile.type = "button";
@@ -1886,6 +1889,9 @@ function renderRailForFlow(
     let title: string;
     if (stepId === currentStep) {
       cls += " x-step-rail-step-current";
+      if (pulseCurrent) {
+        cls += " x-step-rail-step-current-pulse";
+      }
       title = `${STEP_LABELS[stepId] ?? stepId}: current step. Click for the latest critique findings.`;
     } else if (passed.has(stepId)) {
       cls += " x-step-rail-step-passed";
