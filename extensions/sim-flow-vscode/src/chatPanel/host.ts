@@ -1504,14 +1504,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   /**
    * Explicit "Start session" action from the chat panel toolbar.
    * Fires only when the user clicks; window reload, tab focus,
-   * etc. no longer trigger it. If a previous project is remembered
-   * and still on disk, the orchestrator launches directly with no
-   * picker; otherwise the standard QuickPick appears (single-
-   * candidate cases also auto-resolve). Picking "+ New project..."
-   * dispatches the existing `sim-flow.newProject` command. The
-   * spec path is left undefined so DM0 parks at its
-   * `RequestUserInput` (the chat panel surfaces that through the
-   * existing `currentPrompt` channel).
+   * etc. no longer trigger it. ALWAYS opens the project chooser
+   * (previously it short-circuited to the remembered project --
+   * but the user clicks Start session deliberately when they want
+   * to pick a project, so the picker is now the default). The
+   * silent auto-resume of the last project still happens on panel
+   * mount via `tryAutoResume`; that's a separate path.
+   *
+   * Picking "+ New project..." dispatches the existing
+   * `sim-flow.newProject` command. The spec path is left undefined
+   * so DM0 parks at its `RequestUserInput` (the chat panel surfaces
+   * that through the existing `currentPrompt` channel).
    *
    * Step-mode is forced to `manual` regardless of the workspace
    * `sim-flow.flow.stepMode` setting: the click is "open the chat
@@ -1529,24 +1532,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
     const candidates = await findProjectCandidates();
     if (candidates.length === 0) {
-      // No initialized projects in the workspace -- mirror
-      // `switchProjectCommand` and short-circuit to the new-project
-      // flow. `pickProject` returns undefined for an empty list
-      // regardless of `allowNew`, so we have to branch here.
+      // No initialized projects in the workspace -- skip straight to
+      // the new-project flow. `pickProject` returns undefined for an
+      // empty list regardless of `allowNew`, so we have to branch.
       await vscode.commands.executeCommand("sim-flow.newProject");
-      return;
-    }
-    // If we previously remembered a project that's still on disk,
-    // skip the picker entirely so "Start session" is a single
-    // click. Stale entries (project deleted, renamed) fall through
-    // to the picker.
-    const remembered = this.workspaceState.get<string>(
-      ChatPanelProvider.LAST_PROJECT_KEY,
-    );
-    if (remembered && candidates.includes(remembered)) {
-      await this.launchAutoSession(undefined, remembered, {
-        forceStepMode: "manual",
-      });
       return;
     }
     const picked = await pickProject(candidates, { allowNew: true });
