@@ -1550,17 +1550,17 @@ function buildComposer(state: ChatPanelState): HTMLElement {
   });
 
   const inputRow = div("x-composer-input-row");
-  // Browse… is only meaningful while the orchestrator is in DM0
-  // (the spec-ingest step). Other steps don't take a file path as
-  // their primary input, so the button just adds clutter there.
+  // "Upload Spec" is only meaningful while the orchestrator is in
+  // DM0 (the spec-ingest step). Other steps don't take a file path
+  // as their primary input, so the button just adds clutter there.
   if (state.currentStep === "DM0") {
     const browseBtn = document.createElement("button");
     browseBtn.type = "button";
     browseBtn.id = "x-composer-browse";
     browseBtn.className = "x-browse";
-    browseBtn.textContent = "Browse…";
+    browseBtn.textContent = "Upload Spec";
     browseBtn.title =
-      "Pick a file or directory and insert its absolute path into the message.";
+      "Pick a spec file or directory (markdown / text / PDF) and insert its absolute path into the message.";
     browseBtn.disabled =
       state.isViewer || !state.supportsPromptEntry || state.isStreaming;
     browseBtn.addEventListener("click", () => {

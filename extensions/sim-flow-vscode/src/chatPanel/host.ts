@@ -2355,7 +2355,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (this.activePump || this.pendingAutoLaunch) {
       return;
     }
-    const projectDir = await resolveProjectDirForPanel();
+    // Prefer the remembered project (LAST_PROJECT_KEY) over whatever
+    // `resolveProjectDirForPanel` infers from the workspace context.
+    // The user's intent is "reattach to the chat panel I had open
+    // before the window reload"; that's the remembered project, not
+    // whichever sim-flow project happens to win the workspace scan
+    // first. Falls back to the workspace project only when no
+    // remembered project exists yet (very first chat-panel use).
+    const remembered = this.workspaceState.get<string>(
+      ChatPanelProvider.LAST_PROJECT_KEY,
+    );
+    const projectDir = remembered ?? (await resolveProjectDirForPanel());
     if (!projectDir) {
       return;
     }
