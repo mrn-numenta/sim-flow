@@ -2323,7 +2323,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         "awaitingUserInput=true && sessionActive=false (park signal without a live session)",
       );
     }
-    if (!state.sessionActive && state.isStreaming) {
+    if (!state.sessionActive && state.isStreaming && !state.sessionLaunching) {
+      // `sessionLaunching` is the legitimate "we're spawning the
+      // orchestrator now" window where pendingAutoLaunch is set but
+      // activePump hasn't attached yet -- isStreaming reflects that,
+      // sessionActive doesn't, and both are correct. The violation
+      // only fires for cases where the same shape appears without a
+      // launch in flight.
       violations.push(
         "isStreaming=true && sessionActive=false (streaming without a live session)",
       );
