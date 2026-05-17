@@ -64,6 +64,15 @@ pub enum Event {
         content: String,
         turn_index: u32,
         request_id: String,
+        /// Stable orchestrator-side id for the message that
+        /// generated this event. Carries the position in the
+        /// prompt-stack vec (`msg-N`) so hosts can correlate
+        /// later `ContextEvicted` events to the originating
+        /// bubble. `None` on legacy emits / synthetic events not
+        /// tied to a stack slot; hosts ignore the field in that
+        /// case.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
     },
     /// Pause the orchestrator and wait for a `UserMessage` on stdin.
     /// Hosts use the optional hints to focus or label the input area.

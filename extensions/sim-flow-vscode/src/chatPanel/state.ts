@@ -122,6 +122,7 @@ export function appendOrchestratorUserEntry(
   body: string,
   title: string,
   meta: string,
+  messageId: string | null = null,
 ): { state: ChatConversationState; userId: string } {
   const userId = entryId(state.nextId);
   return {
@@ -135,6 +136,7 @@ export function appendOrchestratorUserEntry(
           title,
           body,
           meta,
+          messageId: messageId ?? undefined,
           // Tally the body against the input side at append time so
           // `summarizeTokenEstimates` picks it up in the toolbar
           // totals. Without this, orchestrator-side prompts and tool

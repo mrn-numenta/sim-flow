@@ -165,6 +165,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
    * verbatim on its Continue button.
    */
   private nextActionHintListenerDispose: (() => void) | null = null;
+  /**
+   * Subscription to the active pump's `onContextEvicted`. Each event
+   * carries the ids the orchestrator just evicted from its prompt
+   * stack + the reason; we stash the (id -> reason) entries on the
+   * session so `ChatPanelState.evictedMessages` can mark matching
+   * bubbles when `showContextState` is on.
+   */
+  private contextEvictedListenerDispose: (() => void) | null = null;
 
   /**
    * workspaceState key for the most recently launched project dir.
@@ -267,6 +275,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         this.attachFollowupListener(session);
         this.attachStepModeListener(session);
         this.attachNextActionHintListener(session);
+        this.attachContextEvictedListener(session);
         // A newly attached/replaced session changes the panel's anchor
         // immediately; refresh so OFFLINE flips to VIEWING/STREAMING
         // without waiting for the next pump event. We intentionally do
@@ -343,6 +352,33 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         // Repaint so the Continue button label updates before the
         // user clicks. Arrives right before each `request-user-input`
         // in manual mode.
+        void this.refresh();
+      },
+    );
+  }
+
+  private attachContextEvictedListener(
+    session: ManagedAutoSessionState | undefined,
+  ): void {
+    if (this.contextEvictedListenerDispose) {
+      this.contextEvictedListenerDispose();
+      this.contextEvictedListenerDispose = null;
+    }
+    if (!session || typeof session.pump.onContextEvicted !== "function") {
+      return;
+    }
+    this.contextEvictedListenerDispose = session.pump.onContextEvicted(
+      ({ ids, reason }) => {
+        const current = this.activePump;
+        if (!current) {
+          return;
+        }
+        for (const id of ids) {
+          current.evictedMessageIds.set(id, reason);
+        }
+        // Repaint so the ✗ + tooltip appears immediately. The chat
+        // panel toggle (`showContextState`) gates whether the user
+        // actually sees them; the host always tracks evictions.
         void this.refresh();
       },
     );
@@ -1991,6 +2027,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         vscode.workspace
           .getConfiguration("sim-flow")
           .get<boolean>("chatPanel.showContextState") === true,
+      evictedMessages:
+        this.activePump?.projectDir === context.projectDir
+          ? Array.from(this.activePump.evictedMessageIds.entries())
+          : [],
       contextWindow:
         this.activePump?.projectDir === context.projectDir
           ? this.activePump.contextWindow
@@ -2179,7 +2219,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
    */
   private appendOrchestratorLlmRequest(
     session: ManagedAutoSessionState,
-    args: { role: string; content: string; turnIndex: number; requestId: string },
+    args: {
+      role: string;
+      content: string;
+      turnIndex: number;
+      requestId: string;
+      messageId: string | null;
+    },
   ): void {
     if (!this.activePump || this.activePump !== session) {
       return;
@@ -2202,6 +2248,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       body,
       title,
       meta,
+      args.messageId,
     );
     conversation = next;
     this.rememberConversation(session.projectDir, conversation);

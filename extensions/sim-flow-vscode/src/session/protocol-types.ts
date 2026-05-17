@@ -25,6 +25,10 @@ export type Event =
   | {
       content: string;
       event: "llm-request";
+      /**
+       * Stable orchestrator-side id for the message that generated this event. Carries the position in the prompt-stack vec (`msg-N`) so hosts can correlate later `ContextEvicted` events to the originating bubble. `None` on legacy emits / synthetic events not tied to a stack slot; hosts ignore the field in that case.
+       */
+      message_id?: string | null;
       request_id: string;
       role: LlmRole;
       turn_index: number;

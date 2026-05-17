@@ -597,15 +597,17 @@ where
         // doesn't dominate the scroll. Assistant messages are
         // still skipped here because they were already surfaced
         // via `AssistantText` last turn.
-        for msg in &messages[last_emitted_message_index..] {
+        for (offset, msg) in messages[last_emitted_message_index..].iter().enumerate() {
             if matches!(msg.role, LlmRole::Assistant) {
                 continue;
             }
+            let idx = last_emitted_message_index + offset;
             host.send(&Event::LlmRequest {
                 role: msg.role,
                 content: msg.content.clone(),
                 turn_index,
                 request_id: request_id.clone(),
+                message_id: Some(crate::session::compaction::position_id(idx)),
             })?;
         }
         last_emitted_message_index = messages.len();

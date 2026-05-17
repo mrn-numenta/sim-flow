@@ -146,11 +146,17 @@ export function handleEvent(ctx: EventDispatchContext, event: ProtocolEvent): vo
       // the running prompt+response transcript. Renderers that
       // don't implement `llmRequest` (e.g. VS Code chat
       // participant) silently ignore.
+      //
+      // `messageId` carries the orchestrator's per-message
+      // identifier (the position in its prompt-stack vec) so the
+      // host can correlate later `ContextEvicted` events to the
+      // bubble this event spawned.
       ctx.currentRenderer?.llmRequest?.({
         role: event.role,
         content: event.content,
         turnIndex: event.turn_index,
         requestId: event.request_id,
+        messageId: event.message_id ?? null,
       });
       break;
     case "request-user-input":

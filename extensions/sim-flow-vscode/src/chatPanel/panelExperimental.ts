@@ -448,6 +448,13 @@ function render(): void {
     return;
   }
 
+  // Toggle the body-level `data-show-context-state` flag so the
+  // eviction-indicator CSS (`x-bubble-evicted`) only paints when
+  // the user has the setting on. Re-applied every render in case
+  // the setting just flipped.
+  document.body.dataset.showContextState =
+    ui.state?.showContextState === true ? "on" : "off";
+
   const previousTranscript = app.querySelector<HTMLElement>(".x-transcript");
   if (previousTranscript) {
     ui.pinnedToBottom = isNearBottom(previousTranscript);
@@ -1110,6 +1117,11 @@ function buildTranscript(state: ChatPanelState): HTMLElement {
     return root;
   }
 
+  // Build a map of orchestrator-side message id -> eviction reason
+  // so each bubble can look up its own status in O(1). The map is
+  // tiny (one entry per evicted message), so this is cheap.
+  const evictions = new Map<string, string>(state.evictedMessages);
+
   for (const entry of state.transcript) {
     if (entry.kind === "note") {
       root.appendChild(noteRow(entry));
@@ -1121,7 +1133,10 @@ function buildTranscript(state: ChatPanelState): HTMLElement {
     if (entry.kind === "assistant" && body.length === 0 && !entry.streaming) {
       continue;
     }
-    root.appendChild(messageBubble(entry, body));
+    const evictionReason = entry.messageId
+      ? (evictions.get(entry.messageId) ?? null)
+      : null;
+    root.appendChild(messageBubble(entry, body, evictionReason));
   }
 
   // If the orchestrator says streaming but the latest assistant entry
@@ -1143,6 +1158,33 @@ function hasStreamingAssistantTail(entries: ChatTranscriptEntry[]): boolean {
     return entry.kind === "assistant" && entry.streaming === true;
   }
   return false;
+}
+
+/**
+ * Map an orchestrator `ContextEvictionReason` wire string to the
+ * user-facing tooltip that appears on hover over an evicted bubble.
+ * Keep these short -- the host's native title tooltip displays
+ * them and long strings get awkward line wrapping.
+ */
+function evictionTooltip(reason: string): string {
+  switch (reason) {
+    case "superseded-by-dedup":
+      return "Evicted: a later turn re-read the same path; this body is no longer in the agent's context.";
+    case "invalidated-by-mutation":
+      return "Evicted: a later turn wrote / edited this path; the cached body no longer reflects disk and is no longer in the agent's context.";
+    case "phase-boundary":
+      return "Evicted: dropped at a sub-session boundary; no longer in the agent's context.";
+    case "ttl-expired":
+      return "Evicted: time-to-live elapsed without a citation; no longer in the agent's context.";
+    case "agent-forget":
+      return "Evicted: the agent explicitly discarded this turn via `forget`.";
+    case "summarized-range":
+      return "Evicted: replaced by a summary turn earlier in the transcript.";
+    case "overflow-trim":
+      return "Evicted: trimmed to fit the model's context window.";
+    default:
+      return `Evicted from context (${reason}).`;
+  }
 }
 
 function noteRow(
@@ -1173,6 +1215,7 @@ function renderableBody(
 function messageBubble(
   entry: Extract<ChatTranscriptEntry, { kind: "user" | "assistant" }>,
   body: string,
+  evictionReason: string | null,
 ): HTMLElement {
   const role = entry.kind === "user" ? "user" : "assistant";
   const orchestrator =
@@ -1181,18 +1224,23 @@ function messageBubble(
     entry.meta.startsWith("orchestrator-");
   const tool = entry.kind === "user" && entry.meta === "orchestrator-tool";
   const system = entry.kind === "user" && entry.meta === "orchestrator-system";
+  const evicted = evictionReason !== null;
   const row = div(
     `x-row x-row-${role}${orchestrator ? " x-row-orchestrator" : ""}${
       tool ? " x-row-tool" : ""
-    }${system ? " x-row-system" : ""}`,
+    }${system ? " x-row-system" : ""}${evicted ? " x-row-evicted" : ""}`,
   );
   // Stable id so morphdom keeps DOM identity across renders -- this is
   // what makes streaming chunks patch in place instead of rebuilding.
   row.id = `entry-${entry.id}`;
+  if (evicted) {
+    row.dataset.evictionReason = evictionReason;
+    row.title = evictionTooltip(evictionReason);
+  }
   const bubble = div(
     `x-bubble x-bubble-${role}${orchestrator ? " x-bubble-orchestrator" : ""}${
       tool ? " x-bubble-tool" : ""
-    }${system ? " x-bubble-system" : ""}`,
+    }${system ? " x-bubble-system" : ""}${evicted ? " x-bubble-evicted" : ""}`,
   );
   if (body.length === 0 && entry.streaming) {
     bubble.appendChild(thinkingDots());

@@ -68,6 +68,15 @@ export interface ManagedAutoSessionState {
    * in that case.
    */
   contextWindow: number | null;
+  /**
+   * Map from orchestrator-side message id (e.g. `msg-12`) to the
+   * reason that message was evicted from the prompt stack. Populated
+   * by the `onContextEvicted` listener; never cleared (the transcript
+   * is a chronological log -- once a turn evicts, the visual stays).
+   * Surfaced on `ChatPanelState.evictedMessages` so the webview can
+   * mark the matching bubbles when `showContextState` is on.
+   */
+  evictedMessageIds: Map<string, string>;
 }
 
 export interface StoredAutoSessionRecord {
@@ -98,6 +107,7 @@ export interface AutoSessionDriveDelegate {
       content: string;
       turnIndex: number;
       requestId: string;
+      messageId: string | null;
     },
   ): void;
   /**
@@ -222,6 +232,7 @@ export class AutoSessionManager implements vscode.Disposable {
       launchSpecPath: options.launchSpecPath,
       nextActionHint: undefined,
       contextWindow: null,
+      evictedMessageIds: new Map(),
     };
     this.activeSession = session;
     this.notifyActiveSessionChanged();
@@ -420,6 +431,7 @@ export class AutoSessionManager implements vscode.Disposable {
       launchSpecPath: record.launchSpecPath,
       nextActionHint: undefined,
       contextWindow: null,
+      evictedMessageIds: new Map(),
     };
     this.activeSession = session;
     this.notifyActiveSessionChanged();

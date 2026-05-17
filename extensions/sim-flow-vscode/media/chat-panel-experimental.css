@@ -630,6 +630,41 @@ body {
   align-items: center;
 }
 
+/* -- Context-eviction indicator ------------------------------------
+ * Gated by `body[data-show-context-state="on"]` so the visual only
+ * appears when the user has the chat-panel setting on. The
+ * transcript itself always retains every turn; only the styling
+ * differs.
+ *
+ * - Dim the body so the eye is drawn to live context first.
+ * - Render a red ✗ glyph in the top-right corner of the bubble
+ *   (positioned relative to the row so it overlays the bubble's
+ *   border).
+ * - The row's `title` attribute (set in messageBubble) carries the
+ *   human-readable eviction reason -- the browser's native
+ *   hover tooltip surfaces it.
+ */
+body[data-show-context-state="on"] .x-row-evicted {
+  position: relative;
+}
+
+body[data-show-context-state="on"] .x-row-evicted .x-bubble {
+  opacity: 0.55;
+  filter: grayscale(0.4);
+}
+
+body[data-show-context-state="on"] .x-row-evicted::after {
+  content: "✗";
+  position: absolute;
+  top: 2px;
+  right: 6px;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--vscode-errorForeground, #d2522d);
+  pointer-events: none;
+}
+
 .x-note {
   align-self: center;
   max-width: min(85%, 720px);

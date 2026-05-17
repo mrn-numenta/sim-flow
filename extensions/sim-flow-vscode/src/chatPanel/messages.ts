@@ -207,6 +207,16 @@ export interface ChatPanelState {
    */
   showContextState: boolean;
   /**
+   * Per-message eviction record built up from `ContextEvicted`
+   * events the orchestrator emits during compaction. Each entry is
+   * `[messageId, reason]` where `messageId` matches the
+   * `ChatTranscriptEntry.messageId` of the bubble that turn spawned.
+   * The webview keys on this when `showContextState` is on to render
+   * the ✗ indicator and the per-row tooltip. Empty when no
+   * compaction has fired yet.
+   */
+  evictedMessages: Array<[string, string]>;
+  /**
    * Real context window (in tokens) of the model the orchestrator
    * is dispatching to, queried at session-attach time via the
    * backend's models / show endpoint. `null` when the backend
@@ -244,6 +254,13 @@ export type ChatTranscriptEntry =
       title: string;
       body: string;
       meta?: string;
+      /** Stable orchestrator-side message id (e.g. `msg-12`) that
+       *  spawned this bubble. Used by Phase 1b to correlate
+       *  `ContextEvicted` events back to the matching transcript
+       *  row. Absent for bubbles that don't originate from the
+       *  prompt stack (assistant turns, user prompts the user
+       *  typed). */
+      messageId?: string;
       requestTokensEstimate?: number;
       responseTokensEstimate?: number;
       streaming?: boolean;

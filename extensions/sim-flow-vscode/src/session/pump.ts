@@ -130,6 +130,12 @@ export interface PumpRenderer {
     content: string;
     turnIndex: number;
     requestId: string;
+    /** Stable orchestrator-side message id (e.g. `msg-12`). The
+     *  chat panel stashes this on the bubble so later
+     *  `ContextEvicted` events can mark the matching row. `null`
+     *  on legacy emits / synthetic events that aren't tied to a
+     *  prompt-stack slot. */
+    messageId: string | null;
   }): void;
   /**
    * Optional, experimental: assistant turn carrying both the prose
@@ -553,6 +559,7 @@ export class SessionPump {
           content: event.content,
           turnIndex: event.turn_index,
           requestId: event.request_id,
+          messageId: event.message_id ?? null,
         });
         break;
       case "request-user-input":
