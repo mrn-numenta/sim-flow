@@ -2095,10 +2095,61 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     context: PanelContext,
     conversation: ChatConversationState,
   ): Promise<void> {
+    const state = this.buildState(context, conversation);
+    this.assertChatPanelStateInvariants(state);
     await this.post({
       type: "state-update",
-      state: this.buildState(context, conversation),
+      state,
     });
+  }
+
+  /**
+   * Soft-assert: log when a `ChatPanelState` carries a logically-
+   * impossible combination of flags. These pairs are mutually
+   * exclusive in the orchestrator's contract (a session is either
+   * parked-waiting-on-input OR mid-work, never both; neither flag
+   * makes sense without an active session), so a violation here
+   * means a state-update slipped through with the kind of drift
+   * that produces user-visible stuck UIs (e.g. the "WAITING ON YOU"
+   * pill rendered next to a Stop button + disabled Play button --
+   * 2026-05-17 regression). Pure observation: we still post the
+   * offending state so the underlying bug stays visible rather than
+   * silently papered over. Logged via `console.warn` so the message
+   * surfaces in the Output channel / Developer Tools console with
+   * enough context to trace which postState path produced it.
+   */
+  private assertChatPanelStateInvariants(state: ChatPanelState): void {
+    const violations: string[] = [];
+    if (state.awaitingUserInput && state.isStreaming) {
+      violations.push(
+        "awaitingUserInput=true && isStreaming=true (orchestrator can't be both parked and mid-work)",
+      );
+    }
+    if (!state.sessionActive && state.awaitingUserInput) {
+      violations.push(
+        "awaitingUserInput=true && sessionActive=false (park signal without a live session)",
+      );
+    }
+    if (!state.sessionActive && state.isStreaming) {
+      violations.push(
+        "isStreaming=true && sessionActive=false (streaming without a live session)",
+      );
+    }
+    if (violations.length === 0) {
+      return;
+    }
+    console.warn(
+      `sim-flow: chat-panel state invariant violation: ${violations.join("; ")}`,
+      {
+        projectDir: state.projectDir,
+        currentStep: state.currentStep,
+        currentStepMode: state.currentStepMode,
+        awaitingUserInput: state.awaitingUserInput,
+        isStreaming: state.isStreaming,
+        sessionActive: state.sessionActive,
+        isViewer: state.isViewer,
+      },
+    );
   }
 
   private async post(message: HostMessage): Promise<void> {

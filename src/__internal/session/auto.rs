@@ -3525,6 +3525,20 @@ impl<P: Presenter + ?Sized> Presenter for AutoPresenter<'_, P> {
     }
 
     fn recv(&mut self) -> Result<Option<HostEvent>> {
+        // Soft-assert: `in_subsession_parked` is only meaningful while a
+        // sub-session is open. The flag is only mutated under the
+        // `if self.in_subsession` guard in `send`, and `run_subsession_scoped`
+        // clears both flags together at bracket close (auto.rs:1156-1157).
+        // A drift here would mean the manual-command-while-parked branch
+        // below makes a decision off a stale signal -- log loudly so the
+        // regression is visible without altering behavior.
+        if self.in_subsession_parked && !self.in_subsession {
+            warn!(
+                cap_exceeded = self.cap_exceeded,
+                consume_session_end = self.consume_session_end,
+                "AutoPresenter invariant violation: in_subsession_parked=true but in_subsession=false"
+            );
+        }
         loop {
             if let Some(h) = self.pending_reads.pop_front() {
                 return Ok(Some(h));
