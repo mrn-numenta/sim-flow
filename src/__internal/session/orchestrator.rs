@@ -2400,10 +2400,41 @@ fn invoke_tool(
         Ok(v) => v,
         Err(msg) => return ToolResult::err(msg),
     };
-    match tool.invoke(ctx, &args) {
+    let result = match tool.invoke(ctx, &args) {
         Ok(out) => out,
         Err(err) => ToolResult::err(format!("tool `{}` failed: {err}", call.name)),
+    };
+    cap_tool_output(result)
+}
+
+/// Defensive global cap on tool output size. Most tools already
+/// self-truncate (`read_file` at 16 KB, `run_cargo` at its own
+/// tail-trim threshold), but a chatty / pathological tool result
+/// that bypasses those still dominates the prompt stack. The cap
+/// here is a defence-in-depth backstop; tools that already
+/// trimmed produce output well under this threshold and aren't
+/// touched.
+const TOOL_OUTPUT_CAP_BYTES: usize = 16 * 1024;
+
+fn cap_tool_output(mut result: ToolResult) -> ToolResult {
+    if result.display.len() > TOOL_OUTPUT_CAP_BYTES {
+        let head = &result.display[..TOOL_OUTPUT_CAP_BYTES];
+        // Avoid splitting in the middle of a UTF-8 multi-byte
+        // sequence: walk back to the last char boundary at or
+        // before the cap.
+        let cut = head
+            .char_indices()
+            .last()
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(0);
+        let original_len = result.display.len();
+        let mut trimmed = result.display[..cut].to_string();
+        trimmed.push_str(&format!(
+            "\n... (truncated by orchestrator output cap; original {original_len} bytes)"
+        ));
+        result.display = trimmed;
     }
+    result
 }
 
 fn tool_args_from_body(name: &str, body: &str) -> std::result::Result<serde_json::Value, String> {
