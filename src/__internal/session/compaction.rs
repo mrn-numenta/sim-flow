@@ -38,6 +38,35 @@ use serde_json::Value as JsonValue;
 
 use crate::session::protocol::{ContextEvictionReason, LlmMessage, LlmRole, LlmToolCall};
 
+/// Build the position-based id for the message at index `idx` in
+/// the orchestrator's current `messages: Vec<LlmMessage>` stack.
+/// Stable as long as messages are never *removed* from the vec --
+/// stub-replacement preserves the index. The next compaction
+/// rule that wants to remove (phase-boundary cleanup, overflow
+/// trim) needs a stronger id scheme; that lands together with
+/// the removal logic.
+pub fn position_id(idx: usize) -> String {
+    format!("msg-{idx}")
+}
+
+/// Reverse of `position_id`: parse a "msg-N" id back to an index.
+/// Returns `None` for ids that don't match the scheme.
+pub fn position_id_index(id: &str) -> Option<usize> {
+    id.strip_prefix("msg-")
+        .and_then(|s| s.parse::<usize>().ok())
+}
+
+/// Borrow each (id, message) pair from a `Vec<LlmMessage>` for
+/// passing into compaction rules. The id is the message's position
+/// in the slice, formatted as `msg-N`.
+pub fn position_pairs(messages: &[LlmMessage]) -> Vec<(String, &LlmMessage)> {
+    messages
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (position_id(i), m))
+        .collect()
+}
+
 /// Outcome of one compaction pass. Each rule produces zero or more
 /// evictions; the caller aggregates them and emits a single
 /// `ContextEvicted` event per rule firing.

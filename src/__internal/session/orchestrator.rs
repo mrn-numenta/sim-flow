@@ -610,6 +610,34 @@ where
         }
         last_emitted_message_index = messages.len();
 
+        // Phase 1a deterministic compaction: scan the assembled
+        // prompt stack for redundancy + apply stubs in place
+        // before dispatch. Each evicted message's content shrinks
+        // to a placeholder so the agent still sees that something
+        // existed at that slot, but the LLM no longer carries the
+        // original body forward. `Event::ContextEvicted` lets the
+        // chat panel mark the matching transcript rows.
+        {
+            use crate::session::compaction::{
+                dedup_reason, position_id_index, position_pairs, run_path_keyed_dedup,
+            };
+            let pairs = position_pairs(&messages);
+            let report = run_path_keyed_dedup(&pairs);
+            if !report.is_empty() {
+                for (id, stub) in &report.stubs {
+                    if let Some(idx) = position_id_index(id)
+                        && idx < messages.len()
+                    {
+                        messages[idx].content = stub.clone();
+                    }
+                }
+                host.send(&Event::ContextEvicted {
+                    ids: report.dropped.clone(),
+                    reason: dedup_reason(),
+                })?;
+            }
+        }
+
         let dispatch_result = llm.dispatch_with_tools(&messages, &advertise);
 
         let mut assistant_text = String::new();
