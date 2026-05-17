@@ -1520,9 +1520,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
        * before the new orchestrator's startup note. Used by the
        * Reload-Window auto-relaunch path so the user comes back to
        * the same conversation they were looking at before the
-       * window reload, with a fresh launch note appended.
+       * window reload.
        */
       preserveConversation?: boolean;
+      /**
+       * Suppress the "Flow launched from dashboard" startup note.
+       * Pair with `preserveConversation: true` so consecutive
+       * Reload-Window auto-relaunches don't pile duplicate launch
+       * notes onto the preserved transcript.
+       */
+      skipLaunchNote?: boolean;
     } = {},
   ): Promise<void> {
     // Resolve the target project BEFORE revealing the chat view so we
@@ -1610,6 +1617,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     await this.startAutoSession(ctx, trimmedSpec, {
       resetConversation: !options.preserveConversation,
       forceStepMode: options.forceStepMode,
+      skipLaunchNote: options.skipLaunchNote,
     });
   }
 
@@ -1820,6 +1828,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
        * `sim-flow.flow.stepMode` setting. Used by auto-resume to
        * land the orchestrator in Manual park on cold start. */
       forceStepMode?: "auto" | "manual";
+      /** Suppress the "Flow launched from dashboard" startup note.
+       * The Reload-Window auto-relaunch path uses this together with
+       * `resetConversation: false` so consecutive reloads don't pile
+       * duplicate launch notes onto the preserved transcript -- the
+       * orchestrator's own "Session started" line still appears and
+       * marks the resume cleanly. */
+      skipLaunchNote?: boolean;
     },
   ): Promise<void> {
     const config = vscode.workspace.getConfiguration("sim-flow");
@@ -1871,14 +1886,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     let conversation = options.resetConversation
       ? clearConversationState()
       : this.readConversation(ctx.projectDir);
-    conversation = appendNote(
-      conversation,
-      options.launchTitle ?? "Flow launched from dashboard",
-      options.launchBody ??
-        (trimmedSpec
-          ? `Started sim-flow auto for \`${path.basename(ctx.projectDir)}\` with spec \`${trimmedSpec}\`.`
-          : "Started sim-flow auto without a spec; DM0 will stop for input before the rest of the flow continues."),
-    );
+    if (!options.skipLaunchNote) {
+      conversation = appendNote(
+        conversation,
+        options.launchTitle ?? "Flow launched from dashboard",
+        options.launchBody ??
+          (trimmedSpec
+            ? `Started sim-flow auto for \`${path.basename(ctx.projectDir)}\` with spec \`${trimmedSpec}\`.`
+            : "Started sim-flow auto without a spec; DM0 will stop for input before the rest of the flow continues."),
+      );
+    }
     await this.persistConversation(ctx.projectDir, conversation);
     await this.postState(context, conversation);
 
@@ -2908,6 +2925,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       void this.launchAutoSession(undefined, projectDir, {
         forceStepMode: "manual",
         preserveConversation: true,
+        skipLaunchNote: true,
       }).finally(() => {
         if (this.pendingRelaunchAnchor === projectDir) {
           this.pendingRelaunchAnchor = null;
