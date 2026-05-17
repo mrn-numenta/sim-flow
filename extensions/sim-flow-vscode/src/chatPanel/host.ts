@@ -59,7 +59,6 @@ import {
 import {
   appendAssistantChunk,
   appendAssistantPlaceholder,
-  appendAssistantTurnEntry,
   appendNote,
   appendOrchestratorUserEntry,
   appendUserPrompt,
@@ -2367,10 +2366,35 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   /**
-   * Experimental: render a single LLM turn (prose + native tool
-   * calls) as one completed assistant bubble. The orchestrator emits
-   * one `assistant-text` per turn with `final_chunk = true`, so we
-   * commit the entry immediately instead of chunking.
+   * Experimental: assistant-turn renderer that handles BOTH the
+   * streaming chunk path AND the legacy whole-turn path.
+   *
+   * The orchestrator emits incremental `AssistantText { final_chunk:
+   * false, text: <delta> }` events as the LLM streams its response,
+   * followed by one `AssistantText { final_chunk: true, text: "",
+   * tool_calls: [...] }` to close the turn. To render those as a
+   * single live-updating bubble (instead of one bubble per delta),
+   * we use a placeholder-and-chunk pattern:
+   *
+   *   - First chunk creates the placeholder via
+   *     `appendAssistantPlaceholder` and records its id on
+   *     `session.assistantId`.
+   *   - Subsequent chunks append text via `appendAssistantChunk`,
+   *     keyed off `session.assistantId`.
+   *   - The final chunk (`finalChunk: true`) appends any tool-call
+   *     description as a trailing block via `appendAssistantChunk`
+   *     (so the user sees what the model decided to call) and then
+   *     `completeAssistantTurn` flips `streaming: false`. The
+   *     `assistantId` cursor is cleared so the next turn starts a
+   *     fresh placeholder.
+   *
+   * Cancel mid-stream: when the orchestrator emits
+   * `SessionEnd::Cancelled` after a partial response, the existing
+   * `onManagedSessionSettled` path calls `completeAssistantTurn`
+   * with the placeholder's current body -- which is whatever
+   * chunks have streamed so far. That preserves the partial reply
+   * in the transcript instead of replacing it with "No response
+   * received."
    */
   private appendOrchestratorAssistantTurn(
     session: ManagedAutoSessionState,
@@ -2383,22 +2407,64 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (!this.activePump || this.activePump !== session) {
       return;
     }
-    if (args.text.length === 0 && args.toolCalls.length === 0) {
+    // Drop entirely-empty events that aren't terminal markers --
+    // there's no content to render and no transition to record.
+    if (args.text.length === 0 && args.toolCalls.length === 0 && !args.finalChunk) {
       return;
     }
-    const body = formatAssistantTurnBody(args.text, args.toolCalls);
     let conversation = this.readConversation(session.projectDir);
-    // A new turn arrived; any in-flight legacy placeholder is stale.
-    // Drop the session's assistantId cursor so subsequent calls don't
-    // accidentally chunk into the now-finalised entry.
-    session.assistantId = null;
-    const { state: next } = appendAssistantTurnEntry(
-      conversation,
-      body,
-      "orchestrator",
-      this.transcriptStepFor(session),
-    );
-    conversation = next;
+    // Open a placeholder on the first chunk with content (or on a
+    // tool-call-only final chunk so the description still gets a
+    // bubble). The cursor lives on `session.assistantId` so that
+    // `onManagedSessionSettled` -> `completeAssistantTurn` can
+    // finalize the bubble even if the session ends mid-stream.
+    if (!session.assistantId && (args.text.length > 0 || args.toolCalls.length > 0)) {
+      const started = appendAssistantPlaceholder(
+        conversation,
+        "Assistant",
+        "orchestrator",
+        undefined,
+        this.transcriptStepFor(session),
+      );
+      session.assistantId = started.assistantId;
+      conversation = started.state;
+    }
+    if (args.text.length > 0 && session.assistantId) {
+      conversation = appendAssistantChunk(
+        conversation,
+        session.assistantId,
+        args.text,
+      );
+    }
+    if (args.finalChunk) {
+      // Tool-call lines append AFTER the prose so the model's
+      // "what it decided to do" follows its "why". Skip when the
+      // turn was prose-only.
+      if (args.toolCalls.length > 0 && session.assistantId) {
+        const toolCallBody = formatAssistantTurnBody("", args.toolCalls);
+        if (toolCallBody.length > 0) {
+          // formatAssistantTurnBody already adds the leading "\n\n"
+          // separator only when there's preceding text; we always
+          // want one here since the placeholder may have collected
+          // prose. Re-prefix unconditionally.
+          conversation = appendAssistantChunk(
+            conversation,
+            session.assistantId,
+            `\n\n${toolCallBody}`,
+          );
+        }
+      }
+      // Flip streaming = false. If the body is still empty
+      // (tool-only turn with no text, or an empty close after a
+      // cancel), the fallback text is "No response received." --
+      // for tool-only turns that's not ideal, but the tool calls
+      // rendered above carry the meaningful content. Improving
+      // the fallback for tool-only turns is a follow-up.
+      if (session.assistantId) {
+        conversation = completeAssistantTurn(conversation, session.assistantId);
+        session.assistantId = null;
+      }
+    }
     this.rememberConversation(session.projectDir, conversation);
     void this.postStateForProject(session.projectDir, conversation);
   }

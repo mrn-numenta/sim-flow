@@ -11,6 +11,7 @@
 //!   - [`dispatch`] -- `dispatch_chat_with_tools` round-trip + decode
 
 mod dispatch;
+mod dispatch_streaming;
 mod request;
 mod wire;
 
@@ -18,6 +19,7 @@ mod wire;
 mod tests;
 
 pub use dispatch::dispatch_chat_with_tools;
+pub use dispatch_streaming::dispatch_chat_with_tools_streaming;
 pub use request::OpenAiCompatibleRequest;
 
 use crate::Result;

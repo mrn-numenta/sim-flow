@@ -1,9 +1,11 @@
 //! `OllamaAgent` - Ollama's local OpenAI-compatible endpoint.
 
+use super::openai_compat::transport::dispatch_chat_with_tools_streaming;
 use super::openai_compat::{OpenAiCompatibleRequest, dispatch_chat};
 use super::{
-    AgentAdaptationSummary, CliAgent, LlmCallMetrics, OPENAI_COMPAT_GENERIC_RUNTIME,
-    RuntimeCapabilityProfile, resolve_model_family, resolve_runtime_profile,
+    AdvertisedToolCall, AgentAdaptationSummary, CliAgent, LlmCallMetrics,
+    OPENAI_COMPAT_GENERIC_RUNTIME, RuntimeCapabilityProfile, StreamingChunk, ToolAdvertise,
+    resolve_model_family, resolve_runtime_profile,
 };
 use crate::Result;
 use crate::session::protocol::LlmMessage;
@@ -87,6 +89,24 @@ impl CliAgent for OllamaAgent {
                 .with_model_family_id(self.model_family_id.as_deref()),
             self.cancel_flag.clone(),
         )
+    }
+
+    fn dispatch_streaming(
+        &self,
+        messages: &[LlmMessage],
+        _tools: &[ToolAdvertise],
+        on_chunk: &mut dyn FnMut(StreamingChunk),
+    ) -> Result<(String, Vec<AdvertisedToolCall>, LlmCallMetrics)> {
+        // Ollama's OpenAI-compat shim doesn't reliably implement
+        // native tool-call streaming; we route tool catalogs through
+        // the fenced-block fallback on Ollama anyway, so drop the
+        // tools here and stream text-only. Switching to native-tool
+        // streaming on Ollama is a follow-up tied to its server-side
+        // tool support stabilizing.
+        let req = OpenAiCompatibleRequest::new(&self.base_url, &self.model, messages)
+            .with_model_family_id(self.model_family_id.as_deref());
+        let resp = dispatch_chat_with_tools_streaming(req, self.cancel_flag.clone(), on_chunk)?;
+        Ok((resp.text, Vec::new(), resp.metrics))
     }
 
     fn adaptation_summary(&self) -> Option<AgentAdaptationSummary> {

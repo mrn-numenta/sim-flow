@@ -11,6 +11,14 @@ pub(super) struct ChatRequestBody<'a> {
     pub(super) model: &'a str,
     pub(super) messages: Vec<RequestMessage<'a>>,
     pub(super) stream: bool,
+    /// Streaming options. Set when `stream = true` to request
+    /// `include_usage = true` so the final SSE chunk carries a
+    /// `usage` object (otherwise we'd only have chunk content
+    /// and no token totals for metrics). Skipped on non-streaming
+    /// requests so the wire body stays byte-identical to the
+    /// existing shape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) stream_options: Option<StreamOptions>,
     pub(super) max_tokens: u32,
     /// Optional deterministic-sampling seed. `skip_serializing_if`
     /// keeps the wire body unchanged for servers that reject
@@ -53,6 +61,15 @@ pub(super) struct ChatRequestBody<'a> {
     pub(super) tools: Option<Vec<ToolDescriptor>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) tool_choice: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub(super) struct StreamOptions {
+    /// Ask the server to emit a final SSE chunk carrying a `usage`
+    /// object once streaming finishes. Lets us populate
+    /// `LlmCallMetrics.tokens_{in,out}` for streamed calls; without
+    /// this we'd only see deltas and miss the totals.
+    pub(super) include_usage: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

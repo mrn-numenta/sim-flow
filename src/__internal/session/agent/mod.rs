@@ -71,6 +71,14 @@ pub struct LlmCallMetrics {
     pub tokens_in: Option<u32>,
     pub tokens_out: Option<u32>,
     pub wall_ms: u64,
+    /// True when `dispatch_streaming` returned a partial response
+    /// because the shared cancel flag flipped mid-stream. The
+    /// `text` / `tool_calls` returned alongside hold whatever
+    /// content arrived before the cancel; the orchestrator commits
+    /// them as the assistant turn and then emits
+    /// `SessionEnd::Cancelled`. False on clean completion and on
+    /// the buffered (non-streaming) fallback path.
+    pub cancelled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,6 +138,22 @@ pub struct AdvertisedToolCall {
     pub arguments_json: String,
 }
 
+/// One incremental piece of an LLM response delivered by
+/// `dispatch_streaming`. Backends emit `Text` chunks as the model
+/// produces output so the dashboard can render tokens live; tool
+/// calls are buffered internally and surfaced only via the final
+/// return value (per-arg tool-call streaming is openai-compat-
+/// specific and the dashboard has no live render path for partial
+/// tool args today).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamingChunk {
+    /// Incremental assistant text. Backends accumulate the same
+    /// content into their final returned `text` so non-streaming
+    /// callers (or a fallback through `dispatch_with_tools`) see
+    /// the complete response.
+    Text(String),
+}
+
 pub trait CliAgent: Send + Sync {
     fn name(&self) -> &str;
     fn dispatch(&self, messages: &[LlmMessage]) -> Result<(String, LlmCallMetrics)>;
@@ -148,6 +172,45 @@ pub trait CliAgent: Send + Sync {
     ) -> Result<(String, Vec<AdvertisedToolCall>, LlmCallMetrics)> {
         let (text, metrics) = self.dispatch(messages)?;
         Ok((text, Vec::new(), metrics))
+    }
+    /// Streaming variant of `dispatch_with_tools`. Backends that
+    /// support server-sent events / line-buffered streaming emit
+    /// `StreamingChunk::Text` callbacks as the model produces output;
+    /// the final return is the complete `(text, tool_calls, metrics)`
+    /// tuple, identical in shape to `dispatch_with_tools`. The
+    /// callback signature is `&mut dyn FnMut(StreamingChunk)` so the
+    /// caller can route chunks anywhere (e.g. the orchestrator
+    /// forwards them as `AssistantText { final_chunk: false }`
+    /// events for live rendering).
+    ///
+    /// Cancel semantics during streaming: on a cancel flag flip the
+    /// backend stops reading the stream, drops the underlying
+    /// transport, and returns `Ok((buffered_text, [],
+    /// LlmCallMetrics { cancelled: true, .. }))`. The orchestrator
+    /// treats `cancelled = true` as a clean partial turn -- it
+    /// commits the streamed content into the prompt history and
+    /// then emits `SessionEnd::Cancelled`. This trades the
+    /// "abandon the worker, lose partial content" behavior of
+    /// `dispatch_with_tools` for "stop reading, keep partial
+    /// content" -- the chat panel sees whatever streamed before
+    /// the click as a finalized bubble instead of a "No response
+    /// received." stub.
+    ///
+    /// Default implementation buffers the entire response via
+    /// `dispatch_with_tools` and emits one synthetic `Text` chunk
+    /// at the end, so non-streaming backends (mock, anything that
+    /// hasn't been migrated yet) keep working transparently.
+    fn dispatch_streaming(
+        &self,
+        messages: &[LlmMessage],
+        tools: &[ToolAdvertise],
+        on_chunk: &mut dyn FnMut(StreamingChunk),
+    ) -> Result<(String, Vec<AdvertisedToolCall>, LlmCallMetrics)> {
+        let (text, calls, metrics) = self.dispatch_with_tools(messages, tools)?;
+        if !text.is_empty() {
+            on_chunk(StreamingChunk::Text(text.clone()));
+        }
+        Ok((text, calls, metrics))
     }
     fn adaptation_summary(&self) -> Option<AgentAdaptationSummary> {
         None

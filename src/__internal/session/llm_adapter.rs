@@ -19,7 +19,7 @@
 
 use crate::Result;
 use crate::session::agent::{
-    AdvertisedToolCall, AgentAdaptationSummary, LlmCallMetrics, ToolAdvertise,
+    AdvertisedToolCall, AgentAdaptationSummary, LlmCallMetrics, StreamingChunk, ToolAdvertise,
 };
 use crate::session::protocol::LlmMessage;
 
@@ -66,6 +66,36 @@ pub trait LlmAdapter: Send + Sync {
         Ok((text, Vec::new(), metrics))
     }
 
+    /// Streaming variant of `dispatch_with_tools`. Backends that
+    /// support server-sent events / line-buffered streaming emit
+    /// `StreamingChunk::Text` callbacks as the model produces output;
+    /// the final return is the complete `(text, tool_calls, metrics)`
+    /// tuple. The orchestrator forwards Text chunks as
+    /// `AssistantText { final_chunk: false }` events so the chat
+    /// panel renders tokens live; the final return drives the
+    /// `final_chunk: true` close + tool-call routing.
+    ///
+    /// Mid-stream cancel: on cancel flag flip the backend stops
+    /// reading, drops the transport, and returns
+    /// `Ok((buffered_text, [], metrics { cancelled: true, .. }))`.
+    /// The orchestrator commits the partial turn into history and
+    /// then emits `SessionEnd::Cancelled`.
+    ///
+    /// Default implementation buffers via `dispatch_with_tools` and
+    /// emits one synthetic final chunk.
+    fn dispatch_streaming(
+        &self,
+        messages: &[LlmMessage],
+        tools: &[ToolAdvertise],
+        on_chunk: &mut dyn FnMut(StreamingChunk),
+    ) -> Result<(String, Vec<AdvertisedToolCall>, LlmCallMetrics)> {
+        let (text, calls, metrics) = self.dispatch_with_tools(messages, tools)?;
+        if !text.is_empty() {
+            on_chunk(StreamingChunk::Text(text.clone()));
+        }
+        Ok((text, calls, metrics))
+    }
+
     /// Optional adaptation summary for the diagnostic line emitted
     /// when `--llm-debug-adaptation` is set. `None` means "no
     /// adaptation tracking for this backend."
@@ -93,6 +123,14 @@ impl<A: crate::session::agent::CliAgent + ?Sized> LlmAdapter for A {
         tools: &[ToolAdvertise],
     ) -> Result<(String, Vec<AdvertisedToolCall>, LlmCallMetrics)> {
         crate::session::agent::CliAgent::dispatch_with_tools(self, messages, tools)
+    }
+    fn dispatch_streaming(
+        &self,
+        messages: &[LlmMessage],
+        tools: &[ToolAdvertise],
+        on_chunk: &mut dyn FnMut(StreamingChunk),
+    ) -> Result<(String, Vec<AdvertisedToolCall>, LlmCallMetrics)> {
+        crate::session::agent::CliAgent::dispatch_streaming(self, messages, tools, on_chunk)
     }
     fn adaptation_summary(&self) -> Option<AgentAdaptationSummary> {
         crate::session::agent::CliAgent::adaptation_summary(self)

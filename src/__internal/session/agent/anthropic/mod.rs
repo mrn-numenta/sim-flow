@@ -38,9 +38,11 @@
 
 pub mod tool_use;
 
+use std::collections::BTreeMap;
+use std::io::BufRead;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -49,8 +51,8 @@ use self::tool_use::{
 };
 use super::cancel::run_cancellable;
 use super::{
-    AdvertisedToolCall, AgentAdaptationSummary, CliAgent, LlmCallMetrics, ToolAdvertise,
-    apply_reasoning_history_policy, resolve_model_family,
+    AdvertisedToolCall, AgentAdaptationSummary, CliAgent, LlmCallMetrics, StreamingChunk,
+    ToolAdvertise, apply_reasoning_history_policy, resolve_model_family,
 };
 use crate::keys::{Provider, resolve_api_key};
 use crate::session::protocol::{LlmMessage, LlmRole};
@@ -165,6 +167,7 @@ impl AnthropicAgent {
             },
             messages: conversation,
             tools,
+            stream: false,
         };
 
         // Serialize the request body once in the main thread so the
@@ -226,9 +229,393 @@ impl AnthropicAgent {
             tokens_in: body.usage.as_ref().and_then(|u| u.input_tokens),
             tokens_out: body.usage.as_ref().and_then(|u| u.output_tokens),
             wall_ms: started.elapsed().as_millis() as u64,
+            cancelled: false,
         };
         Ok((text, tool_calls, metrics))
     }
+
+    /// Streaming variant: posts with `stream=true`, reads SSE frames
+    /// on a worker thread, and forwards `text_delta` chunks to
+    /// `on_chunk` as they arrive. Tool-use blocks (`tool_use` /
+    /// `input_json_delta` events) accumulate into the returned
+    /// `tool_calls` vector. The shared `cancel_flag` is polled on
+    /// each chunk boundary; on flip the reader is abandoned and we
+    /// return the partial response with `metrics.cancelled = true`.
+    fn dispatch_inner_streaming(
+        &self,
+        messages: &[LlmMessage],
+        tools: Option<Vec<AnthropicToolDescriptor>>,
+        on_chunk: &mut dyn FnMut(StreamingChunk),
+    ) -> Result<(String, Vec<AdvertisedToolCall>, LlmCallMetrics)> {
+        let started = Instant::now();
+        let Some(api_key) = self.api_key.as_deref() else {
+            return Err(Error::Client(
+                "anthropic backend: no API key found. Set the `ANTHROPIC_API_KEY` \
+                 env var or run `sim-flow keys set anthropic <key>` to persist one."
+                    .into(),
+            ));
+        };
+        let max_tokens = std::env::var("SIM_FLOW_MAX_TOKENS")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(DEFAULT_MAX_TOKENS);
+        let family = resolve_model_family(self.model_family_id.as_deref(), Some(&self.model));
+        let prepared = apply_reasoning_history_policy(messages, family);
+        let (system, conversation) = split_system_and_messages(&prepared);
+
+        let body = MessagesRequestBody {
+            model: &self.model,
+            max_tokens,
+            system: if system.is_empty() {
+                None
+            } else {
+                Some(system)
+            },
+            messages: conversation,
+            tools,
+            stream: true,
+        };
+        let body_bytes = serde_json::to_vec(&body)
+            .map_err(|err| Error::Client(format!("anthropic api: serialize body: {err}")))?;
+        let url = self.api_url.clone();
+        let api_key_owned = api_key.to_string();
+
+        // Reader thread: opens the HTTP stream, splits the response
+        // body into SSE frames, parses each into a `RawSseEvent`, and
+        // forwards through a channel. The main thread polls the
+        // channel + cancel flag so mid-stream cancellation returns
+        // promptly with whatever content has already streamed.
+        let (event_tx, event_rx) = std::sync::mpsc::channel::<Result<RawSseEvent>>();
+        std::thread::spawn(move || {
+            let resp = match ureq::post(&url)
+                .set("content-type", "application/json")
+                .set("x-api-key", &api_key_owned)
+                .set("anthropic-version", DEFAULT_API_VERSION)
+                .set("accept", "text/event-stream")
+                .send_bytes(&body_bytes)
+            {
+                Ok(r) => r,
+                Err(ureq::Error::Status(code, resp)) => {
+                    let body = resp.into_string().unwrap_or_default();
+                    let _ = event_tx.send(Err(Error::Client(format!(
+                        "anthropic api returned HTTP {code}: {body}"
+                    ))));
+                    return;
+                }
+                Err(err) => {
+                    let _ = event_tx.send(Err(Error::Client(format!(
+                        "anthropic api transport: {err}"
+                    ))));
+                    return;
+                }
+            };
+            let mut reader = std::io::BufReader::new(resp.into_reader());
+            let mut current_event: Option<String> = None;
+            let mut current_data = String::new();
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        let trimmed = line.trim_end_matches(['\r', '\n']);
+                        if trimmed.is_empty() {
+                            if let Some(event) = current_event.take() {
+                                let data = std::mem::take(&mut current_data);
+                                if event_tx.send(Ok(RawSseEvent { event, data })).is_err() {
+                                    return;
+                                }
+                            }
+                        } else if let Some(rest) = trimmed.strip_prefix("event: ") {
+                            current_event = Some(rest.to_string());
+                        } else if let Some(rest) = trimmed.strip_prefix("data: ") {
+                            if !current_data.is_empty() {
+                                current_data.push('\n');
+                            }
+                            current_data.push_str(rest);
+                        }
+                        // Other SSE fields (id:, retry:) are ignored;
+                        // Anthropic doesn't emit them today.
+                    }
+                    Err(err) => {
+                        let _ = event_tx.send(Err(Error::Client(format!(
+                            "anthropic api: SSE read failed: {err}"
+                        ))));
+                        return;
+                    }
+                }
+            }
+        });
+
+        let mut blocks: BTreeMap<usize, BlockAccumulator> = BTreeMap::new();
+        let mut text = String::new();
+        let mut input_tokens: Option<u32> = None;
+        let mut output_tokens: Option<u32> = None;
+        let mut stop_reason: Option<String> = None;
+        let mut cancelled = false;
+
+        loop {
+            if let Some(ref flag) = self.cancel_flag
+                && flag.load(Ordering::Acquire)
+            {
+                cancelled = true;
+                break;
+            }
+            match event_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(Ok(raw)) => {
+                    handle_anthropic_sse_event(
+                        &raw,
+                        &mut blocks,
+                        &mut text,
+                        &mut input_tokens,
+                        &mut output_tokens,
+                        &mut stop_reason,
+                        on_chunk,
+                    )?;
+                    if matches!(raw.event.as_str(), "message_stop") {
+                        break;
+                    }
+                }
+                Ok(Err(err)) => return Err(err),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        // max_tokens stop reason is a hard error on the non-streaming
+        // path (we refuse to commit a partial response). Streaming
+        // arguably DOES have a partial response and the user can
+        // make do, but keeping symmetry with `dispatch_inner` here
+        // simplifies the orchestrator's contract: a streaming call
+        // either returns clean text or `Cancelled`-flagged metrics
+        // (user-driven) or `Err` (server-side problem). We surface
+        // it as Err and let the operator retry with a higher cap.
+        if !cancelled
+            && let Some(reason) = stop_reason.as_deref()
+            && reason == "max_tokens"
+        {
+            return Err(Error::Client(format!(
+                "anthropic api: response truncated at max_tokens (stop_reason=max_tokens). \
+                 Refusing to commit a partial response. Raise SIM_FLOW_MAX_TOKENS (current: {max_tokens}), \
+                 ask the agent to write fewer files per turn, or simplify the prompt. \
+                 Tail: {tail}",
+                tail = text
+                    .chars()
+                    .rev()
+                    .take(280)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect::<String>(),
+            )));
+        }
+
+        let tool_calls = collect_tool_calls_from_blocks(blocks);
+        let metrics = LlmCallMetrics {
+            tokens_in: input_tokens,
+            tokens_out: output_tokens,
+            wall_ms: started.elapsed().as_millis() as u64,
+            cancelled,
+        };
+        Ok((text, tool_calls, metrics))
+    }
+}
+
+/// Single SSE event delivered by the reader thread. Anthropic emits
+/// one `event: <name>\n` line per frame followed by one `data: <json>\n`
+/// line (sometimes multi-line for long deltas) terminated by a blank
+/// line; this is the parsed result.
+struct RawSseEvent {
+    event: String,
+    data: String,
+}
+
+/// Per-`content_block.index` accumulator. Text blocks collect
+/// `text_delta`s into a String; tool_use blocks collect the
+/// `input_json_delta`s into a JSON-fragment String that's only valid
+/// once the corresponding `content_block_stop` arrives.
+enum BlockAccumulator {
+    Text(String),
+    ToolUse {
+        id: Option<String>,
+        name: Option<String>,
+        partial_json: String,
+    },
+}
+
+fn handle_anthropic_sse_event(
+    raw: &RawSseEvent,
+    blocks: &mut BTreeMap<usize, BlockAccumulator>,
+    text: &mut String,
+    input_tokens: &mut Option<u32>,
+    output_tokens: &mut Option<u32>,
+    stop_reason: &mut Option<String>,
+    on_chunk: &mut dyn FnMut(StreamingChunk),
+) -> Result<()> {
+    if raw.data.is_empty() {
+        return Ok(());
+    }
+    let value: serde_json::Value = serde_json::from_str(&raw.data).map_err(|err| {
+        Error::Client(format!(
+            "anthropic api: malformed SSE data for event `{}`: {err}",
+            raw.event
+        ))
+    })?;
+    match raw.event.as_str() {
+        "message_start" => {
+            if let Some(t) = value
+                .pointer("/message/usage/input_tokens")
+                .and_then(|v| v.as_u64())
+            {
+                *input_tokens = Some(t as u32);
+            }
+            if let Some(t) = value
+                .pointer("/message/usage/output_tokens")
+                .and_then(|v| v.as_u64())
+            {
+                *output_tokens = Some(t as u32);
+            }
+        }
+        "content_block_start" => {
+            let index = value
+                .pointer("/index")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            let block_type = value
+                .pointer("/content_block/type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match block_type {
+                "text" => {
+                    let initial = value
+                        .pointer("/content_block/text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if !initial.is_empty() {
+                        text.push_str(&initial);
+                        on_chunk(StreamingChunk::Text(initial.clone()));
+                    }
+                    blocks.insert(index, BlockAccumulator::Text(initial));
+                }
+                "tool_use" => {
+                    let id = value
+                        .pointer("/content_block/id")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    let name = value
+                        .pointer("/content_block/name")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    blocks.insert(
+                        index,
+                        BlockAccumulator::ToolUse {
+                            id,
+                            name,
+                            partial_json: String::new(),
+                        },
+                    );
+                }
+                _ => {
+                    // Unknown block type (image, etc.); skip.
+                }
+            }
+        }
+        "content_block_delta" => {
+            let index = value
+                .pointer("/index")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            let delta_type = value
+                .pointer("/delta/type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match delta_type {
+                "text_delta" => {
+                    let piece = value
+                        .pointer("/delta/text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if !piece.is_empty() {
+                        text.push_str(piece);
+                        if let Some(BlockAccumulator::Text(buf)) = blocks.get_mut(&index) {
+                            buf.push_str(piece);
+                        }
+                        on_chunk(StreamingChunk::Text(piece.to_string()));
+                    }
+                }
+                "input_json_delta" => {
+                    let piece = value
+                        .pointer("/delta/partial_json")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if !piece.is_empty()
+                        && let Some(BlockAccumulator::ToolUse { partial_json, .. }) =
+                            blocks.get_mut(&index)
+                    {
+                        partial_json.push_str(piece);
+                    }
+                }
+                _ => {}
+            }
+        }
+        "content_block_stop" => {
+            // Block is finalized in `blocks`; nothing more to do
+            // until message_stop folds tool_use blocks into the
+            // final tool_calls vector.
+        }
+        "message_delta" => {
+            if let Some(reason) = value.pointer("/delta/stop_reason").and_then(|v| v.as_str()) {
+                *stop_reason = Some(reason.to_string());
+            }
+            if let Some(t) = value
+                .pointer("/usage/output_tokens")
+                .and_then(|v| v.as_u64())
+            {
+                *output_tokens = Some(t as u32);
+            }
+        }
+        "message_stop" => {
+            // Handled by caller's loop break.
+        }
+        "ping" => {
+            // Keep-alive; nothing to do.
+        }
+        _ => {
+            // Unknown event type. Anthropic adds new events over time
+            // (`message_start_overload`, etc.); ignore so a new field
+            // doesn't crash the stream parser.
+        }
+    }
+    Ok(())
+}
+
+fn collect_tool_calls_from_blocks(
+    blocks: BTreeMap<usize, BlockAccumulator>,
+) -> Vec<AdvertisedToolCall> {
+    blocks
+        .into_values()
+        .filter_map(|b| match b {
+            BlockAccumulator::ToolUse {
+                id,
+                name,
+                partial_json,
+            } => {
+                let arguments_json = if partial_json.is_empty() {
+                    "{}".to_string()
+                } else {
+                    partial_json
+                };
+                let name = name.unwrap_or_default();
+                Some(AdvertisedToolCall {
+                    id,
+                    name,
+                    arguments_json,
+                })
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 impl CliAgent for AnthropicAgent {
@@ -261,6 +648,29 @@ impl CliAgent for AnthropicAgent {
             )
         };
         self.dispatch_inner(messages, wire_tools)
+    }
+
+    fn dispatch_streaming(
+        &self,
+        messages: &[LlmMessage],
+        tools: &[ToolAdvertise],
+        on_chunk: &mut dyn FnMut(StreamingChunk),
+    ) -> Result<(String, Vec<AdvertisedToolCall>, LlmCallMetrics)> {
+        let wire_tools = if tools.is_empty() {
+            None
+        } else {
+            Some(
+                tools
+                    .iter()
+                    .map(|t| AnthropicToolDescriptor {
+                        name: t.name.clone(),
+                        description: t.description.clone(),
+                        input_schema: t.parameters.clone(),
+                    })
+                    .collect(),
+            )
+        };
+        self.dispatch_inner_streaming(messages, wire_tools, on_chunk)
     }
 
     fn adaptation_summary(&self) -> Option<AgentAdaptationSummary> {
@@ -436,6 +846,15 @@ struct MessagesRequestBody<'a> {
     /// body stays byte-identical to pre-Phase-C requests.
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<AnthropicToolDescriptor>>,
+    /// Server-sent events streaming flag. False (default) returns
+    /// a single JSON response body; true causes the server to
+    /// emit `event: <name>\ndata: <json>\n\n` frames the client
+    /// reads incrementally. Used by `dispatch_streaming` so the
+    /// orchestrator can forward text chunks as
+    /// `AssistantText { final_chunk: false }` events while the
+    /// model is still generating.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    stream: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -561,10 +980,12 @@ mod tests {
                 content: AnthropicMessageContent::Text("hi".into()),
             }],
             tools: None,
+            stream: false,
         };
         let json = serde_json::to_string(&body).unwrap();
         assert!(!json.contains("\"system\""), "json: {json}");
         assert!(!json.contains("\"tools\""), "json: {json}");
+        assert!(!json.contains("\"stream\""), "json: {json}");
         assert!(json.contains("\"max_tokens\":8192"));
         assert!(json.contains("\"model\":\"claude-opus-4-7\""));
     }
@@ -577,6 +998,7 @@ mod tests {
             system: Some("rules".into()),
             messages: vec![],
             tools: None,
+            stream: false,
         };
         let json = serde_json::to_string(&body).unwrap();
         assert!(json.contains("\"system\":\"rules\""));
@@ -597,6 +1019,7 @@ mod tests {
                 description: "List a directory".into(),
                 input_schema: serde_json::json!({"type":"object"}),
             }]),
+            stream: false,
         };
         let v: serde_json::Value = serde_json::to_value(&body).unwrap();
         assert_eq!(v["tools"][0]["name"], "list_dir");
@@ -770,5 +1193,128 @@ mod tests {
         assert!(calls[0].arguments_json.contains("\"path\""));
         assert_eq!(calls[1].name, "list_dir");
         assert_eq!(calls[1].arguments_json, "{}");
+    }
+
+    #[test]
+    fn sse_event_handler_accumulates_text_deltas_and_forwards_chunks() {
+        // Drive the SSE event handler through the canonical Anthropic
+        // streaming sequence: message_start (carries usage),
+        // content_block_start (text block), N x content_block_delta
+        // (text_delta), content_block_stop, message_delta (final
+        // usage + stop_reason), message_stop. Verify text accumulates
+        // correctly, on_chunk receives every delta, and the metrics
+        // come out of message_delta's usage block.
+        let mut blocks: BTreeMap<usize, BlockAccumulator> = BTreeMap::new();
+        let mut text = String::new();
+        let mut input_tokens: Option<u32> = None;
+        let mut output_tokens: Option<u32> = None;
+        let mut stop_reason: Option<String> = None;
+        let mut chunks: Vec<String> = Vec::new();
+        let mut on_chunk = |c: StreamingChunk| match c {
+            StreamingChunk::Text(t) => chunks.push(t),
+        };
+
+        for (event, data) in [
+            (
+                "message_start",
+                r#"{"type":"message_start","message":{"usage":{"input_tokens":12,"output_tokens":1}}}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":", world!"}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":0}"#,
+            ),
+            (
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}"#,
+            ),
+            ("message_stop", r#"{"type":"message_stop"}"#),
+        ] {
+            handle_anthropic_sse_event(
+                &RawSseEvent {
+                    event: event.into(),
+                    data: data.into(),
+                },
+                &mut blocks,
+                &mut text,
+                &mut input_tokens,
+                &mut output_tokens,
+                &mut stop_reason,
+                &mut on_chunk,
+            )
+            .unwrap();
+        }
+
+        assert_eq!(text, "Hello, world!");
+        assert_eq!(chunks, vec!["Hello".to_string(), ", world!".to_string()]);
+        assert_eq!(input_tokens, Some(12));
+        assert_eq!(output_tokens, Some(7));
+        assert_eq!(stop_reason.as_deref(), Some("end_turn"));
+    }
+
+    #[test]
+    fn sse_event_handler_accumulates_tool_use_input_json_deltas() {
+        // Anthropic streams tool_use args as `input_json_delta`
+        // fragments; the handler must concatenate them in order so
+        // the final arguments_json is the complete JSON object.
+        let mut blocks: BTreeMap<usize, BlockAccumulator> = BTreeMap::new();
+        let mut text = String::new();
+        let mut input_tokens: Option<u32> = None;
+        let mut output_tokens: Option<u32> = None;
+        let mut stop_reason: Option<String> = None;
+        let mut chunks: Vec<String> = Vec::new();
+        let mut on_chunk = |c: StreamingChunk| match c {
+            StreamingChunk::Text(t) => chunks.push(t),
+        };
+        for (event, data) in [
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_x","name":"read_file","input":{}}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"sr"}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"c/lib.rs\"}"}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":1}"#,
+            ),
+        ] {
+            handle_anthropic_sse_event(
+                &RawSseEvent {
+                    event: event.into(),
+                    data: data.into(),
+                },
+                &mut blocks,
+                &mut text,
+                &mut input_tokens,
+                &mut output_tokens,
+                &mut stop_reason,
+                &mut on_chunk,
+            )
+            .unwrap();
+        }
+        assert!(text.is_empty());
+        assert!(chunks.is_empty());
+        let calls = collect_tool_calls_from_blocks(blocks);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].id.as_deref(), Some("toolu_x"));
+        assert_eq!(calls[0].arguments_json, r#"{"path":"src/lib.rs"}"#);
     }
 }

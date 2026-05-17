@@ -105,6 +105,7 @@ impl CliAgent for GhCopilotAgent {
             tokens_in: None,
             tokens_out: None,
             wall_ms: started.elapsed().as_millis() as u64,
+            cancelled: false,
         };
         Ok((text, metrics))
     }

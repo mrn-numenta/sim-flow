@@ -672,14 +672,44 @@ where
             }
         }
 
-        let dispatch_result = llm.dispatch_with_tools(&messages, &advertise);
+        // Stream the dispatch: forward each `StreamingChunk::Text`
+        // as an `AssistantText { final_chunk: false }` event so the
+        // chat panel can render tokens live. Buffer text into
+        // `streamed_text` so callers that need the full body (the
+        // existing post-turn artifact extraction below) see the
+        // same string a non-streaming dispatch would have returned.
+        // Backends that don't implement streaming fall back via the
+        // trait default impl, which emits exactly one synthetic
+        // chunk after the buffered dispatch -- semantically a no-op
+        // for those callers.
+        let mut streamed_text = String::new();
+        let dispatch_result = {
+            let host_for_chunks = &mut *host;
+            let mut on_chunk = |chunk: crate::session::agent::StreamingChunk| match chunk {
+                crate::session::agent::StreamingChunk::Text(t) => {
+                    streamed_text.push_str(&t);
+                    // Best-effort: if the host transport closes
+                    // mid-stream we'll see the same error on the
+                    // next event emit and surface it then; silently
+                    // dropping here keeps the per-chunk callback
+                    // infallible.
+                    let _ = host_for_chunks.send(&Event::AssistantText {
+                        text: t,
+                        final_chunk: false,
+                        tool_calls: Vec::new(),
+                    });
+                }
+            };
+            llm.dispatch_streaming(&messages, &advertise, &mut on_chunk)
+        };
 
         // `Error::Cancelled` from the LLM adapter means the control
         // socket flipped the cancel flag while a dispatch was in
-        // flight (subprocess SIGTERM'd, HTTP worker abandoned). The
-        // semantic is identical to a `HostEvent::Cancel` received at
-        // the next `host.recv()` boundary: end the session cleanly
-        // with `SessionEnd::Cancelled`. Doing so here -- before the
+        // flight (subprocess SIGTERM'd, HTTP worker abandoned BEFORE
+        // it could surface partial content). The semantic is
+        // identical to a `HostEvent::Cancel` received at the next
+        // `host.recv()` boundary: end the session cleanly with
+        // `SessionEnd::Cancelled`. Doing so here -- before the
         // generic `agent-failed` error path -- avoids a misleading
         // "LLM error" diagnostic for what's actually a user-driven
         // cancel.
@@ -696,6 +726,14 @@ where
         let mut llm_failed = false;
         let mut llm_error_kind: Option<String> = None;
         let mut llm_error_message: Option<String> = None;
+        // Streaming-cancel case: backend returned `metrics.cancelled
+        // = true` with a partial response. Capture so the post-match
+        // block can commit the partial turn and then end the session
+        // cleanly with `SessionEnd::Cancelled` -- semantically the
+        // same as the `Err(Error::Cancelled)` short-circuit above,
+        // but preserving the streamed prose (and any tool calls that
+        // arrived before the cancel) instead of discarding them.
+        let mut dispatch_cancelled = false;
         match dispatch_result {
             Ok((text, calls, metrics)) => {
                 // Per-call structured metrics so live tailing
@@ -735,20 +773,34 @@ where
                     }),
                     _ => None,
                 };
-                // Single AssistantText carrying the full turn body
-                // plus the final-chunk marker. Presenters that
-                // expected streaming see one event per turn; the
-                // VS Code chat panel UX that depended on per-chunk
-                // streaming was previously synthesized by the
-                // extension's TS-side SSE parser and is intentionally
-                // dropped here (see refactor plan, step 2).
-                //
-                // `tool_calls` carries any native tool calls the model
-                // emitted this turn so experimental hosts can render
-                // a full record of the LLM's reply (prose + tool
-                // calls). Standard hosts ignore the extra field.
+                // Final-chunk close. The full prose was already
+                // streamed via incremental `final_chunk: false`
+                // events from the `on_chunk` callback above (or, for
+                // backends that fall back to the buffered default
+                // impl of `dispatch_streaming`, as a single synthetic
+                // chunk after the dispatch returned). Either way the
+                // panel has the complete body; this final event just
+                // closes the turn and carries any native tool calls
+                // the model emitted. We pass through whatever text
+                // the backend reported as the final accumulated body
+                // ONLY when streaming was bypassed -- if streamed
+                // chunks already covered the same content, sending
+                // it again would double the rendered text on
+                // standard hosts.
+                let final_text = if streamed_text == assistant_text {
+                    String::new()
+                } else {
+                    // Backend skipped the streaming surface and
+                    // returned text the chunks didn't cover -- emit
+                    // the remainder so no content is lost.
+                    let mut remainder = assistant_text.clone();
+                    if let Some(stripped) = remainder.strip_prefix(streamed_text.as_str()) {
+                        remainder = stripped.to_string();
+                    }
+                    remainder
+                };
                 host.send(&Event::AssistantText {
-                    text: assistant_text.clone(),
+                    text: final_text,
                     final_chunk: true,
                     tool_calls: native_tool_calls.clone(),
                 })?;
@@ -802,6 +854,7 @@ where
                         metric.with_exact_usage(u.prompt_tokens.into(), u.completion_tokens.into());
                 }
                 llm_metrics.record(&metric);
+                dispatch_cancelled = metrics.cancelled;
             }
             Err(err) => {
                 let kind = "agent-failed".to_string();
@@ -833,6 +886,24 @@ where
                     ),
                 );
             }
+        }
+
+        // Streaming-cancel short-circuit. The backend returned a
+        // partial response with `metrics.cancelled = true`; the
+        // chunks have already been streamed to the host and the
+        // final AssistantText {final_chunk: true, ...} was sent
+        // above. End the session cleanly so the orchestrator
+        // doesn't process the partial output's tool calls / write
+        // any artifacts from it -- the user explicitly cancelled
+        // and we should not act on incomplete intent.
+        if dispatch_cancelled {
+            host.send(&Event::SessionEnd {
+                reason: SessionEndReason::Cancelled,
+                message: Some(
+                    "cancelled mid-dispatch via control socket; partial response preserved in transcript".into(),
+                ),
+            })?;
+            return Ok(());
         }
 
         // Stuck-loop detection: hash a NORMALIZED version of each

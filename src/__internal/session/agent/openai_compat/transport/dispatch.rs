@@ -113,6 +113,7 @@ pub fn dispatch_chat_with_tools(
             })
             .collect(),
         stream: false,
+        stream_options: None,
         max_tokens: req.max_tokens,
         seed: req.seed,
         chat_template_kwargs,
@@ -206,6 +207,7 @@ pub fn dispatch_chat_with_tools(
         tokens_in: parsed.usage.as_ref().and_then(|u| u.prompt_tokens),
         tokens_out: parsed.usage.as_ref().and_then(|u| u.completion_tokens),
         wall_ms: started.elapsed().as_millis() as u64,
+        cancelled: false,
     };
     let choice = parsed.choices.into_iter().next();
     let tool_calls = choice

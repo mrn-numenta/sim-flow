@@ -14,10 +14,11 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use super::cancel::wait_with_cancel;
+use super::cancel::{wait_with_cancel, wait_with_cancel_streaming};
 use super::{
-    AgentAdaptationSummary, CLAUDE_CLI_RUNTIME, CliAgent, LlmCallMetrics, RuntimeCapabilityProfile,
-    apply_reasoning_history_policy, resolve_model_family, resolve_runtime_profile,
+    AdvertisedToolCall, AgentAdaptationSummary, CLAUDE_CLI_RUNTIME, CliAgent, LlmCallMetrics,
+    RuntimeCapabilityProfile, StreamingChunk, ToolAdvertise, apply_reasoning_history_policy,
+    resolve_model_family, resolve_runtime_profile,
 };
 use crate::session::protocol::{LlmMessage, LlmRole};
 use crate::{Error, Result};
@@ -188,8 +189,84 @@ impl CliAgent for ClaudeAgent {
             tokens_in: None,
             tokens_out: None,
             wall_ms: started.elapsed().as_millis() as u64,
+            cancelled: false,
         };
         Ok((stdout, metrics))
+    }
+
+    fn dispatch_streaming(
+        &self,
+        messages: &[LlmMessage],
+        _tools: &[ToolAdvertise],
+        on_chunk: &mut dyn FnMut(StreamingChunk),
+    ) -> Result<(String, Vec<AdvertisedToolCall>, LlmCallMetrics)> {
+        debug_assert_eq!(self.runtime_profile.request_format, "subprocess_prompt");
+        let started = std::time::Instant::now();
+        let prompt = Self::render_prompt(
+            messages,
+            self.model_family_id.as_deref(),
+            self.model.as_deref(),
+        );
+        let mut cmd = Command::new("claude");
+        cmd.arg("-p");
+        if let Some(model) = &self.model {
+            cmd.arg("--model").arg(normalize_model_for_cli(model));
+        }
+        cmd.stdin(Stdio::piped());
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+
+        let mut child = cmd.spawn().map_err(|err| {
+            Error::Client(format!(
+                "claude CLI not found or failed to spawn: {err}. Install Claude Code (https://docs.claude.com/claude-code) or pick a different `--llm-backend`."
+            ))
+        })?;
+        if let Some(stdin) = child.stdin.as_mut() {
+            stdin.write_all(prompt.as_bytes()).map_err(|err| {
+                Error::Client(format!(
+                    "claude CLI: failed to write prompt to stdin: {err}"
+                ))
+            })?;
+        }
+        drop(child.stdin.take());
+
+        // Forward stdout chunks live; `claude -p` prints incrementally
+        // so this gives the orchestrator the same per-token feel as a
+        // streaming HTTP backend. On cancel the helper SIGTERMs the
+        // child and returns the partial output collected so far.
+        let mut text = String::new();
+        let (output, cancelled) = {
+            let mut on_stream = |s: &str| {
+                text.push_str(s);
+                on_chunk(StreamingChunk::Text(s.to_string()));
+            };
+            wait_with_cancel_streaming(child, self.cancel_flag.clone(), &mut on_stream)?
+        };
+        if !cancelled && !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let pieces: Vec<String> = [stdout.trim(), stderr.trim()]
+                .iter()
+                .filter(|p| !p.is_empty())
+                .map(|p| (*p).to_string())
+                .collect();
+            let detail = if pieces.is_empty() {
+                "(no output)".into()
+            } else {
+                pieces.join(" | ")
+            };
+            return Err(Error::Client(format!(
+                "claude CLI exited {}: {detail}",
+                output.status.code().unwrap_or(-1),
+            )));
+        }
+        let metrics = LlmCallMetrics {
+            tokens_in: None,
+            tokens_out: None,
+            wall_ms: started.elapsed().as_millis() as u64,
+            cancelled,
+        };
+        Ok((text, Vec::new(), metrics))
     }
 
     fn adaptation_summary(&self) -> Option<AgentAdaptationSummary> {

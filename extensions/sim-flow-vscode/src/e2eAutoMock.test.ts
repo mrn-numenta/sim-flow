@@ -109,7 +109,10 @@ function buildMockServer(requestLog: Array<{ url: string; step: string | null; k
       body += chunk.toString("utf8");
     });
     req.on("end", () => {
-      let parsed: { messages: { role: string; content: string }[] };
+      let parsed: {
+        messages: { role: string; content: string }[];
+        stream?: boolean;
+      };
       try {
         parsed = JSON.parse(body) as typeof parsed;
       } catch {
@@ -132,16 +135,85 @@ function buildMockServer(requestLog: Array<{ url: string; step: string | null; k
       requestLog.push({ url: req.url ?? "", step, kind });
 
       const writeFileCall = pickResponseForStep(step, kind);
-      // The orchestrator dispatches chat-completions with
-      // `stream: false`, so the response is a single non-streaming
-      // JSON body (not an SSE stream). Shape:
-      //   { choices: [{ message: { role, content, tool_calls? },
-      //                 finish_reason }], usage }
       const id = `chatcmpl-mock-${Date.now()}`;
       const tokensIn = parsed.messages.reduce(
         (sum, m) => sum + (m.content?.length ?? 0),
         0,
       );
+      const promptTokens = Math.ceil(tokensIn / 4);
+      // Streaming branch: the orchestrator's new `dispatch_streaming`
+      // path sends `stream: true` to enable live token rendering and
+      // mid-dispatch cancellation. Mirror that: emit SSE
+      // (`data: <json>\n\n` frames terminated by `data: [DONE]`).
+      // The framing exactly matches what vLLM / LM Studio / Ollama
+      // emit so the orchestrator's SSE parser sees the same wire
+      // shape it would in production.
+      if (parsed.stream === true) {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        const baseChunk = (delta: Record<string, unknown>, finishReason?: string) => ({
+          id,
+          object: "chat.completion.chunk",
+          model: MODEL,
+          choices: [
+            {
+              index: 0,
+              delta,
+              finish_reason: finishReason ?? null,
+            },
+          ],
+        });
+        const send = (obj: unknown): void => {
+          res.write(`data: ${JSON.stringify(obj)}\n\n`);
+        };
+        send(baseChunk({ role: "assistant", content: "" }));
+        if (writeFileCall) {
+          send(
+            baseChunk({
+              tool_calls: [
+                {
+                  index: 0,
+                  id: `call_mock_${Date.now()}`,
+                  type: "function",
+                  function: {
+                    name: "write_file",
+                    arguments: JSON.stringify(writeFileCall),
+                  },
+                },
+              ],
+            }),
+          );
+          send(baseChunk({}, "tool_calls"));
+        } else {
+          send(baseChunk({ content: "done." }));
+          send(baseChunk({}, "stop"));
+        }
+        // Final usage chunk (stream_options.include_usage path) so
+        // metrics.tokens_{in,out} populate the same as non-streaming.
+        res.write(
+          `data: ${JSON.stringify({
+            id,
+            object: "chat.completion.chunk",
+            model: MODEL,
+            choices: [],
+            usage: {
+              prompt_tokens: promptTokens,
+              completion_tokens: writeFileCall ? 16 : 1,
+              total_tokens: promptTokens + (writeFileCall ? 16 : 1),
+            },
+          })}\n\n`,
+        );
+        res.write("data: [DONE]\n\n");
+        res.end();
+        return;
+      }
+      // Non-streaming branch (kept for back-compat with any caller
+      // that still sends `stream: false`). Single JSON response:
+      //   { choices: [{ message: { role, content, tool_calls? },
+      //                 finish_reason }], usage }
       let responseBody: Record<string, unknown>;
       if (writeFileCall) {
         responseBody = {
@@ -169,14 +241,12 @@ function buildMockServer(requestLog: Array<{ url: string; step: string | null; k
             },
           ],
           usage: {
-            prompt_tokens: Math.ceil(tokensIn / 4),
+            prompt_tokens: promptTokens,
             completion_tokens: 16,
-            total_tokens: Math.ceil(tokensIn / 4) + 16,
+            total_tokens: promptTokens + 16,
           },
         };
       } else {
-        // No-op completion -- lets the orchestrator's auto-mode pump
-        // push us forward (or wind down if the gate is clean).
         responseBody = {
           id,
           object: "chat.completion",
@@ -189,9 +259,9 @@ function buildMockServer(requestLog: Array<{ url: string; step: string | null; k
             },
           ],
           usage: {
-            prompt_tokens: Math.ceil(tokensIn / 4),
+            prompt_tokens: promptTokens,
             completion_tokens: 1,
-            total_tokens: Math.ceil(tokensIn / 4) + 1,
+            total_tokens: promptTokens + 1,
           },
         };
       }

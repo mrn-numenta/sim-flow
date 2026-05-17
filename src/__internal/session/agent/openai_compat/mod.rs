@@ -20,11 +20,11 @@ pub mod transport;
 pub use transport::{OpenAiCompatibleRequest, dispatch_chat};
 
 use self::tool_calls::ToolDescriptor;
-use self::transport::dispatch_chat_with_tools;
+use self::transport::{dispatch_chat_with_tools, dispatch_chat_with_tools_streaming};
 use super::{
     AdvertisedToolCall, AgentAdaptationSummary, CliAgent, LlmCallMetrics,
-    OPENAI_COMPAT_GENERIC_RUNTIME, RuntimeCapabilityProfile, ToolAdvertise, resolve_model_family,
-    resolve_runtime_profile,
+    OPENAI_COMPAT_GENERIC_RUNTIME, RuntimeCapabilityProfile, StreamingChunk, ToolAdvertise,
+    resolve_model_family, resolve_runtime_profile,
 };
 use crate::Result;
 use crate::session::protocol::LlmMessage;
@@ -141,6 +141,44 @@ impl CliAgent for OpenAiCompatAgent {
             .with_model_family_id(self.model_family_id.as_deref())
             .with_tools(wire_tools, Some("auto"));
         let resp = dispatch_chat_with_tools(req, self.cancel_flag.clone())?;
+        let calls = resp
+            .tool_calls
+            .into_iter()
+            .map(|c| AdvertisedToolCall {
+                id: c.id,
+                name: c.function.name,
+                arguments_json: c.function.arguments,
+            })
+            .collect();
+        Ok((resp.text, calls, resp.metrics))
+    }
+
+    fn dispatch_streaming(
+        &self,
+        messages: &[LlmMessage],
+        tools: &[ToolAdvertise],
+        on_chunk: &mut dyn FnMut(StreamingChunk),
+    ) -> Result<(String, Vec<AdvertisedToolCall>, LlmCallMetrics)> {
+        let wire_tools = if tools.is_empty() {
+            Vec::new()
+        } else {
+            tools
+                .iter()
+                .map(|t| {
+                    ToolDescriptor::function(
+                        t.name.clone(),
+                        t.description.clone(),
+                        t.parameters.clone(),
+                    )
+                })
+                .collect()
+        };
+        let mut req = OpenAiCompatibleRequest::new(&self.base_url, &self.model, messages)
+            .with_model_family_id(self.model_family_id.as_deref());
+        if !wire_tools.is_empty() {
+            req = req.with_tools(wire_tools, Some("auto"));
+        }
+        let resp = dispatch_chat_with_tools_streaming(req, self.cancel_flag.clone(), on_chunk)?;
         let calls = resp
             .tool_calls
             .into_iter()

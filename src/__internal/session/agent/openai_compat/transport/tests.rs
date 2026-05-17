@@ -12,6 +12,7 @@ fn empty_body(model: &str, max_tokens: u32) -> ChatRequestBody<'_> {
         model,
         messages: vec![],
         stream: false,
+        stream_options: None,
         max_tokens,
         seed: None,
         chat_template_kwargs: None,

@@ -150,6 +150,136 @@ pub(crate) fn wait_with_cancel(
     })
 }
 
+/// Streaming variant of [`wait_with_cancel`]. Reads the child's
+/// stdout in 4 KiB chunks on a worker thread, forwarding each chunk
+/// to `on_chunk` (decoded lossy-UTF-8) as it arrives. Stderr is
+/// fully buffered like the non-streaming helper. The returned bool
+/// flags whether the cancel flag flipped mid-stream; the caller
+/// translates this into `metrics.cancelled = true` and returns the
+/// partial-but-Ok response.
+///
+/// `cancel_flag = None` degrades to "stream chunks, no
+/// cancellation"; useful from test paths that want to exercise the
+/// streaming code without wiring a control socket.
+pub(crate) fn wait_with_cancel_streaming(
+    mut child: Child,
+    cancel_flag: Option<Arc<AtomicBool>>,
+    on_chunk: &mut dyn FnMut(&str),
+) -> Result<(Output, bool)> {
+    let _ = child.stdin.take();
+    let pid = child.id();
+
+    // Stderr: full buffer; agents only consult it on error paths.
+    let stderr_handle = child.stderr.take().map(|mut s| {
+        std::thread::spawn(move || -> std::io::Result<Vec<u8>> {
+            use std::io::Read;
+            let mut buf = Vec::new();
+            s.read_to_end(&mut buf)?;
+            Ok(buf)
+        })
+    });
+
+    // Stdout: chunked reader. Each `read` of up to 4 KiB becomes one
+    // message on the channel; the main thread invokes `on_chunk` as
+    // chunks arrive and accumulates the full body for the returned
+    // Output.stdout.
+    let (chunk_tx, chunk_rx) = std::sync::mpsc::channel::<std::io::Result<Vec<u8>>>();
+    if let Some(mut s) = child.stdout.take() {
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = [0u8; 4096];
+            loop {
+                match s.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if chunk_tx.send(Ok(buf[..n].to_vec())).is_err() {
+                            return;
+                        }
+                    }
+                    Err(err) => {
+                        let _ = chunk_tx.send(Err(err));
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    let mut stdout_buf: Vec<u8> = Vec::new();
+    let mut cancelled = false;
+
+    loop {
+        if let Some(ref flag) = cancel_flag
+            && flag.load(Ordering::Acquire)
+        {
+            // SAFETY: pid came from a still-running child; libc::kill
+            // on a non-existent pid is harmless (returns ESRCH).
+            unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+            cancelled = true;
+            break;
+        }
+        match chunk_rx.recv_timeout(Duration::from_millis(CANCEL_POLL_MS)) {
+            Ok(Ok(chunk)) => {
+                let s = String::from_utf8_lossy(&chunk);
+                on_chunk(&s);
+                stdout_buf.extend_from_slice(&chunk);
+            }
+            Ok(Err(err)) => {
+                return Err(Error::Llm(format!("subprocess stdout read failed: {err}")));
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // No chunk this cycle; poll the child to see if it
+                // exited (chunk-less exit is normal once stdin is
+                // closed and the model finished writing).
+                match child.try_wait() {
+                    Ok(Some(_)) => {
+                        // Drain whatever the stdout thread queued
+                        // after the child exited but before our
+                        // poll noticed.
+                        while let Ok(Ok(chunk)) = chunk_rx.try_recv() {
+                            let s = String::from_utf8_lossy(&chunk);
+                            on_chunk(&s);
+                            stdout_buf.extend_from_slice(&chunk);
+                        }
+                        break;
+                    }
+                    Ok(None) => continue,
+                    Err(err) => {
+                        return Err(Error::Llm(format!("subprocess try_wait failed: {err}")));
+                    }
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                // stdout closed -- wait for the child to settle and
+                // exit the loop.
+                let _ = child.wait();
+                break;
+            }
+        }
+    }
+
+    // Reap the child (idempotent if already waited above).
+    let status = child
+        .wait()
+        .map_err(|err| Error::Llm(format!("subprocess wait failed: {err}")))?;
+    let stderr = match stderr_handle {
+        Some(h) => h
+            .join()
+            .map_err(|_| Error::Llm("stderr reader thread panicked".into()))?
+            .map_err(|err| Error::Llm(format!("stderr read failed: {err}")))?,
+        None => Vec::new(),
+    };
+
+    Ok((
+        Output {
+            status,
+            stdout: stdout_buf,
+            stderr,
+        },
+        cancelled,
+    ))
+}
+
 /// Run a synchronous blocking call on a worker thread and select
 /// between its result and the cancel flag. On cancel the worker is
 /// abandoned -- its result, when it eventually arrives, is dropped.

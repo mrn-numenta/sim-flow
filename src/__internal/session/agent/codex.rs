@@ -17,8 +17,8 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use super::cancel::wait_with_cancel;
-use super::{CliAgent, LlmCallMetrics};
+use super::cancel::{wait_with_cancel, wait_with_cancel_streaming};
+use super::{AdvertisedToolCall, CliAgent, LlmCallMetrics, StreamingChunk, ToolAdvertise};
 use crate::session::protocol::{LlmMessage, LlmRole};
 use crate::{Error, Result};
 
@@ -108,8 +108,64 @@ impl CliAgent for CodexAgent {
             tokens_in: None,
             tokens_out: None,
             wall_ms: started.elapsed().as_millis() as u64,
+            cancelled: false,
         };
         Ok((text, metrics))
+    }
+
+    fn dispatch_streaming(
+        &self,
+        messages: &[LlmMessage],
+        _tools: &[ToolAdvertise],
+        on_chunk: &mut dyn FnMut(StreamingChunk),
+    ) -> Result<(String, Vec<AdvertisedToolCall>, LlmCallMetrics)> {
+        let started = std::time::Instant::now();
+        let prompt = Self::render_prompt(messages);
+        let mut cmd = Command::new("codex");
+        cmd.arg("exec");
+        if let Some(model) = &self.model {
+            cmd.arg("--model").arg(model);
+        }
+        cmd.arg("-");
+        cmd.stdin(Stdio::piped());
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+
+        let mut child = cmd.spawn().map_err(|err| {
+            Error::Client(format!(
+                "codex CLI not found or failed to spawn: {err}. Install OpenAI Codex CLI (https://github.com/openai/codex) or pick a different `--llm-backend`."
+            ))
+        })?;
+        if let Some(stdin) = child.stdin.as_mut() {
+            stdin.write_all(prompt.as_bytes()).map_err(|err| {
+                Error::Client(format!("codex: failed to write prompt to stdin: {err}"))
+            })?;
+        }
+        drop(child.stdin.take());
+
+        let mut text = String::new();
+        let (output, cancelled) = {
+            let mut on_stream = |s: &str| {
+                text.push_str(s);
+                on_chunk(StreamingChunk::Text(s.to_string()));
+            };
+            wait_with_cancel_streaming(child, self.cancel_flag.clone(), &mut on_stream)?
+        };
+        if !cancelled && !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(Error::Client(format!(
+                "codex exited {}: {}",
+                output.status.code().unwrap_or(-1),
+                stderr.trim(),
+            )));
+        }
+        let metrics = LlmCallMetrics {
+            tokens_in: None,
+            tokens_out: None,
+            wall_ms: started.elapsed().as_millis() as u64,
+            cancelled,
+        };
+        Ok((text, Vec::new(), metrics))
     }
 }
 
