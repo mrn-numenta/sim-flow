@@ -1824,10 +1824,10 @@ function buildComposer(state: ChatPanelState): HTMLElement {
     const ms = state.currentMilestone;
     const progress =
       ms.taskIndex !== null && ms.taskTotal !== null
-        ? ` (${ms.taskIndex}/${ms.taskTotal})`
+        ? `(${ms.taskIndex}/${ms.taskTotal}) `
         : "";
     const sub = div("x-step-rail-substep");
-    sub.textContent = `${ms.title}: ${ms.task}${progress}`;
+    sub.textContent = `${progress}${ms.title}: ${ms.task}`;
     sub.title = sub.textContent;
     root.appendChild(sub);
   }
