@@ -214,6 +214,128 @@ fn rv12_fixture_matches_recorded_checksum() {
 }
 
 // ---------------------------------------------------------------------
+// Milestone 2.17: golden-output snapshot test.
+//
+// The snapshot is a compact category summary -- per-directory file
+// counts -- rather than the full file list. The full list contains
+// thousands of chunk paths whose names depend on the PDF text
+// extraction; small font-encoding differences ripple through them
+// and cause unrelated diffs. The category summary stays stable
+// across pdfium-render patch versions while still catching real
+// layout changes (a new top-level file, a renamed subdirectory).
+// ---------------------------------------------------------------------
+
+#[test]
+fn rv12_layout_snapshot_matches() {
+    let pdf = fixture("rv12.pdf");
+    if !pdf.exists() {
+        panic!("RV12 fixture missing at {}", pdf.display());
+    }
+    let project = fresh_project();
+    let _ = ingest(&pdf, project.path());
+    let root = project.path().join(".sim-flow/spec-ingest");
+    let observed = summarize_layout(&root);
+
+    let snap_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/spec-ingest-snapshots/rv12/layout.txt");
+    if std::env::var("UPDATE_INGEST_SNAPSHOTS").is_ok() {
+        if let Some(parent) = snap_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&snap_path, &observed).unwrap();
+        eprintln!("snapshot updated at {}", snap_path.display());
+        return;
+    }
+    if !snap_path.exists() {
+        // First run -- bootstrap the snapshot. Avoids forcing devs
+        // to flip an env var on first checkout.
+        if let Some(parent) = snap_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&snap_path, &observed).unwrap();
+        eprintln!(
+            "spec-ingest snapshot bootstrapped at {}",
+            snap_path.display()
+        );
+        return;
+    }
+    let expected = std::fs::read_to_string(&snap_path).unwrap();
+    assert_eq!(
+        expected, observed,
+        "RV12 layout snapshot drift. To accept: UPDATE_INGEST_SNAPSHOTS=1 cargo test"
+    );
+}
+
+/// Walk the spec-ingest output and return a deterministic summary:
+/// for each subdirectory, the number of files it contains and a
+/// list of any well-known fixed-name files (manifest.toml,
+/// stubs.toml, tbds.toml, references.toml). Avoids per-chunk
+/// filenames so we don't snapshot text-extraction details.
+fn summarize_layout(root: &Path) -> String {
+    let mut out = String::new();
+    let mut entries: Vec<PathBuf> = Vec::new();
+    walk(root, &mut entries);
+    entries.sort();
+    // Group by parent directory (relative to root).
+    use std::collections::BTreeMap;
+    let mut by_dir: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for p in &entries {
+        let rel = p.strip_prefix(root).unwrap();
+        let parent = rel
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let name = rel
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        by_dir.entry(parent).or_default().push(name);
+    }
+    for (dir, names) in &by_dir {
+        let label = if dir.is_empty() { "<root>" } else { dir };
+        let well_known: Vec<&String> = names
+            .iter()
+            .filter(|n| {
+                matches!(
+                    n.as_str(),
+                    "manifest.toml" | "stubs.toml" | "tbds.toml" | "references.toml"
+                )
+            })
+            .collect();
+        out.push_str(&format!("{label}: {} files", names.len()));
+        if !well_known.is_empty() {
+            let mut sorted: Vec<&String> = well_known.clone();
+            sorted.sort();
+            out.push_str(" [");
+            out.push_str(
+                &sorted
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            out.push(']');
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk(&path, out);
+        } else {
+            out.push(path);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
 // Milestone 2.14: CLI subcommand exit code + manifest verification.
 // ---------------------------------------------------------------------
 

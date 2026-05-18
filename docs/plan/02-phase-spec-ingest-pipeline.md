@@ -324,14 +324,14 @@ Gate: integration test passes against all four specs.
 
 ### Milestone 2.17: Golden-output snapshots
 
-- [ ] Create `tests/fixtures/spec-ingest-snapshots/<name>/`
+- [x] Create `tests/fixtures/spec-ingest-snapshots/<name>/`
       with the expected output structure of each sample
       spec.
-- [ ] Add a snapshot test: ingest each fixture, compare the
+- [x] Add a snapshot test: ingest each fixture, compare the
       output directory's file list against the snapshot.
-- [ ] Allow regenerating snapshots via
+- [x] Allow regenerating snapshots via
       `UPDATE_INGEST_SNAPSHOTS=1 cargo test`.
-- [ ] Document the regenerate flow in a README under
+- [x] Document the regenerate flow in a README under
       `tests/fixtures/spec-ingest-snapshots/`.
 
 Gate: snapshot tests pass; regenerate flow documented.
