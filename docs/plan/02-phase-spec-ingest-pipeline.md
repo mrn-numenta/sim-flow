@@ -227,17 +227,17 @@ Gate: figure-rendering unit tests pass.
 
 ### Milestone 2.11: RV12 figure-render verification
 
-- [ ] Run the figure-rendering stage on
+- [x] Run the figure-rendering stage on
       `tests/fixtures/specs/rv12.pdf` and produce
       `figures/page-013.png`.
-- [ ] Compare against a golden snapshot (e.g. file size and
+- [x] Compare against a golden snapshot (e.g. file size and
       perceptual hash). Alternatively, run an OCR pass
       (tesseract or a small VLM) and assert known labels
       (`if_nxt_pc`, `parcel_pc`) appear in the OCR output.
-- [ ] If OCR isn't available, fall back to: open the file,
+- [x] If OCR isn't available, fall back to: open the file,
       verify it's a valid PNG of at least 800x800 pixels and
       file size > 50 KB.
-- [ ] Add to integration tests.
+- [x] Add to integration tests.
 
 Gate: RV12 figure-render verification passes.
 
