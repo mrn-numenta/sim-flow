@@ -23,14 +23,19 @@ expected dimension.
 
 ## Acceptance Gate
 
-- [ ] `cargo build --package sim-flow` succeeds with rig
+- [x] `cargo build --package sim-flow` succeeds with rig
       added.
-- [ ] `cargo test --package sim-flow embedder::` passes.
-- [ ] `SIM_FLOW_E2E_LIVE=1 cargo test --package sim-flow
+- [x] `cargo test --package sim-flow embedder::` passes.
+- [/] `SIM_FLOW_E2E_LIVE=1 cargo test --package sim-flow
       --test embedder_live` passes against local Ollama with
-      `nomic-embed-text`.
-- [ ] `sim-flow embedder check` returns success against the
-      local Ollama default config.
+      `nomic-embed-text`. (Test file lands and compiles in
+      milestone 3.5; Ollama not running on the implementer's
+      machine, so the live run was not exercised here -- run
+      manually on a developer's machine to flip to `[x]`.)
+- [/] `sim-flow embedder check` returns success against the
+      local Ollama default config. (CLI wired up and unit-
+      tested against a mock provider in milestone 3.6; same
+      Ollama-not-running caveat applies.)
 
 ## Milestones
 
@@ -148,13 +153,13 @@ verification on a developer's machine).
 
 ### Milestone 3.7: Documentation
 
-- [ ] Add a section to the sim-flow README or to
+- [x] Add a section to the sim-flow README or to
       `docs/embedder.md` (new) describing:
   - How to install Ollama and pull `nomic-embed-text`.
   - How to write `embedder.toml`.
   - How to point at a remote vLLM server.
   - How to use a hosted provider (Voyage / OpenAI).
-- [ ] Add a `cargo doc` doc-comment header on
+- [x] Add a `cargo doc` doc-comment header on
       `src/__internal/session/embedder/mod.rs` summarizing
       the trait + the v1 implementation choice.
 
