@@ -114,18 +114,18 @@ Gate: all mock-server unit tests pass.
 
 ### Milestone 3.5: Live smoke test against Ollama
 
-- [ ] Create `tests/embedder_live.rs` gated by
+- [x] Create `tests/embedder_live.rs` gated by
       `SIM_FLOW_E2E_LIVE=1` (matches the existing
       live-test convention).
-- [ ] Test 1: construct `OpenAiCompatEmbedder` with
+- [x] Test 1: construct `OpenAiCompatEmbedder` with
       base_url=`http://localhost:11434/v1`,
       model=`nomic-embed-text`, dimension=`768`; assert
       construction succeeds.
-- [ ] Test 2: embed a single string; assert the returned
+- [x] Test 2: embed a single string; assert the returned
       vector has length 768.
-- [ ] Test 3: embed a batch of 10 strings; assert 10 vectors
+- [x] Test 3: embed a batch of 10 strings; assert 10 vectors
       returned in order.
-- [ ] Document in the test file's header that Ollama must be
+- [x] Document in the test file's header that Ollama must be
       running locally with `nomic-embed-text` pulled.
 
 Gate: `SIM_FLOW_E2E_LIVE=1 cargo test --test embedder_live`
