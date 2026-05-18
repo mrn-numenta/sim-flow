@@ -65,26 +65,26 @@ function-call dispatch, and add observability metrics.
 
 ### Milestone 5.1: RetrievalService scaffold
 
-- [ ] Create `src/__internal/session/retrieval/mod.rs` and
+- [x] Create `src/__internal/session/retrieval/mod.rs` and
       `service.rs`.
-- [ ] Define `RetrievalService` struct holding:
+- [x] Define `RetrievalService` struct holding:
   - A `tokio::runtime::Runtime` (current-thread).
   - An `Arc<dyn EmbeddingClient>` (Phase 3).
   - An optional framework `LanceConnection` (Phase 4) —
     `None` when the framework index isn't built.
   - An optional spec `LanceConnection`.
-- [ ] Implement `RetrievalService::new(project_root: &Path)
+- [x] Implement `RetrievalService::new(project_root: &Path)
       -> Result<RetrievalService>`:
   - Construct the runtime.
   - Construct the embedder from `embedder.toml`.
   - Try to open the framework and spec connections; missing
     connections are not errors (just None).
-- [ ] Implement synchronous query wrappers that `block_on`
+- [x] Implement synchronous query wrappers that `block_on`
       the Phase 4 async query functions:
   - `semantic_search_framework_sync(...)`
   - `semantic_search_spec_sync(...)`
   - `query_signal_table_sync(...)`
-- [ ] Unit test: construct against a fixture project with no
+- [x] Unit test: construct against a fixture project with no
       indexes built; service constructs cleanly with None
       connections.
 

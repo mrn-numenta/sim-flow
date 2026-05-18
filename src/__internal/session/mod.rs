@@ -26,6 +26,7 @@ pub mod orchestrator;
 pub mod pdfium_loader;
 pub mod presenter;
 pub mod protocol;
+pub mod retrieval;
 pub mod runners;
 pub mod signal_cleanup;
 pub mod socket_host;
