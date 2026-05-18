@@ -39,10 +39,19 @@ pub(super) fn dm2d() -> StepDescriptor {
                 "cargo clippy --all-targets clean (warnings denied)",
             ),
             shell("cargo", &["build", "--quiet"], "cargo build succeeds"),
+            // Run the full test suite (unit + every `tests/*.rs`
+            // integration target). The prompt asks the LLM to keep
+            // smoke tests in `tests/elaboration.rs`, but models
+            // periodically rename or split the file (`tests/smoke_tests.rs`,
+            // `tests/elab.rs`, ...). Pinning the gate to one specific
+            // test target name then fails with `no test target named
+            // elaboration` even when functionally-equivalent tests
+            // pass. `cargo test --quiet` is strictly stronger and
+            // doesn't care about the file layout.
             shell(
                 "cargo",
-                &["test", "--quiet", "--test", "elaboration"],
-                "elaboration smoke test passes",
+                &["test", "--quiet"],
+                "cargo test --quiet passes (smoke + unit tests)",
             ),
             // Connectivity style: the prompt instructs inline
             // `HasInstances::instances()` + `connect()` (using
@@ -103,7 +112,7 @@ pub(super) fn dm2d() -> StepDescriptor {
         ],
         // Per-milestone gate: the cheap quality checks that should
         // hold after every milestone lands. Reserves the expensive
-        // integration checks (`cargo test --test elaboration`, the
+        // integration checks (`cargo test --quiet`, the
         // HasInstances / HasLogic / dump_topology / Top struct
         // greps, `milestones_all_implemented`) for the step gate
         // above -- those only become satisfiable once the last

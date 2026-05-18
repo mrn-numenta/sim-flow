@@ -182,16 +182,15 @@ scope and structure.
    step. Exhaustive verification (directed sequences, coverage
    targets, randomized stimulus, scoreboards) belongs to **DM3** --
    do not pre-empt that scope here.
-   The smoke tests **must live in `tests/elaboration.rs`** —
-   that's the file the gate runs via `cargo test --test elaboration`.
-   Other test files (e.g. `tests/units.rs`) are allowed alongside
-   it for per-module unit tests, but the elaboration smoke set
-   has to be in `tests/elaboration.rs` specifically; renaming it
-   breaks the gate. Cover:
-   - **Smoke** (in `tests/elaboration.rs`): elaboration (topology
-     builds without error), basic data flow through the pipeline,
-     backpressure propagation, idle cycles produce no spurious
-     outputs.
+   The template ships `tests/elaboration.rs` as the conventional
+   home for smoke tests. You may keep it there, expand it in
+   place, or split smoke tests across multiple files under
+   `tests/` — the gate runs the entire test suite via
+   `cargo test --quiet`, so file layout is up to you as long as
+   every test passes. Cover:
+   - **Smoke**: elaboration (topology builds without error),
+     basic data flow through the pipeline, backpressure
+     propagation, idle cycles produce no spurious outputs.
    - **Unit** (small, focused): per-module correctness of the
      `evaluate()` core for a couple of representative inputs --
      enough to catch obvious wiring / payload-type mistakes while
