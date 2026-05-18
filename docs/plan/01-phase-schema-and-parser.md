@@ -279,18 +279,18 @@ Gate: writer unit tests pass.
 
 ### Milestone 1.16: Round-trip identity test
 
-- [ ] Create `tests/spec_md_round_trip.rs`.
-- [ ] Author three fixture files under
+- [x] Create `tests/spec_md_round_trip.rs`.
+- [x] Author three fixture files under
       `tests/fixtures/spec_md/`:
   - `minimal.md` — only required sections, minimal content.
   - `rv12-extract.md` — a subset of an RV12-style spec.md
     exercising Blocks, Parameters, Encodings, Worked Examples.
   - `numenta-stubby.md` — heavy on optional sections with
     Open Questions and Auto-decisions.
-- [ ] For each fixture, assert
+- [x] For each fixture, assert
       `parse(write(parse(fixture))) == parse(fixture)` (round
       trip stability; byte equality is NOT required).
-- [ ] For each fixture, assert
+- [x] For each fixture, assert
       `parse(write(parse(fixture))).validate().is_empty()`.
 
 Gate: round-trip tests pass.
