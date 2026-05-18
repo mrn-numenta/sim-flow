@@ -454,6 +454,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           return;
         }
         this.autoSessions.setPendingPrompt(current, prompt, placeholder);
+        // The orchestrator just parked, so any prior `UserMessage`
+        // has been fully processed. Clear the in-flight gate so the
+        // Play / Send controls re-enable.
+        current.userMessageInFlight = false;
         // Repaint so the banner appears above the composer the moment
         // the orchestrator parks -- otherwise the user sees the
         // generic notice for one tick before the prompt lands.
@@ -1091,6 +1095,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (!session) {
       return;
     }
+    // Set the in-flight gate BEFORE sending so rapid double-clicks
+    // (Play, Play, Play) don't each push a `ContinueFlow` onto the
+    // wire and trigger N back-to-back sub-sessions. The flag clears
+    // when the orchestrator emits the next RequestUserInput.
+    if (session.userMessageInFlight) {
+      // Already in flight (likely Send + immediate Play). Drop this
+      // click silently; the user's first command will be acted on
+      // and Play will re-enable once the orchestrator parks.
+      return;
+    }
+    session.userMessageInFlight = true;
+    void this.refresh();
     session.pump.continueFlow?.();
   }
 
@@ -2115,13 +2131,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     // was busy when it was actually idle, which gated Continue and
     // kept the stop glyph visible. `pump.inSubSession` is the
     // accurate "orchestrator is mid-work" signal; `pendingAutoLaunch`
-    // covers the pre-helloAck launching window.
+    // covers the pre-helloAck launching window;
+    // `userMessageInFlight` covers Q&A turns that run an LLM dispatch
+    // without opening a sub-session (so `inSubSession` stays false
+    // even though the orchestrator is busy processing the message).
     const isStreaming =
       (!!this.pendingAutoLaunch &&
         this.pendingAutoLaunch.projectDir === context.projectDir) ||
       (!!this.activePump &&
         this.activePump.projectDir === context.projectDir &&
-        this.activePump.pump.inSubSession === true);
+        (this.activePump.pump.inSubSession === true ||
+          this.activePump.userMessageInFlight));
     const isViewer =
       !!this.activePump &&
       this.activePump.projectDir === context.projectDir &&
@@ -2458,6 +2478,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     session.pendingPromptEntryId = started.userId;
     session.pendingRequestTokensEstimate = null;
     session.awaitingInput = false;
+    // Block subsequent Play / Send clicks until the orchestrator
+    // sends the next `RequestUserInput`. Without this gate the user
+    // could pile multiple `ContinueFlow` events on the wire while
+    // the orchestrator is still processing this UserMessage (the
+    // Q&A path doesn't open a sub-session, so `isStreaming` wouldn't
+    // disable Play on its own).
+    session.userMessageInFlight = true;
     await this.persistConversation(context.projectDir, started.state);
     await this.postState(context, started.state);
     await this.autoSessions.resumeWithPrompt(

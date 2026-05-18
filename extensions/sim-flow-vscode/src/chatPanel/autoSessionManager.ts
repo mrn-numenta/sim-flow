@@ -77,6 +77,17 @@ export interface ManagedAutoSessionState {
    * mark the matching bubbles when `showContextState` is on.
    */
   evictedMessageIds: Map<string, string>;
+  /**
+   * True between sending a `UserMessage` to the orchestrator and
+   * receiving the next `RequestUserInput`. Surfaces as part of
+   * `ChatPanelState.isStreaming` so the Play button and Send box
+   * disable while the orchestrator is processing the prior message
+   * (Q&A turn, mid-stream sub-session, etc.). Without this flag,
+   * Play stayed enabled during Q&A turns and rapid double-clicks
+   * queued multiple `ContinueFlow` events on the wire that each
+   * kicked off a fresh sub-session once the Q&A turn finished.
+   */
+  userMessageInFlight: boolean;
 }
 
 export interface StoredAutoSessionRecord {
@@ -243,6 +254,7 @@ export class AutoSessionManager implements vscode.Disposable {
       nextActionHint: undefined,
       contextWindow: null,
       evictedMessageIds: new Map(),
+      userMessageInFlight: false,
     };
     this.activeSession = session;
     this.notifyActiveSessionChanged();
@@ -442,6 +454,7 @@ export class AutoSessionManager implements vscode.Disposable {
       nextActionHint: undefined,
       contextWindow: null,
       evictedMessageIds: new Map(),
+      userMessageInFlight: false,
     };
     this.activeSession = session;
     this.notifyActiveSessionChanged();
