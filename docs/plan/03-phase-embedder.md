@@ -52,20 +52,20 @@ Gate: `cargo build` succeeds.
 
 ### Milestone 3.2: Embedder config types and loader
 
-- [ ] In `embedder/config.rs`, define `EmbedderConfig`,
+- [x] In `embedder/config.rs`, define `EmbedderConfig`,
       `AuthConfig`, `PerformanceConfig`, `RetryConfig` types
       with serde derives matching Chapter 5 §5.6.
-- [ ] Implement `EmbedderConfig::load() ->
+- [x] Implement `EmbedderConfig::load() ->
       Result<EmbedderConfig, ConfigError>` with the priority
       order:
   - `<cwd>/.sim-flow/embedder.toml`.
   - `$SIM_FLOW_EMBEDDER_CONFIG` env var.
   - `~/.sim-flow/embedder.toml`.
-- [ ] Apply defaults (per §5.6) for missing keys.
-- [ ] Read auth value from the named env var; error if
+- [x] Apply defaults (per §5.6) for missing keys.
+- [x] Read auth value from the named env var; error if
       `[auth]` present but env var unset / empty.
-- [ ] Unit tests for each priority level (use a tmp HOME).
-- [ ] Unit test asserting defaults fill in correctly.
+- [x] Unit tests for each priority level (use a tmp HOME).
+- [x] Unit test asserting defaults fill in correctly.
 
 Gate: `cargo test embedder::config::` passes.
 

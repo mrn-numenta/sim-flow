@@ -36,7 +36,10 @@ pub mod openai_compat;
 
 use std::fmt;
 
-pub use config::{AuthConfig, ConfigError, EmbedderConfig, PerformanceConfig, RetryConfig};
+pub use config::{
+    AuthConfig, ConfigError, ConfigSource, EmbedderConfig, PerformanceConfig, ResolvedAuth,
+    RetryConfig,
+};
 pub use openai_compat::{ConstructError, OpenAiCompatEmbedder};
 
 /// Single-batch embedding client. One instance is constructed at
