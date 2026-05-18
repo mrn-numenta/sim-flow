@@ -265,13 +265,13 @@ Gate: validate unit tests pass.
 
 ### Milestone 1.15: Writer (SpecMd to markdown)
 
-- [ ] Create `writer.rs`.
-- [ ] Implement `SpecMd::to_markdown(&self) -> String`.
-- [ ] Implement per-section writers mirroring the parser
+- [x] Create `writer.rs`.
+- [x] Implement `SpecMd::to_markdown(&self) -> String`.
+- [x] Implement per-section writers mirroring the parser
       structure: one function per section.
-- [ ] Use a markdown formatter helper for tables (handles
+- [x] Use a markdown formatter helper for tables (handles
       column alignment heuristically).
-- [ ] Unit tests for each section writer (input: typed
+- [x] Unit tests for each section writer (input: typed
       struct; output: markdown string; gate: contains the
       expected heading and table rows).
 

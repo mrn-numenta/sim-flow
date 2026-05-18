@@ -20,6 +20,7 @@ pub mod anchor;
 pub mod parser;
 pub mod types;
 pub mod validate;
+pub mod writer;
 
 pub use anchor::{AnchorParseError, AnchorParseReason};
 pub use parser::{SpecMdParseError, parse};
