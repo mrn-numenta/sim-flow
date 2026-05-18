@@ -1,0 +1,302 @@
+# Phase 4: LanceDB Index
+
+## Goal
+
+Implement the four Lance tables (`framework_chunks`,
+`spec_chunks`, `signal_table_rows`, `cross_spec_refs`), the
+build / refresh operations as CLI subcommands, manifest and
+lock-file handling, and staleness detection. Acceptance is a
+build-then-query smoke test on synthetic fixtures plus a build
+against the real foundation-framework corpus.
+
+## Inputs
+
+- Architecture Chapter 3 (full).
+- Phase 1 output: `SpecMd` parser (for extracting spec.md
+  signal-table rows during spec-index build).
+- Phase 2 output: spec-ingest corpus under
+  `.sim-flow/spec-ingest/`.
+- Phase 3 output: `EmbeddingClient` trait + the
+  `OpenAiCompatEmbedder`.
+
+## Outputs
+
+- New module `src/__internal/session/lance_index/`.
+- CLI subcommands: `sim-flow build-framework-index`,
+  `sim-flow build-spec-index`, `sim-flow refresh-spec`.
+- Test fixtures and integration test
+  `tests/lance_index_integration.rs`.
+
+## Acceptance Gate
+
+- [ ] `cargo build --package sim-flow` succeeds with lancedb
+      added.
+- [ ] `cargo test --package sim-flow lance_index::` passes.
+- [ ] `cargo test --package sim-flow --test
+      lance_index_integration` passes against synthetic
+      fixtures.
+- [ ] `sim-flow build-framework-index --framework-root
+      crates/framework` against the real framework produces a
+      Lance directory with row count > 1000 (approximate; the
+      framework is large).
+- [ ] `sim-flow build-spec-index --project
+      tests/fixtures/rv12-project` after running
+      `sim-flow ingest --source rv12.pdf` succeeds.
+
+## Milestones
+
+### Milestone 4.1: Dependency + module scaffolding
+
+- [ ] Add `lancedb` to `tools/sim-flow/Cargo.toml` with an
+      exact version pin (latest stable at implementation
+      time; pin per the same policy as rig in Chapter 5
+      §5.8).
+- [ ] Add `arrow` / `arrow-array` (transitively via lancedb,
+      but verify direct usage compiles).
+- [ ] Create `src/__internal/session/lance_index/mod.rs` with
+      module wiring.
+- [ ] Submodules: `schemas.rs`, `manifests.rs`, `lock.rs`,
+      `build/framework.rs`, `build/spec.rs`,
+      `connection.rs`, `query.rs`.
+
+Gate: `cargo build` succeeds.
+
+### Milestone 4.2: Arrow schemas for the four tables
+
+- [ ] In `schemas.rs`, define the Arrow `Schema` for each
+      table per Architecture Chapter 3 §3.4 / §3.5 / §3.6 /
+      §3.7.
+- [ ] Provide const helpers: `framework_chunks_schema()`,
+      `spec_chunks_schema()`, `signal_table_rows_schema()`,
+      `cross_spec_refs_schema()`.
+- [ ] Vector columns use `DataType::FixedSizeList(Float32,
+      dimension)`. Make `dimension` a constructor parameter
+      since it depends on the embedder.
+- [ ] Unit test: each schema constructs without error and has
+      the expected column count and types.
+
+Gate: `cargo test lance_index::schemas::` passes.
+
+### Milestone 4.3: Manifest types and serdes
+
+- [ ] In `manifests.rs`, define `ApiIndexManifest`,
+      `SpecIndexManifest`, `EmbedderManifest` structs with
+      serde derives matching Chapter 3 §3.3 / §3.8.
+- [ ] Implement `load(path: &Path) -> Result<Self>` and
+      `save(path: &Path) -> Result<()>` for each.
+- [ ] Implement `EmbedderManifest::matches(&self, other:
+      &EmbedderManifest) -> bool` checking provider, model,
+      dimension exactly.
+- [ ] Unit tests: round-trip serdes; match success/fail
+      cases.
+
+Gate: manifest unit tests pass.
+
+### Milestone 4.4: Lock-file handling
+
+- [ ] In `lock.rs`, implement `LanceLock::acquire(path:
+      &Path) -> Result<LanceLock>` and `Drop` to release.
+- [ ] Implement stale-lock cleanup: if the lock file is
+      older than 10 minutes, remove it and proceed.
+- [ ] Unit tests: acquire / release cycle; stale-lock
+      cleanup; concurrent-acquire fails fast.
+
+Gate: lock unit tests pass.
+
+### Milestone 4.5: LanceConnection wrapper
+
+- [ ] In `connection.rs`, define `LanceConnection` holding
+      an open `lancedb::Connection` and the table handles
+      for one tree (framework or spec).
+- [ ] Implement `LanceConnection::open(root: &Path) ->
+      Result<LanceConnection>` reading the manifest +
+      embedder manifest + opening each `*.lance/` dataset.
+- [ ] Refuse to open if any per-tree expectation fails
+      (missing manifest, missing dataset, embedder
+      mismatch).
+- [ ] Unit test: open a tree built by milestone 4.6 / 4.10
+      and verify the table handles are reachable.
+
+Gate: connection unit tests pass.
+
+### Milestone 4.6: framework_chunks build pipeline
+
+- [ ] In `build/framework.rs`, implement
+      `build_framework_index(opts: FrameworkBuildOpts) ->
+      Result<FrameworkBuildOutcome>`.
+- [ ] Walk `<framework-root>/api/pages/**/*.md`. Each file
+      yields one chunk.
+- [ ] Walk `<framework-root>/src/**/*.rs`. Parse each file
+      with `syn` and yield one chunk per top-level item:
+      `fn`, `impl` block, `trait` def, module doc-comment.
+  - Helpful: `syn::parse_file` plus a visitor that walks
+    top-level items.
+- [ ] For each chunk, compute `text_sha256`, check against
+      existing dataset rows with the same `id`; skip
+      embedding when sha matches.
+- [ ] Batch-embed missing chunks using the configured
+      `EmbeddingClient`.
+- [ ] Write rows into a Lance dataset at `<out>.tmp/`; then
+      atomic-rename over `<out>/`.
+- [ ] Update / write the manifest at `<root>/manifest.toml`
+      and `<root>/embedder.toml`.
+
+Gate: builds a synthetic-framework fixture; row count
+matches the fixture's expected items.
+
+### Milestone 4.7: spec_chunks build pipeline
+
+- [ ] In `build/spec.rs`, implement
+      `build_spec_chunks(opts: &SpecBuildOpts) -> Result<()>`.
+- [ ] Read `.sim-flow/spec-ingest/manifest.toml`; fail if
+      absent.
+- [ ] Walk `primary/chunks/*.md` and `peers/<id>/chunks/*.md`.
+- [ ] For each chunk-md file: parse YAML front matter
+      (chunk_id, breadcrumb, kind, page range, etc.); the
+      body is the markdown content.
+- [ ] SHA-256 staleness check; skip unchanged rows.
+- [ ] Batch-embed missing chunks.
+- [ ] Write the Lance dataset atomically into
+      `.sim-flow/lance-index/spec_chunks.lance/`.
+
+Gate: builds against a fixture corpus; row count matches.
+
+### Milestone 4.8: signal_table_rows build pipeline
+
+- [ ] In `build/spec.rs`, implement
+      `build_signal_table_rows(opts: &SpecBuildOpts) ->
+      Result<()>`.
+- [ ] Walk
+      `.sim-flow/spec-ingest/**/tables/signals/*.toml`; emit
+      one row per `[[rows]]` entry with `source_kind =
+      "source-spec"`.
+- [ ] If `<project>/docs/spec.md` exists, parse via Phase 1's
+      `SpecMd::parse`. For every `Block.signals` row, emit a
+      `signal_table_rows` row with `source_kind = "spec-md"`.
+- [ ] Compute `row_id` per Architecture §3.6.
+- [ ] No embedding; this table is scalar-only in v1.
+- [ ] Atomic-rename the Lance dataset.
+
+Gate: builds rows from a fixture; the parser-extracted rows
+match expected counts.
+
+### Milestone 4.9: cross_spec_refs build pipeline
+
+- [ ] In `build/spec.rs`, implement
+      `build_cross_spec_refs(opts: &SpecBuildOpts) ->
+      Result<()>`.
+- [ ] Walk `.sim-flow/spec-ingest/**/references.toml`; emit
+      one row per `[[references]]` entry.
+- [ ] Atomic-rename the Lance dataset.
+
+Gate: builds rows; row count matches fixture.
+
+### Milestone 4.10: `sim-flow build-framework-index` CLI
+
+- [ ] Register the subcommand per Architecture §3.9.1.
+- [ ] Wire to `build_framework_index`.
+- [ ] Implement `--force` for full re-embed.
+- [ ] CLI integration test: build against a synthetic
+      framework fixture; assert success exit and expected row
+      counts.
+
+Gate: CLI integration test passes.
+
+### Milestone 4.11: `sim-flow build-spec-index` CLI
+
+- [ ] Register the subcommand per Architecture §3.9.2.
+- [ ] Wire to all three spec-side builds (4.7 / 4.8 / 4.9) in
+      sequence under a single project lock.
+- [ ] CLI integration test against an ingested fixture.
+
+Gate: CLI integration test passes.
+
+### Milestone 4.12: `sim-flow refresh-spec` CLI
+
+- [ ] Register the convenience command per §3.9.3.
+- [ ] Implementation: run `sim-flow ingest --rebuild` (or
+      programmatically invoke the ingest pipeline) followed
+      by `sim-flow build-spec-index`.
+- [ ] CLI integration test on a fixture project.
+
+Gate: CLI integration test passes.
+
+### Milestone 4.13: Staleness detection helpers
+
+- [ ] Implement `is_framework_index_stale(root: &Path,
+      current_framework_version: &str) -> bool`.
+- [ ] Implement `is_spec_index_stale(project_root: &Path) ->
+      SpecIndexStaleness` returning an enum
+      `{ Fresh, SourceChanged, SpecMdChanged, EmbedderChanged
+      }`.
+- [ ] CLI: `sim-flow build-spec-index --check` prints the
+      staleness state without rebuilding.
+- [ ] Unit tests for each staleness case.
+
+Gate: staleness unit tests pass.
+
+### Milestone 4.14: Query API (read-side)
+
+- [ ] In `query.rs`, implement async functions:
+  - `semantic_search_framework(conn: &LanceConnection,
+    vector: &[f32], k: usize, kind: Option<&str>) ->
+    Result<Vec<FrameworkHit>>`.
+  - `semantic_search_spec(conn: &LanceConnection, vector:
+    &[f32], k: usize, source: Option<&str>, kind:
+    Option<&str>) -> Result<Vec<SpecHit>>`.
+  - `query_signal_table(conn: &LanceConnection, filter:
+    &SignalFilter, limit: usize) -> Result<Vec<SignalRow>>`.
+  - `find_signal_conflicts(conn: &LanceConnection) ->
+    Result<Vec<SignalConflict>>` joining spec-md vs
+    source-spec rows on `(stage, signal_name)`.
+- [ ] Unit tests using small in-memory datasets.
+
+Gate: query unit tests pass.
+
+### Milestone 4.15: Synthetic-fixture integration test
+
+- [ ] Create `tests/fixtures/synthetic-framework/` with a
+      minimal `api/pages/foo.md` and `src/lib.rs` containing
+      one `fn`.
+- [ ] Create `tests/fixtures/synthetic-project/.sim-flow/
+      spec-ingest/...` mimicking the corpus shape.
+- [ ] `tests/lance_index_integration.rs`:
+  - Build framework index against synthetic-framework; assert
+    row count.
+  - Build spec index against synthetic-project; assert row
+    counts per table.
+  - Issue a semantic_search call (using a mock embedder
+    that returns deterministic vectors); assert results.
+  - Issue a signal_table_query call; assert row.
+- [ ] Run under both `cargo test` (mock embedder) and
+      `SIM_FLOW_E2E_LIVE=1 cargo test` (live Ollama).
+
+Gate: integration tests pass.
+
+### Milestone 4.16: Real-corpus smoke test (manual gate)
+
+- [ ] Run `sim-flow build-framework-index --framework-root
+      crates/framework` and verify:
+  - Build completes within a reasonable time (target: < 5
+    min on M5 Max with Ollama nomic-embed-text).
+  - Resulting Lance dataset has > 1000 rows.
+  - `embedder.toml` and `manifest.toml` are written.
+- [ ] Document the run in
+      `tests/fixtures/lance-index-snapshots/api/README.md`
+      (timestamps, row count, embedder used).
+
+Gate: manual verification by the developer; recorded in the
+README.
+
+## Out of Scope (deferred to later phases)
+
+- **Retrieval tools wired into the agent.** Phase 5.
+- **DM0 invocation of `build-spec-index`.** Phase 6 wires
+  this into the DM0 flow.
+- **Multi-embedder support.** v1 uses one embedder per
+  index.
+- **Vector index tuning** (IVF_PQ vs HNSW vs IVF_FLAT).
+  Defaults to IVF_FLAT; tuning is a future operational
+  concern.
+- **Backup / replication.** The index is disposable; no
+  backup support.
