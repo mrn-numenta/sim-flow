@@ -36,16 +36,16 @@ expected dimension.
 
 ### Milestone 3.1: Dependency + module scaffolding
 
-- [ ] Add `rig-core = "=0.37.0"` to
+- [x] Add `rig-core = "=0.37.0"` to
       `tools/sim-flow/Cargo.toml` (exact version pin per
       Chapter 5 §5.8).
-- [ ] Add `async-trait` and `tokio` (current-thread runtime,
+- [x] Add `async-trait` and `tokio` (current-thread runtime,
       already a transitive dep but ensure direct).
-- [ ] Create `src/__internal/session/embedder/mod.rs` with
+- [x] Create `src/__internal/session/embedder/mod.rs` with
       module wiring.
-- [ ] Define `EmbeddingClient` trait per Chapter 5 §5.3.
-- [ ] Define `EmbedError` enum per Chapter 5 §5.3.
-- [ ] Verify `cargo build` succeeds; verify no unused-import
+- [x] Define `EmbeddingClient` trait per Chapter 5 §5.3.
+- [x] Define `EmbedError` enum per Chapter 5 §5.3.
+- [x] Verify `cargo build` succeeds; verify no unused-import
       lints.
 
 Gate: `cargo build` succeeds.

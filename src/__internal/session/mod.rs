@@ -15,6 +15,7 @@ pub mod capture_host;
 pub mod compaction;
 pub mod control_socket;
 pub mod debug_log;
+pub mod embedder;
 pub mod event_tap;
 pub mod host;
 pub mod llm_adapter;

@@ -68,6 +68,24 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Wraps flock on Unix and LockFileEx on Windows.
 fs2 = "0.4"
 ureq = { version = "2", default-features = false, features = ["json", "tls"] }
+# Embedding client (Chapter 5 of the spec/lance architecture). We use
+# rig solely for its `openai`-provider HTTP wrapper around embedding
+# endpoints; the rest of rig (agents, completions, vector stores,
+# extractors, RAG pipelines) is explicitly NOT used. Version is pinned
+# exactly (`=0.37.0`, not `^0.37`) per §5.8 because rig's README warns
+# that future updates contain breaking changes; upgrades are explicit
+# operations that include reviewing the rig changelog and re-running
+# the embedder smoke tests.
+rig-core = "=0.37.0"
+# Required by rig's `EmbeddingModel` trait (returns boxed futures via
+# `async-trait`). We use the same crate to express the sim-flow-side
+# `EmbeddingClient` trait so the boundary is symmetric.
+async-trait = "0.1"
+# Current-thread tokio runtime used by `RetrievalService` (Chapter 5
+# §5.7) to bridge sim-flow's synchronous orchestrator to rig's async
+# HTTP. Async leakage is confined to the `embedder` module and its
+# tokio-block_on shim.
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "time"] }
 # Raw-mode termios on the controlling terminal so user keystrokes
 # pass through to the spawned PTY child unprocessed (no line
 # buffering, no echo, Ctrl-C as 0x03 byte). Same API on macOS and
@@ -87,3 +105,8 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+# HTTP mock server for the embedder unit tests. Spawns a local server
+# on an ephemeral port and answers configured request matchers; we use
+# it to exercise the rig openai-compat client against fixed payloads
+# without touching a real provider.
+wiremock = "0.6"
