@@ -17,6 +17,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::__internal::session::ask_user::SuspendOutcome;
 use crate::{Error, Result};
 
 mod api_common;
@@ -48,9 +49,7 @@ pub use api_impls::ApiImplsTool;
 pub use api_references::ApiReferencesTool;
 pub use api_search::ApiSearchTool;
 pub use api_semantic_search::ApiSemanticSearchTool;
-pub use ask_user::{
-    ASK_USER_SUSPENDED_MARKER, AskUserTool, is_suspended_result, parse_suspended_payload,
-};
+pub use ask_user::{ASK_USER_TURN_CAP, AskUserTool};
 pub use declare_fix::DeclareFixTool;
 pub use declare_hypothesis::DeclareHypothesisTool;
 pub use delete_file::DeleteFileTool;
@@ -281,6 +280,16 @@ pub struct ToolResult {
     /// pre-session path is still a fix attempt (one classification,
     /// two counters in parallel).
     pub declared_fix: bool,
+    /// When `Some`, this tool call has suspended the LLM turn pending
+    /// a user reply. The orchestrator's dispatch loop must derive a
+    /// `RequestUserInput` event from `pending`, park the work
+    /// session, and exit the current LLM turn cleanly (discarding
+    /// any subsequent tool calls in the same model response with a
+    /// `tool_calls_after_ask_user` warning per Architecture §6.5.1).
+    /// The resume hook returns the user's reply as the suspended
+    /// call's tool-result on the next LLM turn. Only the `ask_user`
+    /// tool sets this today.
+    pub suspend: Option<SuspendOutcome>,
 }
 
 /// Internal-only; never serialized over the JSONL protocol. The
@@ -303,6 +312,7 @@ impl ToolResult {
             test_failures: None,
             touched_paths: Vec::new(),
             declared_fix: false,
+            suspend: None,
         }
     }
     pub fn err(display: impl Into<String>) -> Self {
@@ -314,6 +324,7 @@ impl ToolResult {
             test_failures: None,
             touched_paths: Vec::new(),
             declared_fix: false,
+            suspend: None,
         }
     }
     pub fn ok_with_attachment(
@@ -334,6 +345,7 @@ impl ToolResult {
             test_failures: None,
             touched_paths: Vec::new(),
             declared_fix: false,
+            suspend: None,
         }
     }
     pub fn with_test_failure_count(mut self, count: usize) -> Self {
@@ -351,6 +363,24 @@ impl ToolResult {
     pub fn with_declared_fix(mut self) -> Self {
         self.declared_fix = true;
         self
+    }
+    /// Construct a tool result that signals "the LLM turn is
+    /// suspended pending a user reply." Used by `ask_user`; the
+    /// dispatch loop reads `suspend.as_ref()` to detect the
+    /// suspension. `display` is left empty because the suspended
+    /// result is never threaded back to the model — the resume path
+    /// returns the user's actual answer on the next turn.
+    pub fn suspended(outcome: SuspendOutcome) -> Self {
+        Self {
+            ok: true,
+            display: String::new(),
+            attachments: Vec::new(),
+            test_failure_count: None,
+            test_failures: None,
+            touched_paths: Vec::new(),
+            declared_fix: false,
+            suspend: Some(outcome),
+        }
     }
 }
 

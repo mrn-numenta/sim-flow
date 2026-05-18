@@ -7,11 +7,11 @@
 //! return a synchronous answer. Instead it calls
 //! `AskUserRuntime::suspend_for_user_ask`, which stashes the call,
 //! persists checkpoints, and signals the orchestrator's outer
-//! dispatch loop to exit the LLM turn cleanly. The
-//! `ToolResult::display` carries a sentinel marker
-//! (`ASK_USER_SUSPENDED_MARKER`) so the dispatch loop can detect
-//! the suspension without having to extend the universal `Tool`
-//! contract.
+//! dispatch loop to exit the LLM turn cleanly. The signal is the
+//! typed `ToolResult::suspend` field carrying the `SuspendOutcome`;
+//! the orchestrator reads `result.suspend.as_ref()` to detect the
+//! suspension and derive the `RequestUserInput` event from
+//! `outcome.pending`.
 //!
 //! `step_mode_before` and the auto→manual flip side-effect are
 //! handled by an optional `flip` callback the orchestrator wires in;
@@ -28,12 +28,6 @@ use crate::__internal::session::ask_user::{
 };
 use crate::__internal::session::protocol::StepMode;
 use crate::Result;
-
-/// Stable marker the orchestrator's dispatch loop scans for to detect
-/// "this tool call suspended the LLM turn". The marker is followed by
-/// the JSON-shaped pending-call payload so the orchestrator can emit
-/// `RequestUserInput` directly off the tool result.
-pub const ASK_USER_SUSPENDED_MARKER: &str = "ASK_USER_SUSPENDED::";
 
 /// Soft turn-cap warning per Architecture §4.5 chaining section.
 pub const ASK_USER_TURN_CAP: u32 = 5;
@@ -214,21 +208,6 @@ impl Tool for AskUserTool {
             );
         }
 
-        // Construct the suspended payload the orchestrator's dispatch
-        // loop scans for.
-        let payload = json!({
-            "question": outcome.pending.question,
-            "context": outcome.pending.context,
-            "kind": outcome.pending.kind.as_str(),
-            "choices": outcome.pending.choices,
-            "default": outcome.pending.default,
-            "thread_id": outcome.pending.thread_id,
-            "thread_turn_index": outcome.pending.thread_turn_index,
-            "fresh_thread": outcome.fresh_thread,
-            "tool_call_id": outcome.pending.tool_call_id,
-            "turn_cap_warning": outcome.pending.thread_turn_index >= ASK_USER_TURN_CAP,
-        });
-
         // The first-call metric event lives in the runtime's
         // record_turn callsite; the suspend itself emits an
         // "ask_user_suspend" event so we can measure how often the
@@ -244,21 +223,8 @@ impl Tool for AskUserTool {
             record_as = outcome.pending.record_as.as_str(),
         );
 
-        Ok(ToolResult::ok(format!(
-            "{ASK_USER_SUSPENDED_MARKER}{payload}"
-        )))
+        Ok(ToolResult::suspended(outcome))
     }
-}
-
-/// Test whether a `ToolResult::display` is the suspended-marker shape.
-pub fn is_suspended_result(display: &str) -> bool {
-    display.starts_with(ASK_USER_SUSPENDED_MARKER)
-}
-
-/// Parse the JSON payload that follows the suspended marker.
-pub fn parse_suspended_payload(display: &str) -> Option<Value> {
-    let body = display.strip_prefix(ASK_USER_SUSPENDED_MARKER)?;
-    serde_json::from_str(body).ok()
 }
 
 #[cfg(test)]
@@ -312,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    fn fresh_call_emits_suspended_marker_and_suspends_runtime() {
+    fn fresh_call_sets_suspend_field_and_suspends_runtime() {
         let tmp = tempfile::tempdir().unwrap();
         let tool = make_tool(&tmp, "DM0");
         let ctx = ctx_for(&tmp);
@@ -320,11 +286,10 @@ mod tests {
             .invoke(&ctx, &json!({"question": "What's the clock freq?"}))
             .expect("invoke");
         assert!(r.ok);
-        assert!(is_suspended_result(&r.display));
-        let payload = parse_suspended_payload(&r.display).expect("payload parses");
-        assert_eq!(payload["question"], "What's the clock freq?");
-        assert!(payload["fresh_thread"].as_bool().unwrap());
-        assert_eq!(payload["thread_turn_index"], 0);
+        let suspend = r.suspend.as_ref().expect("suspend populated");
+        assert_eq!(suspend.pending.question, "What's the clock freq?");
+        assert!(suspend.fresh_thread);
+        assert_eq!(suspend.pending.thread_turn_index, 0);
         assert!(tool.runtime.has_pending());
     }
 
@@ -376,8 +341,7 @@ mod tests {
         let r = tool
             .invoke(&ctx, &json!({"question": "q0", "record_as": "none"}))
             .expect("invoke 0");
-        let payload = parse_suspended_payload(&r.display).unwrap();
-        let tid = payload["thread_id"].as_str().unwrap().to_string();
+        let tid = r.suspend.as_ref().unwrap().pending.thread_id.clone();
         tool.runtime
             .resume_from_user_ask("a0", false, false)
             .expect("resume 0");
@@ -393,8 +357,8 @@ mod tests {
                 }),
             )
             .expect("invoke 1");
-        let payload = parse_suspended_payload(&r.display).unwrap();
-        assert_eq!(payload["thread_turn_index"], 1);
-        assert_eq!(payload["fresh_thread"], false);
+        let suspend = r.suspend.as_ref().expect("suspend populated");
+        assert_eq!(suspend.pending.thread_turn_index, 1);
+        assert!(!suspend.fresh_thread);
     }
 }

@@ -23,8 +23,9 @@ use super::persist::persist_resolved_thread;
 use super::threads::{ClosedAs, ResolvedThread, ThreadRegistry, ThreadRegistryError};
 
 /// Result of a successful `suspend_for_user_ask`. The orchestrator
-/// reads `pending` to emit the `RequestUserInput` event.
-#[derive(Debug)]
+/// reads `pending` to emit the `RequestUserInput` event. `Clone` is
+/// derived because this rides on `ToolResult`, which is `Clone`.
+#[derive(Debug, Clone)]
 pub struct SuspendOutcome {
     pub pending: PendingUserAsk,
     /// Whether the orchestrator should treat this as a brand-new

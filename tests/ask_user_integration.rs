@@ -33,10 +33,7 @@ use sim_flow::__internal::session::ask_user::{
     mode_flip::{RecordingSink, read_current_step_mode, write_current_step_mode},
 };
 use sim_flow::__internal::session::protocol::StepMode;
-use sim_flow::__internal::session::tools::{
-    ASK_USER_SUSPENDED_MARKER, AskUserTool, Tool, ToolContext, is_suspended_result,
-    parse_suspended_payload,
-};
+use sim_flow::__internal::session::tools::{ASK_USER_TURN_CAP, AskUserTool, Tool, ToolContext};
 
 fn empty_ctx<'a>(project: &'a std::path::Path) -> ToolContext<'a> {
     ToolContext::new(project, None, None, None)
@@ -61,10 +58,9 @@ fn test_1_manual_single_turn_thread_persists_open_question() {
             &json!({"question": "How wide is the bus?", "record_as": "open-question"}),
         )
         .expect("invoke");
-    assert!(is_suspended_result(&r.display));
-    let payload = parse_suspended_payload(&r.display).expect("payload");
-    assert_eq!(payload["thread_turn_index"], 0);
-    let tid = payload["thread_id"].as_str().unwrap().to_string();
+    let suspend = r.suspend.as_ref().expect("suspend populated");
+    assert_eq!(suspend.pending.thread_turn_index, 0);
+    let tid = suspend.pending.thread_id.clone();
     assert!(rt.has_pending());
 
     // Scripted host supplies the answer.
@@ -122,8 +118,13 @@ fn test_3_reload_mid_suspend_recovers_pending_state() {
     let r = tool
         .invoke(&ctx, &json!({"question": "Frequency?"}))
         .expect("invoke");
-    let payload = parse_suspended_payload(&r.display).expect("payload");
-    let original_tid = payload["thread_id"].as_str().unwrap().to_string();
+    let original_tid = r
+        .suspend
+        .as_ref()
+        .expect("suspend")
+        .pending
+        .thread_id
+        .clone();
 
     // Simulate orchestrator restart: drop runtime, build a new one,
     // verify recovery.
@@ -148,11 +149,10 @@ fn test_4_subsequent_tool_calls_after_ask_user_marker_present() {
     // The architecture says the orchestrator's dispatch loop must
     // detect ask_user suspension and discard subsequent calls with a
     // `tool_calls_after_ask_user` warning. The protocol surface this
-    // test verifies is the ToolResult marker -- whether the
-    // orchestrator's dispatch loop acts on it is its concern. Here we
-    // assert that a fresh AskUserTool::invoke produces the
-    // ASK_USER_SUSPENDED_MARKER prefix that the dispatch loop
-    // matches on.
+    // test verifies is the ToolResult.suspend field -- whether the
+    // orchestrator's dispatch loop acts on it is its concern. Here
+    // we assert that a fresh AskUserTool::invoke populates the
+    // typed suspend field the dispatch loop matches on.
     let tmp = tempfile::tempdir().unwrap();
     let rt = Arc::new(AskUserRuntime::new(tmp.path().to_path_buf(), "DM2d".into()));
     let tool = AskUserTool::new(rt);
@@ -160,10 +160,9 @@ fn test_4_subsequent_tool_calls_after_ask_user_marker_present() {
     let r = tool
         .invoke(&ctx, &json!({"question": "x"}))
         .expect("invoke");
-    assert!(r.display.starts_with(ASK_USER_SUSPENDED_MARKER));
-    let payload = parse_suspended_payload(&r.display).unwrap();
-    assert!(payload["thread_id"].is_string());
-    assert_eq!(payload["fresh_thread"], true);
+    let suspend = r.suspend.as_ref().expect("suspend populated");
+    assert!(!suspend.pending.thread_id.is_empty());
+    assert!(suspend.fresh_thread);
 }
 
 #[test]
@@ -184,8 +183,7 @@ fn test_5_chained_three_turns_close_as_auto_decision_writes_one_row() {
             &json!({"question": "How many entries?", "record_as": "none"}),
         )
         .expect("turn 0");
-    let payload = parse_suspended_payload(&r.display).unwrap();
-    let tid = payload["thread_id"].as_str().unwrap().to_string();
+    let tid = r.suspend.as_ref().unwrap().pending.thread_id.clone();
     let a0 = rt
         .resume_from_user_ask("probably 4", false, false)
         .expect("r0");
@@ -202,8 +200,7 @@ fn test_5_chained_three_turns_close_as_auto_decision_writes_one_row() {
             }),
         )
         .expect("turn 1");
-    let payload = parse_suspended_payload(&r.display).unwrap();
-    assert_eq!(payload["thread_turn_index"], 1);
+    assert_eq!(r.suspend.as_ref().unwrap().pending.thread_turn_index, 1);
     let a1 = rt.resume_from_user_ask("yes, 4", false, false).expect("r1");
     assert_eq!(a1.thread_turn_index, 1);
 
@@ -218,8 +215,7 @@ fn test_5_chained_three_turns_close_as_auto_decision_writes_one_row() {
             }),
         )
         .expect("turn 2");
-    let payload = parse_suspended_payload(&r.display).unwrap();
-    assert_eq!(payload["thread_turn_index"], 2);
+    assert_eq!(r.suspend.as_ref().unwrap().pending.thread_turn_index, 2);
     let a2 = rt
         .resume_from_user_ask("yes, 4 confirmed", false, false)
         .expect("r2");
@@ -249,10 +245,13 @@ fn test_6_cancel_thread_persists_unresolved_open_question() {
     let r = tool
         .invoke(&ctx, &json!({"question": "q0", "record_as": "none"}))
         .expect("turn 0");
-    let tid = parse_suspended_payload(&r.display).unwrap()["thread_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let tid = r
+        .suspend
+        .as_ref()
+        .expect("suspend populated")
+        .pending
+        .thread_id
+        .clone();
     rt.resume_from_user_ask("a0", false, false).expect("r0");
 
     tool.invoke(
@@ -294,10 +293,13 @@ fn test_7_force_close_on_subsession_end_resolves_or_drops() {
     let r = tool
         .invoke(&ctx, &json!({"question": "q0", "record_as": "none"}))
         .expect("turn 0");
-    let _tid = parse_suspended_payload(&r.display).unwrap()["thread_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let _tid = r
+        .suspend
+        .as_ref()
+        .expect("suspend populated")
+        .pending
+        .thread_id
+        .clone();
     rt.resume_from_user_ask("a0", false, false).expect("r0");
     // Thread is still open (record_as=none keeps it open).
     assert_eq!(rt.open_thread_count(), 1);
@@ -321,10 +323,13 @@ fn test_8_turn_cap_warning_at_five() {
     let r = tool
         .invoke(&ctx, &json!({"question": "q0", "record_as": "none"}))
         .expect("turn 0");
-    let tid = parse_suspended_payload(&r.display).unwrap()["thread_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let tid = r
+        .suspend
+        .as_ref()
+        .expect("suspend populated")
+        .pending
+        .thread_id
+        .clone();
     rt.resume_from_user_ask("a0", false, false).expect("r0");
 
     // Turns 1, 2, 3, 4 -- still under the cap.
@@ -335,22 +340,22 @@ fn test_8_turn_cap_warning_at_five() {
                 &json!({"question": format!("q{turn}"), "record_as": "none", "thread_id": tid}),
             )
             .expect("invoke turn");
-        let payload = parse_suspended_payload(&r.display).unwrap();
-        assert_eq!(payload["turn_cap_warning"], false);
+        let pending = &r.suspend.as_ref().expect("suspend populated").pending;
+        assert!(pending.thread_turn_index < ASK_USER_TURN_CAP);
         rt.resume_from_user_ask(&format!("a{turn}"), false, false)
             .expect("resume turn");
     }
 
-    // Turn 5 -- at the cap. Payload's turn_cap_warning flips true.
+    // Turn 5 -- at the cap.
     let r = tool
         .invoke(
             &ctx,
             &json!({"question": "q5", "record_as": "none", "thread_id": tid}),
         )
         .expect("turn 5");
-    let payload = parse_suspended_payload(&r.display).unwrap();
-    assert_eq!(payload["thread_turn_index"], 5);
-    assert_eq!(payload["turn_cap_warning"], true);
+    let pending = &r.suspend.as_ref().expect("suspend populated").pending;
+    assert_eq!(pending.thread_turn_index, 5);
+    assert!(pending.thread_turn_index >= ASK_USER_TURN_CAP);
 }
 
 #[test]
@@ -368,10 +373,13 @@ fn test_9_interleaved_threads_stay_independent() {
     let r = tool
         .invoke(&ctx, &json!({"question": "Q-A", "record_as": "none"}))
         .expect("A0");
-    let tid_a = parse_suspended_payload(&r.display).unwrap()["thread_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let tid_a = r
+        .suspend
+        .as_ref()
+        .expect("suspend populated")
+        .pending
+        .thread_id
+        .clone();
     rt.resume_from_user_ask("Reply A", false, false)
         .expect("rA0");
 
@@ -379,10 +387,13 @@ fn test_9_interleaved_threads_stay_independent() {
     let r = tool
         .invoke(&ctx, &json!({"question": "Q-B", "record_as": "none"}))
         .expect("B0");
-    let tid_b = parse_suspended_payload(&r.display).unwrap()["thread_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let tid_b = r
+        .suspend
+        .as_ref()
+        .expect("suspend populated")
+        .pending
+        .thread_id
+        .clone();
     assert_ne!(tid_a, tid_b);
     rt.resume_from_user_ask("Reply B", false, false)
         .expect("rB0");
