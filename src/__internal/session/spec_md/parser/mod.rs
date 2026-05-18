@@ -13,6 +13,7 @@ use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use super::types::SpecMd;
 
 pub(crate) mod assumptions;
+pub(crate) mod blocks;
 pub(crate) mod external_interfaces;
 pub(crate) mod metadata;
 pub(crate) mod prose;
@@ -243,7 +244,10 @@ fn dispatch_section(section: &Section, spec: &mut SpecMd) -> Result<(), SpecMdPa
                 external_interfaces::parse_external_interfaces(&section.body)?;
             Ok(())
         }
-        "Blocks" => Ok(()),
+        "Blocks" => {
+            spec.blocks = blocks::parse_blocks(&section.body)?;
+            Ok(())
+        }
         "Parameters" => Ok(()),
         "State Machines" => Ok(()),
         "Encodings" => Ok(()),

@@ -151,17 +151,17 @@ Gate: external_interfaces unit test passes.
 
 ### Milestone 1.6: Per-section parsers — Blocks
 
-- [ ] Implement `parser/blocks.rs`.
-- [ ] Handle the `### Block: <name>` heading pattern.
-- [ ] Parse the property block (Role / Parent / Clock domain /
+- [x] Implement `parser/blocks.rs`.
+- [x] Handle the `### Block: <name>` heading pattern.
+- [x] Parse the property block (Role / Parent / Clock domain /
       Parameterized by).
-- [ ] Parse the four-column I/O signal table.
-- [ ] Parse the State subsection (bulleted list of state
+- [x] Parse the four-column I/O signal table.
+- [x] Parse the State subsection (bulleted list of state
       elements with `name (width, reset value)` shape).
-- [ ] Parse the Behavior summary prose.
-- [ ] Parse the Source-spec anchors and Figures lists.
-- [ ] Parse the optional Sub-blocks list.
-- [ ] Unit test against a fixture with three blocks in a
+- [x] Parse the Behavior summary prose.
+- [x] Parse the Source-spec anchors and Figures lists.
+- [x] Parse the optional Sub-blocks list.
+- [x] Unit test against a fixture with three blocks in a
       two-level hierarchy.
 
 Gate: blocks unit test passes.
