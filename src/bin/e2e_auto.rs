@@ -83,6 +83,14 @@ struct Args {
     max_critique_no_progress_iters: u32,
     max_llm_requests: u32,
     max_identical_responses: u32,
+    /// Mirror of `sim-flow auto --max-parallel-requests`. Default
+    /// `1` selects the serial plan-detail walk so per-milestone
+    /// critique findings can be retried. The parallel path
+    /// (`>= 2`) is one-shot: any gate finding flips the run to
+    /// manual, which fails an end-to-end completion test. Set
+    /// `0` to use the project's `config.toml::[llm]` default
+    /// (typically unbounded fan-out).
+    max_parallel_requests: u32,
     no_preamble: bool,
     /// When true (default for openai-compat backend with an
     /// explicit base_url), ping `<base_url>/models` before
@@ -137,6 +145,7 @@ impl Args {
         let mut max_critique_no_progress_iters = 3u32;
         let mut max_llm_requests = 500u32;
         let mut max_identical_responses = 3u32;
+        let mut max_parallel_requests = 1u32;
         let mut no_preamble = true;
         let mut healthcheck = true;
         let mut watch_socket: Option<PathBuf> = None;
@@ -191,6 +200,13 @@ impl Args {
                         .parse()
                         .map_err(|err| format!("--max-identical-responses: {err}"))?
                 }
+                "--max-parallel-requests" => {
+                    max_parallel_requests = iter
+                        .next()
+                        .ok_or_else(|| "--max-parallel-requests needs a value".to_string())?
+                        .parse()
+                        .map_err(|err| format!("--max-parallel-requests: {err}"))?
+                }
                 "--no-preamble" => no_preamble = true,
                 "--preamble" => no_preamble = false,
                 "--no-healthcheck" => healthcheck = false,
@@ -206,6 +222,7 @@ impl Args {
                          [--max-auto-iters <N>] [--max-critique-iters <N>] \
                          [--max-critique-no-progress-iters <N>] \
                          [--max-llm-requests <N>] [--max-identical-responses <N>] \
+                         [--max-parallel-requests <N>] \
                          [--preamble | --no-preamble] \
                          [--healthcheck | --no-healthcheck] \
                          [--watch-socket <PATH>] [--no-watch-socket] \
@@ -267,6 +284,7 @@ impl Args {
             max_critique_no_progress_iters,
             max_llm_requests,
             max_identical_responses,
+            max_parallel_requests,
             no_preamble,
             healthcheck,
             watch_socket,
@@ -353,12 +371,13 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         args.model.as_deref().unwrap_or("(default)")
     );
     println!(
-        "e2e_auto: caps              = max_auto_iters={} max_critique_iters={} max_critique_no_progress_iters={} max_llm_requests={} max_identical_responses={} no_preamble={}",
+        "e2e_auto: caps              = max_auto_iters={} max_critique_iters={} max_critique_no_progress_iters={} max_llm_requests={} max_identical_responses={} max_parallel_requests={} no_preamble={}",
         args.max_auto_iters,
         args.max_critique_iters,
         args.max_critique_no_progress_iters,
         args.max_llm_requests,
         args.max_identical_responses,
+        args.max_parallel_requests,
         args.no_preamble,
     );
     // Mirror e2e_manual: smoke projects in tempdirs would otherwise see
@@ -542,7 +561,7 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         dm0_interactive: false,
         max_llm_requests: args.max_llm_requests,
         max_identical_responses: args.max_identical_responses,
-        max_parallel_requests: 0,
+        max_parallel_requests: args.max_parallel_requests,
         step_mode: StepMode::Auto,
         no_preamble: args.no_preamble,
         cancel_flag: None,
