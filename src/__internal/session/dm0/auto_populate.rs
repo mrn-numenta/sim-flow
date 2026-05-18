@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::__internal::session::spec_md::types::{
-    Encoding, EncodingValue, ErrorEntry, FsmState, FsmTransition, Parameter, QuantitativeRow,
-    SourceDocument, SourceDocumentRole, SpecMd, StateMachine,
+    Block, BlockSignalRow, Encoding, EncodingValue, ErrorEntry, FsmState, FsmTransition, Parameter,
+    QuantitativeRow, SourceDocument, SourceDocumentRole, SpecMd, StateMachine,
 };
 use crate::{Error, Result};
 
@@ -372,9 +372,59 @@ pub fn populate_fsms(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
     Ok(appended)
 }
 
-#[allow(dead_code)]
-pub fn populate_blocks(_corpus_root: &Path, _spec: &mut SpecMd) -> Result<usize> {
-    todo!("Phase 6 milestone 6.5 — one block per primary/tables/signals/NNN-<stage>.toml")
+// ---------------------------------------------------------------------------
+// 6.5 — Blocks
+// ---------------------------------------------------------------------------
+
+/// Emit one `Block` per `<corpus>/tables/signals/NNN-<stage>.toml`.
+/// Each block's `name` is the table's `stage`, the parent is the
+/// top-level sentinel `(none -- top-level)` (the agent refines later
+/// after reading enough source-spec context to infer hierarchy),
+/// and `signals[]` populates from the shard's `[[rows]]`. The
+/// shard's source page range becomes a single `primary:p<N>` anchor
+/// on the block.
+///
+/// Idempotent on `(name, source_anchor)`.
+pub fn populate_blocks(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
+    let dir = corpus_root.join("tables").join("signals");
+    let mut appended = 0usize;
+    for path in list_toml_files(&dir) {
+        let body = read_required(&path)?;
+        let table: RawSignalTable = parse_toml(&path, &body)?;
+        let anchor = page_anchor("primary", &table.source_page_range);
+        let already = spec
+            .blocks
+            .iter()
+            .any(|b| b.name == table.stage && b.source_anchors.iter().any(|a| a == &anchor));
+        if already {
+            continue;
+        }
+        let signals: Vec<BlockSignalRow> = table
+            .rows
+            .into_iter()
+            .map(|r| BlockSignalRow {
+                name: r.name,
+                direction: r.direction,
+                peer: r.peer,
+                description: r.description,
+            })
+            .collect();
+        spec.blocks.push(Block {
+            name: table.stage,
+            role: String::new(),
+            parent: "(none -- top-level)".into(),
+            clock_domain: String::new(),
+            parameterized_by: Vec::new(),
+            signals,
+            state: Vec::new(),
+            behavior_summary: String::new(),
+            source_anchors: vec![anchor],
+            figures: Vec::new(),
+            sub_blocks: Vec::new(),
+        });
+        appended += 1;
+    }
+    Ok(appended)
 }
 
 #[allow(dead_code)]
@@ -511,6 +561,26 @@ struct RawManifest {
 struct RawManifestPeer {
     id: String,
     source_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawSignalTable {
+    stage: String,
+    #[serde(default)]
+    source_page_range: Vec<u32>,
+    #[serde(default)]
+    rows: Vec<RawSignalRow>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawSignalRow {
+    name: String,
+    #[serde(default)]
+    direction: String,
+    #[serde(default)]
+    peer: String,
+    #[serde(default)]
+    description: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -869,6 +939,51 @@ mod tests {
         assert!(names.contains(&"RESET_HOLD"));
         assert!(names.contains(&"RESET_RELEASE"));
         let n2 = populate_fsms(&corpus, &mut spec).unwrap();
+        assert_eq!(n2, 0);
+    }
+
+    #[test]
+    fn blocks_one_per_signal_shard_with_top_level_parent() {
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        let dir = corpus.join("tables").join("signals");
+        let shards = [
+            ("000-if.toml", "Instruction Fetch (IF)", 12u32, 13u32),
+            ("001-pd.toml", "Pre-Decode (PD)", 14, 14),
+            ("002-id.toml", "Instruction Decode (ID)", 15, 15),
+            ("003-ex.toml", "Execute (EX)", 16, 16),
+            ("004-mem.toml", "Memory (MEM)", 17, 17),
+            ("005-wb.toml", "Write Back (WB)", 18, 18),
+        ];
+        for (filename, stage, p0, p1) in shards.iter() {
+            let body = format!(
+                "schema_version = 1\n\
+                 table_kind = \"signal_table\"\n\
+                 source_chunk_id = \"c-{filename}\"\n\
+                 source_page_range = [{p0}, {p1}]\n\
+                 stage = \"{stage}\"\n\
+                 breadcrumb = [\"Pipeline\", \"{stage}\"]\n\
+                 \n\
+                 [[rows]]\n\
+                 name = \"if_nxt_pc\"\n\
+                 direction = \"out\"\n\
+                 peer = \"Bus\"\n\
+                 description = \"next pc\"\n"
+            );
+            write(&dir.join(filename), &body);
+        }
+        let mut spec = SpecMd::default();
+        let n = populate_blocks(&corpus, &mut spec).unwrap();
+        assert_eq!(n, 6);
+        assert_eq!(spec.blocks.len(), 6);
+        for b in &spec.blocks {
+            assert_eq!(b.parent, "(none -- top-level)");
+            assert_eq!(b.signals.len(), 1);
+            assert_eq!(b.source_anchors.len(), 1);
+        }
+        assert_eq!(spec.blocks[0].name, "Instruction Fetch (IF)");
+        assert_eq!(spec.blocks[0].source_anchors[0], "primary:p12-13");
+        let n2 = populate_blocks(&corpus, &mut spec).unwrap();
         assert_eq!(n2, 0);
     }
 
