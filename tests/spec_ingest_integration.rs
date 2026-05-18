@@ -176,3 +176,58 @@ fn spatial_pooler_full_ingest() {
     let outcome = ingest(&pdf, project.path());
     assert!(outcome.primary_chunk_count >= 1);
 }
+
+// ---------------------------------------------------------------------
+// Milestone 2.14: CLI subcommand exit code + manifest verification.
+// ---------------------------------------------------------------------
+
+#[test]
+fn cli_ingest_subcommand_produces_manifest() {
+    let pdf = fixture("rv12.pdf");
+    if !pdf.exists() {
+        panic!("RV12 fixture missing at {}", pdf.display());
+    }
+    let project = fresh_project();
+    let bin = env!("CARGO_BIN_EXE_sim-flow");
+    let out = std::process::Command::new(bin)
+        .arg("--project")
+        .arg(project.path())
+        .arg("ingest")
+        .arg("--source")
+        .arg(&pdf)
+        .arg("--out")
+        .arg(project.path())
+        .output()
+        .expect("spawn sim-flow");
+    assert!(
+        out.status.success(),
+        "sim-flow ingest failed: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let manifest = project.path().join(".sim-flow/spec-ingest/manifest.toml");
+    assert!(
+        manifest.exists(),
+        "expected manifest at {}",
+        manifest.display()
+    );
+    let body = std::fs::read_to_string(&manifest).unwrap();
+    assert!(body.contains("source_kind = \"pdf\""));
+    assert!(body.contains("primary_chunk_count"));
+
+    // `--status` should print the same manifest.
+    let status_out = std::process::Command::new(bin)
+        .arg("--project")
+        .arg(project.path())
+        .arg("ingest")
+        .arg("--status")
+        .arg("--out")
+        .arg(project.path())
+        .output()
+        .expect("spawn sim-flow --status");
+    assert!(status_out.status.success());
+    let stdout = String::from_utf8_lossy(&status_out.stdout);
+    assert!(
+        stdout.contains("source_kind"),
+        "status stdout missing manifest: {stdout}"
+    );
+}

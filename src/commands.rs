@@ -221,7 +221,138 @@ fn embedder_cmd(action: &EmbedderAction) -> sim_flow::Result<()> {
         EmbedderAction::Check { config, verbose } => {
             crate::cli::embedder::check(config.as_deref(), *verbose)
         }
+        Command::Ingest {
+            source,
+            peers,
+            config,
+            out,
+            rebuild,
+            status,
+        } => ingest_cmd(
+            &project_dir,
+            source.as_deref(),
+            peers.as_slice(),
+            config.as_deref(),
+            out.as_deref(),
+            *rebuild,
+            *status,
+        ),
     }
+}
+
+/// Driver for `sim-flow ingest`. Resolves project root, optional
+/// config, and primary/peer paths into an `IngestRequest` and runs
+/// the pipeline. Supports the `--rebuild` and `--status` flavours
+/// per chapter 1.8.
+fn ingest_cmd(
+    project_dir: &Path,
+    source: Option<&Path>,
+    peers: &[(String, std::path::PathBuf)],
+    config: Option<&Path>,
+    out: Option<&Path>,
+    rebuild: bool,
+    status: bool,
+) -> sim_flow::Result<()> {
+    use sim_flow::__internal::session::spec_ingest::{
+        IngestConfig, IngestRequest, PeerSpec, SourceSpec, pipeline::run as run_pipeline,
+    };
+
+    let project_root: std::path::PathBuf = out
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| project_dir.to_path_buf());
+
+    if status {
+        let manifest_path = project_root
+            .join(".sim-flow")
+            .join("spec-ingest")
+            .join("manifest.toml");
+        if !manifest_path.exists() {
+            println!(
+                "sim-flow ingest --status: no manifest at {}",
+                manifest_path.display()
+            );
+            return Ok(());
+        }
+        let body = std::fs::read_to_string(&manifest_path).map_err(|e| {
+            sim_flow::Error::State(format!("read {}: {e}", manifest_path.display()))
+        })?;
+        println!("{body}");
+        return Ok(());
+    }
+
+    let cfg = match config {
+        Some(p) => {
+            let body = std::fs::read_to_string(p)
+                .map_err(|e| sim_flow::Error::State(format!("read config {}: {e}", p.display())))?;
+            IngestConfig::parse(&body)
+                .map_err(|e| sim_flow::Error::State(format!("parse config: {e}")))?
+        }
+        None => IngestConfig::load(&project_root)?,
+    };
+
+    let primary_path: Option<std::path::PathBuf> = if rebuild {
+        // Pull the source path from the existing manifest.
+        let manifest_path = project_root
+            .join(".sim-flow")
+            .join("spec-ingest")
+            .join("manifest.toml");
+        let body = std::fs::read_to_string(&manifest_path).map_err(|e| {
+            sim_flow::Error::State(format!(
+                "rebuild: read manifest {}: {e}",
+                manifest_path.display()
+            ))
+        })?;
+        parse_manifest_source_path(&body)
+    } else {
+        source.map(std::path::PathBuf::from)
+    };
+
+    let request = IngestRequest {
+        primary: primary_path.map(SourceSpec::new),
+        peers: peers
+            .iter()
+            .map(|(id, path)| PeerSpec {
+                id: id.clone(),
+                source: SourceSpec::new(path.clone()),
+            })
+            .collect(),
+        config: cfg,
+        project_root: project_root.clone(),
+    };
+    let outcome = run_pipeline(request)?;
+    println!(
+        "sim-flow ingest: wrote {} ({} chunks, {} figures, {} signal tables, {} stubs, {} TBDs)",
+        outcome.manifest_path.display(),
+        outcome.primary_chunk_count,
+        outcome.primary_figure_count,
+        outcome.primary_signal_table_count,
+        outcome.primary_stub_count,
+        outcome.primary_tbd_count,
+    );
+    if !outcome.warnings.is_empty() {
+        eprintln!("sim-flow ingest: {} warning(s):", outcome.warnings.len());
+        for w in &outcome.warnings {
+            eprintln!("  [stage {}] {}: {}", w.stage, w.code, w.message);
+        }
+    }
+    Ok(())
+}
+
+/// Pull `source_path = "..."` out of a manifest TOML body. Returns
+/// None if the field is missing or empty.
+fn parse_manifest_source_path(body: &str) -> Option<std::path::PathBuf> {
+    for line in body.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("source_path") {
+            let v = rest.trim().trim_start_matches('=').trim();
+            let v = v.trim_matches('"');
+            if v.is_empty() {
+                return None;
+            }
+            return Some(std::path::PathBuf::from(v));
+        }
+    }
+    None
 }
 
 fn metrics_cmd(

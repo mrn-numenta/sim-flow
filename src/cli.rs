@@ -592,6 +592,40 @@ pub(crate) enum Command {
         #[command(subcommand)]
         action: KeysAction,
     },
+    /// Run the spec-ingest pipeline (Phase 2 architecture chapter 1)
+    /// against a primary source spec, optionally with peer specs.
+    /// Output lands at `<project>/.sim-flow/spec-ingest/`. See
+    /// `tools/sim-flow/docs/architecture/01-spec-ingest-pipeline.md`
+    /// for the full contract.
+    Ingest {
+        /// Absolute or project-relative path to the primary source
+        /// spec (PDF / markdown / text). Required unless `--rebuild`
+        /// or `--status` is passed.
+        #[arg(long)]
+        source: Option<PathBuf>,
+        /// Peer spec registration in the form `id=path`. May appear
+        /// multiple times. The peer spec is recorded in the
+        /// manifest; full ingestion of peers is currently deferred
+        /// to a follow-up rebuild.
+        #[arg(long = "peer", value_parser = parse_peer_arg, action = clap::ArgAction::Append)]
+        peers: Vec<(String, PathBuf)>,
+        /// Path to an ingest config TOML. Defaults to
+        /// `<project>/.sim-flow/spec-ingest.config.toml` when present.
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Project root the ingest writes under. Defaults to the
+        /// global `--project` flag (or the current working dir).
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Re-ingest from the source path recorded in the existing
+        /// manifest.
+        #[arg(long)]
+        rebuild: bool,
+        /// Print a summary of the existing manifest and exit. No
+        /// ingestion is performed.
+        #[arg(long)]
+        status: bool,
+    },
     /// Discover running orchestrators that have a `--watch-socket`
     /// observer surface bound. Reads the registry directory each
     /// `sim-flow auto --watch-socket ...` registers on bind and
@@ -727,4 +761,19 @@ impl From<FlowArg> for Flow {
             FlowArg::SystemverilogConvert => Flow::SystemVerilogConvert,
         }
     }
+}
+
+/// Parse `--peer id=path` argument values. Splits on the first `=`
+/// and returns `(id, path)`.
+fn parse_peer_arg(s: &str) -> Result<(String, PathBuf), String> {
+    let (id, rest) = s
+        .split_once('=')
+        .ok_or_else(|| format!("expected --peer <id>=<path>, got `{s}`"))?;
+    if id.is_empty() {
+        return Err(format!("peer id is empty in `{s}`"));
+    }
+    if rest.is_empty() {
+        return Err(format!("peer path is empty in `{s}`"));
+    }
+    Ok((id.to_string(), PathBuf::from(rest)))
 }

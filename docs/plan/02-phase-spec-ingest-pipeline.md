@@ -277,16 +277,16 @@ Gate: config-load unit test passes.
 
 ### Milestone 2.14: CLI subcommand
 
-- [ ] In `src/main.rs` or the appropriate CLI module, register
+- [x] In `src/main.rs` or the appropriate CLI module, register
       the `ingest` subcommand with clap.
-- [ ] Implement `sim-flow ingest --source <path> [--peer
+- [x] Implement `sim-flow ingest --source <path> [--peer
       <id>=<path>]... [--config <path>] [--out <project-root>]`.
-- [ ] Implement `sim-flow ingest --rebuild [--out
+- [x] Implement `sim-flow ingest --rebuild [--out
       <project-root>]` reading the existing manifest to
       recover source paths.
-- [ ] Implement `sim-flow ingest --status [--out
+- [x] Implement `sim-flow ingest --status [--out
       <project-root>]` printing a manifest summary.
-- [ ] Integration test: shell out to the binary against a
+- [x] Integration test: shell out to the binary against a
       fixture and verify exit code + manifest contents.
 
 Gate: CLI integration test passes.
