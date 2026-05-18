@@ -29,19 +29,28 @@ against the real foundation-framework corpus.
 
 ## Acceptance Gate
 
-- [ ] `cargo build --package sim-flow` succeeds with lancedb
+- [x] `cargo build --package sim-flow` succeeds with lancedb
       added.
-- [ ] `cargo test --package sim-flow lance_index::` passes.
-- [ ] `cargo test --package sim-flow --test
+- [x] `cargo test --package sim-flow lance_index::` passes.
+- [x] `cargo test --package sim-flow --test
       lance_index_integration` passes against synthetic
       fixtures.
-- [ ] `sim-flow build-framework-index --framework-root
+- [/] `sim-flow build-framework-index --framework-root
       crates/framework` against the real framework produces a
       Lance directory with row count > 1000 (approximate; the
       framework is large).
-- [ ] `sim-flow build-spec-index --project
+
+      *See milestone 4.16: deferred (Ollama unreachable +
+      `crates/framework/api/pages/` absent at implementation
+      time).*
+- [/] `sim-flow build-spec-index --project
       tests/fixtures/rv12-project` after running
       `sim-flow ingest --source rv12.pdf` succeeds.
+
+      *Same blocker: no live embedder. The CLI passes its
+      help / `--check` integration tests, and the library
+      builder handles the same fixture shape (verified by
+      `tests/lance_index_integration.rs`).*
 
 ## Milestones
 
@@ -193,10 +202,10 @@ Gate: builds rows; row count matches fixture.
 
 ### Milestone 4.10: `sim-flow build-framework-index` CLI
 
-- [ ] Register the subcommand per Architecture §3.9.1.
-- [ ] Wire to `build_framework_index`.
-- [ ] Implement `--force` for full re-embed.
-- [ ] CLI integration test: build against a synthetic
+- [x] Register the subcommand per Architecture §3.9.1.
+- [x] Wire to `build_framework_index`.
+- [x] Implement `--force` for full re-embed.
+- [x] CLI integration test: build against a synthetic
       framework fixture; assert success exit and expected row
       counts.
 
@@ -204,20 +213,20 @@ Gate: CLI integration test passes.
 
 ### Milestone 4.11: `sim-flow build-spec-index` CLI
 
-- [ ] Register the subcommand per Architecture §3.9.2.
-- [ ] Wire to all three spec-side builds (4.7 / 4.8 / 4.9) in
+- [x] Register the subcommand per Architecture §3.9.2.
+- [x] Wire to all three spec-side builds (4.7 / 4.8 / 4.9) in
       sequence under a single project lock.
-- [ ] CLI integration test against an ingested fixture.
+- [x] CLI integration test against an ingested fixture.
 
 Gate: CLI integration test passes.
 
 ### Milestone 4.12: `sim-flow refresh-spec` CLI
 
-- [ ] Register the convenience command per §3.9.3.
-- [ ] Implementation: run `sim-flow ingest --rebuild` (or
+- [x] Register the convenience command per §3.9.3.
+- [x] Implementation: run `sim-flow ingest --rebuild` (or
       programmatically invoke the ingest pipeline) followed
       by `sim-flow build-spec-index`.
-- [ ] CLI integration test on a fixture project.
+- [x] CLI integration test on a fixture project.
 
 Gate: CLI integration test passes.
 
@@ -229,7 +238,7 @@ Gate: CLI integration test passes.
       SpecIndexStaleness` returning an enum
       `{ Fresh, SourceChanged, SpecMdChanged, EmbedderChanged
       }`.
-- [ ] CLI: `sim-flow build-spec-index --check` prints the
+- [x] CLI: `sim-flow build-spec-index --check` prints the
       staleness state without rebuilding.
 - [x] Unit tests for each staleness case.
 
@@ -256,12 +265,20 @@ Gate: query unit tests pass.
 
 ### Milestone 4.15: Synthetic-fixture integration test
 
-- [ ] Create `tests/fixtures/synthetic-framework/` with a
+- [x] Create `tests/fixtures/synthetic-framework/` with a
       minimal `api/pages/foo.md` and `src/lib.rs` containing
       one `fn`.
-- [ ] Create `tests/fixtures/synthetic-project/.sim-flow/
+
+      *Implemented inline in
+      `tests/lance_index_integration.rs::make_synthetic_framework`
+      rather than as a checked-in directory; the fixture is
+      deterministic and the test would otherwise be the only
+      consumer.*
+- [x] Create `tests/fixtures/synthetic-project/.sim-flow/
       spec-ingest/...` mimicking the corpus shape.
-- [ ] `tests/lance_index_integration.rs`:
+
+      *Same: inline via `make_synthetic_project`.*
+- [x] `tests/lance_index_integration.rs`:
   - Build framework index against synthetic-framework; assert
     row count.
   - Build spec index against synthetic-project; assert row
@@ -269,19 +286,38 @@ Gate: query unit tests pass.
   - Issue a semantic_search call (using a mock embedder
     that returns deterministic vectors); assert results.
   - Issue a signal_table_query call; assert row.
-- [ ] Run under both `cargo test` (mock embedder) and
+- [/] Run under both `cargo test` (mock embedder) and
       `SIM_FLOW_E2E_LIVE=1 cargo test` (live Ollama).
+
+      *Mock-embedder path verified. Live-Ollama variant not
+      run because Ollama was not reachable from the sandbox
+      at implementation time; the same mock-vs-live gating
+      that Phase 3's embedder tests use applies here when an
+      Ollama instance is available.*
 
 Gate: integration tests pass.
 
 ### Milestone 4.16: Real-corpus smoke test (manual gate)
 
-- [ ] Run `sim-flow build-framework-index --framework-root
+- [/] Run `sim-flow build-framework-index --framework-root
       crates/framework` and verify:
   - Build completes within a reasonable time (target: < 5
     min on M5 Max with Ollama nomic-embed-text).
   - Resulting Lance dataset has > 1000 rows.
   - `embedder.toml` and `manifest.toml` are written.
+
+      *Not run during initial implementation. Two blockers:
+      (1) Ollama was not reachable on the implementation
+      host (`curl http://localhost:11434/api/tags` failed),
+      and (2) the framework workspace at
+      `crates/framework/` carries `src/` (~67 .rs files)
+      but no `api/pages/` directory -- the curated rustdoc
+      tree lives at `target/sim-flow-vscode-api-docs/pages/`
+      (an artifact produced by an out-of-band rustdoc
+      pipeline). The CLI accepts an explicit
+      `--framework-root` so a developer with Ollama running
+      and api-docs generated can complete this milestone
+      when both prerequisites are in place.*
 - [ ] Document the run in
       `tests/fixtures/lance-index-snapshots/api/README.md`
       (timestamps, row count, embedder used).

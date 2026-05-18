@@ -5,6 +5,7 @@ use sim_flow::__internal::state::Flow;
 
 pub(crate) mod actions;
 pub(crate) mod embedder;
+pub(crate) mod lance_index;
 
 #[cfg(test)]
 mod tests;
@@ -668,6 +669,63 @@ pub(crate) enum Command {
     Embedder {
         #[command(subcommand)]
         action: EmbedderAction,
+    },
+    /// Build (or rebuild) the shared framework lance index
+    /// (Chapter 3 §3.9.1). The output lands at
+    /// `<out>/framework_chunks.lance/` plus a `manifest.toml` and
+    /// an `embedder.toml` recording the embedder identity used at
+    /// build time.
+    BuildFrameworkIndex {
+        /// Root of the framework workspace. Default: walk up from
+        /// the project dir to discover sim-foundation, then point at
+        /// `<root>/crates/framework/`.
+        #[arg(long)]
+        framework_root: Option<PathBuf>,
+        /// Output root for the shared framework index. Default:
+        /// `~/.sim-flow/lance-index/api/` (the `SIM_FLOW_API_INDEX_ROOT`
+        /// env var overrides).
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Explicit embedder config path (bypasses the project /
+        /// env / home priority resolution).
+        #[arg(long)]
+        embedder: Option<PathBuf>,
+        /// Force a full re-embed even if not stale.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Build (or rebuild) the per-project spec lance index (Chapter
+    /// 3 §3.9.2). Requires `sim-flow ingest` to have run first.
+    /// Writes `<project>/.sim-flow/lance-index/` containing
+    /// `spec_chunks.lance/`, `signal_table_rows.lance/`,
+    /// `cross_spec_refs.lance/`, a `manifest.toml`, and an
+    /// `embedder.toml`.
+    BuildSpecIndex {
+        /// Project root. Default: the global `--project` flag (or
+        /// the current working dir).
+        #[arg(long)]
+        project: Option<PathBuf>,
+        /// Explicit embedder config path.
+        #[arg(long)]
+        embedder: Option<PathBuf>,
+        /// Force a full re-embed even if not stale.
+        #[arg(long)]
+        force: bool,
+        /// Print the staleness state (Fresh / SourceChanged /
+        /// SpecMdChanged / EmbedderChanged) and exit without
+        /// rebuilding.
+        #[arg(long)]
+        check: bool,
+    },
+    /// Convenience: re-ingest the source spec and rebuild the
+    /// per-project lance index in one command (Chapter 3 §3.9.3).
+    /// Equivalent to `sim-flow ingest --rebuild` followed by
+    /// `sim-flow build-spec-index`.
+    RefreshSpec {
+        /// Project root. Default: the global `--project` flag (or
+        /// the current working dir).
+        #[arg(long)]
+        project: Option<PathBuf>,
     },
 }
 

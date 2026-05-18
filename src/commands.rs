@@ -237,6 +237,33 @@ fn embedder_cmd(action: &EmbedderAction) -> sim_flow::Result<()> {
             *rebuild,
             *status,
         ),
+        Command::BuildFrameworkIndex {
+            framework_root,
+            out,
+            embedder,
+            force,
+        } => crate::cli::lance_index::build_framework_index_cmd(
+            &project_dir,
+            framework_root.as_deref(),
+            out.as_deref(),
+            embedder.as_deref(),
+            *force,
+        ),
+        Command::BuildSpecIndex {
+            project,
+            embedder,
+            force,
+            check,
+        } => crate::cli::lance_index::build_spec_index_cmd(
+            &project_dir,
+            project.as_deref(),
+            embedder.as_deref(),
+            *force,
+            *check,
+        ),
+        Command::RefreshSpec { project } => {
+            crate::cli::lance_index::refresh_spec_cmd(&project_dir, project.as_deref())
+        }
     }
 }
 
