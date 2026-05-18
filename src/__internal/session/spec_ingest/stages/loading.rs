@@ -134,8 +134,13 @@ fn load_pdf(source: &Path) -> Result<LoadedSource> {
 /// not to share it across threads concurrently by gating every
 /// access on a `Mutex`. Concurrent tests still cause `pdfium`
 /// methods to run serially, which is what pdfium-render wants
-/// internally.
-struct SyncPdfium(Pdfium);
+/// internally. We also wrap in `ManuallyDrop`: pdfium-render's
+/// `Drop` for `Pdfium` unbinds the dynamically-loaded C library,
+/// and when the static is torn down at process exit the bindings
+/// can outrace the Rust drop ordering, producing a SIGABRT in
+/// libpdfium's internal teardown. Leaking the binding for the
+/// process lifetime is simpler than wrestling with that.
+struct SyncPdfium(std::mem::ManuallyDrop<Pdfium>);
 // SAFETY: the only access path is `shared_pdfium`, which hands
 // out a `&'static Pdfium` whose API is internally serialized by
 // the C library. We never invoke pdfium methods from two threads
@@ -153,13 +158,13 @@ pub(crate) fn shared_pdfium() -> Result<&'static Pdfium> {
         .map_err(|e| Error::State(format!("spec ingest: pdfium mutex poisoned: {e}")))?;
     if guard.is_none() {
         let loaded = crate::session::pdfium_loader::load()?;
-        *guard = Some(Box::new(SyncPdfium(loaded)));
+        *guard = Some(Box::new(SyncPdfium(std::mem::ManuallyDrop::new(loaded))));
     }
     // SAFETY: the box was placed once and is never moved or dropped
     // while the OnceLock lives (i.e. for the process lifetime).
     let ptr: &'static Pdfium = unsafe {
         let b = guard.as_ref().unwrap();
-        &*(&(**b).0 as *const Pdfium)
+        &*(&*(**b).0 as *const Pdfium)
     };
     Ok(ptr)
 }

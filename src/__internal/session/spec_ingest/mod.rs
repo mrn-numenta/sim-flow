@@ -82,6 +82,44 @@ appearance_threshold = 0.75
         assert!(cfg.chrome_stripping.enabled);
     }
 
+    /// Milestone 2.18: a degenerate-fixture (no headings detected)
+    /// produces a manifest carrying the expected warning entry plus
+    /// a single-root section.
+    #[test]
+    fn degenerate_markdown_surfaces_no_headings_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().to_path_buf();
+        let spec = project.join("src.md");
+        std::fs::write(&spec, "just some text\nwith no headings at all\n").unwrap();
+        let outcome = pipeline::run(IngestRequest {
+            primary: Some(SourceSpec::new(spec)),
+            peers: Vec::new(),
+            config: IngestConfig::default(),
+            project_root: project.clone(),
+        })
+        .expect("run succeeds");
+        // The outcome carries the warning back to the programmatic
+        // caller.
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|w| w.code == "no_headings_detected"),
+            "expected no_headings_detected warning, got {:?}",
+            outcome.warnings
+        );
+        // And the manifest records it under [[warnings]].
+        let body = std::fs::read_to_string(&outcome.manifest_path).unwrap();
+        assert!(
+            body.contains("[[warnings]]"),
+            "manifest is missing [[warnings]] block:\n{body}"
+        );
+        assert!(
+            body.contains("no_headings_detected"),
+            "manifest is missing no_headings_detected warning:\n{body}"
+        );
+    }
+
     /// Milestone 2.15: the chapter 1.9 programmatic API surface is
     /// callable from outside the module. We construct an
     /// `IngestRequest` against a tiny markdown source and call

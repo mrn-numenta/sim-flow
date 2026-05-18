@@ -429,6 +429,12 @@ fn column_index<F: Fn(&str) -> bool>(headers: &[String], pred: F) -> Option<usiz
 // ---------------------------------------------------------------------
 
 pub fn extract_signal_tables(section: &Section) -> Vec<SignalTable> {
+    let mut out = extract_signal_tables_markdown(section);
+    out.extend(extract_signal_tables_pdf_text(section));
+    out
+}
+
+fn extract_signal_tables_markdown(section: &Section) -> Vec<SignalTable> {
     let mut out = Vec::new();
     let defaults: [&[&str]; 3] = [
         &["Signal", "Direction", "To/From", "Description"],
@@ -472,6 +478,126 @@ pub fn extract_signal_tables(section: &Section) -> Vec<SignalTable> {
             source_page_range: section.page_range,
             rows,
         });
+    }
+    out
+}
+
+/// PDF text-extraction case: tables don't survive into markdown
+/// pipes, but the column headers do produce a recognizable line
+/// (e.g. `Signal Direction To/From Description`). Each subsequent
+/// row is a (possibly multi-line) record beginning with an
+/// identifier-like signal name plus a direction token. We treat
+/// the table as a sequence of records terminated by a blank line,
+/// a heading-like line, or end-of-section.
+fn extract_signal_tables_pdf_text(section: &Section) -> Vec<SignalTable> {
+    let mut out = Vec::new();
+    // Match the canonical header line. Order matters here -- "Signal"
+    // must come first. We tolerate whitespace runs and the common
+    // "To/From" vs "From/To" swap.
+    let header_re = regex::Regex::new(
+        r"(?i)^\s*Signal\s+(?:Direction|Dir)\s+(?:To\s*/\s*From|From\s*/\s*To)\s+Description\s*$",
+    )
+    .unwrap();
+    // A new-record line: optional leading whitespace, an identifier-
+    // like signal name, a direction token, then anything else. We
+    // accept '_' / digits in the name plus a leading optional `i_` /
+    // `o_` prefix.
+    let row_start_re = regex::Regex::new(
+        r"(?i)^\s*([A-Za-z_][A-Za-z0-9_]*)\s+(in|out|input|output|inout|to|from|i/o|bidir)\b(.*)$",
+    )
+    .unwrap();
+
+    let numbered_heading_re = regex::Regex::new(r"^\s*\d+(?:\.\d+)+\s+\S").unwrap();
+    let title_paren_re = regex::Regex::new(r"^\s*[A-Z][A-Za-z\- ]+\([A-Z][A-Z0-9]*\)\s*$").unwrap();
+    let body = &section.body;
+    let lines: Vec<&str> = body.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        if !header_re.is_match(lines[i]) {
+            i += 1;
+            continue;
+        }
+        // Begin a table at lines[i]; collect rows.
+        let mut rows: Vec<SignalRow> = Vec::new();
+        let mut j = i + 1;
+        let mut current: Option<SignalRow> = None;
+        while j < lines.len() {
+            let line = lines[j];
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                if let Some(r) = current.take() {
+                    rows.push(r);
+                }
+                break;
+            }
+            // Heading-like line ends the table. We treat as a
+            // heading: numbered TOC entries ("3.1 Instruction
+            // Fetch"); short title-cased lines ending in a
+            // parenthesised acronym ("Pre-Decode (PD)"); body-
+            // marker comments (`<!-- ... -->`).
+            let is_numbered_heading = numbered_heading_re.is_match(line);
+            let is_title_with_paren = title_paren_re.is_match(line);
+            let is_marker_comment = trimmed.starts_with("<!--");
+            if is_numbered_heading || is_title_with_paren || is_marker_comment {
+                if let Some(r) = current.take() {
+                    rows.push(r);
+                }
+                break;
+            }
+            if let Some(caps) = row_start_re.captures(trimmed) {
+                if let Some(r) = current.take() {
+                    rows.push(r);
+                }
+                let name = caps.get(1).unwrap().as_str().to_string();
+                let direction = normalize_direction(caps.get(2).unwrap().as_str());
+                let rest = caps.get(3).unwrap().as_str().trim().to_string();
+                current = Some(SignalRow {
+                    name,
+                    direction,
+                    peer: rest,
+                    description: String::new(),
+                });
+            } else if let Some(r) = current.as_mut() {
+                // Continuation: append to description (or peer if
+                // peer is the only column populated so far).
+                if r.description.is_empty()
+                    && r.peer.split_whitespace().count() < 4
+                    && trimmed
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_uppercase() || c.is_ascii_alphabetic())
+                {
+                    // First continuation line is usually the second
+                    // half of the "peer" column ("Bus" + next line
+                    // "Interface") or the description starts here.
+                    if r.peer.split_whitespace().count() < 2
+                        && trimmed.split_whitespace().count() <= 3
+                    {
+                        r.peer = format!("{} {}", r.peer, trimmed).trim().to_string();
+                    } else {
+                        r.description = trimmed.to_string();
+                    }
+                } else if !r.description.is_empty() {
+                    r.description.push(' ');
+                    r.description.push_str(trimmed);
+                } else {
+                    r.description = trimmed.to_string();
+                }
+            }
+            j += 1;
+        }
+        if let Some(r) = current.take() {
+            rows.push(r);
+        }
+        if !rows.is_empty() {
+            out.push(SignalTable {
+                breadcrumb: section.breadcrumb.clone(),
+                stage_label: section.heading.clone(),
+                source_page_range: section.page_range,
+                rows,
+            });
+        }
+        i = j + 1;
     }
     out
 }
@@ -849,6 +975,22 @@ mod tests {
         assert_eq!(t.len(), 1);
         assert_eq!(t[0].rows.len(), 2);
         assert_eq!(t[0].rows[0].abbreviation, "U");
+    }
+
+    #[test]
+    fn pdf_text_signal_table_extracted_with_continuations() {
+        let body = "Some intro.\n\nSignal Direction To/From Description\nif_nxt_pc to Bus\nInterface\nNext address to fetch parcel from\nparcel_pc from Bus\nInterface\nFetch parcel address\n\nOther prose.\n\nSignal Direction To/From Description\nif_pc from IF Instruction Fetch program counter\nif_instr from IF Instruction Fetch instruction\n";
+        let s = section_with_body(body);
+        let tables = extract_signal_tables(&s);
+        assert_eq!(tables.len(), 2, "expected two PDF-text signal tables");
+        assert!(
+            tables[0].rows.iter().any(|r| r.name == "if_nxt_pc"),
+            "missing if_nxt_pc"
+        );
+        assert!(
+            tables[1].rows.iter().any(|r| r.name == "if_pc"),
+            "missing if_pc"
+        );
     }
 
     #[test]

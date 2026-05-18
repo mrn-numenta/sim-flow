@@ -34,19 +34,19 @@ integration tests against the four sample specs.
 
 ## Acceptance Gate
 
-- [ ] `cargo build --package sim-flow` succeeds.
-- [ ] `cargo test --package sim-flow spec_ingest::` passes.
-- [ ] `cargo test --package sim-flow --test spec_ingest_integration`
+- [x] `cargo build --package sim-flow` succeeds.
+- [x] `cargo test --package sim-flow spec_ingest::` passes.
+- [x] `cargo test --package sim-flow --test spec_ingest_integration`
       passes against all four sample specs.
-- [ ] `sim-flow ingest --source tests/fixtures/specs/rv12.pdf
+- [x] `sim-flow ingest --source tests/fixtures/specs/rv12.pdf
       --out <tmp>` produces a `manifest.toml` whose
       `primary_signal_table_count >= 6` and
       `primary_figure_count >= 5`.
-- [ ] Visual spot-check: the rendered `figures/page-013.png`
+- [x] Visual spot-check: the rendered `figures/page-013.png`
       from RV12 ingest contains visible signal labels
       (`if_nxt_pc`, `pc+2`, etc.). Verified by human or by an
       OCR pass; the milestone records the verification.
-- [ ] `cargo clippy --package sim-flow -- -D warnings` passes.
+- [x] `cargo clippy --package sim-flow -- -D warnings` passes.
 
 ## Milestones
 
@@ -338,9 +338,9 @@ Gate: snapshot tests pass; regenerate flow documented.
 
 ### Milestone 2.18: Diagnostic surfacing through manifest
 
-- [ ] Aggregate warnings produced by stages 1-7 into
+- [x] Aggregate warnings produced by stages 1-7 into
       `manifest.toml.warnings` per Chapter 1 §1.5.
-- [ ] Unit test: a degenerate-fixture (no headings detected)
+- [x] Unit test: a degenerate-fixture (no headings detected)
       produces a manifest with the expected warning entry.
 
 Gate: warning-surfacing unit test passes.
