@@ -1,0 +1,27 @@
+# SHA-256 of each spec-ingest test fixture. The integration tests
+# in tests/spec_ingest_integration.rs use these to detect drift if
+# a fixture is re-downloaded or regenerated from its upstream
+# source. Update the hash here whenever you intentionally refresh
+# a fixture.
+
+[rv12_pdf]
+path = "rv12.pdf"
+sha256 = "af487088fe5bc42610b40cea36860e3567e7d4295b587e2038999bcb9935c8bd"
+upstream = "RV12 RISC-V CPU Core.pdf (Roa Logic)"
+
+# Additional sample-spec fixtures live in the user's tree at
+# ~/nta/sim-models/users/mneilly/<name>/docs/ but are not checked
+# into this repo. To enable their integration tests, copy each
+# into this directory and add a matching `[<slug>_pdf]` table here.
+#
+# [apical_noc_pdf]
+# path = "apical-noc.pdf"
+# sha256 = ""
+#
+# [numenta_soc_pdf]
+# path = "numenta-soc.pdf"
+# sha256 = ""
+#
+# [spatial_pooler_pdf]
+# path = "spatial-pooler.pdf"
+# sha256 = ""

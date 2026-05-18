@@ -121,3 +121,8 @@ tempfile = "3"
 # it to exercise the rig openai-compat client against fixed payloads
 # without touching a real provider.
 wiremock = "0.6"
+
+# Reused by the spec-ingest integration test to verify the checked-in
+# RV12 PDF fixture hasn't drifted from the hash recorded in
+# tests/fixtures/specs/CHECKSUMS.toml.
+sha2 = "0.10"

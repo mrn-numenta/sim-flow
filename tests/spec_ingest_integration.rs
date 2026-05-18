@@ -177,6 +177,42 @@ fn spatial_pooler_full_ingest() {
     assert!(outcome.primary_chunk_count >= 1);
 }
 
+/// Milestone 2.16 drift detection: the RV12 fixture's sha256 must
+/// match what `tests/fixtures/specs/CHECKSUMS.toml` records. If a
+/// developer intentionally refreshes the fixture, update the
+/// checksum in that file in the same commit.
+#[test]
+fn rv12_fixture_matches_recorded_checksum() {
+    use sha2::{Digest, Sha256};
+    let pdf = fixture("rv12.pdf");
+    if !pdf.exists() {
+        panic!("RV12 fixture missing at {}", pdf.display());
+    }
+    let bytes = std::fs::read(&pdf).unwrap();
+    let mut h = Sha256::new();
+    h.update(&bytes);
+    let got = format!("{:x}", h.finalize());
+
+    let checksums_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/specs/CHECKSUMS.toml");
+    let body = std::fs::read_to_string(&checksums_path).unwrap();
+    // We don't want to depend on toml in tests; a simple scan
+    // suffices here.
+    let mut expected: Option<&str> = None;
+    for line in body.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("sha256 = \"") {
+            expected = Some(rest.trim_end_matches('"'));
+            break;
+        }
+    }
+    let expected = expected.expect("first sha256 entry in CHECKSUMS.toml");
+    assert_eq!(
+        got, expected,
+        "rv12.pdf checksum drift: recompute and update CHECKSUMS.toml in the same commit if this was intentional"
+    );
+}
+
 // ---------------------------------------------------------------------
 // Milestone 2.14: CLI subcommand exit code + manifest verification.
 // ---------------------------------------------------------------------

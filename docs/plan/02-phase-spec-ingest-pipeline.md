@@ -303,8 +303,8 @@ Gate: programmatic-API unit test passes.
 
 ### Milestone 2.16: Integration test against four sample specs
 
-- [ ] Create `tests/spec_ingest_integration.rs`.
-- [ ] For each of the four sample specs:
+- [x] Create `tests/spec_ingest_integration.rs`.
+- [x] For each of the four sample specs:
   - Run the pipeline against `tests/fixtures/specs/<name>.pdf`.
   - Assert manifest.toml exists with expected
     `primary_chunk_count` ranges.
@@ -315,7 +315,7 @@ Gate: programmatic-API unit test passes.
     Clock, Debug, Register Definition, SW Flow).
   - Assert `tbds.toml` records at least one TBD for each
     spec that has them.
-- [ ] Add the test fixtures (PDF files) to
+- [x] Add the test fixtures (PDF files) to
       `tests/fixtures/specs/` if not present; record their
       sha256 in a `tests/fixtures/specs/CHECKSUMS.toml` to
       detect drift.
