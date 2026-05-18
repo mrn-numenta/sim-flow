@@ -35,13 +35,13 @@ and 8 consume.
 
 ## Acceptance Gate
 
-- [ ] `cargo build --package sim-flow` succeeds.
-- [ ] `cargo test --package sim-flow spec_md::` passes (all
+- [x] `cargo build --package sim-flow` succeeds.
+- [x] `cargo test --package sim-flow spec_md::` passes (all
       unit tests).
-- [ ] `cargo test --package sim-flow --test spec_md_round_trip`
+- [x] `cargo test --package sim-flow --test spec_md_round_trip`
       passes (round-trip identity on all fixtures and on the
       new template).
-- [ ] `cargo clippy --package sim-flow -- -D warnings` passes.
+- [x] `cargo clippy --package sim-flow -- -D warnings` passes.
 
 ## Milestones
 
@@ -332,12 +332,12 @@ Gate: traversal unit tests pass.
 
 ### Milestone 1.19: Public API surface and doc comments
 
-- [ ] Add doc-comments to all public types and functions in
+- [x] Add doc-comments to all public types and functions in
       `spec_md/mod.rs`.
-- [ ] Re-export the canonical public surface:
+- [x] Re-export the canonical public surface:
       `parse`, `SpecMd`, `SpecMdParseError`, `ValidationIssue`,
       `MissingField`.
-- [ ] Run `cargo doc --package sim-flow --no-deps` and
+- [x] Run `cargo doc --package sim-flow --no-deps` and
       confirm no warnings.
 
 Gate: `cargo doc` succeeds without warnings on the spec_md

@@ -12,7 +12,7 @@
 
 use super::types::SourceSpecAnchor;
 
-/// Errors produced by [`parse_anchor`].
+/// Errors produced by [`SourceSpecAnchor::parse`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnchorParseError {
     pub input: String,
