@@ -161,32 +161,32 @@ boundary, surface a question, await a user reply, and resume
 the agent's LLM turn with the reply threaded back as the
 tool result.
 
-- [ ] Identify the work-session dispatch site (likely under
+- [x] Identify the work-session dispatch site (likely under
       `src/__internal/session/orchestrator/` or
       `session/auto.rs`).
-- [ ] Define an internal `PendingUserAsk` struct holding:
+- [x] Define an internal `PendingUserAsk` struct holding:
       `question`, `context`, `kind`, `choices`, `default`,
       `record_as`, `tool_call_id` (so the resume can return
       the answer in the tool-result frame matching the
       paused call), `triggered_at`, `step_mode_before`,
       `thread_id` (either passed in by the agent or generated
       by the orchestrator for fresh threads), `thread_turn_index`.
-- [ ] Add a `pending_user_ask: Option<PendingUserAsk>` field
+- [x] Add a `pending_user_ask: Option<PendingUserAsk>` field
       to the work-session state.
-- [ ] Implement `WorkSession::suspend_for_user_ask(ask:
+- [x] Implement `WorkSession::suspend_for_user_ask(ask:
       PendingUserAsk)`: stash the ask, emit
       `RequestUserInput` (with `prompt = question`,
       `placeholder` = kind hint, `followups` = `choices`
       when kind=choice), persist a checkpoint to
       `.sim-flow/<step>/pending-ask.toml` so a reload can
       recover.
-- [ ] Implement `WorkSession::resume_from_user_ask(reply:
+- [x] Implement `WorkSession::resume_from_user_ask(reply:
       UserMessage) -> AskUserAnswer`: package the reply,
       clear the pending state, return.
-- [ ] Implement reload-recovery: at session startup, if
+- [x] Implement reload-recovery: at session startup, if
       `pending-ask.toml` exists, restore the pending state
       and wait for the next `UserMessage`.
-- [ ] Implement thread management:
+- [x] Implement thread management:
   - `ThreadRegistry` holding open threads keyed by
     `thread_id`. Each thread carries: turn count, accumulated
     Q+A history, time-of-first-call, current `step` /
@@ -208,7 +208,7 @@ tool result.
   - Persist open-thread state to
     `.sim-flow/<step>/ask-threads/<thread_id>.toml` after
     each turn so a reload mid-thread recovers.
-- [ ] Unit tests: suspend then resume cycle; reload from a
+- [x] Unit tests: suspend then resume cycle; reload from a
       pending checkpoint; multiple-ask serialization (one at
       a time); thread creation, continuation, and close;
       reload mid-thread recovers turn history; force-close
@@ -219,17 +219,17 @@ pass.
 
 ### Milestone 5.6: ask_user -- step-mode flip
 
-- [ ] Implement `flip_step_mode_for_ask_user(state: &mut
+- [x] Implement `flip_step_mode_for_ask_user(state: &mut
       FlowState) -> ModeFlipOutcome`: when
       `state.current_step_mode == auto`, set to `manual`,
       persist `state.toml`, emit `StepModeChanged` event,
       emit `Diagnostic::Info` with the message from Chapter
       6 §6.5.2. When already `manual`, return
       `ModeFlipOutcome::NoChange`.
-- [ ] The function is idempotent and safe to call from
+- [x] The function is idempotent and safe to call from
       either the tool dispatch or the orchestrator's
       `ask_user` interception path.
-- [ ] Unit tests: auto-to-manual flip persists +
+- [x] Unit tests: auto-to-manual flip persists +
       emits event; manual-to-manual is a no-op; reload after
       a flip sees the persisted manual mode.
 
@@ -237,12 +237,12 @@ Gate: mode-flip unit tests pass.
 
 ### Milestone 5.7: ask_user -- tool implementation
 
-- [ ] Create `tools/ask_user.rs`.
-- [ ] Implement `AskUserTool` matching the existing tool
+- [x] Create `tools/ask_user.rs`.
+- [x] Implement `AskUserTool` matching the existing tool
       trait.
-- [ ] Define the JSON schema per Architecture §4.5,
+- [x] Define the JSON schema per Architecture §4.5,
       including `thread_id` as an optional argument.
-- [ ] Implement `dispatch(args, ctx)`:
+- [x] Implement `dispatch(args, ctx)`:
   - Validate args (kind=choice requires choices; an
     explicit `thread_id` must reference an open thread or
     return a structured error).
@@ -261,7 +261,7 @@ Gate: mode-flip unit tests pass.
     tool calls in the same model response with a
     `tool_calls_after_ask_user` warning per Architecture
     §6.5.1).
-- [ ] After the user replies, the orchestrator's
+- [x] After the user replies, the orchestrator's
       resume-from-user-ask path:
   - Calls `ThreadRegistry::record_turn` with the Q+A.
   - If `record_as` on the suspended call was NOT `"none"`,
@@ -271,16 +271,16 @@ Gate: mode-flip unit tests pass.
     `thread_id` and current `thread_turn_index`.
   - Threads it into the agent's next-turn tool-result
     stream. The tool itself is not re-invoked on resume.
-- [ ] Cancellation handling: if the user's reply is the
+- [x] Cancellation handling: if the user's reply is the
       `/cancel` or `/cancel-thread` command, populate
       `cancelled` / `thread_cancelled` fields and (for
       thread cancel) close the thread with `closed_as =
       "thread-cancelled"` and persist as unresolved.
-- [ ] Turn-cap behavior: when `thread_turn_index >= 5` on
+- [x] Turn-cap behavior: when `thread_turn_index >= 5` on
       a new turn in an open thread, emit
       `Diagnostic::Warning` per Architecture §4.5 chaining
       section.
-- [ ] Unit tests: dispatch flow with a scripted host;
+- [x] Unit tests: dispatch flow with a scripted host;
       validation errors; auto-mode flip side effect;
       fresh-thread creation; thread continuation;
       intermediate vs closing call persistence behavior;
@@ -290,7 +290,7 @@ Gate: ask_user tool unit tests pass.
 
 ### Milestone 5.8: ask_user -- persistence (thread-aware)
 
-- [ ] Implement
+- [x] Implement
       `persist_resolved_thread(spec_md_path: &Path,
       resolved: &ResolvedThread) -> Result<String>` that
       writes a SINGLE entry to spec.md from a closed thread
@@ -308,18 +308,18 @@ Gate: ask_user tool unit tests pass.
   - `record_as = "none"`: should not be invoked on closed
     threads (closing requires a non-none record_as);
     defensive panic / debug-assert.
-- [ ] Implement multi-turn coalescing: for threads with >1
+- [x] Implement multi-turn coalescing: for threads with >1
       turn, write only the resolved form (original question
       + final answer), NOT the intermediate turns.
       Intermediate turns are preserved in the metrics log
       (`metrics.jsonl`) for audit.
-- [ ] When `spec.md` does not exist yet (DM0 in progress),
+- [x] When `spec.md` does not exist yet (DM0 in progress),
       append the resolved entry to a session buffer at
       `.sim-flow/spec-ingest/qa-buffer.toml`. Each entry in
       the buffer is one resolved thread.
-- [ ] Returns the anchor string for the `recorded_at` field
+- [x] Returns the anchor string for the `recorded_at` field
       of the `AskUserAnswer` returned at thread close.
-- [ ] Unit tests:
+- [x] Unit tests:
   - Single-turn thread with each `record_as` value
     persists correctly.
   - Multi-turn thread (3 turns) coalesces to ONE entry

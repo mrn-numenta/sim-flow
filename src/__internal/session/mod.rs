@@ -9,6 +9,7 @@
 //! `docs/architecture/ai-flow/07-session-protocol.md`.
 
 pub mod agent;
+pub mod ask_user;
 pub mod auto;
 pub mod auto_interactive;
 pub mod capture_host;

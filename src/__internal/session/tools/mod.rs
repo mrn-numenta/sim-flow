@@ -26,6 +26,7 @@ mod api_impls;
 mod api_references;
 mod api_search;
 mod api_semantic_search;
+mod ask_user;
 mod declare_fix;
 mod declare_hypothesis;
 mod delete_file;
@@ -47,6 +48,9 @@ pub use api_impls::ApiImplsTool;
 pub use api_references::ApiReferencesTool;
 pub use api_search::ApiSearchTool;
 pub use api_semantic_search::ApiSemanticSearchTool;
+pub use ask_user::{
+    ASK_USER_SUSPENDED_MARKER, AskUserTool, is_suspended_result, parse_suspended_payload,
+};
 pub use declare_fix::DeclareFixTool;
 pub use declare_hypothesis::DeclareHypothesisTool;
 pub use delete_file::DeleteFileTool;
