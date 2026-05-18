@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::__internal::session::spec_md::types::{
-    QuantitativeRow, SourceDocument, SourceDocumentRole, SpecMd,
+    Encoding, EncodingValue, ErrorEntry, FsmState, FsmTransition, Parameter, QuantitativeRow,
+    SourceDocument, SourceDocumentRole, SpecMd, StateMachine,
 };
 use crate::{Error, Result};
 
@@ -200,24 +201,175 @@ fn push_unique_quant_row(out: &mut Vec<QuantitativeRow>, row: QuantitativeRow) {
     }
 }
 
-#[allow(dead_code)]
-pub fn populate_parameters(_corpus_root: &Path, _spec: &mut SpecMd) -> Result<usize> {
-    todo!("Phase 6 milestone 6.4 — read primary/tables/parameters/*.toml → SpecMd.parameters")
+// ---------------------------------------------------------------------------
+// 6.4 — Parameters / Encodings / Errors / FSMs
+// ---------------------------------------------------------------------------
+
+/// Append one `Parameter` per row across every
+/// `<corpus>/tables/parameters/*.toml` shard. Idempotent on
+/// `(name, source_anchor)`.
+pub fn populate_parameters(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
+    let dir = corpus_root.join("tables").join("parameters");
+    let mut appended = 0usize;
+    for path in list_toml_files(&dir) {
+        let body = read_required(&path)?;
+        let table: RawParameterTable = parse_toml(&path, &body)?;
+        let anchor = page_anchor("primary", &table.source_page_range);
+        for row in table.rows {
+            let p = Parameter {
+                name: row.name.clone(),
+                ty: row.kind.unwrap_or_default(),
+                default: row.default.clone(),
+                valid_range: String::new(),
+                behavioral_impact: row.comment.clone(),
+                source_anchor: anchor.clone(),
+            };
+            if !spec
+                .parameters
+                .iter()
+                .any(|x| x.name == p.name && x.source_anchor == p.source_anchor)
+            {
+                spec.parameters.push(p);
+                appended += 1;
+            }
+        }
+    }
+    Ok(appended)
 }
 
-#[allow(dead_code)]
-pub fn populate_encodings(_corpus_root: &Path, _spec: &mut SpecMd) -> Result<usize> {
-    todo!("Phase 6 milestone 6.4 — read primary/tables/encodings/*.toml → SpecMd.encodings")
+/// Append one `Encoding` per
+/// `<corpus>/tables/encodings/*.toml`. Each encoding's `values[]`
+/// captures the rows of the shard. Idempotent on `(field,
+/// source_anchor)`.
+pub fn populate_encodings(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
+    let dir = corpus_root.join("tables").join("encodings");
+    let mut appended = 0usize;
+    for path in list_toml_files(&dir) {
+        let body = read_required(&path)?;
+        let table: RawEncodingTable = parse_toml(&path, &body)?;
+        let anchor = page_anchor("primary", &table.source_page_range);
+        let already = spec
+            .encodings
+            .iter()
+            .any(|e| e.field == table.field && e.source_anchor == anchor);
+        if already {
+            continue;
+        }
+        let values = table
+            .rows
+            .into_iter()
+            .map(|r| EncodingValue {
+                value: r.value,
+                name: r.name,
+                abbreviation: r.abbreviation,
+            })
+            .collect();
+        spec.encodings.push(Encoding {
+            field: table.field,
+            bit_width: table.bit_width.map(|b| b.to_string()).unwrap_or_default(),
+            source_anchor: anchor,
+            values,
+            reserved: String::new(),
+        });
+        appended += 1;
+    }
+    Ok(appended)
 }
 
-#[allow(dead_code)]
-pub fn populate_errors(_corpus_root: &Path, _spec: &mut SpecMd) -> Result<usize> {
-    todo!("Phase 6 milestone 6.4 — read primary/tables/errors/*.toml → SpecMd.errors")
+/// Append one `ErrorEntry` per row across every
+/// `<corpus>/tables/errors/*.toml` shard. Idempotent on
+/// `(error_type, source_anchor)`.
+pub fn populate_errors(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
+    let dir = corpus_root.join("tables").join("errors");
+    let mut appended = 0usize;
+    for path in list_toml_files(&dir) {
+        let body = read_required(&path)?;
+        let table: RawErrorTable = parse_toml(&path, &body)?;
+        let anchor = page_anchor("primary", &table.source_page_range);
+        for row in table.rows {
+            let entry = ErrorEntry {
+                error_type: row.error_type,
+                detecting_component: row.detecting_component,
+                detection_behavior: row.detecting_behavior,
+                bus_response: row.bus_response,
+                master_behavior: row.master_behavior,
+                software_response: row.software_response,
+                source_anchor: anchor.clone(),
+            };
+            if !spec
+                .error_handling
+                .iter()
+                .any(|e| e.error_type == entry.error_type && e.source_anchor == entry.source_anchor)
+            {
+                spec.error_handling.push(entry);
+                appended += 1;
+            }
+        }
+    }
+    Ok(appended)
 }
 
-#[allow(dead_code)]
-pub fn populate_fsms(_corpus_root: &Path, _spec: &mut SpecMd) -> Result<usize> {
-    todo!("Phase 6 milestone 6.4 — read primary/tables/state_machines/*.toml → SpecMd.fsms")
+/// Append one `StateMachine` per `<corpus>/tables/fsms/*.toml`.
+///
+/// The emit stage writes FSM shards under `tables/fsms/` (not
+/// `tables/state_machines/`); the plan's wording is a typo. Each
+/// shard contains a single FSM with its `name`, optional
+/// `reset_state`, and a `[[transitions]]` list. The shard does not
+/// declare per-state descriptions, so we derive the FSM's
+/// `states[]` by unioning the `from` and `to` cells of the
+/// transitions and leaving descriptions empty for the agent to fill.
+///
+/// Idempotent on `(name, source_anchor)`.
+pub fn populate_fsms(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
+    let dir = corpus_root.join("tables").join("fsms");
+    let mut appended = 0usize;
+    for path in list_toml_files(&dir) {
+        let body = read_required(&path)?;
+        let table: RawFsmTable = parse_toml(&path, &body)?;
+        let anchor = page_anchor("primary", &table.source_page_range);
+        let already = spec
+            .state_machines
+            .iter()
+            .any(|s| s.name == table.name && s.source_anchor == anchor);
+        if already {
+            continue;
+        }
+        let transitions: Vec<FsmTransition> = table
+            .transitions
+            .iter()
+            .map(|t| FsmTransition {
+                from: t.from.clone(),
+                input: t.input.clone(),
+                to: t.to.clone(),
+                output: t.output.clone(),
+            })
+            .collect();
+        let mut state_names: Vec<String> = Vec::new();
+        for t in &transitions {
+            if !state_names.contains(&t.from) {
+                state_names.push(t.from.clone());
+            }
+            if !state_names.contains(&t.to) {
+                state_names.push(t.to.clone());
+            }
+        }
+        let states: Vec<FsmState> = state_names
+            .into_iter()
+            .map(|n| FsmState {
+                name: n,
+                description: String::new(),
+            })
+            .collect();
+        spec.state_machines.push(StateMachine {
+            name: table.name,
+            reset_state: table.reset_state.unwrap_or_default(),
+            source_anchor: anchor,
+            states,
+            transitions,
+        });
+        appended += 1;
+    }
+    Ok(appended)
 }
 
 #[allow(dead_code)]
@@ -278,6 +430,20 @@ fn list_files_with_extension(dir: &Path, ext: &str) -> Vec<PathBuf> {
     }
     out.sort();
     out
+}
+
+fn read_required(path: &Path) -> Result<String> {
+    fs::read_to_string(path).map_err(|source| Error::Io {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+fn parse_toml<T: for<'de> Deserialize<'de>>(path: &Path, body: &str) -> Result<T> {
+    toml::from_str(body).map_err(|source| Error::TomlParse {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 /// Build a `<source>:p<N>` or `<source>:p<N>-<M>` anchor from a
@@ -357,15 +523,76 @@ struct RawParameterTable {
 
 #[derive(Debug, Deserialize)]
 struct RawParameterRow {
-    #[allow(dead_code)]
     name: String,
     #[serde(default)]
-    #[allow(dead_code)]
     kind: Option<String>,
     #[serde(default)]
     default: String,
     #[serde(default)]
     comment: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawErrorTable {
+    #[serde(default)]
+    source_page_range: Vec<u32>,
+    #[serde(default)]
+    rows: Vec<RawErrorRow>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawErrorRow {
+    #[serde(default)]
+    error_type: String,
+    #[serde(default)]
+    detecting_component: String,
+    #[serde(default)]
+    detecting_behavior: String,
+    #[serde(default)]
+    bus_response: String,
+    #[serde(default)]
+    master_behavior: String,
+    #[serde(default)]
+    software_response: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawEncodingTable {
+    field: String,
+    #[serde(default)]
+    bit_width: Option<u32>,
+    #[serde(default)]
+    source_page_range: Vec<u32>,
+    #[serde(default)]
+    rows: Vec<RawEncodingRow>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawEncodingRow {
+    value: String,
+    name: String,
+    #[serde(default)]
+    abbreviation: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawFsmTable {
+    name: String,
+    #[serde(default)]
+    reset_state: Option<String>,
+    #[serde(default)]
+    source_page_range: Vec<u32>,
+    #[serde(default)]
+    transitions: Vec<RawFsmTransition>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawFsmTransition {
+    from: String,
+    input: String,
+    to: String,
+    #[serde(default)]
+    output: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -488,6 +715,161 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn parameters_round_trip_per_shard() {
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        let p = corpus
+            .join("tables")
+            .join("parameters")
+            .join("000-core.toml");
+        write(
+            &p,
+            "schema_version = 1\n\
+             table_kind = \"parameter_table\"\n\
+             source_chunk_id = \"c1\"\n\
+             source_page_range = [3, 3]\n\
+             group = \"core\"\n\
+             \n\
+             [[rows]]\n\
+             name = \"XLEN\"\n\
+             kind = \"int\"\n\
+             default = \"32\"\n\
+             comment = \"register width\"\n\
+             \n\
+             [[rows]]\n\
+             name = \"HAS_BPU\"\n\
+             kind = \"bool\"\n\
+             default = \"true\"\n\
+             comment = \"branch prediction unit\"\n",
+        );
+        let mut spec = SpecMd::default();
+        let n = populate_parameters(&corpus, &mut spec).unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(spec.parameters.len(), 2);
+        assert_eq!(spec.parameters[0].name, "XLEN");
+        assert_eq!(spec.parameters[0].ty, "int");
+        assert_eq!(spec.parameters[0].default, "32");
+        assert_eq!(spec.parameters[0].behavioral_impact, "register width");
+        assert_eq!(spec.parameters[0].source_anchor, "primary:p3");
+        // Idempotency.
+        let n2 = populate_parameters(&corpus, &mut spec).unwrap();
+        assert_eq!(n2, 0);
+        assert_eq!(spec.parameters.len(), 2);
+    }
+
+    #[test]
+    fn encodings_round_trip_per_shard() {
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        let p = corpus
+            .join("tables")
+            .join("encodings")
+            .join("000-priv.toml");
+        write(
+            &p,
+            "schema_version = 1\n\
+             table_kind = \"encoding_table\"\n\
+             source_chunk_id = \"c1\"\n\
+             source_page_range = [5, 5]\n\
+             field = \"Privilege Level\"\n\
+             bit_width = 2\n\
+             \n\
+             [[rows]]\n\
+             value = \"00\"\n\
+             name = \"User/Application\"\n\
+             abbreviation = \"U\"\n\
+             \n\
+             [[rows]]\n\
+             value = \"11\"\n\
+             name = \"Machine\"\n\
+             abbreviation = \"M\"\n",
+        );
+        let mut spec = SpecMd::default();
+        let n = populate_encodings(&corpus, &mut spec).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(spec.encodings.len(), 1);
+        assert_eq!(spec.encodings[0].field, "Privilege Level");
+        assert_eq!(spec.encodings[0].bit_width, "2");
+        assert_eq!(spec.encodings[0].source_anchor, "primary:p5");
+        assert_eq!(spec.encodings[0].values.len(), 2);
+        let n2 = populate_encodings(&corpus, &mut spec).unwrap();
+        assert_eq!(n2, 0);
+    }
+
+    #[test]
+    fn errors_round_trip_per_shard() {
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        let p = corpus.join("tables").join("errors").join("000.toml");
+        write(
+            &p,
+            "schema_version = 1\n\
+             table_kind = \"error_table\"\n\
+             source_chunk_id = \"c1\"\n\
+             source_page_range = [28, 28]\n\
+             \n\
+             [[rows]]\n\
+             error_type = \"Bus error\"\n\
+             detecting_component = \"NoC\"\n\
+             detecting_behavior = \"Log Error\"\n\
+             bus_response = \"Bus error\"\n\
+             master_behavior = \"Abort\"\n\
+             software_response = \"Interrupt\"\n",
+        );
+        let mut spec = SpecMd::default();
+        let n = populate_errors(&corpus, &mut spec).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(spec.error_handling[0].error_type, "Bus error");
+        assert_eq!(spec.error_handling[0].detection_behavior, "Log Error");
+        assert_eq!(spec.error_handling[0].source_anchor, "primary:p28");
+        let n2 = populate_errors(&corpus, &mut spec).unwrap();
+        assert_eq!(n2, 0);
+    }
+
+    #[test]
+    fn fsms_round_trip_per_shard() {
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        let p = corpus.join("tables").join("fsms").join("000-boot.toml");
+        write(
+            &p,
+            "schema_version = 1\n\
+             table_kind = \"fsm_table\"\n\
+             source_chunk_id = \"c1\"\n\
+             source_page_range = [8, 9]\n\
+             name = \"Boot FSM\"\n\
+             reset_state = \"IDLE\"\n\
+             \n\
+             [[transitions]]\n\
+             from = \"IDLE\"\n\
+             input = \"power_on\"\n\
+             to = \"RESET_HOLD\"\n\
+             output = \"assert nReset\"\n\
+             \n\
+             [[transitions]]\n\
+             from = \"RESET_HOLD\"\n\
+             input = \"stability_timer_done\"\n\
+             to = \"RESET_RELEASE\"\n\
+             output = \"begin reset deassertion\"\n",
+        );
+        let mut spec = SpecMd::default();
+        let n = populate_fsms(&corpus, &mut spec).unwrap();
+        assert_eq!(n, 1);
+        let fsm = &spec.state_machines[0];
+        assert_eq!(fsm.name, "Boot FSM");
+        assert_eq!(fsm.reset_state, "IDLE");
+        assert_eq!(fsm.source_anchor, "primary:p8-9");
+        assert_eq!(fsm.transitions.len(), 2);
+        assert_eq!(fsm.states.len(), 3);
+        let names: Vec<&str> = fsm.states.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"IDLE"));
+        assert!(names.contains(&"RESET_HOLD"));
+        assert!(names.contains(&"RESET_RELEASE"));
+        let n2 = populate_fsms(&corpus, &mut spec).unwrap();
+        assert_eq!(n2, 0);
     }
 
     #[test]
