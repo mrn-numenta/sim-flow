@@ -137,15 +137,15 @@ Gate: per-section unit tests pass.
 
 ### Milestone 1.5: Per-section parsers — External Interfaces
 
-- [ ] Implement `parser/external_interfaces.rs`.
-- [ ] Handle the `### Interface: <name>` heading pattern.
-- [ ] Parse the property block (Direction / Protocol / Clock
+- [x] Implement `parser/external_interfaces.rs`.
+- [x] Handle the `### Interface: <name>` heading pattern.
+- [x] Parse the property block (Direction / Protocol / Clock
       domain / Connected peer).
-- [ ] Parse the six-column signal table.
-- [ ] Parse transaction-semantics, timing / flow control,
+- [x] Parse the six-column signal table.
+- [x] Parse transaction-semantics, timing / flow control,
       error subsection prose.
-- [ ] Parse the source-spec-anchors list.
-- [ ] Unit test against a fixture with two interfaces.
+- [x] Parse the source-spec-anchors list.
+- [x] Unit test against a fixture with two interfaces.
 
 Gate: external_interfaces unit test passes.
 
