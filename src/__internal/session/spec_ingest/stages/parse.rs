@@ -1,8 +1,13 @@
 //! Stage 3: hierarchical parsing.
 //!
 //! Builds a `SectionTree` of `Section { heading, level, breadcrumb,
-//! body, page_range, children }`. For PDFs we infer headings from
-//! line patterns and font sizes; for markdown we walk the source.
+//! body, page_range, children }`. PDF and markdown inputs both flow
+//! through [`parse_markdown`]: `pdf_oxide`'s `to_markdown()`
+//! converts each PDF page into markdown with `#`-prefixed headings
+//! (driven by font-size clustering), and the loading stage joins
+//! those per-page markdowns with `<!-- spec-ingest:page=N -->`
+//! markers that this stage uses to recover per-section page ranges
+//! before stripping them from the chunked bodies.
 
 use crate::Result;
 
@@ -146,11 +151,14 @@ pub fn parse_hierarchy(
             })
         }
         SourceKind::Pdf => {
-            let tree = parse_pdf(&loaded.pages, warnings)?;
+            let total_pages = loaded.pages.len() as u32;
+            let joined = join_pdf_pages_for_markdown(&loaded.pages);
+            let mut tree = parse_markdown(&joined, warnings)?;
+            recover_page_ranges_and_strip_markers(&mut tree, total_pages);
             Ok(SectionTree {
                 source_kind: Some(SourceKind::Pdf),
                 source_label: String::new(),
-                total_pages: loaded.pages.len() as u32,
+                total_pages,
                 ..tree
             })
         }
@@ -296,154 +304,80 @@ fn build_nested(flat: Vec<(u8, String, String)>, page_range: (u32, u32)) -> Vec<
 }
 
 // ---------------------------------------------------------------------
-// PDF parser. Without easy access to per-glyph font sizes through
-// pdfium's high-level text API, we use a robust heuristic: lines
-// whose content matches a heading-like pattern (TOC-style numbering
-// or all-caps short lines) become headings. Body text is the lines
-// between headings. The pdf's outline (if any) takes precedence.
+// PDF parser. `pdf_oxide::PdfDocument::to_markdown` runs heading
+// clustering (by font size + weight), bold/italic preservation, and
+// simple table detection on each page, producing per-page markdown
+// that we splice together with `<!-- spec-ingest:page=N -->` markers.
+// `parse_markdown` handles the resulting concatenated document; this
+// stage's only PDF-specific work is recovering per-section page
+// ranges from those markers and stripping the markers from chunked
+// section bodies.
 // ---------------------------------------------------------------------
 
-pub(crate) fn parse_pdf(
-    pages: &[PageText],
-    warnings: &mut Vec<IngestWarning>,
-) -> Result<SectionTree> {
-    // Flatten pages into a stream of (page_number, line). Track each
-    // line's source page so headings carry an accurate page_range.
-    let mut lines: Vec<(u32, String)> = Vec::new();
+/// HTML-comment marker emitted between PDF pages so we can recover
+/// per-section page ranges after running the markdown parser. The
+/// markdown parser treats these as opaque body text.
+const PAGE_MARKER_PREFIX: &str = "<!-- spec-ingest:page=";
+const PAGE_MARKER_SUFFIX: &str = " -->";
+
+/// Build the synthetic markdown body the markdown parser consumes.
+/// Appends a `<!-- spec-ingest:page=N -->` marker AFTER each page's
+/// content so it always lands inside the section whose body it
+/// belongs to (rather than in document preamble when the first
+/// page has no heading). The post-pass scans every section's body
+/// for these markers and pins section.page_range from them.
+pub(crate) fn join_pdf_pages_for_markdown(pages: &[PageText]) -> String {
+    let mut out = String::new();
     for p in pages {
-        for line in p.text.lines() {
-            lines.push((p.page_number, line.to_string()));
+        out.push_str(&p.text);
+        if !p.text.ends_with('\n') {
+            out.push('\n');
         }
+        out.push_str(PAGE_MARKER_PREFIX);
+        out.push_str(&p.page_number.to_string());
+        out.push_str(PAGE_MARKER_SUFFIX);
+        out.push('\n');
     }
-
-    // Heading detection patterns:
-    //   - "1 Title", "1.2 Title", "1.2.3 Title" (TOC numbering)
-    let numbered_re = regex::Regex::new(r"^\s*(\d+(?:\.\d+){0,5})\s+(\S.*?)\s*$").unwrap();
-    // Markdown-style headings inside PDFs (rare, but tolerated).
-    let md_re = regex::Regex::new(r"^\s*(#{1,6})\s+(.+?)\s*$").unwrap();
-
-    // We classify each line as either heading-start or body.
-    enum LineRole {
-        Heading { level: u8, text: String },
-        Body,
-    }
-    let role_of = |line: &str| -> LineRole {
-        let trimmed = line.trim();
-        if let Some(caps) = md_re.captures(trimmed) {
-            let level = caps.get(1).unwrap().as_str().len() as u8;
-            return LineRole::Heading {
-                level,
-                text: caps.get(2).unwrap().as_str().to_string(),
-            };
-        }
-        if let Some(caps) = numbered_re.captures(trimmed) {
-            let number = caps.get(1).unwrap().as_str();
-            let text = caps.get(2).unwrap().as_str();
-            // Reject obvious false positives: lines ending in a period
-            // are likely sentences; lines containing more than ~12
-            // words are likely prose.
-            if text.ends_with('.') {
-                return LineRole::Body;
-            }
-            if text.split_whitespace().count() > 12 {
-                return LineRole::Body;
-            }
-            let level = (number.matches('.').count() + 1).clamp(1, 6) as u8;
-            return LineRole::Heading {
-                level,
-                text: format!("{number} {text}"),
-            };
-        }
-        LineRole::Body
-    };
-
-    // Walk lines, building flat (level, heading, body, page_range).
-    let mut flat: Vec<(u8, String, String, (u32, u32))> = Vec::new();
-    let mut current: Option<(u8, String, String, u32, u32)> = None; // level, heading, body, start, end
-    for (page, line) in &lines {
-        match role_of(line) {
-            LineRole::Heading { level, text } => {
-                if let Some((lvl, hd, bd, st, en)) = current.take() {
-                    flat.push((lvl, hd, bd, (st, en)));
-                }
-                current = Some((level, text, String::new(), *page, *page));
-            }
-            LineRole::Body => {
-                if let Some((_, _, bd, _, en)) = current.as_mut() {
-                    bd.push_str(line);
-                    bd.push('\n');
-                    *en = *page;
-                }
-                // Lines before the first heading are dropped on the
-                // PDF path; the chrome-stripping step plus the
-                // numbered-heading detector usually picks up the
-                // title from the TOC.
-            }
-        }
-    }
-    if let Some((lvl, hd, bd, st, en)) = current {
-        flat.push((lvl, hd, bd, (st, en)));
-    }
-
-    let total_pages = pages.last().map(|p| p.page_number).unwrap_or(1);
-
-    if flat.is_empty() {
-        warnings.push(IngestWarning::new(
-            "no_headings_detected",
-            "PDF had no inferrable headings; emitting a single root section",
-            3,
-        ));
-        let body = pages
-            .iter()
-            .map(|p| p.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        return Ok(SectionTree {
-            roots: vec![make_section(
-                "(document)",
-                1,
-                &["(document)".to_string()],
-                body,
-                (1, total_pages),
-            )],
-            ..Default::default()
-        });
-    }
-
-    let flat_for_nest: Vec<(u8, String, String)> = flat
-        .iter()
-        .map(|(l, h, b, _)| (*l, h.clone(), b.clone()))
-        .collect();
-    let page_ranges: Vec<(u32, u32)> = flat.iter().map(|(_, _, _, r)| *r).collect();
-    let mut roots = build_nested(flat_for_nest, (1, 1));
-    // Walk and patch in real page ranges (build_nested doesn't know
-    // about per-entry pages). We rely on the DFS order matching the
-    // flat entry order, which it does for build_nested.
-    let mut idx = 0usize;
-    apply_page_ranges(&mut roots, &page_ranges, &mut idx);
-
-    Ok(SectionTree {
-        roots,
-        ..Default::default()
-    })
+    out
 }
 
-fn apply_page_ranges(sections: &mut [Section], ranges: &[(u32, u32)], idx: &mut usize) {
-    for s in sections.iter_mut() {
-        if *idx < ranges.len() {
-            s.page_range = ranges[*idx];
-            *idx += 1;
-        }
-        apply_page_ranges(&mut s.children, ranges, idx);
-        // Extend the section's page_range over its descendants for
-        // accuracy (a parent section's range covers all its
-        // children's pages).
-        let mut max_end = s.page_range.1;
-        for c in &s.children {
-            max_end = max_end.max(c.page_range.1);
-        }
-        s.page_range.1 = max_end;
+/// Walk the section tree, scan each section's body for
+/// `<!-- spec-ingest:page=N -->` markers, set page_range from
+/// min/max markers seen, and strip the markers from the body so
+/// downstream chunk emission sees clean text. Sections with no
+/// marker fall back to `(1, total_pages)`.
+pub(crate) fn recover_page_ranges_and_strip_markers(tree: &mut SectionTree, total_pages: u32) {
+    for section in tree.iter_mut() {
+        let (range, cleaned) = extract_and_strip(&section.body, total_pages);
+        section.page_range = range;
+        section.body = cleaned;
     }
+}
+
+fn extract_and_strip(body: &str, total_pages: u32) -> ((u32, u32), String) {
+    let mut min_page: Option<u32> = None;
+    let mut max_page: Option<u32> = None;
+    let mut out = String::with_capacity(body.len());
+    for line in body.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed
+            .strip_prefix(PAGE_MARKER_PREFIX)
+            .and_then(|s| s.strip_suffix(PAGE_MARKER_SUFFIX))
+        {
+            if let Ok(n) = rest.parse::<u32>() {
+                min_page = Some(min_page.map(|m| m.min(n)).unwrap_or(n));
+                max_page = Some(max_page.map(|m| m.max(n)).unwrap_or(n));
+            }
+            // Drop the marker line; do not append to `out`.
+            continue;
+        }
+        out.push_str(line);
+    }
+    let range = match (min_page, max_page) {
+        (Some(lo), Some(hi)) => (lo, hi),
+        _ => (1, total_pages.max(1)),
+    };
+    (range, out)
 }
 
 #[cfg(test)]
@@ -475,31 +409,41 @@ mod tests {
     }
 
     #[test]
-    fn pdf_numbered_headings_build_tree() {
+    fn pdf_pages_join_with_page_markers_then_recover_ranges() {
+        // pdf_oxide produces markdown per page; the loader joins them
+        // with `<!-- spec-ingest:page=N -->` markers. parse_hierarchy
+        // runs the markdown parser and the post-pass strips markers
+        // while recovering per-section page ranges.
         let pages = vec![
             PageText {
                 page_number: 1,
-                text: "1 Introduction\nsome body\nmore body\n".into(),
+                text: "# Introduction\n\nintro body\n".into(),
             },
             PageText {
                 page_number: 2,
-                text: "1.1 Background\nbg body\n2 Architecture\narch body\n".into(),
+                text: "more intro body on page 2\n".into(),
+            },
+            PageText {
+                page_number: 3,
+                text: "## Background\n\nbackground body\n".into(),
             },
         ];
+        let joined = join_pdf_pages_for_markdown(&pages);
         let mut warnings = Vec::new();
-        let tree = parse_pdf(&pages, &mut warnings).unwrap();
-        // Roots: Introduction (level 1), Architecture (level 1).
-        let root_headings: Vec<&str> = tree.roots.iter().map(|s| s.heading.as_str()).collect();
-        assert!(root_headings.iter().any(|h| h.contains("Introduction")));
-        assert!(root_headings.iter().any(|h| h.contains("Architecture")));
-        // 1.1 Background is a child of Introduction.
-        let intro = tree
-            .roots
-            .iter()
-            .find(|s| s.heading.contains("Introduction"))
-            .unwrap();
+        let mut tree = parse_markdown(&joined, &mut warnings).unwrap();
+        recover_page_ranges_and_strip_markers(&mut tree, 3);
+        assert_eq!(tree.roots.len(), 1);
+        let intro = &tree.roots[0];
+        assert_eq!(intro.heading, "Introduction");
+        // Introduction spans pages 1-2.
+        assert_eq!(intro.page_range, (1, 2));
+        // Markers were stripped from body.
+        assert!(!intro.body.contains("spec-ingest:page="));
+        // Background is page 3 only.
         assert_eq!(intro.children.len(), 1);
-        assert!(intro.children[0].heading.contains("Background"));
+        assert_eq!(intro.children[0].heading, "Background");
+        assert_eq!(intro.children[0].page_range, (3, 3));
+        assert!(!intro.children[0].body.contains("spec-ingest:page="));
     }
 
     #[test]
@@ -508,8 +452,10 @@ mod tests {
             page_number: 1,
             text: "this is just prose\nwith no heading-like lines\n".into(),
         }];
+        let joined = join_pdf_pages_for_markdown(&pages);
         let mut warnings = Vec::new();
-        let tree = parse_pdf(&pages, &mut warnings).unwrap();
+        let mut tree = parse_markdown(&joined, &mut warnings).unwrap();
+        recover_page_ranges_and_strip_markers(&mut tree, 1);
         assert_eq!(tree.roots.len(), 1);
         assert_eq!(tree.roots[0].heading, "(document)");
         assert!(warnings.iter().any(|w| w.code == "no_headings_detected"));

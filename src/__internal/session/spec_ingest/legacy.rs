@@ -160,46 +160,40 @@ fn chunk_spec(body: &str, kind: SpecKind) -> Vec<Page> {
     }
 }
 
-/// PDF-specific chunker, backed by PDFium via `pdfium-render`.
-/// PDFium handles every CMap and font encoding (including Identity-H
-/// which lopdf chokes on), and gives us proper per-page text plus
-/// image / vector-page rasterization. Each PDF page becomes one
-/// markdown file; embedded raster images are saved under `images/`
-/// and referenced from the page's markdown via standard
+/// PDF-specific chunker, backed by `pdf_oxide`. Each PDF page becomes
+/// one markdown file; embedded raster images are saved under
+/// `images/` and referenced from the page's markdown via standard
 /// `![](images/...)` links.
 fn chunk_pdf(source_path: &Path, images_dir: &Path) -> Result<Vec<Page>> {
-    use pdfium_render::prelude::*;
-    let _ = std::marker::PhantomData::<&Pdfium>;
+    use pdf_oxide::PdfDocument;
 
-    // Use the process-shared pdfium handle so concurrent unit tests
-    // (and any caller that runs the pipeline + legacy ingest in the
-    // same process) don't bind the C library twice. Hold the
-    // serialising lock across the whole pdfium-using section
-    // because pdfium-render is `!Send + !Sync`.
-    let _guard = super::stages::loading::pdfium_lock()?;
-    let pdfium = super::stages::loading::shared_pdfium()?;
-    let document = pdfium
-        .load_pdf_from_file(source_path, None)
-        .map_err(|e| Error::State(format!("spec ingestion: load PDF via pdfium: {e}")))?;
+    let path_str = source_path.to_str().ok_or_else(|| {
+        Error::State(format!(
+            "spec ingestion: non-UTF-8 PDF path: {source_path:?}"
+        ))
+    })?;
+    let document = PdfDocument::open(path_str)
+        .map_err(|e| Error::State(format!("spec ingestion: open PDF via pdf_oxide: {e}")))?;
+    let page_count = document
+        .page_count()
+        .map_err(|e| Error::State(format!("spec ingestion: read PDF page count: {e}")))?;
 
     let mut pages: Vec<Page> = Vec::new();
-    for (idx, page) in document.pages().iter().enumerate() {
+    for idx in 0..page_count {
         let page_num = (idx + 1) as u32;
-        let text = page.text().map(|t| t.all()).unwrap_or_default();
+        let text = document.extract_text(idx).unwrap_or_default();
         let trimmed = text.trim().to_string();
         let title = first_pdf_heading(&trimmed, page_num);
 
         let mut figures: Vec<String> = Vec::new();
-        for (obj_idx, object) in page.objects().iter().enumerate() {
-            if let Some(image) = object.as_image_object() {
-                if let Some(rel) = save_pdfium_image(image, page_num, obj_idx + 1, images_dir)? {
-                    figures.push(format!("- ![]({rel})"));
-                } else {
-                    figures.push(format!(
-                        "- _Figure on page {page_num} (image #{n}) could not be encoded._",
-                        n = obj_idx + 1
-                    ));
-                }
+        let images = document.extract_images(idx).unwrap_or_default();
+        for (img_idx, img) in images.iter().enumerate() {
+            match save_pdf_oxide_image(img, page_num, img_idx + 1, images_dir)? {
+                Some(rel) => figures.push(format!("- ![]({rel})")),
+                None => figures.push(format!(
+                    "- _Figure on page {page_num} (image #{n}) could not be encoded._",
+                    n = img_idx + 1
+                )),
             }
         }
 
@@ -229,20 +223,15 @@ fn chunk_pdf(source_path: &Path, images_dir: &Path) -> Result<Vec<Page>> {
     Ok(pages)
 }
 
-fn save_pdfium_image(
-    image: &pdfium_render::prelude::PdfPageImageObject<'_>,
+fn save_pdf_oxide_image(
+    image: &pdf_oxide::extractors::PdfImage,
     page_num: u32,
     image_idx: usize,
     images_dir: &Path,
 ) -> Result<Option<String>> {
-    let bitmap = match image.get_raw_bitmap() {
-        Ok(b) => b,
-        Err(_) => return Ok(None),
-    };
-    let dynimg = bitmap.as_image();
     let filename = format!("page-{page_num:03}-img-{image_idx}.png");
     let abs = images_dir.join(&filename);
-    if let Err(err) = dynimg.save_with_format(&abs, image::ImageFormat::Png) {
+    if let Err(err) = image.save_as_png(&abs) {
         return Err(Error::State(format!(
             "spec ingestion: write image {}: {err}",
             abs.display()
@@ -657,10 +646,7 @@ mod tests {
         std::fs::write(&spec, b"not actually a pdf").unwrap();
         let err = ingest_spec_file(&spec, project).unwrap_err();
         let msg = format!("{err}").to_lowercase();
-        assert!(
-            msg.contains("pdf") && (msg.contains("load") || msg.contains("pdfium")),
-            "unexpected error: {msg}"
-        );
+        assert!(msg.contains("pdf"), "unexpected error: {msg}");
     }
 
     #[test]

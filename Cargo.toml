@@ -18,7 +18,14 @@ foundation-framework = { path = "../../crates/framework" }
 directories = "5"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 lopdf = "0.32"
-pdfium-render = "0.8"
+# Pure-Rust PDF text + layout extraction + page rasterization. Replaces
+# pdfium-render. Exposes per-character bounds, font metadata, and a
+# `to_markdown()` converter that runs heading clustering + table
+# detection inline. The `rendering` feature pulls in `tiny-skia` for
+# full-page raster output (used by `spec_ingest::stages::figures` to
+# emit `figures/page-NNN.png`). Pinned exactly because the crate is
+# pre-1.0 and the public API evolves rapidly; upgrades are explicit.
+pdf_oxide = { version = "=0.3.50", features = ["rendering"] }
 # Cross-platform PTY for the interactive Claude session driver
 # (`session::agent::interactive_pty`). Used to spawn `claude` as a
 # child on a pseudo-terminal so its TUI renders into the user's

@@ -2,52 +2,50 @@
 //!
 //! Dispatches by extension and produces a `LoadedSource` carrying
 //! per-page text the rest of the pipeline operates on. PDF inputs
-//! retain the pdfium-render document handle for stage 6 (figure
+//! retain the `pdf_oxide` document handle for stage 6 (figure
 //! rendering); markdown and text inputs are treated as a single
 //! "page" of UTF-8 with BOM stripped.
 
 use std::path::Path;
+use std::sync::Arc;
 
-use pdfium_render::prelude::*;
+use pdf_oxide::PdfDocument;
+use pdf_oxide::converters::{ConversionOptions, ReadingOrderMode};
 
 use crate::{Error, Result};
 
 use super::super::pipeline::{IngestRequest, IngestWarning, SourceKind};
 
-/// Output of stage 1. The pdfium document is owned here so its
+/// Output of stage 1. The `pdf_oxide` document is owned here so its
 /// lifetime spans every later stage that needs it (chrome, parse,
 /// figures).
 pub struct LoadedSource {
     pub kind: SourceKind,
     /// Per-page text. For markdown / text inputs there is exactly
-    /// one entry; for PDFs there is one per page.
+    /// one entry; for PDFs there is one per page. The text content
+    /// is layout-aware markdown for PDFs (produced by
+    /// `pdf_oxide::PdfDocument::to_markdown`) — headings, bold,
+    /// italic, and simple pipe tables are preserved.
     pub pages: Vec<PageText>,
     /// PDF document handle. `Some` only when `kind == Pdf`. Stage 6
-    /// uses this for page rendering and figure detection. Held as
-    /// an owned wrapper so its drop order matches the loaded source.
+    /// uses this for page rendering. The Arc keeps the document
+    /// alive across the pipeline without cloning the underlying
+    /// PDF state.
     pub pdf: Option<LoadedPdf>,
 }
 
-/// Owned pdfium document plus its loader handle. The handle must
-/// outlive the document, so they're kept together.
+/// Owned `pdf_oxide` document. Held as an `Arc` so it can be
+/// borrowed from several pipeline stages without lifetime
+/// gymnastics.
+#[derive(Clone)]
 pub struct LoadedPdf {
-    /// SAFETY note: the document references the pdfium instance via
-    /// a lifetime. We keep them in the same struct so the pdfium
-    /// instance never drops before the document. The `'static` is a
-    /// load-bearing white lie: pdfium-render's API doesn't expose a
-    /// self-referencing owner cleanly, but in practice we only hand
-    /// out references via `document()` whose borrow is bounded by
-    /// the &self of this wrapper. The field is held to keep the
-    /// owner alive; it's never read directly.
-    #[allow(dead_code)]
-    pub(crate) pdfium: &'static Pdfium,
-    pub(crate) document: PdfDocument<'static>,
+    pub(crate) document: Arc<PdfDocument>,
 }
 
 impl LoadedPdf {
-    /// Borrow the document. Caller must ensure the returned reference
-    /// does not outlive `self`.
-    pub fn document(&self) -> &PdfDocument<'static> {
+    /// Borrow the document. Caller must ensure the returned
+    /// reference does not outlive `self`.
+    pub fn document(&self) -> &PdfDocument {
         &self.document
     }
 }
@@ -105,87 +103,43 @@ pub fn load(source: &Path, warnings: &mut Vec<IngestWarning>) -> Result<LoadedSo
 }
 
 fn load_pdf(source: &Path) -> Result<LoadedSource> {
-    // pdfium-render binds the underlying C library once per
-    // process; binding twice deadlocks or returns an error. We
-    // cache the `Pdfium` in a process-wide OnceLock so repeated
-    // calls (CLI invocations, unit tests with --test-threads > 1)
-    // reuse the same instance.
-    let pdfium = shared_pdfium()?;
-    let document = pdfium
-        .load_pdf_from_file(source, None)
-        .map_err(|e| Error::State(format!("spec ingest: load PDF via pdfium: {e}")))?;
+    let path_str = source
+        .to_str()
+        .ok_or_else(|| Error::State(format!("spec ingest: non-UTF-8 PDF path: {source:?}")))?;
+    let document = PdfDocument::open(path_str)
+        .map_err(|e| Error::State(format!("spec ingest: open PDF via pdf_oxide: {e}")))?;
+    let page_count = document
+        .page_count()
+        .map_err(|e| Error::State(format!("spec ingest: read PDF page count: {e}")))?;
 
-    let mut pages = Vec::new();
-    for (idx, page) in document.pages().iter().enumerate() {
-        let page_number = (idx + 1) as u32;
-        let text = page.text().map(|t| t.all()).unwrap_or_default();
-        pages.push(PageText { page_number, text });
+    // Layout-aware markdown per page. `TopToBottomLeftToRight`
+    // produces deterministic, row-major output that downstream
+    // stages can chunk by heading. Heading clustering by font size
+    // is the default and what the chunker depends on; table
+    // extraction is opt-in and not on for the chunker (multi-line
+    // cells make it unreliable on real specs).
+    let opts = ConversionOptions {
+        reading_order_mode: ReadingOrderMode::TopToBottomLeftToRight,
+        ..ConversionOptions::default()
+    };
+    let mut pages = Vec::with_capacity(page_count);
+    for idx in 0..page_count {
+        let md = document
+            .to_markdown(idx, &opts)
+            .map_err(|e| Error::State(format!("spec ingest: extract page {idx} markdown: {e}")))?;
+        pages.push(PageText {
+            page_number: (idx + 1) as u32,
+            text: md,
+        });
     }
 
     Ok(LoadedSource {
         kind: SourceKind::Pdf,
         pages,
-        pdf: Some(LoadedPdf { pdfium, document }),
+        pdf: Some(LoadedPdf {
+            document: Arc::new(document),
+        }),
     })
-}
-
-/// Wrapper that lets us put a `Pdfium` behind a static. The
-/// underlying type is `!Send + !Sync` so we promise the harness
-/// not to share it across threads concurrently by gating every
-/// access on a `Mutex`. Concurrent tests still cause `pdfium`
-/// methods to run serially, which is what pdfium-render wants
-/// internally. We also wrap in `ManuallyDrop`: pdfium-render's
-/// `Drop` for `Pdfium` unbinds the dynamically-loaded C library,
-/// and when the static is torn down at process exit the bindings
-/// can outrace the Rust drop ordering, producing a SIGABRT in
-/// libpdfium's internal teardown. Leaking the binding for the
-/// process lifetime is simpler than wrestling with that.
-struct SyncPdfium(std::mem::ManuallyDrop<Pdfium>);
-// SAFETY: the only access path is `shared_pdfium`, which hands
-// out a `&'static Pdfium` whose API is internally serialized by
-// the C library. We never invoke pdfium methods from two threads
-// in parallel.
-unsafe impl Send for SyncPdfium {}
-unsafe impl Sync for SyncPdfium {}
-
-/// Process-wide pdfium handle. Loaded on first use, reused thereafter.
-pub(crate) fn shared_pdfium() -> Result<&'static Pdfium> {
-    use std::sync::{Mutex, OnceLock};
-    static CELL: OnceLock<Mutex<Option<Box<SyncPdfium>>>> = OnceLock::new();
-    let mutex = CELL.get_or_init(|| Mutex::new(None));
-    let mut guard = mutex
-        .lock()
-        .map_err(|e| Error::State(format!("spec ingest: pdfium mutex poisoned: {e}")))?;
-    if guard.is_none() {
-        let loaded = crate::session::pdfium_loader::load()?;
-        *guard = Some(Box::new(SyncPdfium(std::mem::ManuallyDrop::new(loaded))));
-    }
-    // SAFETY: the box was placed once and is never moved or dropped
-    // while the OnceLock lives (i.e. for the process lifetime).
-    let ptr: &'static Pdfium = unsafe {
-        let b = guard.as_ref().unwrap();
-        &*(&*(**b).0 as *const Pdfium)
-    };
-    Ok(ptr)
-}
-
-/// Global serializing lock for any pdfium access. Returns a guard
-/// that must be held across the full lifetime of any pdfium method
-/// calls. pdfium-render is `!Send + !Sync`; even with a cached
-/// handle, two threads invoking pdfium concurrently produces
-/// undefined behaviour. Callers should:
-///
-/// ```ignore
-/// let _guard = pdfium_lock()?;
-/// let pdfium = shared_pdfium()?;
-/// // ... use pdfium / load_pdf_from_file / etc ...
-/// ```
-pub(crate) fn pdfium_lock() -> Result<std::sync::MutexGuard<'static, ()>> {
-    use std::sync::{Mutex, OnceLock};
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .map_err(|e| Error::State(format!("spec ingest: pdfium serial lock poisoned: {e}")))
 }
 
 fn load_text_like(source: &Path, kind: SourceKind) -> Result<LoadedSource> {

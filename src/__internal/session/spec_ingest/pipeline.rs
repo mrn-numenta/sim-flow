@@ -332,16 +332,7 @@ impl Pipeline {
 }
 
 /// Programmatic API per chapter 1.9. Thin wrapper over `Pipeline`.
-///
-/// `run` is serialized by the shared pdfium lock from
-/// `stages::loading::pdfium_lock`. pdfium-render is `!Send + !Sync`
-/// and binds a process-global C library; running two ingests
-/// concurrently in the same process produces unpredictable
-/// failures. The serialization is conservative for markdown-only
-/// ingests but cheap enough that the simpler "always serialize"
-/// rule is preferable to per-input branching.
 pub fn run(request: IngestRequest) -> Result<IngestOutcome> {
-    let _guard = super::stages::loading::pdfium_lock()?;
     Pipeline::new(request).run()
 }
 
