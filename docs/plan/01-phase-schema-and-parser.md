@@ -314,17 +314,17 @@ Gate: template unit test passes.
 
 ### Milestone 1.18: Required-field traversal
 
-- [ ] Create `traversal.rs`.
-- [ ] Define `MissingField { section_path: String,
+- [x] Create `traversal.rs`.
+- [x] Define `MissingField { section_path: String,
       prompt_template: String, kind: MissingFieldKind }`.
-- [ ] Define `MissingFieldKind` (Scalar / Prose /
+- [x] Define `MissingFieldKind` (Scalar / Prose /
       ConstrainedScalar { regex } / TableRow {
       column_names } / SectionApplicability).
-- [ ] Implement `SpecMd::missing_required_fields(&self) ->
+- [x] Implement `SpecMd::missing_required_fields(&self) ->
       Vec<MissingField>` walking the schema in
       template-order.
-- [ ] Implement the prompt-template strings as a const table.
-- [ ] Unit test: empty `SpecMd::default()` produces the
+- [x] Implement the prompt-template strings as a const table.
+- [x] Unit test: empty `SpecMd::default()` produces the
       expected ordered list of MissingFields; a fully-
       populated `SpecMd` produces an empty list.
 

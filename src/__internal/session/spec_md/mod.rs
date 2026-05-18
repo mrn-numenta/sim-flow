@@ -18,11 +18,13 @@
 
 pub mod anchor;
 pub mod parser;
+pub mod traversal;
 pub mod types;
 pub mod validate;
 pub mod writer;
 
 pub use anchor::{AnchorParseError, AnchorParseReason};
 pub use parser::{SpecMdParseError, parse};
+pub use traversal::{MissingField, MissingFieldKind};
 pub use types::*;
 pub use validate::{IssueSeverity, ValidationIssue};
