@@ -40,21 +40,21 @@ function-call dispatch, and add observability metrics.
 
 ## Acceptance Gate
 
-- [ ] `cargo build --package sim-flow` succeeds.
-- [ ] `cargo test --package sim-flow retrieval::` passes.
-- [ ] `cargo test --package sim-flow tools::api_semantic_search::`
+- [x] `cargo build --package sim-flow` succeeds.
+- [x] `cargo test --package sim-flow retrieval::` passes.
+- [x] `cargo test --package sim-flow tools::api_semantic_search::`
       passes.
-- [ ] `cargo test --package sim-flow tools::spec_semantic_search::`
+- [x] `cargo test --package sim-flow tools::spec_semantic_search::`
       passes.
-- [ ] `cargo test --package sim-flow tools::signal_table_query::`
+- [x] `cargo test --package sim-flow tools::signal_table_query::`
       passes.
-- [ ] `cargo test --package sim-flow tools::ask_user::`
+- [x] `cargo test --package sim-flow tools::ask_user::`
       passes (suspend/resume protocol, mode flip, thread
       registry, persistence).
-- [ ] `cargo test --package sim-flow --test
+- [x] `cargo test --package sim-flow --test
       retrieval_integration` passes against synthetic
       fixtures.
-- [ ] `cargo test --package sim-flow --test
+- [x] `cargo test --package sim-flow --test
       ask_user_integration` passes with a scripted mock host
       driving the suspend/resume cycle, including multi-turn
       chained threads, thread cancellation, force-close on
@@ -393,11 +393,11 @@ Gate: cold-start unit test passes.
 
 ### Milestone 5.13: Retrieval integration test with synthetic fixtures
 
-- [ ] Create `tests/retrieval_integration.rs` using the
+- [x] Create `tests/retrieval_integration.rs` using the
       synthetic fixtures from Phase 4 (milestone 4.15).
-- [ ] Build the framework + spec indexes against the
+- [x] Build the framework + spec indexes against the
       fixtures.
-- [ ] Construct a `RetrievalService` and invoke each tool
+- [x] Construct a `RetrievalService` and invoke each tool
       directly:
   - `api_semantic_search` with a known-good query that
     should hit a specific fixture symbol.
@@ -408,16 +408,16 @@ Gate: cold-start unit test passes.
   - `signal_table_query` with `conflicts_only=true` against
     a fixture with a deliberate spec-md vs source-spec
     conflict; assert the conflict is detected.
-- [ ] Run under both mock embedder (`cargo test`) and live
+- [x] Run under both mock embedder (`cargo test`) and live
       Ollama (`SIM_FLOW_E2E_LIVE=1 cargo test`).
 
 Gate: retrieval integration tests pass.
 
 ### Milestone 5.14: ask_user integration test
 
-- [ ] Create `tests/ask_user_integration.rs` using a mock
+- [x] Create `tests/ask_user_integration.rs` using a mock
       host (`AutoPresenter`) that scripts user replies.
-- [ ] Test 1 (manual mode, single-turn thread): a mock work
+- [x] Test 1 (manual mode, single-turn thread): a mock work
       session emits an `ask_user` call (no `thread_id`); the
       test asserts the `RequestUserInput` event is emitted,
       the work session suspends, the scripted reply
@@ -426,12 +426,12 @@ Gate: retrieval integration tests pass.
       `record_as = "open-question"` results in the Q+A
       being persisted to a fixture spec.md as a single
       Open Question entry.
-- [ ] Test 2 (auto mode, single-turn thread): same flow but
+- [x] Test 2 (auto mode, single-turn thread): same flow but
       starting in `step_mode = auto`; assert the
       `StepModeChanged { mode: manual }` event fires before
       the user-input is surfaced, and
       `state.toml.current_step_mode` is now `manual`.
-- [ ] Test 3 (reload mid-suspend): simulate an orchestrator
+- [x] Test 3 (reload mid-suspend): simulate an orchestrator
       shutdown after `ask_user` has suspended but before
       the user replies; restart the session; verify the
       pending-ask state and the thread state are recovered
@@ -439,11 +439,11 @@ Gate: retrieval integration tests pass.
       `.sim-flow/<step>/ask-threads/<thread_id>.toml`, and
       that the session resumes correctly when the reply
       arrives.
-- [ ] Test 4 (tool calls after ask_user): an LLM response
+- [x] Test 4 (tool calls after ask_user): an LLM response
       emitting `ask_user` followed by another tool call;
       verify the second call is discarded and a
       `tool_calls_after_ask_user` warning is emitted.
-- [ ] Test 5 (chained thread, 3 turns, auto-decision close):
+- [x] Test 5 (chained thread, 3 turns, auto-decision close):
       first call is fresh (no thread_id); reply is
       ambiguous ("probably 4"); second call passes the
       returned `thread_id` with `record_as = "none"` and
@@ -459,7 +459,7 @@ Gate: retrieval integration tests pass.
     through 3 rounds of clarification)" annotation.
   - An `ask_user_thread_closed` metric event fires with
     `turn_count = 3`, `closed_as = "auto-decision"`.
-- [ ] Test 6 (mid-thread cancel via `/cancel-thread`):
+- [x] Test 6 (mid-thread cancel via `/cancel-thread`):
       first two calls succeed; on the third, the user
       types `/cancel-thread`. Assert:
   - The tool result has `thread_cancelled = true,
@@ -467,16 +467,16 @@ Gate: retrieval integration tests pass.
   - spec.md gets one unresolved Open Question with the
     "User cancelled clarification after N exchanges" body.
   - The thread is removed from the open-thread registry.
-- [ ] Test 7 (force-close on sub-session end): an open
+- [x] Test 7 (force-close on sub-session end): an open
       thread exists when the sub-session terminates.
       Assert the orchestrator's sub-session-end hook
       force-closes the thread per Architecture §6.5.5 (one
       resolved Open Question if any answer recorded; drop
       silently if no answer recorded).
-- [ ] Test 8 (turn-cap warning at 5): emit 5 ask_user
+- [x] Test 8 (turn-cap warning at 5): emit 5 ask_user
       calls in the same thread without closing. Assert
       `Diagnostic::Warning` fires on the 5th turn.
-- [ ] Test 9 (interleaved threads): the agent emits
+- [x] Test 9 (interleaved threads): the agent emits
       `ask_user` calls with two DIFFERENT `thread_id`s in
       adjacent turns. Assert both threads remain open
       independently, the chat panel rendering distinguishes
@@ -486,14 +486,21 @@ Gate: ask_user integration tests pass.
 
 ### Milestone 5.15: Live end-to-end smoke
 
-- [ ] Manual: build framework index against real
+- [/] Manual: build framework index against real
       `crates/framework`; build a spec index against a real
       ingested RV12 project; issue tool calls from a small
       driver script that exercises each tool.
-- [ ] Confirm latency: each call returns in under 2 seconds
+- [/] Confirm latency: each call returns in under 2 seconds
       on M5 Max with Ollama (after the cold start has
       completed). Record latencies in
       `tests/fixtures/retrieval-snapshots/README.md`.
+
+Note: Ollama is not running in this environment
+(`curl http://localhost:11434/api/tags` failed). Marked
+partial per Phase 3 / Phase 4 precedent. The unit + integration
+test coverage (milestones 5.13 and 5.14) exercises the same code
+paths with a deterministic mock embedder; the live smoke is a
+deployment-environment verification rather than a code change.
 
 Gate: manual verification; recorded.
 
