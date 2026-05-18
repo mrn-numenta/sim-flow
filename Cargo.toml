@@ -32,6 +32,10 @@ portable-pty = "0.8"
 # socket file the next dashboard click trips on.
 ctrlc = "3"
 regex = "1"
+# Markdown event-stream parser. Drives the spec.md parser
+# (`session::spec_md::parser`) which walks H2-delimited sections and
+# extracts typed tables / lists / prose subsections from each.
+pulldown-cmark = { version = "0.12", default-features = false }
 rusqlite = { version = "0.31", features = ["bundled"] }
 # Per-machine identifier persisted in the global DB's `meta` table.
 # Generated as UUID v4 on first init and stored, so it's stable across

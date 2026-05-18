@@ -8,6 +8,8 @@
 //! bad anchors, missing REQUIRED sub-structure) surface as
 //! [`SpecMdParseError`].
 
+use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+
 use super::types::SpecMd;
 
 /// Errors produced by [`parse`]. Every variant carries the offending
@@ -79,6 +81,14 @@ impl std::fmt::Display for SpecMdParseError {
 
 impl std::error::Error for SpecMdParseError {}
 
+/// Build the `pulldown_cmark::Options` used by the parser. We need
+/// table support; everything else stays default.
+pub(crate) fn cmark_options() -> Options {
+    let mut opts = Options::empty();
+    opts.insert(Options::ENABLE_TABLES);
+    opts
+}
+
 /// Parse a structured `spec.md` document into typed form.
 ///
 /// On empty input, returns `Ok(SpecMd::default())` with every
@@ -92,77 +102,111 @@ pub fn parse(input: &str) -> Result<SpecMd, SpecMdParseError> {
         return Ok(spec);
     }
 
-    // Peel out the H1 title if present so dispatch only sees H2-
-    // rooted sections.
-    let (title, body) = split_title(input);
-    if !title.is_empty() {
-        spec.title = title;
-    }
-
-    let sections = split_sections(body);
-    for section in sections {
-        dispatch_section(&section, &mut spec)?;
+    // Segment the document by H1 (title) and H2 (sections).
+    let segments = segment_document(input);
+    for seg in segments {
+        match seg {
+            Segment::Title(text) => {
+                spec.title = text;
+            }
+            Segment::Section(section) => {
+                dispatch_section(&section, &mut spec)?;
+            }
+        }
     }
 
     Ok(spec)
 }
 
-/// One H2-rooted section: the heading text plus its body lines
-/// (everything from the heading up to but not including the next H2
-/// or end of input).
+/// One slice of the document: either the H1 title or an H2-rooted
+/// section body.
 #[derive(Debug, Clone)]
+pub(crate) enum Segment {
+    Title(String),
+    Section(Section),
+}
+
+/// One H2-rooted section: the heading text plus the raw markdown
+/// body (everything from the heading up to but not including the
+/// next H2 or end of input). Per-section parsers reparse the body
+/// with `pulldown_cmark` to extract their own sub-structure.
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // body / line are consumed by per-section parsers (M1.4+).
 pub(crate) struct Section {
     pub heading: String,
     pub body: String,
+    /// 1-based line number of the H2 heading. Used in error
+    /// diagnostics for per-section parsers.
+    pub line: usize,
 }
 
-fn split_title(input: &str) -> (String, &str) {
-    let mut lines = input.lines();
-    let mut consumed = 0usize;
-    let mut title = String::new();
-    for line in lines.by_ref() {
-        consumed += line.len() + 1; // +1 for the newline
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Some(rest) = trimmed.strip_prefix("# ") {
-            title = rest.trim().to_string();
-        } else {
-            // No title -- rewind: return the entire input as the body.
-            return (String::new(), input);
-        }
-        break;
-    }
-    let body = if consumed >= input.len() {
-        ""
-    } else {
-        &input[consumed..]
-    };
-    (title, body)
-}
+/// Walk the event stream and compute (a) the H1 title if present,
+/// (b) the H2 headings + their byte offsets so we can slice the
+/// source into section bodies for the per-section parsers.
+///
+/// We rely on byte offsets from `pulldown_cmark`'s
+/// `into_offset_iter` so the per-section parsers receive the exact
+/// original markdown for their section -- this keeps round-trip
+/// stability achievable.
+pub(crate) fn segment_document(input: &str) -> Vec<Segment> {
+    let parser = Parser::new_ext(input, cmark_options()).into_offset_iter();
 
-fn split_sections(body: &str) -> Vec<Section> {
-    let mut out: Vec<Section> = Vec::new();
-    let mut current: Option<Section> = None;
-    for line in body.lines() {
-        if let Some(rest) = line.strip_prefix("## ") {
-            if let Some(sec) = current.take() {
-                out.push(sec);
+    // (heading_level, start_byte, end_byte_of_heading, heading_text)
+    let mut h1_title: Option<String> = None;
+    let mut h2_marks: Vec<(usize, String)> = Vec::new();
+
+    let mut current_h: Option<(HeadingLevel, usize)> = None;
+    let mut current_text = String::new();
+    for (event, range) in parser {
+        match event {
+            Event::Start(Tag::Heading { level, .. }) => {
+                current_h = Some((level, range.start));
+                current_text.clear();
             }
-            current = Some(Section {
-                heading: rest.trim().to_string(),
-                body: String::new(),
-            });
-        } else if let Some(sec) = current.as_mut() {
-            sec.body.push_str(line);
-            sec.body.push('\n');
+            Event::End(TagEnd::Heading(_)) => {
+                if let Some((level, start)) = current_h.take() {
+                    let text = std::mem::take(&mut current_text).trim().to_string();
+                    match level {
+                        HeadingLevel::H1 if h1_title.is_none() => {
+                            h1_title = Some(text);
+                        }
+                        HeadingLevel::H2 => {
+                            h2_marks.push((start, text));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Event::Text(t) | Event::Code(t) if current_h.is_some() => {
+                current_text.push_str(&t);
+            }
+            _ => {}
         }
     }
-    if let Some(sec) = current.take() {
-        out.push(sec);
+
+    let mut out: Vec<Segment> = Vec::new();
+    if let Some(title) = h1_title
+        && !title.is_empty()
+    {
+        out.push(Segment::Title(title));
+    }
+    for (i, (start, heading)) in h2_marks.iter().enumerate() {
+        let end = h2_marks.get(i + 1).map(|(s, _)| *s).unwrap_or(input.len());
+        let body = input[*start..end].to_string();
+        let line = byte_offset_to_line(input, *start);
+        out.push(Segment::Section(Section {
+            heading: heading.clone(),
+            body,
+            line,
+        }));
     }
     out
+}
+
+/// 1-based line number for a byte offset.
+pub(crate) fn byte_offset_to_line(input: &str, offset: usize) -> usize {
+    let upto = offset.min(input.len());
+    input[..upto].bytes().filter(|b| *b == b'\n').count() + 1
 }
 
 fn dispatch_section(section: &Section, spec: &mut SpecMd) -> Result<(), SpecMdParseError> {
@@ -220,5 +264,30 @@ mod tests {
     fn title_only_input_captures_title() {
         let spec = parse("# RV12 RISC-V CPU Core\n").expect("title parses");
         assert_eq!(spec.title, "RV12 RISC-V CPU Core");
+    }
+
+    #[test]
+    fn h2_sections_are_segmented_and_routed() {
+        // The dispatcher is still a stub but unknown sections are
+        // tolerated -- this exercises the segmenter end-to-end.
+        let input = "# Doc\n\n## Metadata\n\nbody\n\n## Purpose\n\nmore\n";
+        let segments = segment_document(input);
+        let headings: Vec<_> = segments
+            .iter()
+            .filter_map(|s| match s {
+                Segment::Section(sec) => Some(sec.heading.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            headings,
+            vec!["Metadata".to_string(), "Purpose".to_string()]
+        );
+        // Title is captured separately.
+        let title = segments.iter().find_map(|s| match s {
+            Segment::Title(t) => Some(t.clone()),
+            _ => None,
+        });
+        assert_eq!(title.as_deref(), Some("Doc"));
     }
 }

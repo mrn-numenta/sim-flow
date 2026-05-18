@@ -82,20 +82,20 @@ Gate: `cargo build --package sim-flow` succeeds.
 
 ### Milestone 1.2: Parser foundation
 
-- [ ] Add `pulldown_cmark` dependency to
+- [x] Add `pulldown_cmark` dependency to
       `tools/sim-flow/Cargo.toml` if not already present.
-- [ ] Create `src/__internal/session/spec_md/parser/mod.rs`
+- [x] Create `src/__internal/session/spec_md/parser/mod.rs`
       with the public entry point: `parse(input: &str) ->
       Result<SpecMd, SpecMdParseError>`.
-- [ ] Define `SpecMdParseError` with variants for missing
+- [x] Define `SpecMdParseError` with variants for missing
       section, malformed table, bad anchor, etc., each
       carrying line and column.
-- [ ] Implement a markdown event-stream walker that segments
+- [x] Implement a markdown event-stream walker that segments
       the document into H2-delimited sections.
-- [ ] Implement section-header dispatch: match heading text
+- [x] Implement section-header dispatch: match heading text
       against a fixed table of section names; route to the
       appropriate per-section parser stub.
-- [ ] Stub each per-section parser function with an empty
+- [x] Stub each per-section parser function with an empty
       default return so the dispatch wiring compiles end-to-
       end.
 
