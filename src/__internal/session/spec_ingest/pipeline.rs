@@ -129,6 +129,107 @@ pub struct IngestConfig {
     pub signal_table_detection: SignalTableConfig,
 }
 
+impl IngestConfig {
+    /// Path the config loader inspects under a project root.
+    pub fn config_path(project_root: &Path) -> PathBuf {
+        project_root
+            .join(".sim-flow")
+            .join("spec-ingest.config.toml")
+    }
+
+    /// Load configuration from `<project>/.sim-flow/spec-ingest.config.toml`.
+    /// Returns defaults when the file is absent. Errors when the
+    /// file exists but is malformed.
+    pub fn load(project_root: &Path) -> crate::Result<IngestConfig> {
+        let path = Self::config_path(project_root);
+        if !path.is_file() {
+            return Ok(IngestConfig::default());
+        }
+        let body = std::fs::read_to_string(&path).map_err(|e| {
+            crate::Error::State(format!("spec ingest config: read {}: {e}", path.display()))
+        })?;
+        Self::parse(&body).map_err(|e| {
+            crate::Error::State(format!("spec ingest config: parse {}: {e}", path.display()))
+        })
+    }
+
+    /// Parse a config TOML body. Each section is optional; missing
+    /// keys fall back to defaults.
+    pub fn parse(body: &str) -> std::result::Result<IngestConfig, toml::de::Error> {
+        let raw: RawConfig = toml::from_str(body)?;
+        let mut cfg = IngestConfig::default();
+        if let Some(f) = raw.figures {
+            if let Some(v) = f.dpi {
+                cfg.figures.dpi = v;
+            }
+            if let Some(v) = f.format {
+                cfg.figures.format = v;
+            }
+            if let Some(v) = f.vector_op_threshold {
+                cfg.figures.vector_op_threshold = v;
+            }
+        }
+        if let Some(c) = raw.chunking {
+            if let Some(v) = c.max_chunk_chars {
+                cfg.chunking.max_chunk_chars = v;
+            }
+            if let Some(v) = c.min_chunk_chars {
+                cfg.chunking.min_chunk_chars = v;
+            }
+        }
+        if let Some(cs) = raw.chrome_stripping {
+            if let Some(v) = cs.enabled {
+                cfg.chrome_stripping.enabled = v;
+            }
+            if let Some(v) = cs.appearance_threshold {
+                cfg.chrome_stripping.appearance_threshold = v;
+            }
+        }
+        if let Some(st) = raw.signal_table_detection {
+            if let Some(v) = st.enabled {
+                cfg.signal_table_detection.enabled = v;
+            }
+            if let Some(aliases) = st.header_aliases {
+                cfg.signal_table_detection.header_aliases = aliases;
+            }
+        }
+        Ok(cfg)
+    }
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+struct RawConfig {
+    figures: Option<RawFigures>,
+    chunking: Option<RawChunking>,
+    chrome_stripping: Option<RawChromeStripping>,
+    signal_table_detection: Option<RawSignalTable>,
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+struct RawFigures {
+    dpi: Option<u32>,
+    format: Option<String>,
+    vector_op_threshold: Option<u32>,
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+struct RawChunking {
+    max_chunk_chars: Option<usize>,
+    min_chunk_chars: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+struct RawChromeStripping {
+    enabled: Option<bool>,
+    appearance_threshold: Option<f32>,
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+struct RawSignalTable {
+    enabled: Option<bool>,
+    header_aliases: Option<Vec<Vec<String>>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct FiguresConfig {
     pub dpi: u32,

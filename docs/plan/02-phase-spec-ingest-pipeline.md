@@ -266,11 +266,11 @@ Gate: emit unit test passes.
 
 ### Milestone 2.13: Configuration loading
 
-- [ ] Implement `IngestConfig::load(project_root: &Path) ->
+- [x] Implement `IngestConfig::load(project_root: &Path) ->
       IngestConfig` reading
       `<project>/.sim-flow/spec-ingest.config.toml`.
-- [ ] Apply defaults (Chapter 1 §1.7) for unset fields.
-- [ ] Unit test: load a fixture config; assert overrides
+- [x] Apply defaults (Chapter 1 §1.7) for unset fields.
+- [x] Unit test: load a fixture config; assert overrides
       apply and defaults fill in.
 
 Gate: config-load unit test passes.

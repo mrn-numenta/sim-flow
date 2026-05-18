@@ -45,4 +45,40 @@ mod smoke_tests {
         let manifest = std::fs::read_to_string(&outcome.manifest_path).unwrap();
         assert!(manifest.contains("source_kind = \"none\""));
     }
+
+    /// Milestone 2.13: load config with overrides; missing keys
+    /// inherit defaults.
+    #[test]
+    fn config_load_applies_overrides_and_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dot = tmp.path().join(".sim-flow");
+        std::fs::create_dir_all(&dot).unwrap();
+        let cfg_path = dot.join("spec-ingest.config.toml");
+        std::fs::write(
+            &cfg_path,
+            r#"
+[figures]
+dpi = 220
+
+[chrome_stripping]
+appearance_threshold = 0.75
+"#,
+        )
+        .unwrap();
+        let cfg = IngestConfig::load(tmp.path()).unwrap();
+        assert_eq!(cfg.figures.dpi, 220);
+        assert_eq!(cfg.figures.format, "png"); // default
+        assert!((cfg.chrome_stripping.appearance_threshold - 0.75).abs() < 1e-6);
+        assert!(cfg.chrome_stripping.enabled); // default
+        // Untouched section keeps defaults.
+        assert_eq!(cfg.chunking.max_chunk_chars, 8000);
+    }
+
+    #[test]
+    fn config_load_returns_defaults_when_file_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = IngestConfig::load(tmp.path()).unwrap();
+        assert_eq!(cfg.figures.dpi, 150);
+        assert!(cfg.chrome_stripping.enabled);
+    }
 }
