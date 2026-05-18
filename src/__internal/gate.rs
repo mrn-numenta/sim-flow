@@ -63,6 +63,23 @@ pub enum GateCheck {
         pattern: String,
         description: String,
     },
+    /// Structured-spec.md check: parse `spec_md_path`, run the
+    /// Phase 1 validator, verify the Quantitative-row regexes, and
+    /// resolve every source-anchor against `manifest_path` (when
+    /// present). Used by DM0 in place of the old regex-based gate
+    /// dispatch. The implementation lives in
+    /// [`crate::__internal::session::dm0::gate::check_dm0_gate`];
+    /// the evaluator simply converts its `Dm0GateOutcome` into the
+    /// orchestrator's `GateReport` so the existing emission paths
+    /// keep working.
+    SpecMdStructured {
+        spec_md_path: PathBuf,
+        /// `Some` when the project has an ingest manifest;
+        /// `None` for no-source-spec projects (anchor resolution
+        /// is then skipped).
+        manifest_path: Option<PathBuf>,
+        description: String,
+    },
     /// Every milestone file under `dir` matching one of
     /// `<file_prefix>NN-*.md` (for any `<file_prefix>` in
     /// `file_prefixes`) must be resolved.

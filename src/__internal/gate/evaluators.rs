@@ -348,6 +348,32 @@ pub(super) fn evaluate_one(project_dir: &Path, check: &GateCheck) -> Result<Opti
                 }))
             }
         }
+        GateCheck::SpecMdStructured {
+            spec_md_path,
+            manifest_path,
+            description,
+        } => {
+            let abs_spec = project_dir.join(spec_md_path);
+            let abs_manifest = manifest_path.as_ref().map(|p| project_dir.join(p));
+            let outcome = crate::__internal::session::dm0::gate::check_dm0_gate(
+                &abs_spec,
+                abs_manifest.as_deref(),
+                Some(project_dir),
+            )?;
+            if outcome.is_clean() {
+                return Ok(None);
+            }
+            let summary = outcome
+                .failures
+                .iter()
+                .map(|f| format!("  - [{}] {}", f.code, f.message))
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(Some(GateFailure {
+                description: description.clone(),
+                reason: format!("spec.md structural gate failed:\n{summary}"),
+            }))
+        }
         GateCheck::CritiqueClean { path, description } => {
             let full = project_dir.join(path);
             if !full.exists() {

@@ -54,6 +54,22 @@ pub(super) fn any_matches(paths: &[&str], pattern: &str, description: &str) -> G
     }
 }
 
+/// `GateCheck::SpecMdStructured` constructor used by DM0 to swap the
+/// legacy regex-driven dispatch for the Phase 1 parser + validator.
+/// `spec_md_path` and `manifest_path` are relative to the project
+/// dir; the evaluator joins them with the project root.
+pub(super) fn spec_md_structured(
+    spec_md_path: &str,
+    manifest_path: Option<&str>,
+    description: &str,
+) -> GateCheck {
+    GateCheck::SpecMdStructured {
+        spec_md_path: PathBuf::from(spec_md_path),
+        manifest_path: manifest_path.map(PathBuf::from),
+        description: description.to_string(),
+    }
+}
+
 /// Pair this with a `StepDescriptor::milestone_walk` so the step's
 /// gate cannot pass while any milestone file under `dir` is still
 /// pending. Defaults to execution-step semantics (`- [ ]` rows must

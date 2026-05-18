@@ -8,15 +8,23 @@ use crate::steps::StepDescriptor;
 use super::helpers::*;
 
 pub(super) fn dm0() -> StepDescriptor {
-    // The spec can land in either of two layouts and the gate
-    // accepts both:
-    //   - Single file: `docs/spec.md` (small designs).
-    //   - Paginated:  `docs/spec/<NN>-<slug>.md` section files
-    //     (large designs that exceed an LLM's single-response
-    //     budget; mirrors the input-spec staging convention).
-    // The `any_exists` / `any_matches` helpers expand the directory
-    // entry to all `*.md` files inside (excluding scaffolding and
-    // index files like `README.md` / `_toc.md`).
+    // Phase 6 (Stream C) rewires the DM0 gate around the structured
+    // spec.md parser + validator. The single
+    // `GateCheck::SpecMdStructured` entry replaces the legacy
+    // regex pipeline (file-exists + clock-frequency-regex +
+    // gates-per-cycle-regex) with a parser-driven dispatch that
+    // checks REQUIRED sections, the Quantitative-row regexes,
+    // anchor resolution against the ingest manifest, and (in
+    // automated mode) the presence of Auto-decisions. The
+    // implementation lives at
+    // `crate::__internal::session::dm0::gate::check_dm0_gate`; the
+    // evaluator in `crate::__internal::gate::evaluators` converts
+    // its `Dm0GateOutcome` into the existing `GateReport`.
+    //
+    // `docs/spec.md` is the canonical artifact path. The paginated
+    // `docs/spec/<NN>-<slug>.md` layout the legacy regex gate
+    // tolerated is no longer accepted -- the structured parser is
+    // strict about single-file `docs/spec.md`.
     StepDescriptor {
         id: "DM0",
         flow: Flow::DirectModeling,
@@ -24,31 +32,15 @@ pub(super) fn dm0() -> StepDescriptor {
         instruction_slug: "dm0-specification",
         per_candidate: false,
         gate_checks: vec![
-            any_exists(
-                &["docs/spec.md", "docs/spec/"],
-                "docs/spec.md or docs/spec/ exists and is non-empty",
-            ),
-            any_matches(
-                &["docs/spec.md", "docs/spec/"],
-                r"\d+\s*(MHz|GHz)",
-                "spec declares a clock frequency",
-            ),
-            // Gates-per-cycle is REQUIRED -- DM2 needs an explicit
-            // budget number from the source material, not an
-            // LLM-derived estimate from frequency + technology node.
-            // Technology node is now optional (downstream context for
-            // power / area discussion) and not gate-checked.
-            any_matches(
-                &["docs/spec.md", "docs/spec/"],
-                r"(?i)gates\s+per\s+cycle.*\d+",
-                "spec declares an explicit gates-per-cycle budget",
+            spec_md_structured(
+                "docs/spec.md",
+                Some(".sim-flow/spec-ingest/manifest.toml"),
+                "docs/spec.md parses, validates, and its source-anchors resolve",
             ),
             critique_clean("DM0"),
         ],
         walk_gate_checks: vec![],
-        // Both layouts listed so a Reset to DM0 (or any downstream
-        // reset that cascades through DM0) clears either form.
-        work_artifacts: &["docs/spec.md", "docs/spec/"],
+        work_artifacts: &["docs/spec.md"],
         predecessor_inputs: &[],
         work_write_paths: &["docs/"],
         work_phases: &["chat"],

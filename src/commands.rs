@@ -2838,6 +2838,21 @@ fn gate_check_to_out(check: &sim_flow::__internal::gate::GateCheck) -> GateCheck
             cmd: None,
             args: None,
         },
+        SpecMdStructured {
+            spec_md_path,
+            manifest_path,
+            description,
+        } => GateCheckOut {
+            kind: "spec-md-structured",
+            description,
+            path: Some(match manifest_path {
+                Some(m) => format!("{} | manifest={}", spec_md_path.display(), m.display()),
+                None => spec_md_path.display().to_string(),
+            }),
+            pattern: None,
+            cmd: None,
+            args: None,
+        },
     }
 }
 
