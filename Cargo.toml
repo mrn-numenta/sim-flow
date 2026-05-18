@@ -44,6 +44,11 @@ uuid = { version = "1", features = ["v4"] }
 schemars = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# SHA-256 over `breadcrumb || page_range || body` produces the
+# stable `chunk_id` Phase 2's ingest pipeline writes into chunk
+# front matter, plus the `source_sha256` in `manifest.toml`. Phase
+# 4's lance build keys off the same digests so they're load-bearing.
+sha2 = "0.10"
 # Wire types for the `session::lsp` blocking client that backs the
 # `api_*` discovery tools (rust-analyzer over LSP). We only consume
 # the type definitions -- the JSON-RPC framing and transport are

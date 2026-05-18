@@ -169,8 +169,12 @@ fn chunk_spec(body: &str, kind: SpecKind) -> Vec<Page> {
 /// `![](images/...)` links.
 fn chunk_pdf(source_path: &Path, images_dir: &Path) -> Result<Vec<Page>> {
     use pdfium_render::prelude::*;
+    let _ = std::marker::PhantomData::<&Pdfium>;
 
-    let pdfium = crate::session::pdfium_loader::load()?;
+    // Use the process-shared pdfium handle so concurrent unit tests
+    // (and any caller that runs the pipeline + legacy ingest in the
+    // same process) don't bind the C library twice.
+    let pdfium = super::stages::loading::shared_pdfium()?;
     let document = pdfium
         .load_pdf_from_file(source_path, None)
         .map_err(|e| Error::State(format!("spec ingestion: load PDF via pdfium: {e}")))?;

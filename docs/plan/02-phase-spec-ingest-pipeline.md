@@ -52,74 +52,74 @@ integration tests against the four sample specs.
 
 ### Milestone 2.1: Module scaffolding
 
-- [ ] Create `src/__internal/session/spec_ingest/mod.rs` and
+- [x] Create `src/__internal/session/spec_ingest/mod.rs` and
       remove the old `spec_ingest.rs` (or convert it into a
       shim that re-exports from the new module).
-- [ ] Create submodule files: `pipeline.rs`, `stages/mod.rs`,
+- [x] Create submodule files: `pipeline.rs`, `stages/mod.rs`,
       `stages/loading.rs`, `stages/chrome.rs`, `stages/parse.rs`,
       `stages/classify.rs`, `stages/references.rs`,
       `stages/figures.rs`, `stages/emit.rs`.
-- [ ] Define `IngestRequest`, `IngestOutcome`,
+- [x] Define `IngestRequest`, `IngestOutcome`,
       `IngestWarning`, `IngestConfig` types in `pipeline.rs`.
-- [ ] Define an internal `Pipeline` orchestrator that runs the
+- [x] Define an internal `Pipeline` orchestrator that runs the
       seven stages in order, with each stage taking the
       previous stage's output type.
-- [ ] Wire empty stage stubs returning default outputs.
+- [x] Wire empty stage stubs returning default outputs.
 
 Gate: `cargo build` succeeds; an empty pipeline can be
 constructed and run on an empty input without panicking.
 
 ### Milestone 2.2: Stage 1 -- Source loading
 
-- [ ] In `stages/loading.rs`, implement `load(source: &Path)
+- [x] In `stages/loading.rs`, implement `load(source: &Path)
       -> Result<LoadedSource>` dispatching by extension.
-- [ ] PDF branch: open with `pdfium_render::PdfDocument`,
+- [x] PDF branch: open with `pdfium_render::PdfDocument`,
       validate parseability, return the document handle.
-- [ ] Markdown branch: read UTF-8 with BOM stripping; return
+- [x] Markdown branch: read UTF-8 with BOM stripping; return
       as a single-page document.
-- [ ] Text branch: same as markdown but mark `source_kind =
+- [x] Text branch: same as markdown but mark `source_kind =
       "text"` so later stages know.
-- [ ] Hard-error on unknown extensions.
-- [ ] Unit tests for each branch with minimal fixtures.
+- [x] Hard-error on unknown extensions.
+- [x] Unit tests for each branch with minimal fixtures.
 
 Gate: `cargo test spec_ingest::stages::loading::` passes.
 
 ### Milestone 2.3: Stage 2 -- Page-chrome stripping
 
-- [ ] In `stages/chrome.rs`, implement `strip_chrome(pages:
+- [x] In `stages/chrome.rs`, implement `strip_chrome(pages:
       Vec<PageText>) -> (Vec<PageText>, ChromeRecord)`.
-- [ ] Detect lines appearing on >= 50% of pages with
+- [x] Detect lines appearing on >= 50% of pages with
       identical content after whitespace normalization.
-- [ ] Strip patterns matching `Page \d+ of \d+` and
+- [x] Strip patterns matching `Page \d+ of \d+` and
       `\d+ / \d+` even when not appearing on all pages.
-- [ ] Record removed lines in `ChromeRecord` for the
+- [x] Record removed lines in `ChromeRecord` for the
       manifest.
-- [ ] Unit test on a synthetic three-page input with known
+- [x] Unit test on a synthetic three-page input with known
       chrome lines; assert stripping happens and the record
       captures them.
-- [ ] Markdown / text branch: no-op pass-through.
+- [x] Markdown / text branch: no-op pass-through.
 
 Gate: `cargo test spec_ingest::stages::chrome::` passes.
 
 ### Milestone 2.4: Stage 3 -- Hierarchical parsing (PDF)
 
-- [ ] In `stages/parse.rs`, implement
+- [x] In `stages/parse.rs`, implement
       `parse_hierarchy(loaded: &LoadedSource) -> SectionTree`.
-- [ ] For PDF: walk pages with pdfium, extract text with
+- [x] For PDF: walk pages with pdfium, extract text with
       style information, infer heading levels from font
       size + style (bold / italic) clusters.
-- [ ] If the PDF has an outline (table of contents), use it
+- [x] If the PDF has an outline (table of contents), use it
       as ground truth for the heading hierarchy and prefer it
       over inferred headings.
-- [ ] Construct `SectionTree` with each `Section` carrying
+- [x] Construct `SectionTree` with each `Section` carrying
       heading text, level, full breadcrumb (ancestor chain),
       body text, and `page_range = (start, end)`.
-- [ ] Handle the degenerate case (no headings detected):
+- [x] Handle the degenerate case (no headings detected):
       produce a single root section spanning the whole
       document.
-- [ ] Markdown branch: use pulldown_cmark to walk H1-H6
+- [x] Markdown branch: use pulldown_cmark to walk H1-H6
       headings; produce the same tree.
-- [ ] Unit tests on a synthetic 3-page PDF (build inline via
+- [x] Unit tests on a synthetic 3-page PDF (build inline via
       pdfium write API or use a checked-in tiny fixture) and
       on a synthetic markdown.
 
@@ -127,100 +127,100 @@ Gate: `cargo test spec_ingest::stages::parse::` passes.
 
 ### Milestone 2.5: Stage 4 -- Stub and TBD detection
 
-- [ ] In `stages/classify.rs`, implement `detect_stubs(tree:
+- [x] In `stages/classify.rs`, implement `detect_stubs(tree:
       &SectionTree) -> Vec<StubRecord>`.
-- [ ] Stub criteria: section body is empty, contains only
+- [x] Stub criteria: section body is empty, contains only
       "TBD", or contains only placeholder phrases (regex over
       a small allow-list).
-- [ ] Implement `detect_tbds(tree: &SectionTree) ->
+- [x] Implement `detect_tbds(tree: &SectionTree) ->
       Vec<TbdRecord>` scanning every section body for
       whole-word `TBD` with surrounding context.
-- [ ] Unit tests against fixtures with known stubs / TBDs.
+- [x] Unit tests against fixtures with known stubs / TBDs.
 
 Gate: `cargo test spec_ingest::stages::classify::` (stub /
 TBD tests) passes.
 
 ### Milestone 2.6: Stage 4 -- Markdown table reassembly across pages
 
-- [ ] In `stages/classify.rs`, implement
+- [x] In `stages/classify.rs`, implement
       `reassemble_tables(section: &mut Section)`.
-- [ ] Detect tables that start in one section and continue in
+- [x] Detect tables that start in one section and continue in
       the next (a section ending with a partial table row +
       next section starting with the rest).
-- [ ] Stitch them and re-attach to the originating section
+- [x] Stitch them and re-attach to the originating section
       with `page_range` extended to cover both.
-- [ ] Unit test on a fixture with a known cross-section
+- [x] Unit test on a fixture with a known cross-section
       table (synthetic).
 
 Gate: table-reassembly unit test passes.
 
 ### Milestone 2.7: Stage 4 -- Signal-table extraction
 
-- [ ] In `stages/classify.rs`, implement
+- [x] In `stages/classify.rs`, implement
       `extract_signal_tables(section: &Section) ->
       Vec<SignalTable>`.
-- [ ] Match the table's header row against the canonical
+- [x] Match the table's header row against the canonical
       column set (Chapter 1 §1.7 `header_aliases`) with
       case-insensitive comparison and order-tolerance.
-- [ ] When matched, extract typed rows and emit a
+- [x] When matched, extract typed rows and emit a
       `SignalTable` with `breadcrumb = section.breadcrumb`,
       `stage = section.heading`.
-- [ ] Leave the matched table marked in the section body as
+- [x] Leave the matched table marked in the section body as
       `<!-- signal-table extracted to tables/signals/NNN.toml -->`.
-- [ ] Unit test against fixtures with two-column-order
+- [x] Unit test against fixtures with two-column-order
       variations.
 
 Gate: signal-table unit test passes.
 
 ### Milestone 2.8: Stage 4 -- Parameter, error, encoding, FSM table extraction
 
-- [ ] Implement `extract_parameter_tables` keyed on `Name |
+- [x] Implement `extract_parameter_tables` keyed on `Name |
       Default | Comment` or `Name | Type | Default | ...`
       header patterns.
-- [ ] Implement `extract_error_tables` keyed on `Error Type |
+- [x] Implement `extract_error_tables` keyed on `Error Type |
       Detecting Component | ...`.
-- [ ] Implement `extract_encoding_tables` keyed on `Value |
+- [x] Implement `extract_encoding_tables` keyed on `Value |
       Name | Abbreviation` or `Value | Name`.
-- [ ] Implement `extract_fsm_tables` keyed on `From | Input |
+- [x] Implement `extract_fsm_tables` keyed on `From | Input |
       To | Output` or similar transition shapes.
-- [ ] Per-kind unit tests.
+- [x] Per-kind unit tests.
 
 Gate: per-kind unit tests pass.
 
 ### Milestone 2.9: Stage 5 -- Cross-spec reference parsing
 
-- [ ] In `stages/references.rs`, implement
+- [x] In `stages/references.rs`, implement
       `parse_references(tree: &SectionTree) ->
       Vec<CrossSpecReference>`.
-- [ ] Pattern: `see <Title>[\s,:]+section\s+["']?<text>["']?`
+- [x] Pattern: `see <Title>[\s,:]+section\s+["']?<text>["']?`
       (case-insensitive).
-- [ ] Pattern: markdown links to peer spec files
+- [x] Pattern: markdown links to peer spec files
       (`*.md` / `*.pdf` with relative-path heuristic).
-- [ ] Pattern: section content under a heading matching
+- [x] Pattern: section content under a heading matching
       `^(References|Inherits[\s-]+from)$` (case-insensitive).
-- [ ] Each detected reference gets `peer_id = ""` (resolved
+- [x] Each detected reference gets `peer_id = ""` (resolved
       later by the orchestrator from configured peer
       registrations).
-- [ ] Unit tests on a fixture with three reference styles.
+- [x] Unit tests on a fixture with three reference styles.
 
 Gate: references unit test passes.
 
 ### Milestone 2.10: Stage 6 -- Figure detection and page-region rendering
 
-- [ ] In `stages/figures.rs`, implement
+- [x] In `stages/figures.rs`, implement
       `detect_figure_pages(doc: &PdfDocument) -> Vec<u32>`
       returning page numbers that contain figure content.
-- [ ] Heuristic: a page contains figure content if either
+- [x] Heuristic: a page contains figure content if either
       (a) it has at least one image XObject OR (b) the count
       of vector drawing operations (non-text path ops)
       exceeds a threshold (configurable; default 20).
-- [ ] Implement `render_figure_page(doc: &PdfDocument, page:
+- [x] Implement `render_figure_page(doc: &PdfDocument, page:
       u32, dpi: u32) -> Result<DynamicImage>` using pdfium's
       `render_with_config`.
-- [ ] Save as PNG to `figures/page-<NNN>.png`.
-- [ ] Emit `figures/page-<NNN>.caption.md` stub per Chapter 1
+- [x] Save as PNG to `figures/page-<NNN>.png`.
+- [x] Emit `figures/page-<NNN>.caption.md` stub per Chapter 1
       §1.3.4.
-- [ ] Unit test: render a known fixture PDF page, verify the
+- [x] Unit test: render a known fixture PDF page, verify the
       PNG is non-empty and has expected dimensions.
 
 Gate: figure-rendering unit tests pass.
@@ -243,22 +243,22 @@ Gate: RV12 figure-render verification passes.
 
 ### Milestone 2.12: Stage 7 -- Output emission
 
-- [ ] In `stages/emit.rs`, implement
+- [x] In `stages/emit.rs`, implement
       `emit_corpus(tree: &SectionTree, stubs: &[StubRecord],
       tbds: &[TbdRecord], refs: &[CrossSpecReference],
       figures: &[FigureOutput], out_dir: &Path)`.
-- [ ] Write each section as `chunks/NNN-<slug>.md` with YAML
+- [x] Write each section as `chunks/NNN-<slug>.md` with YAML
       front matter per Chapter 1 §1.3.2.
-- [ ] Compute stable `chunk_id = sha256(breadcrumb ||
+- [x] Compute stable `chunk_id = sha256(breadcrumb ||
       source_page_range || body)` for each chunk.
-- [ ] Write structured tables to their typed locations under
+- [x] Write structured tables to their typed locations under
       `tables/signals/`, `tables/parameters/`,
       `tables/errors/`, `tables/encodings/`, `tables/fsms/`.
-- [ ] Write `stubs.toml`, `tbds.toml`, `references.toml`,
+- [x] Write `stubs.toml`, `tbds.toml`, `references.toml`,
       `manifest.toml`.
-- [ ] Implement atomic replace: write to
+- [x] Implement atomic replace: write to
       `<out>.tmp/`, then `std::fs::rename` over `<out>/`.
-- [ ] Unit test: emit a synthetic corpus to a tmp dir and
+- [x] Unit test: emit a synthetic corpus to a tmp dir and
       verify expected files exist with expected front-matter
       structure.
 
