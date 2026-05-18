@@ -28,6 +28,7 @@ pub mod runners;
 pub mod signal_cleanup;
 pub mod socket_host;
 pub mod spec_ingest;
+pub mod spec_md;
 pub mod stderr_presenter;
 pub mod tool_timings;
 pub mod tools;

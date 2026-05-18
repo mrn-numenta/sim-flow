@@ -47,35 +47,35 @@ and 8 consume.
 
 ### Milestone 1.1: Type definitions
 
-- [ ] Create `src/__internal/session/spec_md/mod.rs` with
+- [x] Create `src/__internal/session/spec_md/mod.rs` with
       module wiring and public re-exports.
-- [ ] Create `src/__internal/session/spec_md/types.rs`.
-- [ ] Define `SpecMd` top-level struct holding every section.
-- [ ] Define `Metadata`, `SourceDocument` (with `role` enum:
+- [x] Create `src/__internal/session/spec_md/types.rs`.
+- [x] Define `SpecMd` top-level struct holding every section.
+- [x] Define `Metadata`, `SourceDocument` (with `role` enum:
       `primary | peer`).
-- [ ] Define `AssumptionsAndConstraints`, `QuantitativeRow`.
-- [ ] Define `ExternalInterface`, `ExternalSignalRow` (six-
+- [x] Define `AssumptionsAndConstraints`, `QuantitativeRow`.
+- [x] Define `ExternalInterface`, `ExternalSignalRow` (six-
       column form: Signal / Direction / Width / Type /
       Required / Description).
-- [ ] Define `Block`, `BlockSignalRow` (four-column form:
+- [x] Define `Block`, `BlockSignalRow` (four-column form:
       Signal / Direction / Peer / Description), `BlockState`.
-- [ ] Define `Parameter` (single typed table row).
-- [ ] Define `StateMachine`, `FsmState`, `FsmTransition`.
-- [ ] Define `Encoding`, `EncodingValue`.
-- [ ] Define `MemoryRegion`.
-- [ ] Define `Connectivity`, `Node`, `Edge`.
-- [ ] Define `ErrorEntry`.
-- [ ] Define `FunctionalBehavior`, `Operation`.
-- [ ] Define `TimingAndThroughput`, `LatencyRow`.
-- [ ] Define `PipelineAndHierarchy` (prose-only).
-- [ ] Define `ResetInitFlushDrain` (prose-only).
-- [ ] Define `CycleAccurateScenario`, `CycleAccurateRow`.
-- [ ] Define `FigureEntry`, `FigureElement`.
-- [ ] Define `WorkedExample`.
-- [ ] Define `SourceSpecAnchor` (with three forms: page,
+- [x] Define `Parameter` (single typed table row).
+- [x] Define `StateMachine`, `FsmState`, `FsmTransition`.
+- [x] Define `Encoding`, `EncodingValue`.
+- [x] Define `MemoryRegion`.
+- [x] Define `Connectivity`, `Node`, `Edge`.
+- [x] Define `ErrorEntry`.
+- [x] Define `FunctionalBehavior`, `Operation`.
+- [x] Define `TimingAndThroughput`, `LatencyRow`.
+- [x] Define `PipelineAndHierarchy` (prose-only).
+- [x] Define `ResetInitFlushDrain` (prose-only).
+- [x] Define `CycleAccurateScenario`, `CycleAccurateRow`.
+- [x] Define `FigureEntry`, `FigureElement`.
+- [x] Define `WorkedExample`.
+- [x] Define `SourceSpecAnchor` (with three forms: page,
       page-range, chunk).
-- [ ] Define `OpenQuestion`, `AutoDecision`.
-- [ ] Derive `serde::Serialize`, `serde::Deserialize`, `Clone`,
+- [x] Define `OpenQuestion`, `AutoDecision`.
+- [x] Derive `serde::Serialize`, `serde::Deserialize`, `Clone`,
       `Debug`, `PartialEq` on all types.
 
 Gate: `cargo build --package sim-flow` succeeds.
