@@ -12,6 +12,8 @@ use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use super::types::SpecMd;
 
+pub(crate) mod table;
+
 /// Errors produced by [`parse`]. Every variant carries the offending
 /// line / column so the caller can surface a precise diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]

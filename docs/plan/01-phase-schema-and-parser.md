@@ -104,15 +104,15 @@ Gate: `cargo build` succeeds; `parser::parse("")` returns
 
 ### Milestone 1.3: Markdown table parser helper
 
-- [ ] Create `src/__internal/session/spec_md/parser/table.rs`.
-- [ ] Implement a `MarkdownTable` parser that takes a
+- [x] Create `src/__internal/session/spec_md/parser/table.rs`.
+- [x] Implement a `MarkdownTable` parser that takes a
       pulldown_cmark event range and produces a
       `MarkdownTable { headers: Vec<String>, rows: Vec<Vec<String>> }`.
-- [ ] Implement `normalize_header(name: &str) ->
+- [x] Implement `normalize_header(name: &str) ->
       CanonicalColumn` matching Chapter 2 §2.5 aliases.
-- [ ] Implement column-presence check helpers
+- [x] Implement column-presence check helpers
       (`require_columns`, `optional_column`).
-- [ ] Unit test on three table variants: signal table,
+- [x] Unit test on three table variants: signal table,
       parameter table, error table.
 
 Gate: `cargo test --package sim-flow spec_md::parser::table::`
