@@ -71,16 +71,16 @@ Gate: `cargo test embedder::config::` passes.
 
 ### Milestone 3.3: OpenAiCompatEmbedder implementation
 
-- [ ] In `embedder/openai_compat.rs`, define
+- [x] In `embedder/openai_compat.rs`, define
       `OpenAiCompatEmbedder` struct holding
       `rig::providers::openai::Client`, model id, dimension,
       batch size, timeout, and retry policy.
-- [ ] Implement `OpenAiCompatEmbedder::new(config:
+- [x] Implement `OpenAiCompatEmbedder::new(config:
       EmbedderConfig) -> Result<Self, ConstructError>`
       including a smoke embed of `"sim-flow embedder probe"`
       to validate the dimension. On dimension mismatch return
       `ConstructError::DimensionMismatch`.
-- [ ] Implement `#[async_trait] impl EmbeddingClient for
+- [x] Implement `#[async_trait] impl EmbeddingClient for
       OpenAiCompatEmbedder`:
   - Batch inputs into groups of `batch_size`.
   - For each batch, call rig's embedding API with timeout and
@@ -88,7 +88,7 @@ Gate: `cargo test embedder::config::` passes.
   - Verify each returned vector matches `dimension`; emit
     `EmbedError::DimensionMismatch` on drift.
   - Concatenate batch results in input order.
-- [ ] Implement retry with exponential backoff per
+- [x] Implement retry with exponential backoff per
       `RetryConfig`.
 
 Gate: `cargo build` succeeds; type-check passes.

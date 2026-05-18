@@ -76,7 +76,13 @@ ureq = { version = "2", default-features = false, features = ["json", "tls"] }
 # that future updates contain breaking changes; upgrades are explicit
 # operations that include reviewing the rig changelog and re-running
 # the embedder smoke tests.
-rig-core = "=0.37.0"
+rig = { version = "=0.37.0", package = "rig-core" }
+# rig re-exports `http`'s `HeaderMap` / `HeaderValue` but not
+# `HeaderName`; the embedder config supports custom auth header
+# names (per Chapter 5 §5.6) and needs the full constructor surface.
+# Pull `http` directly to construct dynamic header names without
+# leaking the type through the rest of sim-flow.
+http = "1"
 # Required by rig's `EmbeddingModel` trait (returns boxed futures via
 # `async-trait`). We use the same crate to express the sim-flow-side
 # `EmbeddingClient` trait so the boundary is symmetric.
