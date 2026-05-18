@@ -15,9 +15,12 @@ use super::types::SpecMd;
 pub(crate) mod assumptions;
 pub(crate) mod blocks;
 pub(crate) mod connectivity;
+pub(crate) mod cycle_accurate;
 pub(crate) mod encodings;
 pub(crate) mod errors;
 pub(crate) mod external_interfaces;
+pub(crate) mod figures;
+pub(crate) mod functional_behavior;
 pub(crate) mod memory_map;
 pub(crate) mod metadata;
 pub(crate) mod parameters;
@@ -25,6 +28,7 @@ pub(crate) mod prose;
 pub(crate) mod section_util;
 pub(crate) mod state_machines;
 pub(crate) mod table;
+pub(crate) mod timing;
 
 /// Errors produced by [`parse`]. Every variant carries the offending
 /// line / column so the caller can surface a precise diagnostic.
@@ -223,6 +227,23 @@ pub(crate) fn byte_offset_to_line(input: &str, offset: usize) -> usize {
     input[..upto].bytes().filter(|b| *b == b'\n').count() + 1
 }
 
+fn parse_reset_section(body: &str) -> super::types::ResetInitFlushDrain {
+    use section_util::{collect_prose, split_h3};
+    let mut out = super::types::ResetInitFlushDrain::default();
+    let (_pre, subs) = split_h3(body);
+    for sub in subs {
+        match sub.heading.to_ascii_lowercase().as_str() {
+            "reset" | "reset behavior" => out.reset = collect_prose(&sub.body),
+            "initialization" => out.initialization = collect_prose(&sub.body),
+            "flush and drain" | "flush / drain" => {
+                out.flush_and_drain = collect_prose(&sub.body);
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 fn dispatch_section(section: &Section, spec: &mut SpecMd) -> Result<(), SpecMdParseError> {
     match section.heading.as_str() {
         "Metadata" => {
@@ -278,12 +299,33 @@ fn dispatch_section(section: &Section, spec: &mut SpecMd) -> Result<(), SpecMdPa
             spec.error_handling = errors::parse_errors(&section.body)?;
             Ok(())
         }
-        "Functional Behavior" => Ok(()),
-        "Timing, Latency, and Throughput" => Ok(()),
-        "Pipeline and Hierarchy" => Ok(()),
-        "Reset, Initialization, Flush, Drain" => Ok(()),
-        "Cycle-Accurate Behavior" => Ok(()),
-        "Figures" => Ok(()),
+        "Functional Behavior" => {
+            spec.functional_behavior =
+                functional_behavior::parse_functional_behavior(&section.body)?;
+            Ok(())
+        }
+        "Timing, Latency, and Throughput" => {
+            spec.timing = timing::parse_timing(&section.body)?;
+            Ok(())
+        }
+        "Pipeline and Hierarchy" => {
+            spec.pipeline_and_hierarchy = crate::session::spec_md::types::PipelineAndHierarchy {
+                prose: prose::parse_prose_section(&section.body),
+            };
+            Ok(())
+        }
+        "Reset, Initialization, Flush, Drain" => {
+            spec.reset_init_flush_drain = parse_reset_section(&section.body);
+            Ok(())
+        }
+        "Cycle-Accurate Behavior" => {
+            spec.cycle_accurate = cycle_accurate::parse_cycle_accurate(&section.body)?;
+            Ok(())
+        }
+        "Figures" => {
+            spec.figures = figures::parse_figures(&section.body)?;
+            Ok(())
+        }
         "Worked Examples" => Ok(()),
         "Source-Spec Anchors" => Ok(()),
         "Open Questions" => Ok(()),

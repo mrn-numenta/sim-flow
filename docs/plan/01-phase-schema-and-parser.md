@@ -210,15 +210,15 @@ Gate: per-section unit tests pass.
 
 ### Milestone 1.11: Per-section parsers — Functional Behavior, Timing, Cycle-Accurate, Figures
 
-- [ ] Implement `parser/functional_behavior.rs` (end-to-end
+- [x] Implement `parser/functional_behavior.rs` (end-to-end
       prose + operation flow numbered list with `id - purpose
       (anchor: ...)` shape + data movement prose).
-- [ ] Implement `parser/timing.rs` (latency table + prose).
-- [ ] Implement `parser/cycle_accurate.rs` (per-scenario
+- [x] Implement `parser/timing.rs` (latency table + prose).
+- [x] Implement `parser/cycle_accurate.rs` (per-scenario
       heading + the cycle-by-cycle table).
-- [ ] Implement `parser/figures.rs` (per-figure heading +
+- [x] Implement `parser/figures.rs` (per-figure heading +
       properties + caption + elements-depicted table).
-- [ ] Unit tests for each.
+- [x] Unit tests for each.
 
 Gate: per-section unit tests pass.
 
