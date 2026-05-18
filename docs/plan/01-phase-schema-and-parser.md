@@ -177,13 +177,13 @@ Gate: parameters unit test passes.
 
 ### Milestone 1.8: Per-section parsers — State Machines
 
-- [ ] Implement `parser/state_machines.rs`.
-- [ ] Handle the `### FSM: <name>` heading pattern.
-- [ ] Parse the property block (Reset state / Source-spec
+- [x] Implement `parser/state_machines.rs`.
+- [x] Handle the `### FSM: <name>` heading pattern.
+- [x] Parse the property block (Reset state / Source-spec
       anchor).
-- [ ] Parse the States bulleted list (`<state> - <description>`).
-- [ ] Parse the Transitions table (From / Input / To / Output).
-- [ ] Unit test against a fixture with one FSM.
+- [x] Parse the States bulleted list (`<state> - <description>`).
+- [x] Parse the Transitions table (From / Input / To / Output).
+- [x] Unit test against a fixture with one FSM.
 
 Gate: state_machines unit test passes.
 

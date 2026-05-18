@@ -19,6 +19,7 @@ pub(crate) mod metadata;
 pub(crate) mod parameters;
 pub(crate) mod prose;
 pub(crate) mod section_util;
+pub(crate) mod state_machines;
 pub(crate) mod table;
 
 /// Errors produced by [`parse`]. Every variant carries the offending
@@ -253,7 +254,10 @@ fn dispatch_section(section: &Section, spec: &mut SpecMd) -> Result<(), SpecMdPa
             spec.parameters = parameters::parse_parameters(&section.body)?;
             Ok(())
         }
-        "State Machines" => Ok(()),
+        "State Machines" => {
+            spec.state_machines = state_machines::parse_state_machines(&section.body)?;
+            Ok(())
+        }
         "Encodings" => Ok(()),
         "Memory Map" => Ok(()),
         "Connectivity" => Ok(()),
