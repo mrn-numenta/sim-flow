@@ -16,8 +16,9 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::__internal::session::spec_md::types::{
-    Block, BlockSignalRow, Encoding, EncodingValue, ErrorEntry, FsmState, FsmTransition, Parameter,
-    QuantitativeRow, SourceDocument, SourceDocumentRole, SpecMd, StateMachine,
+    AnchorIndexEntry, Block, BlockSignalRow, Encoding, EncodingValue, ErrorEntry, FigureEntry,
+    FsmState, FsmTransition, OpenQuestion, Parameter, QuantitativeRow, SourceDocument,
+    SourceDocumentRole, SpecMd, StateMachine,
 };
 use crate::{Error, Result};
 
@@ -427,19 +428,237 @@ pub fn populate_blocks(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
     Ok(appended)
 }
 
-#[allow(dead_code)]
-pub fn populate_figures(_corpus_root: &Path, _spec: &mut SpecMd) -> Result<usize> {
-    todo!("Phase 6 milestone 6.6 — one FigureEntry per figures/page-NNN.png")
+// ---------------------------------------------------------------------------
+// 6.6 — Figures / Anchors / Open Questions
+// ---------------------------------------------------------------------------
+
+/// Emit one `FigureEntry` per `<corpus>/figures/page-NNN.png`. Source
+/// page is the parsed `NNN`; raster is the relative path
+/// `figures/page-NNN.png`; caption is intentionally empty for the
+/// agent or a future vision-captioning pass to fill.
+///
+/// Idempotent on `(name, raster)`.
+pub fn populate_figures(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
+    let dir = corpus_root.join("figures");
+    let mut entries: Vec<FigureEntry> = Vec::new();
+    let Ok(read) = fs::read_dir(&dir) else {
+        return Ok(0);
+    };
+    for entry in read.flatten() {
+        let p = entry.path();
+        if p.extension().and_then(|e| e.to_str()) != Some("png") {
+            continue;
+        }
+        let stem = match p.file_stem().and_then(|s| s.to_str()) {
+            Some(s) => s,
+            None => continue,
+        };
+        let Some(page) = parse_page_filename(stem) else {
+            continue;
+        };
+        let raster = format!(
+            "figures/{}",
+            p.file_name().and_then(|s| s.to_str()).unwrap_or("")
+        );
+        entries.push(FigureEntry {
+            name: format!("page-{page:03}"),
+            source_page: page.to_string(),
+            raster,
+            role: String::new(),
+            referenced_blocks: Vec::new(),
+            caption: String::new(),
+            elements: Vec::new(),
+        });
+    }
+    entries.sort_by(|a, b| a.raster.cmp(&b.raster));
+    let mut appended = 0usize;
+    for e in entries {
+        let already = spec
+            .figures
+            .iter()
+            .any(|f| f.name == e.name && f.raster == e.raster);
+        if !already {
+            spec.figures.push(e);
+            appended += 1;
+        }
+    }
+    Ok(appended)
 }
 
-#[allow(dead_code)]
-pub fn populate_anchors(_spec: &mut SpecMd) -> Result<usize> {
-    todo!("Phase 6 milestone 6.6 — walk populated sections and build Source-Spec Anchors index")
+/// Build the `Source-Spec Anchors` index by walking already-populated
+/// sections and emitting one row per (section, anchor) pair. The
+/// row's `chunk_id` / `page_range` are derived from the anchor's
+/// textual form: `primary:p<N>` → `chunk_id = ""`, `page_range =
+/// "N"`; `primary:p<N>-<M>` → `page_range = "N-M"`; chunk form →
+/// `chunk_id` populated, `page_range` empty.
+///
+/// Idempotent on `(section_path, source, chunk_id, page_range)`.
+pub fn populate_anchors(spec: &mut SpecMd) -> Result<usize> {
+    use crate::__internal::session::spec_md::types::SourceSpecAnchor;
+
+    let mut pending: Vec<AnchorIndexEntry> = Vec::new();
+
+    let emit = |section_path: String, anchor_text: &str, pending: &mut Vec<AnchorIndexEntry>| {
+        let Ok(parsed) = SourceSpecAnchor::parse(anchor_text) else {
+            return;
+        };
+        let (source, chunk_id, page_range) = match &parsed {
+            SourceSpecAnchor::Page { source, page } => {
+                (source.clone(), String::new(), page.to_string())
+            }
+            SourceSpecAnchor::PageRange { source, start, end } => {
+                (source.clone(), String::new(), format!("{start}-{end}"))
+            }
+            SourceSpecAnchor::Chunk { source, chunk } => {
+                (source.clone(), format!("chunk-{chunk}"), String::new())
+            }
+        };
+        pending.push(AnchorIndexEntry {
+            section_path,
+            source,
+            chunk_id,
+            page_range,
+        });
+    };
+
+    // External interfaces.
+    for iface in &spec.external_interfaces {
+        for a in &iface.source_anchors {
+            emit(
+                format!("External Interfaces > {}", iface.name),
+                a,
+                &mut pending,
+            );
+        }
+    }
+    // Blocks.
+    for block in &spec.blocks {
+        for a in &block.source_anchors {
+            emit(format!("Blocks > {}", block.name), a, &mut pending);
+        }
+    }
+    // Parameters (one anchor per row).
+    for p in &spec.parameters {
+        if !p.source_anchor.is_empty() {
+            emit(
+                format!("Parameters > {}", p.name),
+                &p.source_anchor,
+                &mut pending,
+            );
+        }
+    }
+    // State machines.
+    for s in &spec.state_machines {
+        if !s.source_anchor.is_empty() {
+            emit(
+                format!("State Machines > {}", s.name),
+                &s.source_anchor,
+                &mut pending,
+            );
+        }
+    }
+    // Encodings.
+    for e in &spec.encodings {
+        if !e.source_anchor.is_empty() {
+            emit(
+                format!("Encodings > {}", e.field),
+                &e.source_anchor,
+                &mut pending,
+            );
+        }
+    }
+    // Memory map.
+    for m in &spec.memory_map {
+        if !m.source_anchor.is_empty() {
+            emit(
+                format!("Memory Map > {}", m.name),
+                &m.source_anchor,
+                &mut pending,
+            );
+        }
+    }
+    // Error handling.
+    for e in &spec.error_handling {
+        if !e.source_anchor.is_empty() {
+            emit(
+                format!("Error Handling > {}", e.error_type),
+                &e.source_anchor,
+                &mut pending,
+            );
+        }
+    }
+    // Assumptions / Quantitative rows.
+    for q in &spec.assumptions.quantitative {
+        if !q.source_anchor.is_empty() {
+            emit(
+                format!(
+                    "Assumptions and Constraints > Quantitative > {}",
+                    q.constraint
+                ),
+                &q.source_anchor,
+                &mut pending,
+            );
+        }
+    }
+
+    let mut appended = 0usize;
+    for entry in pending {
+        let already = spec.source_spec_anchors.iter().any(|x| {
+            x.section_path == entry.section_path
+                && x.source == entry.source
+                && x.chunk_id == entry.chunk_id
+                && x.page_range == entry.page_range
+        });
+        if !already {
+            spec.source_spec_anchors.push(entry);
+            appended += 1;
+        }
+    }
+    Ok(appended)
 }
 
-#[allow(dead_code)]
-pub fn populate_open_questions_from_tbds(_corpus_root: &Path, _spec: &mut SpecMd) -> Result<usize> {
-    todo!("Phase 6 milestone 6.6 — turn primary/tbds.toml entries into OpenQuestions")
+/// Turn each entry in `<corpus>/tbds.toml` into an `OpenQuestion`.
+/// The question text carries the breadcrumb (so the agent has
+/// enough context to resolve it) plus the TBD's surrounding line
+/// and the page number.
+///
+/// Idempotent on the rendered question text.
+pub fn populate_open_questions_from_tbds(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
+    let path = corpus_root.join("tbds.toml");
+    if !path.is_file() {
+        return Ok(0);
+    }
+    let body = read_required(&path)?;
+    let raw: RawTbds = parse_toml(&path, &body)?;
+    let mut appended = 0usize;
+    for tbd in raw.tbds {
+        let breadcrumb = if tbd.breadcrumb.is_empty() {
+            String::new()
+        } else {
+            tbd.breadcrumb.join(" > ")
+        };
+        let text = match (breadcrumb.is_empty(), tbd.context.is_empty()) {
+            (true, true) => format!("Unresolved TBD on primary:p{}.", tbd.source_page),
+            (true, false) => format!(
+                "Unresolved TBD on primary:p{}: {}",
+                tbd.source_page, tbd.context
+            ),
+            (false, true) => format!(
+                "Unresolved TBD in `{breadcrumb}` (primary:p{}).",
+                tbd.source_page
+            ),
+            (false, false) => format!(
+                "Unresolved TBD in `{breadcrumb}` (primary:p{}): {}",
+                tbd.source_page, tbd.context
+            ),
+        };
+        let already = spec.open_questions.iter().any(|q| q.text == text);
+        if !already {
+            spec.open_questions.push(OpenQuestion { text });
+            appended += 1;
+        }
+    }
+    Ok(appended)
 }
 
 // ---------------------------------------------------------------------------
@@ -515,6 +734,15 @@ fn page_anchor(source: &str, page_range: &[u32]) -> String {
     } else {
         format!("{source}:p{start}")
     }
+}
+
+/// Parse a `page-NNN[-suffix]` figure filename stem and return the
+/// page number. Accepts `page-013`, `page-13`, `page-013-foo`. The
+/// suffix is anything after the page digits.
+fn parse_page_filename(stem: &str) -> Option<u32> {
+    let rest = stem.strip_prefix("page-")?;
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
 }
 
 #[derive(Debug, Default)]
@@ -663,6 +891,22 @@ struct RawFsmTransition {
     to: String,
     #[serde(default)]
     output: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTbds {
+    #[serde(default)]
+    tbds: Vec<RawTbd>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTbd {
+    #[serde(default)]
+    breadcrumb: Vec<String>,
+    #[serde(default)]
+    source_page: u32,
+    #[serde(default)]
+    context: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -940,6 +1184,114 @@ mod tests {
         assert!(names.contains(&"RESET_RELEASE"));
         let n2 = populate_fsms(&corpus, &mut spec).unwrap();
         assert_eq!(n2, 0);
+    }
+
+    #[test]
+    fn figures_one_per_png_with_parsed_page() {
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        write(&corpus.join("figures").join("page-013.png"), "PNGDATA");
+        write(&corpus.join("figures").join("page-007.png"), "PNGDATA");
+        write(&corpus.join("figures").join("notes.txt"), "ignored");
+        let mut spec = SpecMd::default();
+        let n = populate_figures(&corpus, &mut spec).unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(spec.figures.len(), 2);
+        // Sorted lexicographically by raster path.
+        assert_eq!(spec.figures[0].raster, "figures/page-007.png");
+        assert_eq!(spec.figures[0].source_page, "7");
+        assert_eq!(spec.figures[0].name, "page-007");
+        assert_eq!(spec.figures[1].raster, "figures/page-013.png");
+        assert_eq!(spec.figures[1].source_page, "13");
+        // Captions empty by design.
+        assert!(spec.figures[0].caption.is_empty());
+        let n2 = populate_figures(&corpus, &mut spec).unwrap();
+        assert_eq!(n2, 0);
+    }
+
+    #[test]
+    fn anchors_built_from_populated_sections() {
+        let mut spec = SpecMd::default();
+        spec.blocks.push(Block {
+            name: "Instruction Fetch (IF)".into(),
+            parent: "(none -- top-level)".into(),
+            source_anchors: vec!["primary:p12-13".into()],
+            ..Default::default()
+        });
+        spec.parameters.push(Parameter {
+            name: "XLEN".into(),
+            ty: "int".into(),
+            default: "32".into(),
+            valid_range: String::new(),
+            behavioral_impact: String::new(),
+            source_anchor: "primary:p3".into(),
+        });
+        spec.assumptions.quantitative.push(QuantitativeRow {
+            constraint: "Clock frequency".into(),
+            value: "1 GHz".into(),
+            source_anchor: "primary:p3".into(),
+        });
+        let n = populate_anchors(&mut spec).unwrap();
+        assert_eq!(n, 3);
+        let paths: Vec<&str> = spec
+            .source_spec_anchors
+            .iter()
+            .map(|x| x.section_path.as_str())
+            .collect();
+        assert!(paths.contains(&"Blocks > Instruction Fetch (IF)"));
+        assert!(paths.contains(&"Parameters > XLEN"));
+        assert!(paths.contains(&"Assumptions and Constraints > Quantitative > Clock frequency"));
+        let block_row = spec
+            .source_spec_anchors
+            .iter()
+            .find(|r| r.section_path == "Blocks > Instruction Fetch (IF)")
+            .unwrap();
+        assert_eq!(block_row.source, "primary");
+        assert_eq!(block_row.page_range, "12-13");
+        assert_eq!(block_row.chunk_id, "");
+        // Idempotency.
+        let n2 = populate_anchors(&mut spec).unwrap();
+        assert_eq!(n2, 0);
+    }
+
+    #[test]
+    fn open_questions_from_tbds_carries_breadcrumb() {
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        write(
+            &corpus.join("tbds.toml"),
+            "schema_version = 1\n\
+             \n\
+             [[tbds]]\n\
+             chunk_id = \"c1\"\n\
+             breadcrumb = [\"Pipeline\", \"IF\"]\n\
+             source_page = 13\n\
+             context = \"Reset value for `if_exception` not stated\"\n\
+             \n\
+             [[tbds]]\n\
+             chunk_id = \"c2\"\n\
+             breadcrumb = [\"BPU\"]\n\
+             source_page = 9\n\
+             context = \"BPU table size at default BPU_LOCAL_BITS=8 TBD\"\n",
+        );
+        let mut spec = SpecMd::default();
+        let n = populate_open_questions_from_tbds(&corpus, &mut spec).unwrap();
+        assert_eq!(n, 2);
+        assert!(spec.open_questions[0].text.contains("Pipeline > IF"));
+        assert!(spec.open_questions[0].text.contains("primary:p13"));
+        assert!(spec.open_questions[0].text.contains("if_exception"));
+        // Idempotency.
+        let n2 = populate_open_questions_from_tbds(&corpus, &mut spec).unwrap();
+        assert_eq!(n2, 0);
+    }
+
+    #[test]
+    fn open_questions_missing_file_is_zero() {
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        let mut spec = SpecMd::default();
+        let n = populate_open_questions_from_tbds(&corpus, &mut spec).unwrap();
+        assert_eq!(n, 0);
     }
 
     #[test]
