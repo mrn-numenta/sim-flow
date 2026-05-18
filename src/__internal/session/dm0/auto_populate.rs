@@ -39,9 +39,35 @@ pub struct AutoPopulateReport {
 /// Run every `populate_*` step in order and return an aggregate
 /// report. Called from [`super::run_dm0_work`] when
 /// [`super::detect_mode`] returns [`super::Dm0Mode::SourceDriven`].
-#[allow(dead_code)]
-pub fn run(_project_dir: &Path, _spec: &mut SpecMd) -> Result<AutoPopulateReport> {
-    todo!("Phase 6 milestones 6.3–6.6 — orchestrate the populate_* helpers")
+///
+/// Order is load-bearing: `populate_anchors` walks already-populated
+/// sections, so it runs after every other populate step that emits a
+/// `source_anchor`. TBDs run last because they only consume the
+/// ingest corpus (no spec-state dependency) and are the least likely
+/// to surface useful information until everything else is in place.
+pub fn run(project_dir: &Path, spec: &mut SpecMd) -> Result<AutoPopulateReport> {
+    let manifest = manifest_path(project_dir);
+    let corpus = corpus_root(project_dir);
+    populate_metadata(&manifest, spec)?;
+    populate_assumptions(&corpus, spec)?;
+    let parameters = populate_parameters(&corpus, spec)?;
+    let encodings = populate_encodings(&corpus, spec)?;
+    let errors = populate_errors(&corpus, spec)?;
+    let fsms = populate_fsms(&corpus, spec)?;
+    let blocks = populate_blocks(&corpus, spec)?;
+    let figures = populate_figures(&corpus, spec)?;
+    let anchors = populate_anchors(spec)?;
+    let open_questions = populate_open_questions_from_tbds(&corpus, spec)?;
+    Ok(AutoPopulateReport {
+        blocks,
+        parameters,
+        encodings,
+        errors,
+        fsms,
+        figures,
+        anchors,
+        open_questions,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -665,12 +691,10 @@ pub fn populate_open_questions_from_tbds(corpus_root: &Path, spec: &mut SpecMd) 
 // Path / parsing helpers
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
 fn manifest_path(project_dir: &Path) -> PathBuf {
     super::manifest_path(project_dir)
 }
 
-#[allow(dead_code)]
 fn corpus_root(project_dir: &Path) -> PathBuf {
     project_dir
         .join(".sim-flow")
@@ -1283,6 +1307,82 @@ mod tests {
         // Idempotency.
         let n2 = populate_open_questions_from_tbds(&corpus, &mut spec).unwrap();
         assert_eq!(n2, 0);
+    }
+
+    #[test]
+    fn run_orchestrates_every_step_and_reports_counts() {
+        let tmp = make_project();
+        let project = tmp.path();
+        // Minimal but representative ingest corpus.
+        write(
+            &manifest_path(project),
+            "schema_version = 1\n\
+             source_kind = \"pdf\"\n\
+             source_path = \"docs/main.pdf\"\n",
+        );
+        let corpus = corpus_root(project);
+        write(
+            &corpus.join("tables").join("parameters").join("000.toml"),
+            "schema_version = 1\n\
+             table_kind = \"parameter_table\"\n\
+             source_chunk_id = \"c\"\n\
+             source_page_range = [3, 3]\n\
+             group = \"x\"\n\
+             \n\
+             [[rows]]\n\
+             name = \"XLEN\"\n\
+             default = \"32\"\n\
+             comment = \"register width at 1 GHz\"\n",
+        );
+        write(
+            &corpus.join("tables").join("signals").join("000-if.toml"),
+            "schema_version = 1\n\
+             table_kind = \"signal_table\"\n\
+             source_chunk_id = \"c\"\n\
+             source_page_range = [12, 13]\n\
+             stage = \"IF\"\n\
+             breadcrumb = [\"P\", \"IF\"]\n\
+             \n\
+             [[rows]]\n\
+             name = \"if_pc\"\n\
+             direction = \"out\"\n\
+             peer = \"PD\"\n\
+             description = \"pc\"\n",
+        );
+        write(&corpus.join("figures").join("page-013.png"), "DATA");
+        write(
+            &corpus.join("tbds.toml"),
+            "schema_version = 1\n\
+             \n\
+             [[tbds]]\n\
+             chunk_id = \"c\"\n\
+             breadcrumb = [\"IF\"]\n\
+             source_page = 13\n\
+             context = \"reset value TBD\"\n",
+        );
+
+        let mut spec = SpecMd::default();
+        let report = run(project, &mut spec).unwrap();
+        assert_eq!(report.parameters, 1);
+        assert_eq!(report.blocks, 1);
+        assert_eq!(report.figures, 1);
+        assert_eq!(report.open_questions, 1);
+        // anchors come from blocks + parameters + clock-quant row.
+        assert!(report.anchors >= 3);
+        assert_eq!(spec.metadata.source_documents.len(), 1);
+        assert!(
+            spec.assumptions
+                .quantitative
+                .iter()
+                .any(|r| r.constraint == "Clock frequency")
+        );
+        // Re-running must not duplicate.
+        let report2 = run(project, &mut spec).unwrap();
+        assert_eq!(report2.parameters, 0);
+        assert_eq!(report2.blocks, 0);
+        assert_eq!(report2.figures, 0);
+        assert_eq!(report2.open_questions, 0);
+        assert_eq!(report2.anchors, 0);
     }
 
     #[test]
