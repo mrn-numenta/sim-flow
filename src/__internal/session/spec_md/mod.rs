@@ -16,8 +16,10 @@
 //! Phases 2, 6, and 8 consume this module; nothing here is wired
 //! into DM0, the lance index, or any prompt yet.
 
+pub mod anchor;
 pub mod parser;
 pub mod types;
 
+pub use anchor::{AnchorParseError, AnchorParseReason};
 pub use parser::{SpecMdParseError, parse};
 pub use types::*;

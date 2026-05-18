@@ -238,12 +238,12 @@ Gate: per-section unit tests pass.
 
 ### Milestone 1.13: Anchor format parser
 
-- [ ] Implement `SourceSpecAnchor::parse(&str) ->
+- [x] Implement `SourceSpecAnchor::parse(&str) ->
       Result<SourceSpecAnchor, AnchorParseError>` handling
       the three forms (page, page-range, chunk).
-- [ ] Implement `SourceSpecAnchor::to_string(&self) -> String`
+- [x] Implement `SourceSpecAnchor::to_string(&self) -> String`
       producing the canonical form.
-- [ ] Unit tests covering each form, plus malformed inputs.
+- [x] Unit tests covering each form, plus malformed inputs.
 
 Gate: anchor unit tests pass.
 
