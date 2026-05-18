@@ -81,4 +81,29 @@ appearance_threshold = 0.75
         assert_eq!(cfg.figures.dpi, 150);
         assert!(cfg.chrome_stripping.enabled);
     }
+
+    /// Milestone 2.15: the chapter 1.9 programmatic API surface is
+    /// callable from outside the module. We construct an
+    /// `IngestRequest` against a tiny markdown source and call
+    /// `pipeline::run` directly; the outcome's counts match the
+    /// expected manifest.
+    #[test]
+    fn programmatic_api_runs_against_markdown() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().to_path_buf();
+        let spec = project.join("src.md");
+        std::fs::write(&spec, "# Top\nbody\n\n## Sub\nmore body\n").unwrap();
+        let outcome = pipeline::run(IngestRequest {
+            primary: Some(SourceSpec::new(spec)),
+            peers: Vec::new(),
+            config: IngestConfig::default(),
+            project_root: project.clone(),
+        })
+        .expect("run succeeds");
+        assert_eq!(outcome.primary_chunk_count, 2);
+        assert!(outcome.manifest_path.exists());
+        let body = std::fs::read_to_string(&outcome.manifest_path).unwrap();
+        assert!(body.contains("source_kind = \"markdown\""));
+        assert!(body.contains("primary_chunk_count = 2"));
+    }
 }

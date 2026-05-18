@@ -293,11 +293,11 @@ Gate: CLI integration test passes.
 
 ### Milestone 2.15: Programmatic API
 
-- [ ] Expose `sim_flow::session::spec_ingest::pipeline::run`
+- [x] Expose `sim_flow::session::spec_ingest::pipeline::run`
       as the public Rust API per Chapter 1 §1.9.
-- [ ] Update `Cargo.toml` if needed to expose the symbol
+- [x] Update `Cargo.toml` if needed to expose the symbol
       through the library target.
-- [ ] Unit test calling `run` programmatically.
+- [x] Unit test calling `run` programmatically.
 
 Gate: programmatic-API unit test passes.
 
