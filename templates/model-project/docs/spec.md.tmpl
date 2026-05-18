@@ -1,90 +1,193 @@
+<!--
+This file is the design-specification template. It conforms to the
+structured spec.md schema documented in
+`tools/sim-flow/docs/architecture/02-spec-md-schema.md`.
+
+Authoring loop:
+  1. Fill in `## Metadata`.
+  2. Walk every REQUIRED section in order. Where you don't yet know
+     a value, leave the placeholder text and DM0 (manual mode) or
+     the agent (automated mode) will ask you about each missing
+     required field in turn.
+  3. OPTIONAL sections appear below as HTML comments. Uncomment any
+     that apply to your design.
+
+Schema reference: Architecture Chapter 2 §2.2 for section order,
+§2.3 for per-section shape, §2.4 for source-spec anchor format,
+§2.5 for column-header alias rules.
+-->
+
 # Design Specification
 
 ## Metadata
 
 - Design name:
-- Version / revision:
-- Spec status: draft | reviewed | approved
-- Author(s):
-- Source document(s):
+- Version:
+- Status: draft
+- Authors:
 - Last updated:
 
-## Purpose And Scope
-
-### Purpose
+## Purpose
 
 Describe what the design does in one or two paragraphs.
 
-### Scope
+## Scope
 
 Describe what this model must include.
 
-### Non-goals
+## Non-goals
 
 Describe what is explicitly out of scope for this model.
 
-## Assumptions And Constraints
+## Assumptions and Constraints
 
-### Technology target
+### Quantitative
 
-- Technology node: `<N nm>`
-- Clock frequency: `<N MHz | N GHz>`
-- Gate budget per cycle: `<concrete number — e.g. "~50–100 gates" copied from the source, or a derivation line like "Derived gate budget per cycle: ~50–100 (1 GHz at 7 nm, FO4 ~10 ps)">`
+| Constraint | Value | Source-anchor |
+| --- | --- | --- |
+| Clock frequency |  |  |
+| Gate budget per cycle |  |  |
 
-### Environmental assumptions
+### Environmental
 
-Document assumptions about surrounding blocks, traffic patterns, memory system behavior, clocking, reset, or software control.
+Document assumptions about surrounding blocks, traffic patterns,
+memory system behavior, clocking, reset, or software control.
 
-### Architectural constraints
+### Architectural
 
 Document any fixed architectural requirements the model must honor.
 
 ## External Interfaces
 
-For each externally visible interface, provide a subsection using the structure below.
+<!--
+Add one `### Interface: <name>` block per externally visible
+interface. Each interface has a bold-property block, a six-column
+signal table, and optional transaction / timing / error / anchor
+subsections.
 
-### Interface: `<name>`
+### Interface: <name>
 
-- Direction: input | output | bidirectional
-- Protocol:
-- Clock domain:
-- Connected peer(s):
-- Purpose:
+**Direction:**
+**Protocol:**
+**Clock domain:**
+**Connected peer:**
 
-| Signal / field | Width | Type / encoding | Required | Description |
-| --- | --- | --- | --- | --- |
-| `<signal>` | `<bits>` | `<type>` | yes/no | `<meaning>` |
+#### Signals
 
-#### Transaction semantics
+| Signal | Direction | Width | Type | Required | Description |
+| --- | --- | --- | --- | --- | --- |
 
-Describe what constitutes a request, response, command, packet, beat, flit, or transaction on this interface.
+#### Source-spec anchors
 
-#### Timing and flow control
+-
+-->
 
-Describe handshake semantics, backpressure behavior, credit rules, arbitration constraints, ordering requirements, and any cycle-level timing rules.
+## Blocks
 
-#### Error and exceptional behavior
+<!--
+Add one `### Block: <name>` block per architectural unit. Blocks are
+flat at heading level 3; nesting is recorded by the `Parent:` field
+rather than by markdown depth.
 
-Describe malformed input handling, timeouts, retries, drops, stalls, and recovery behavior.
+### Block: <name>
 
-## Internal Interfaces
+**Role:**
+**Parent:** (none -- top-level)
+**Clock domain:**
+**Parameterized by:**
 
-List the important internal boundaries the model must represent. Use this section when internal pipes, queues, scoreboards, arbiters, or storage interfaces matter to decomposition or pipelining.
+#### I/O Signals
 
-### Internal interface: `<name>`
-
-- Source block:
-- Destination block:
-- Purpose:
-- Clock domain:
-
-| Signal / field | Width | Type / encoding | Description |
+| Signal | Direction | Peer | Description |
 | --- | --- | --- | --- |
-| `<signal>` | `<bits>` | `<type>` | `<meaning>` |
 
-#### Semantics
+#### State
 
-Describe the meaning of the transferred data and any required ordering, hazard, or flow-control behavior.
+- `<name>` (`<width>`-wide register, reset to `<value>`)
+
+#### Behavior summary
+
+#### Source-spec anchors
+
+-
+
+#### Figures
+
+-
+
+#### Sub-blocks
+
+-
+-->
+
+<!--
+## Parameters
+
+| Name | Type | Default | Valid range | Behavioral impact | Source-anchor |
+| --- | --- | --- | --- | --- | --- |
+-->
+
+<!--
+## State Machines
+
+### FSM: <name>
+
+**Reset state:**
+**Source-spec anchor:**
+
+#### States
+
+- `<state>` - <description>
+
+#### Transitions
+
+| From | Input/Event | To | Output/Action |
+| --- | --- | --- | --- |
+-->
+
+<!--
+## Encodings
+
+### Encoding: <field>
+
+**Bit width:**
+**Source-anchor:**
+
+| Value | Name | Abbreviation |
+| --- | --- | --- |
+
+Reserved / illegal: none.
+-->
+
+<!--
+## Memory Map
+
+| Start | End | Name | Purpose | Access | Source-anchor |
+| --- | --- | --- | --- | --- | --- |
+-->
+
+<!--
+## Connectivity
+
+### Nodes
+
+| Id | Type | Coordinate | Role |
+| --- | --- | --- | --- |
+
+### Edges
+
+| From | To | Channel | Source-anchor |
+| --- | --- | --- | --- |
+
+### Routing rules
+-->
+
+<!--
+## Error Handling
+
+| Error type | Detecting component | Detection behavior | Bus response | Master behavior | Software response | Source-anchor |
+| --- | --- | --- | --- | --- | --- | --- |
+-->
 
 ## Functional Behavior
 
@@ -94,99 +197,84 @@ Describe the top-level transformation from inputs to outputs.
 
 ### Operation flow
 
-List the major operations in execution order. This section should be detailed enough that later steps can decompose the design into named operations without guessing.
-
-1. `<operation name>`: `<purpose>`
-2. `<operation name>`: `<purpose>`
-3. `<operation name>`: `<purpose>`
+1. `<id>` - <purpose> (anchor: <source-anchor>)
 
 ### Data movement
 
-Describe what data items move between operations, including payload meaning, widths, production and consumption points, and any rate or burst assumptions.
+Describe what data items move between operations, including payload
+meaning, widths, production and consumption points, and any rate or
+burst assumptions.
 
-### State and storage
+## Timing, Latency, and Throughput
 
-Describe architecturally visible state, queues, tables, buffers, caches, scoreboards, or counters the model must represent.
+### Latency
 
-### Arbitration and scheduling
+| Operation | Best-case | Worst-case | Notes |
+| --- | --- | --- | --- |
 
-Describe any arbitration, prioritization, fairness, or scheduling rules that affect behavior or performance.
+### Throughput
 
-## Timing, Latency, And Throughput
+Describe steady-state throughput, burst behavior, concurrency
+limits, and any occupancy or buffering expectations.
 
-### Performance intent
+### Stall and backpressure
 
-Document any throughput, latency, bandwidth, utilization, or initiation-interval expectations.
+Describe what causes stalls, how backpressure propagates, and which
+operations or interfaces can block one another.
 
-### Latency expectations
+## Pipeline and Hierarchy
 
-Describe expected end-to-end latency and any important per-stage or per-operation timing requirements.
+Short prose summary that points at the Blocks section for detail.
 
-### Throughput expectations
+## Reset, Initialization, Flush, Drain
 
-Describe steady-state throughput, burst behavior, concurrency limits, and any occupancy or buffering expectations.
+### Reset
 
-### Stall and backpressure behavior
-
-Describe what causes stalls, how backpressure propagates, and which operations or interfaces can block one another.
-
-## Pipeline And Hierarchy
-
-### Pipeline intent
-
-Describe intended pipeline depth, stage boundaries, and any mandatory stage placements.
-
-### Hierarchy
-
-Describe the intended sub-modules or major blocks and their responsibilities.
-
-### Clocking
-
-Describe clock domains, clock crossings, synchronizers, FIFOs, or other CDC structures the model must represent.
-
-## Reset, Initialization, Flush, And Drain Behavior
-
-### Reset behavior
-
-Describe reset inputs, reset scope, reset values, and what state is cleared or preserved.
+Describe reset inputs, reset scope, reset values, and what state is
+cleared or preserved.
 
 ### Initialization
 
-Describe any startup sequencing, training, warm-up, or required preconditions before normal operation.
+Describe any startup sequencing, training, warm-up, or required
+preconditions before normal operation.
 
 ### Flush and drain
 
-Describe how in-flight work is flushed, drained, canceled, or completed.
+Describe how in-flight work is flushed, drained, canceled, or
+completed.
 
-## Parameters And Configuration
+<!--
+## Cycle-Accurate Behavior
 
-If the design is parameterizable, list each parameter using the structure below.
+### Scenario: <name>
 
-### Parameter: `<name>`
+| Cycle | <stage> |
+| --- | --- |
 
-- Description:
-- Type:
-- Valid range / values:
-- Default:
-- Behavioral impact:
+**Source-anchor:**
+-->
 
-## Corner Cases And Exceptional Behavior
+<!--
+## Figures
 
-Document any corner cases that the model must implement explicitly.
+### Figure: <name>
 
-- Empty or idle input behavior:
-- Full-buffer behavior:
-- Reordering behavior:
-- Hazard / conflict behavior:
-- Error detection and reporting:
-- Unsupported or reserved encodings:
-- Any other exceptional cases:
+**Source page:**
+**Raster:** [path](path)
+**Role:**
+**Referenced blocks:**
+
+#### Caption
+
+#### Elements depicted
+
+| Element | Kind | Notes |
+| --- | --- | --- |
+-->
 
 ## Worked Examples
 
-Provide one or more concrete examples that trace data through the design.
-
-### Example 1: `<name>`
+### Example 1: <name>
 
 #### Inputs
 
@@ -194,24 +282,23 @@ Describe the input transaction or stimulus.
 
 #### Expected flow
 
-Describe the major operations, state updates, and transfers that should occur.
+Describe the major operations, state updates, and transfers that
+should occur.
 
 #### Expected outputs
 
-Describe the output transaction(s), timing, and any observable side effects.
+Describe the output transaction(s), timing, and any observable side
+effects.
 
-### Example 2: `<name>`
+## Source-Spec Anchors
 
-Use this for a corner case, stall case, or error case when applicable.
+| spec.md section | Source | Chunk id | Page range |
+| --- | --- | --- | --- |
 
 ## Open Questions
 
-List ambiguities, contradictions, or missing information that later steps should not silently resolve.
-
-- `<question>`
+-
 
 ## Auto-decisions
 
-When operating without a human in the loop, record each non-trivial assumption here.
-
-- decided `<decision>`; rationale: `<one sentence>`
+-

@@ -297,17 +297,17 @@ Gate: round-trip tests pass.
 
 ### Milestone 1.17: New spec.md template
 
-- [ ] Replace
+- [x] Replace
       `templates/model-project/docs/spec.md.tmpl` with the
       new structured template per Chapter 2 §2.8.
-- [ ] Include every REQUIRED section heading.
-- [ ] Include table header rows (column headers + separator
+- [x] Include every REQUIRED section heading.
+- [x] Include table header rows (column headers + separator
       rows) for every REQUIRED table.
-- [ ] Include OPTIONAL section headings as HTML comments
+- [x] Include OPTIONAL section headings as HTML comments
       (`<!-- ## State Machines (uncomment if applicable) -->`).
-- [ ] Top-of-file comment block summarizes the authoring loop
+- [x] Top-of-file comment block summarizes the authoring loop
       and points at Architecture Chapter 2.
-- [ ] Add a unit test that parses the template, asserts no
+- [x] Add a unit test that parses the template, asserts no
       errors, and asserts the round-trip identity holds.
 
 Gate: template unit test passes.

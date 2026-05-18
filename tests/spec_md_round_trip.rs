@@ -64,3 +64,20 @@ fn round_trip_numenta_stubby() {
     round_trip("numenta-stubby.md");
     round_trip_validates("numenta-stubby.md");
 }
+
+#[test]
+fn template_parses_and_round_trips() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("templates")
+        .join("model-project")
+        .join("docs")
+        .join("spec.md.tmpl");
+    let original = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read template: {e}"));
+    let first = spec_md::parse(&original).expect("template parses");
+    let rendered = first.to_markdown();
+    let second = spec_md::parse(&rendered).expect("template re-parses after writer");
+    assert_eq!(
+        first, second,
+        "template round-trip identity failed; rendered:\n{rendered}"
+    );
+}
