@@ -71,6 +71,18 @@ fn init_project(tmp: &tempfile::TempDir) -> PathBuf {
     state.save(&project.join(".sim-flow")).unwrap();
     let config = sim_flow::config::Config::default();
     config.save(&project.join(".sim-flow")).unwrap();
+    // Phase 6: DM0's structured gate resolves source-anchors
+    // against `.sim-flow/spec-ingest/manifest.toml`. Stage a minimal
+    // manifest so the mock-driven spec.md (anchored at
+    // `primary:p1`) passes the resolution step. Real projects get
+    // this via `sim-flow ingest`.
+    let ingest = project.join(".sim-flow").join("spec-ingest");
+    std::fs::create_dir_all(&ingest).unwrap();
+    std::fs::write(
+        ingest.join("manifest.toml"),
+        "schema_version = 1\nsource_kind = \"markdown\"\n",
+    )
+    .unwrap();
     project
 }
 
@@ -119,9 +131,20 @@ fn auto_opts(project: &Path, mode: StepMode) -> AutoOptions {
 // allowlist is `docs/` for DM0..DM2b and the critique-session
 // allowlist is the canonical `docs/critiques/<step>-critique.{md,json}`.
 fn dm0_work_response() -> String {
+    // Phase 6: DM0 gate runs the structured spec.md parser. The
+    // mock response writes a minimal spec that carries the
+    // REQUIRED Quantitative rows; the orchestrator's test harness
+    // pre-seeds `.sim-flow/spec-ingest/manifest.toml` so the
+    // anchor-resolution step has somewhere to point at.
     "Drafting the spec.\n\n\
      ```docs/spec.md\n\
-     # Spec\n\nClock: 2 GHz\nGates per cycle: 50\nNode: 7 nm\n\
+     # Spec\n\n\
+     ## Assumptions and Constraints\n\n\
+     ### Quantitative\n\n\
+     | Constraint | Value | Source-anchor |\n\
+     | --- | --- | --- |\n\
+     | Clock frequency | 2 GHz | primary:p1 |\n\
+     | Gate budget per cycle | 50 | primary:p1 |\n\
      ```\n"
         .into()
 }
@@ -297,7 +320,7 @@ fn e2e_auto_walks_docs_only_dm_flow() {
 
     // Every step's artifacts on disk.
     for (path, marker) in [
-        ("docs/spec.md", "Clock: 2 GHz"),
+        ("docs/spec.md", "Clock frequency | 2 GHz"),
         ("docs/targets.md", "Throughput"),
         ("docs/testbench.md", "Scoreboard"),
         ("docs/analysis/decomposition.md", "## Operation: combine"),
@@ -701,6 +724,18 @@ fn bootstrap_full_project(tmp: &tempfile::TempDir) -> PathBuf {
     };
     let outcome = new_model(&opts).expect("new_model bootstrap");
 
+    // Phase 6: stage a minimal `spec-ingest/manifest.toml` so DM0's
+    // structured gate can resolve `primary:*` anchors. Real projects
+    // get this via `sim-flow ingest`; the mock fixture skips that
+    // path and writes the manifest directly.
+    let ingest = outcome.project_dir.join(".sim-flow").join("spec-ingest");
+    std::fs::create_dir_all(&ingest).unwrap();
+    std::fs::write(
+        ingest.join("manifest.toml"),
+        "schema_version = 1\nsource_kind = \"markdown\"\n",
+    )
+    .unwrap();
+
     // Replace src/model/top.rs with code that contains the literal
     // text `impl HasLogic for Top` (DM2d's grep gate matches on text,
     // not macro expansion -- the template's `impl_structural_has_logic!`
@@ -730,7 +765,13 @@ fn pre_write_full_artifacts(project: &Path) {
     let writes: &[(&str, &str)] = &[
         (
             "docs/spec.md",
-            "# Spec\n\nClock: 2 GHz\nGates per cycle: 50\nNode: 7 nm\n",
+            "# Spec\n\n\
+             ## Assumptions and Constraints\n\n\
+             ### Quantitative\n\n\
+             | Constraint | Value | Source-anchor |\n\
+             | --- | --- | --- |\n\
+             | Clock frequency | 2 GHz | primary:p1 |\n\
+             | Gate budget per cycle | 50 | primary:p1 |\n",
         ),
         (
             "docs/targets.md",

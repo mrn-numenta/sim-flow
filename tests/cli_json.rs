@@ -222,18 +222,21 @@ fn describe_emits_step_descriptor_for_dm0_work() {
     assert_eq!(v["kind"], "work");
     assert_eq!(v["flow"], "direct-modeling");
     assert_eq!(v["per_candidate"], false);
-    // DM0 lists both spec layouts (single-file `docs/spec.md` and
-    // paginated `docs/spec/`); the gate accepts either, and Reset
-    // sweeps both forms.
-    assert_eq!(
-        v["work_artifacts"],
-        serde_json::json!(["docs/spec.md", "docs/spec/"])
-    );
+    // Phase 6 rewires DM0 around the structured spec.md parser. The
+    // canonical artifact is single-file `docs/spec.md`; the legacy
+    // paginated `docs/spec/` layout is no longer accepted.
+    assert_eq!(v["work_artifacts"], serde_json::json!(["docs/spec.md"]));
     assert_eq!(v["predecessor_inputs"], serde_json::json!([]));
     let gate_checks = v["gate_checks"].as_array().expect("gate_checks array");
     assert!(
         gate_checks.iter().any(|c| c["kind"] == "critique-clean"),
         "DM0 gate should include critique-clean",
+    );
+    assert!(
+        gate_checks
+            .iter()
+            .any(|c| c["kind"] == "spec-md-structured"),
+        "DM0 gate should include spec-md-structured",
     );
     assert!(
         v["instruction_body"]
@@ -314,11 +317,28 @@ fn advance_refuses_when_gate_dirty_and_does_not_mutate_state() {
 #[test]
 fn advance_marks_passed_and_bumps_current_step_on_clean_gate() {
     let (_tmp, project) = init_project();
-    // Satisfy DM0's gate by hand.
+    // Satisfy DM0's structured gate by hand: a spec.md the Phase 1
+    // parser accepts plus the required Quantitative rows.
     std::fs::create_dir_all(project.join("docs")).unwrap();
     std::fs::write(
         project.join("docs/spec.md"),
-        "# Spec\n\nClock: 2 GHz\nGates per cycle: 50\nNode: 7 nm\n",
+        "# Test Spec\n\n\
+         ## Assumptions and Constraints\n\n\
+         ### Quantitative\n\n\
+         | Constraint | Value | Source-anchor |\n\
+         | --- | --- | --- |\n\
+         | Clock frequency | 2 GHz | primary:p1 |\n\
+         | Gate budget per cycle | 50 | primary:p1 |\n",
+    )
+    .unwrap();
+    // No `.sim-flow/spec-ingest/manifest.toml`: the gate evaluator
+    // detects `manifest_path` doesn't exist on disk, emits an info
+    // failure -- but we satisfy that by providing the manifest.
+    let ingest = project.join(".sim-flow").join("spec-ingest");
+    std::fs::create_dir_all(&ingest).unwrap();
+    std::fs::write(
+        ingest.join("manifest.toml"),
+        "schema_version = 1\nsource_kind = \"markdown\"\n",
     )
     .unwrap();
     let critiques = project.join("docs").join("critiques");

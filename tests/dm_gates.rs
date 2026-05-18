@@ -59,13 +59,31 @@ fn new_project() -> (tempfile::TempDir, PathBuf) {
     (tmp, project)
 }
 
+/// Minimal structured `spec.md` body that satisfies the Phase 6
+/// parser-driven gate: Quantitative table carries both required
+/// rows with valid values, and source-anchors resolve to `primary`.
+const STRUCTURED_VALID_SPEC: &str = "# Design Spec\n\n\
+    ## Assumptions and Constraints\n\n\
+    ### Quantitative\n\n\
+    | Constraint | Value | Source-anchor |\n\
+    | --- | --- | --- |\n\
+    | Clock frequency | 2 GHz | primary:p1 |\n\
+    | Gate budget per cycle | 50 | primary:p1 |\n";
+
+/// Ingest manifest stub the gate's anchor-resolution step uses to
+/// confirm `<source>` identifiers resolve.
+fn write_stub_manifest(project: &Path) {
+    write(
+        &project.join(".sim-flow/spec-ingest/manifest.toml"),
+        "schema_version = 1\nsource_kind = \"markdown\"\n",
+    );
+}
+
 #[test]
 fn dm0_gate_accepts_well_formed_spec() {
     let (_tmp, project) = new_project();
-    write(
-        &project.join("docs/spec.md"),
-        "# Design Spec\nClock: 2 GHz\nGates per cycle: 50\nTech node: 7 nm\n",
-    );
+    write(&project.join("docs/spec.md"), STRUCTURED_VALID_SPEC);
+    write_stub_manifest(&project);
     clean_critique(&project, "DM0");
     assert_clean(evaluate(&project, "DM0"), "DM0");
 }
@@ -75,8 +93,14 @@ fn dm0_gate_rejects_missing_gates_per_cycle() {
     let (_tmp, project) = new_project();
     write(
         &project.join("docs/spec.md"),
-        "# Design Spec\nClock: 2 GHz\nTech node: 7 nm\n",
+        "# Design Spec\n\n\
+         ## Assumptions and Constraints\n\n\
+         ### Quantitative\n\n\
+         | Constraint | Value | Source-anchor |\n\
+         | --- | --- | --- |\n\
+         | Clock frequency | 2 GHz | primary:p1 |\n",
     );
+    write_stub_manifest(&project);
     clean_critique(&project, "DM0");
     let report = evaluate(&project, "DM0");
     assert!(!report.is_clean());
@@ -84,7 +108,10 @@ fn dm0_gate_rejects_missing_gates_per_cycle() {
         report
             .failures
             .iter()
-            .any(|f| f.description.contains("gates-per-cycle"))
+            .any(|f| f.reason.contains("Gate budget per cycle")
+                || f.reason.contains("missing-gate-budget")),
+        "expected missing-gate-budget failure; got {:?}",
+        report.failures
     );
 }
 
@@ -98,7 +125,16 @@ fn dm0_gate_rejects_missing_spec() {
 #[test]
 fn dm0_gate_rejects_missing_frequency() {
     let (_tmp, project) = new_project();
-    write(&project.join("docs/spec.md"), "no frequency, tech 7 nm\n");
+    write(
+        &project.join("docs/spec.md"),
+        "# Design Spec\n\n\
+         ## Assumptions and Constraints\n\n\
+         ### Quantitative\n\n\
+         | Constraint | Value | Source-anchor |\n\
+         | --- | --- | --- |\n\
+         | Gate budget per cycle | 50 | primary:p1 |\n",
+    );
+    write_stub_manifest(&project);
     clean_critique(&project, "DM0");
     let report = evaluate(&project, "DM0");
     assert!(!report.is_clean());
@@ -106,7 +142,10 @@ fn dm0_gate_rejects_missing_frequency() {
         report
             .failures
             .iter()
-            .any(|f| f.description.contains("frequency"))
+            .any(|f| f.reason.contains("Clock frequency")
+                || f.reason.contains("missing-clock-frequency")),
+        "expected missing-clock-frequency failure; got {:?}",
+        report.failures
     );
 }
 
