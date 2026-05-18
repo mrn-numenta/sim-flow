@@ -12,7 +12,9 @@ use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use super::types::SpecMd;
 
+pub(crate) mod anchors;
 pub(crate) mod assumptions;
+pub(crate) mod auto_decisions;
 pub(crate) mod blocks;
 pub(crate) mod connectivity;
 pub(crate) mod cycle_accurate;
@@ -23,12 +25,14 @@ pub(crate) mod figures;
 pub(crate) mod functional_behavior;
 pub(crate) mod memory_map;
 pub(crate) mod metadata;
+pub(crate) mod open_questions;
 pub(crate) mod parameters;
 pub(crate) mod prose;
 pub(crate) mod section_util;
 pub(crate) mod state_machines;
 pub(crate) mod table;
 pub(crate) mod timing;
+pub(crate) mod worked_examples;
 
 /// Errors produced by [`parse`]. Every variant carries the offending
 /// line / column so the caller can surface a precise diagnostic.
@@ -326,10 +330,22 @@ fn dispatch_section(section: &Section, spec: &mut SpecMd) -> Result<(), SpecMdPa
             spec.figures = figures::parse_figures(&section.body)?;
             Ok(())
         }
-        "Worked Examples" => Ok(()),
-        "Source-Spec Anchors" => Ok(()),
-        "Open Questions" => Ok(()),
-        "Auto-decisions" => Ok(()),
+        "Worked Examples" => {
+            spec.worked_examples = worked_examples::parse_worked_examples(&section.body);
+            Ok(())
+        }
+        "Source-Spec Anchors" => {
+            spec.source_spec_anchors = anchors::parse_anchors(&section.body)?;
+            Ok(())
+        }
+        "Open Questions" => {
+            spec.open_questions = open_questions::parse_open_questions(&section.body);
+            Ok(())
+        }
+        "Auto-decisions" => {
+            spec.auto_decisions = auto_decisions::parse_auto_decisions(&section.body);
+            Ok(())
+        }
         // Unknown sections are tolerated (forward compatibility) but
         // produce no parsed output.
         _ => Ok(()),

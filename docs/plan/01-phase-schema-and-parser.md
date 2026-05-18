@@ -224,15 +224,15 @@ Gate: per-section unit tests pass.
 
 ### Milestone 1.12: Per-section parsers — Worked Examples, Anchors, Questions, Decisions
 
-- [ ] Implement `parser/worked_examples.rs` (per-example
+- [x] Implement `parser/worked_examples.rs` (per-example
       heading + Inputs / Expected flow / Expected outputs
       subsections).
-- [ ] Implement `parser/anchors.rs` (the anchor-map table).
-- [ ] Implement `parser/open_questions.rs` (bulleted list).
-- [ ] Implement `parser/auto_decisions.rs` (bulleted list,
+- [x] Implement `parser/anchors.rs` (the anchor-map table).
+- [x] Implement `parser/open_questions.rs` (bulleted list).
+- [x] Implement `parser/auto_decisions.rs` (bulleted list,
       each line: `decided <decision>; rationale: <one
       sentence>`).
-- [ ] Unit tests.
+- [x] Unit tests.
 
 Gate: per-section unit tests pass.
 
