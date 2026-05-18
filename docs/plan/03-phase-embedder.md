@@ -133,14 +133,14 @@ passes when Ollama is running.
 
 ### Milestone 3.6: `sim-flow embedder check` CLI
 
-- [ ] In the appropriate CLI module, register an `embedder`
+- [x] In the appropriate CLI module, register an `embedder`
       command with a `check` subcommand.
-- [ ] `sim-flow embedder check [--config <path>] [--verbose]`
+- [x] `sim-flow embedder check [--config <path>] [--verbose]`
       runs the construction smoke embed and prints the result
       per Chapter 5 §5.9.
-- [ ] Exit 0 on success, exit 1 on construction failure
+- [x] Exit 0 on success, exit 1 on construction failure
       (with the error printed).
-- [ ] Unit test invoking the CLI handler programmatically
+- [x] Unit test invoking the CLI handler programmatically
       with a mock embedder server.
 
 Gate: CLI subcommand works against the live Ollama (manual

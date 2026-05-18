@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use sim_flow::__internal::state::Flow;
 
 pub(crate) mod actions;
+pub(crate) mod embedder;
 
 #[cfg(test)]
 mod tests;
@@ -621,6 +622,36 @@ pub(crate) enum Command {
         /// `raw` always emits JSON regardless of this flag.
         #[arg(long, default_value_t = false)]
         json: bool,
+    },
+    /// Diagnostics for the embedding client (Chapter 5 §5.9).
+    /// `sim-flow embedder check` validates that the configured
+    /// `embedder.toml` connects to its provider and the returned
+    /// vector dimension matches the configured `dimension`. Use
+    /// when configuring a new project's embedder for the first
+    /// time, when an index build fails with a dimension error, or
+    /// when a retrieval tool surfaces "embedder unreachable" mid-
+    /// session.
+    Embedder {
+        #[command(subcommand)]
+        action: EmbedderAction,
+    },
+}
+
+/// Subcommands under `sim-flow embedder`. Currently `check`; future
+/// additions might include `ad-hoc embed "..."` or per-source
+/// diagnostics.
+#[derive(Debug, Subcommand)]
+pub(crate) enum EmbedderAction {
+    /// Resolve the embedder config and run a probe embed.
+    Check {
+        /// Explicit path to an `embedder.toml`. Bypasses the
+        /// project / env / home priority resolution.
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Print extra fields (header counts, retry policy, elapsed
+        /// per attempt) on success.
+        #[arg(long, default_value_t = false)]
+        verbose: bool,
     },
 }
 
