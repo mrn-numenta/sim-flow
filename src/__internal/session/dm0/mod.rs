@@ -86,14 +86,70 @@ pub struct Dm0Outcome {
 }
 
 /// Top-level entry point invoked by the orchestrator when the DM0
-/// work session starts. Branches on [`detect_mode`] and either runs
-/// the auto-populate path ([`auto_populate::run`]) or the Q&A loop
-/// ([`qa_loop::drive_qa_loop`]). The orchestrator drives the LLM
-/// turn loop separately; this function returns once the
-/// auto-populate / Q&A bootstrapping is done.
-#[allow(dead_code)]
-pub fn run_dm0_work(_project_dir: &Path) -> Result<Dm0Outcome> {
-    todo!("Phase 6 milestone 6.1 — wire auto_populate + qa_loop from detect_mode")
+/// work session starts. Branches on [`detect_mode`] and either seeds
+/// `docs/spec.md` from the ingest corpus
+/// ([`auto_populate::run`]) or drives the interactive Q&A loop
+/// ([`qa_loop::drive_qa_loop`]).
+///
+/// In source-driven mode the function returns once the auto-populate
+/// step has persisted a draft spec.md; the agent's LLM turn picks up
+/// from there and completes prose subsections.
+///
+/// In no-source mode the function drives the Q&A loop to completion
+/// (every MissingField either resolved or recorded as a TBD) and
+/// then persists the populated spec.md.
+///
+/// On missing manifest, falls back to no-source mode — the caller
+/// is responsible for surfacing a diagnostic suggesting
+/// `sim-flow ingest` if a source-spec was expected.
+pub fn run_dm0_work(
+    project_dir: &Path,
+    llm: &mut dyn crate::__internal::session::llm_adapter::LlmAdapter,
+) -> Result<Dm0Outcome> {
+    use crate::__internal::session::spec_md::SpecMd;
+
+    let mode = match detect_mode(project_dir) {
+        Ok(m) => m,
+        Err(_) => Dm0Mode::NoSource,
+    };
+    let mut spec = SpecMd::default();
+    let mut outcome = Dm0Outcome {
+        mode: Some(mode),
+        ..Dm0Outcome::default()
+    };
+
+    match mode {
+        Dm0Mode::SourceDriven => {
+            let report = auto_populate::run(project_dir, &mut spec)?;
+            outcome.fields_filled = report.blocks
+                + report.parameters
+                + report.encodings
+                + report.errors
+                + report.fsms
+                + report.figures
+                + report.anchors;
+            outcome.tbds_recorded = report.open_questions;
+        }
+        Dm0Mode::NoSource => {
+            let report = qa_loop::drive_qa_loop(&mut spec, llm)?;
+            outcome.fields_filled = report.fields_resolved;
+            outcome.tbds_recorded = report.fields_cancelled + report.fields_capped;
+        }
+    }
+
+    let spec_path = project_dir.join("docs").join("spec.md");
+    if let Some(parent) = spec_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| Error::Io {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    std::fs::write(&spec_path, spec.to_markdown()).map_err(|source| Error::Io {
+        path: spec_path.clone(),
+        source,
+    })?;
+
+    Ok(outcome)
 }
 
 #[cfg(test)]

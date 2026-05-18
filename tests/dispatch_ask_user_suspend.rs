@@ -151,10 +151,8 @@ fn dispatch_loop_resumes_with_answer_after_user_reply() {
     let tool_msg = resume_turn
         .iter()
         .find(|m| {
-            matches!(
-                m.role,
-                sim_flow::session::protocol::LlmRole::Tool
-            ) && m.tool_call_id.as_deref() == Some("call_42")
+            matches!(m.role, sim_flow::session::protocol::LlmRole::Tool)
+                && m.tool_call_id.as_deref() == Some("call_42")
         })
         .expect("expected Tool-role resume message keyed by call_42");
     assert!(
@@ -352,10 +350,8 @@ fn dispatch_loop_treats_cancel_thread_reply_as_thread_cancel() {
     if seen.len() >= 2 {
         let resume_turn = &seen[1];
         let saw_tool_resume = resume_turn.iter().any(|m| {
-            matches!(
-                m.role,
-                sim_flow::session::protocol::LlmRole::Tool
-            ) && m.tool_call_id.as_deref() == Some("call_ask")
+            matches!(m.role, sim_flow::session::protocol::LlmRole::Tool)
+                && m.tool_call_id.as_deref() == Some("call_ask")
         });
         assert!(
             saw_tool_resume,
