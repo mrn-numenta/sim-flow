@@ -16,6 +16,7 @@ pub(crate) mod assumptions;
 pub(crate) mod blocks;
 pub(crate) mod external_interfaces;
 pub(crate) mod metadata;
+pub(crate) mod parameters;
 pub(crate) mod prose;
 pub(crate) mod section_util;
 pub(crate) mod table;
@@ -248,7 +249,10 @@ fn dispatch_section(section: &Section, spec: &mut SpecMd) -> Result<(), SpecMdPa
             spec.blocks = blocks::parse_blocks(&section.body)?;
             Ok(())
         }
-        "Parameters" => Ok(()),
+        "Parameters" => {
+            spec.parameters = parameters::parse_parameters(&section.body)?;
+            Ok(())
+        }
         "State Machines" => Ok(()),
         "Encodings" => Ok(()),
         "Memory Map" => Ok(()),

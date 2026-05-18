@@ -168,10 +168,10 @@ Gate: blocks unit test passes.
 
 ### Milestone 1.7: Per-section parsers — Parameters
 
-- [ ] Implement `parser/parameters.rs`.
-- [ ] Parse the single typed table (Name / Type / Default /
+- [x] Implement `parser/parameters.rs`.
+- [x] Parse the single typed table (Name / Type / Default /
       Valid range / Behavioral impact / Source-anchor).
-- [ ] Unit test against a fixture with five parameters.
+- [x] Unit test against a fixture with five parameters.
 
 Gate: parameters unit test passes.
 
