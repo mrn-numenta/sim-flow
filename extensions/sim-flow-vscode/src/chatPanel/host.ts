@@ -524,15 +524,30 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         // `if (session.drivePromise) return` early-exit also fires in
         // the microtask-gap window (the `.finally()` that clears
         // `drivePromise` is itself a microtask).
-        const wasAwaiting = current.awaitingInput;
         current.awaitingInput = false;
-        if (!wasAwaiting) {
-          // Drive is already running (e.g. the session never
-          // parked); the cleared fields will surface on the next
-          // postState. Nothing else to do.
-          return;
-        }
-        void this.autoSessions.resumeDriveOnly(current, this.autoSessionDelegate());
+        // Restart the drive when request-user-input + sub-session-started
+        // arrive in the same wire chunk (the Q&A path's
+        // park-then-immediately-start pattern; also any host command
+        // dispatched while parked). settle's bus listener has already
+        // synchronously resolved the drive promise and cleared
+        // `currentRenderer = null`, but `drivePromise` is only nulled
+        // out by startDrive's `.finally()` continuation -- a microtask.
+        // A Promise.resolve().then(...) check would itself run in the
+        // microtask queue and race against the finally, observing a
+        // stale non-null `drivePromise`. setTimeout(0) defers to the
+        // next macrotask AFTER all pending microtasks drain, so
+        // `drivePromise === null` accurately distinguishes "drive
+        // ended" from "drive truly mid-flight" (auto mode keeps drive
+        // running across sub-sessions; we must NOT restart there).
+        setTimeout(() => {
+          if (this.activePump !== current) {
+            return;
+          }
+          if (current.drivePromise) {
+            return;
+          }
+          void this.autoSessions.resumeDriveOnly(current, this.autoSessionDelegate());
+        }, 0);
       },
     );
   }
