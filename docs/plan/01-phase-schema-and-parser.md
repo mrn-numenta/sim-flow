@@ -120,17 +120,17 @@ passes.
 
 ### Milestone 1.4: Per-section parsers — Metadata + prose sections
 
-- [ ] Implement `parser/metadata.rs` parsing the
+- [x] Implement `parser/metadata.rs` parsing the
       definition-list shape (Chapter 2 §2.3.1).
-- [ ] Implement `parser/prose.rs` for `Purpose`, `Scope`,
+- [x] Implement `parser/prose.rs` for `Purpose`, `Scope`,
       `Non-goals`, `Functional Behavior > End-to-end
       behavior`, `Pipeline and Hierarchy`, `Reset / Init /
       Flush / Drain` (single-paragraph or multi-paragraph
       prose).
-- [ ] Implement `parser/assumptions.rs` for `Assumptions and
+- [x] Implement `parser/assumptions.rs` for `Assumptions and
       Constraints` (the quantitative table + the two prose
       subsections).
-- [ ] Add unit tests for each, using minimal hand-authored
+- [x] Add unit tests for each, using minimal hand-authored
       fixtures inline.
 
 Gate: per-section unit tests pass.

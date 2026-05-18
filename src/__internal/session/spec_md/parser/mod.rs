@@ -12,6 +12,10 @@ use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use super::types::SpecMd;
 
+pub(crate) mod assumptions;
+pub(crate) mod metadata;
+pub(crate) mod prose;
+pub(crate) mod section_util;
 pub(crate) mod table;
 
 /// Errors produced by [`parse`]. Every variant carries the offending
@@ -212,16 +216,27 @@ pub(crate) fn byte_offset_to_line(input: &str, offset: usize) -> usize {
 }
 
 fn dispatch_section(section: &Section, spec: &mut SpecMd) -> Result<(), SpecMdParseError> {
-    // Per-section parsers will be wired in milestones 1.4 through
-    // 1.12. For now every branch is a no-op stub so the dispatch
-    // table is the single source of truth for section recognition.
-    let _ = spec;
     match section.heading.as_str() {
-        "Metadata" => Ok(()),
-        "Purpose" => Ok(()),
-        "Scope" => Ok(()),
-        "Non-goals" => Ok(()),
-        "Assumptions and Constraints" => Ok(()),
+        "Metadata" => {
+            spec.metadata = metadata::parse_metadata(&section.body)?;
+            Ok(())
+        }
+        "Purpose" => {
+            spec.purpose = prose::parse_prose_section(&section.body);
+            Ok(())
+        }
+        "Scope" => {
+            spec.scope = prose::parse_prose_section(&section.body);
+            Ok(())
+        }
+        "Non-goals" => {
+            spec.non_goals = prose::parse_prose_section(&section.body);
+            Ok(())
+        }
+        "Assumptions and Constraints" => {
+            spec.assumptions = assumptions::parse_assumptions(&section.body)?;
+            Ok(())
+        }
         "External Interfaces" => Ok(()),
         "Blocks" => Ok(()),
         "Parameters" => Ok(()),
