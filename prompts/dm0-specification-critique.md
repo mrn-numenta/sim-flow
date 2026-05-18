@@ -1,90 +1,160 @@
 # DM0 - Specification (critique session)
 
-You are reviewing the DM0 work artifact. {{ third_party_reviewer_note }} Do not
-modify the spec; evaluate it and write the critique file.
+You are reviewing the DM0 work artifact at `docs/spec.md`.
+{{ third_party_reviewer_note }} Do not modify the spec; evaluate it and
+write the critique file.
 
-## Inputs
+## Input
 
-The spec lands in one of two layouts; the gate accepts either, and
-your review applies to whichever is on disk:
+- `docs/spec.md` at the project root: the structured Chapter 2 schema
+  spec that DM0's work session produced.
+- `.sim-flow/spec-ingest/manifest.toml` and the per-chunk corpus under
+  `.sim-flow/spec-ingest/` -- consult via `spec_semantic_search` and
+  `read_file` when you need source-spec context the spec.md has
+  normalized away.
 
-- **Single-file:** `docs/spec.md` at the project root. Read it
-  directly.
-- **Paginated:** numbered section files under `docs/spec/`
-  (e.g. `docs/spec/01-overview.md`,
-  `docs/spec/02-interfaces.md`, ...). The system stack's TOC
-  block lists every section file with its size; use `read_file`
-  per section, or `list_dir docs/spec/` if the TOC isn't already
-  in scope. Treat the union of section files as "the spec" for
-  the questions below; quote the section file path + line number
-  when citing offending content.
+Judge the spec on its own merits and against the source-spec corpus.
+Any transcript or prior reasoning you might have access to is not
+authoritative -- what's on disk is.
 
-Judge the spec on its own merits; any transcript or prior reasoning
-you happen to have access to is not authoritative -- what's on
-disk is.
+## The schema you are checking against
 
-## Evaluation
+`docs/spec.md` follows a fixed top-level section order. The
+high-level structure is:
 
-Judge the spec (whichever layout) by this standard:
+| H2 heading | Required? | Shape |
+| --- | --- | --- |
+| `Metadata` | required | definition list |
+| `Purpose` / `Scope` / `Non-goals` | required | prose |
+| `Assumptions and Constraints` | required | `### Quantitative` table + prose subsections |
+| `External Interfaces` | required if any | per-interface H3 subsections with a signal table |
+| `Blocks` | required | per-block H3 subsections with I/O table + behavior summary |
+| `Parameters` | required if any | single table |
+| `State Machines` / `Encodings` / `Memory Map` / `Connectivity` / `Error Handling` / `Cycle-Accurate Behavior` / `Figures` | optional | typed tables / per-entry subsections |
+| `Functional Behavior` | required | prose + operation list |
+| `Timing, Latency, and Throughput` | required | prose + optional latency table |
+| `Pipeline and Hierarchy` | required | short prose pointing at Blocks |
+| `Reset, Initialization, Flush, Drain` | required | prose |
+| `Worked Examples` | required | at least one scenario |
+| `Source-Spec Anchors` | required | index table |
+| `Open Questions` | required | bullet list |
+| `Auto-decisions` | required | bullet list |
 
-- The spec does NOT need to spell out every minute detail.
-- It DOES need to preserve explicit requirements and be clear enough that
-  a competent modeling agent can infer the rest reasonably.
-- A missing detail is a `BLOCKER:` only if it would likely cause two
-  competent agents to build materially different models, or if it would
-  force later steps to guess at core behavior, interface semantics,
-  timing intent, or correctness expectations.
-- A missing detail is `UNRESOLVED:` when it is real but safely inferable,
-  deferrable, or unlikely to materially change the model.
+Signal tables use canonical column sets:
 
-For each question below, record a finding in the critique JSON.
+- External Interfaces signal table:
+  `Signal | Direction | Width | Type | Required | Description`.
+- Blocks I/O signal table:
+  `Signal | Direction | Peer | Description`.
+
+Parameter table: `Name | Type | Default | Valid range | Behavioral
+impact | Source-anchor`.
+
+Source-spec anchors are one of:
+`<source>:p<N>` / `<source>:p<N>-<M>` / `<source>:chunk-<NNN>`.
+
+The DM0 gate engine separately enforces:
+- The required `Clock frequency` row (value matching
+  `\d+\s*(MHz|GHz)`) in the Quantitative table.
+- The required `Gate budget per cycle` row (value containing a
+  number) in the Quantitative table.
+- Every source-spec anchor resolves to a real chunk in
+  `manifest.toml`.
+- `Auto-decisions` is non-empty when running in automated mode.
+
+Findings you raise here are semantic checks ABOVE that
+structural / regex gate.
+
+## Walk
+
+Per Architecture Chapter 6 §6.3 Step C, walk the structured spec
+checking semantic consistency:
+
+1. **Metadata sanity.** Are `Design name`, `Version`, `Status`,
+   `Authors`, and `Source documents` filled? Does `Source documents`
+   include every peer registered in `manifest.toml.peers[].id`?
+2. **Purpose / Scope / Non-goals prose.** Are they short, focused, and
+   non-redundant? Does the prose describe the design's intent rather
+   than restating the section heading?
+3. **Quantitative table.** Beyond the regex-gated rows, are the values
+   plausible given the source spec? Does any quantitative row carry an
+   obviously wrong unit (e.g. `1 ns` for a clock frequency)?
+4. **External Interfaces.** Does every declared interface have a
+   non-empty signal table? Do the signal `Width` / `Type` values look
+   plausible for the protocol? Do the Source-spec anchors actually
+   resolve to chunks describing this interface? Spot-check at least one
+   interface via `spec_semantic_search` against the source.
+5. **Blocks.** Every Block must carry:
+   - A non-empty `Behavior summary` (warning if under ~50 chars).
+   - A `Parent` that names another declared block or
+     `(none -- top-level)`.
+   - An `#### I/O Signals` table (warning if empty -- the auto-populate
+     pass usually fills these).
+   - At least one Source-spec anchor.
+   Walk the source-anchor list per block: each anchor's
+   `<source>:p<N>` form must map to a chunk in the manifest.
+6. **Signal-table consistency.** Use `signal_table_query` with
+   `conflicts_only = true` to surface any (stage, signal_name) pair
+   where the row in spec.md disagrees with the source-spec row on
+   direction, peer, width, or description. Each conflict is a finding;
+   record an `unresolved` for benign rewording, a `blocker` for a
+   direction / width disagreement.
+7. **Parameters.** Are `Type` / `Default` / `Valid range` filled? Does
+   `Behavioral impact` carry useful prose (not a tautology like
+   `"Sets X"`)?
+8. **Functional Behavior.** Does `End-to-end behavior` describe what
+   the design DOES, in plain language, before diving into
+   `Operation flow`? Is each entry in `Operation flow` a single
+   well-named operation with a backtick-quoted id + a one-line
+   purpose? Does `Data movement` describe payload flow rather than
+   restating the operation list?
+9. **Timing, Pipeline, Reset.** Are stalls, backpressure, flush, and
+   reset behavior specified well enough that DM2b can make staging
+   decisions without inventing intent?
+10. **Worked Examples.** Is there at least one concrete scenario with
+    explicit Inputs / Expected flow / Expected outputs? A worked
+    example is the only safety net against ambiguous prose; absence
+    is a blocker.
+11. **Source-Spec Anchors index.** Does the index cover the spec.md
+    sections that carry anchors elsewhere in the document? Are the
+    `Chunk id` values present (not `"TBD"`)?
+12. **Open Questions vs Auto-decisions.** Are entries in `Open
+    Questions` genuinely open (i.e. nothing in the source spec
+    answers them)? Use `spec_semantic_search` to spot-check; an
+    answered TBD that's still in Open Questions is a finding (move
+    to Auto-decisions or resolve in-section). Conversely, are
+    Auto-decisions backed by evidence or do any of them look like
+    LLM guesses for which an `ask_user` was warranted?
+13. **Spec.md vs source spec coverage.** Pick a handful of important
+    source-spec sections (the design's headline blocks, the
+    parameters table, the interfaces) and use `spec_semantic_search`
+    to verify they show up in spec.md with anchors back to those
+    chunks. A source-spec section that the spec.md never references
+    is a finding (`unresolved`) unless the section was intentionally
+    out of scope.
+
+For each question above, when you raise a finding, the `body` field
+should explain WHY the issue matters to later steps -- spec.md is the
+input to DM1 / DM2 / DM3, and the cost of an ambiguity here propagates
+through every downstream step.
+
+## What counts as blocker vs unresolved vs resolved
+
+- `BLOCKER` -- the issue would cause two competent agents to build
+  materially different models, OR force a later step to guess at core
+  behavior, interface semantics, timing intent, or correctness
+  expectations.
+- `UNRESOLVED` -- the issue is real but safely inferable, deferrable,
+  or unlikely to materially change the model.
+- `RESOLVED` -- informational; ignored by the gate. Use this to record
+  positive findings (e.g. "the Worked Examples section is unusually
+  clear") that help downstream agents calibrate trust in the spec.
+
+A missing detail that the source spec also did not specify is
+typically `UNRESOLVED`, not `BLOCKER`, unless the missing detail
+blocks DM2 (e.g. a missing top-level interface signal).
 
 {{ critique_kinds }}
-
-1. Does the spec declare a clock frequency? (regex `\d+\s*(MHz|GHz)`
-   in `docs/spec.md` OR any `docs/spec/*.md` section) -- REQUIRED.
-2. Does it declare a gates-per-cycle budget as an EXPLICIT number?
-   (regex `[Gg]ates\s+per\s+cycle.*\d+` in either layout's content
-   files) -- REQUIRED. A frequency + technology pair is NOT a
-   substitute; DM2 needs the budget number directly, not an
-   LLM-derived estimate.
-3. (Optional context, NOT a blocker on its own) Does the spec also
-   declare a technology node (e.g. `\d+\s*nm`)? Useful for downstream
-   power / area discussion; flag as `"unresolved"` if absent, not as
-   a `"blocker"`.
-4. Is the design intent clear enough that DM2a can derive major named
-   operations without guessing at the core architecture?
-5. Are the external interfaces described clearly enough to model I/O
-   behavior correctly, including names, widths, direction, protocol, and
-   essential semantics?
-6. Is the internal dataflow clear enough to infer the main payloads,
-   transfers, and connectivity needed for decomposition and
-   implementation?
-7. Are timing, throughput, flow-control, pipelining, and hierarchy
-   specified clearly enough that DM2b can make reasonable staging and
-   latency decisions without inventing architectural intent?
-8. Are reset, initialization, flush, drain, state, storage,
-   arbitration, or exceptional behaviors specified well enough to avoid
-   incorrect modeling assumptions where they materially matter?
-9. If the design is parameterizable, are the important parameters and
-   valid ranges listed clearly enough for the model to be configured
-   correctly?
-10. Where the spec omits detail, are those omissions safely inferable by
-   a competent modeling agent, or are any of them likely to produce
-   materially different implementations?
-11. Does the spec contain any explicit contradictions, ambiguities, or
-    unresolved conflicts that should be called out with specific lines or
-    sections?
-12. Does the spec include at least one representative scenario or enough
-    concrete behavioral detail to anchor later decomposition and
-    implementation?
-13. Does the document still contain template placeholder text or empty
-    sections that hide missing information rather than stating "not
-    applicable" or an explicit open question?
-
-When you raise a finding, say why it matters to later steps when that is
-not obvious -- the finding's `body` field is the right place for the
-"why" prose.
 
 ## Output
 

@@ -1,173 +1,318 @@
 # DM0 - Specification (work session)
 
 You are executing step DM0 (Specification) of the Direct Modeling Flow.
-
-## Goal
-
-Produce or validate `docs/spec.md` at the project root. The specification is
-an input for every later DMF step. The goal is not to exhaustively spell out
-every possible detail; the goal is to capture the design intent clearly enough
-that a competent modeling agent can decompose, pipeline, and implement the
-model without guessing at core behavior.
+The artifact you produce is `docs/spec.md`: the structured, anchor-bearing
+normalization of the source spec (or, when there is no source spec, of the
+user's design intent). Every later DM step (DM1, DM2*, DM3*, the critiques,
+and the gate engine) reads `docs/spec.md` as authoritative truth.
 
 ## Two kinds of "spec"
 
-This step distinguishes between two artifacts that both have "spec" in
-the name; do not conflate them:
+- **Source spec** -- the user-supplied document the orchestrator ingested
+  before this session started. When present, the ingest pipeline has
+  chunked, classified, and indexed it under
+  `.sim-flow/spec-ingest/`. Use the `spec_semantic_search` tool to find
+  relevant chunks and `read_file` on the returned `chunk_path` to read the
+  full body. **Do not modify** anything under `.sim-flow/` -- it is the
+  orchestrator's tree.
+- **Sim-flow spec** -- `docs/spec.md`: the structured artifact you produce.
+  Single file at the project root. Use the schema described below.
 
-- **Source spec** -- the user-supplied document the orchestrator
-  ingested before this session started. When present, it lives at:
-  - `.sim-flow/source-spec.md` (or `.sim-flow/source-spec.<ext>` for
-    PDF / TXT inputs the orchestrator paginated for you)
-  - `.sim-flow/spec-pages/<NNN>.md` -- one file per source page,
-    zero-padded; use these for `read_file` lookups
-  - `.sim-flow/source-spec-toc.md` -- table of contents the
-    orchestrator may have inlined into the system stack
-  Treat the source spec as authoritative input. **Do not modify it**
-  (`.sim-flow/` is the orchestrator's tree).
-- **Sim-flow spec** -- the structured artifact you produce. Two
-  acceptable layouts; downstream steps and the gate accept either:
-  - **Single-file:** `docs/spec.md` at the project root. Use this
-    when the spec is small enough to fit comfortably in one
-    response (rough rule: under ~500 lines of markdown).
-  - **Paginated:** a directory `docs/spec/` containing numbered
-    section files (`docs/spec/01-overview.md`,
-    `docs/spec/02-interfaces.md`, ...). Use this for large designs
-    where a single response would exceed your output budget. The
-    file numbers establish the canonical reading order; the
-    section slug is for human readability. Each file holds one
-    self-contained section.
-    - The orchestrator inlines the section directory listing into
-      every downstream step, so DM1 / DM2a / DM2b / etc. can
-      `read_file` individual sections on demand without you
-      having to maintain a hand-written TOC.
-    - You MAY also write a brief `docs/spec.md` at the project
-      root that points readers at the section directory; it is
-      not required by the gate. If you write it, keep it short
-      (intent + link to `docs/spec/`); the bulk content goes in
-      the numbered files.
-  Either layout is the input to every later DM step. **Pick one
-  layout per project and stick with it** -- mixing a populated
-  `docs/spec.md` with a populated `docs/spec/` is confusing for
-  downstream readers.
+## The structured spec.md schema
+
+`docs/spec.md` follows a fixed top-level section order. Required sections
+MUST be present; optional sections are present only when the design has
+that feature. The orchestrator parses your output with a markdown parser
+that keys on H2 headings and column-header conventions, so heading text
+must match exactly.
+
+### Required sections (in this order)
+
+1. `# <Project Name> Design Specification` -- H1 title.
+2. `## Metadata` -- definition-list block: `Design name`, `Version`,
+   `Status` (`draft | reviewed | approved`), `Authors`, `Source
+   documents` (primary + peers, each with role + path), `Last updated`.
+3. `## Purpose` -- one to three short prose paragraphs.
+4. `## Scope` -- one to three short prose paragraphs.
+5. `## Non-goals` -- one to three short prose paragraphs.
+6. `## Assumptions and Constraints` -- a `### Quantitative` table with
+   columns `Constraint | Value | Source-anchor`, plus `### Environmental`
+   and `### Architectural` prose. The `Clock frequency` row (value
+   matching `\d+\s*(MHz|GHz)`) and the `Gate budget per cycle` row
+   (value containing a number) are REQUIRED rows.
+7. `## External Interfaces` -- per-interface `### Interface: <name>`
+   subsections, each with a property block (Direction / Protocol / Clock
+   domain / Connected peer), a `#### Signals` table (six columns:
+   `Signal | Direction | Width | Type | Required | Description`),
+   `#### Transaction semantics` prose, and a `#### Source-spec anchors`
+   bullet list.
+8. `## Blocks` -- per-block `### Block: <name>` subsections, each with a
+   property block (Role / Parent / Clock domain / Parameterized by), a
+   `#### I/O Signals` table (four columns:
+   `Signal | Direction | Peer | Description`), a `#### State` bullet
+   list, a `#### Behavior summary` of one to three prose paragraphs,
+   a `#### Source-spec anchors` bullet list, and optional `#### Figures`
+   and `#### Sub-blocks` bullets. All blocks sit at heading level 3
+   regardless of nesting; hierarchy is conveyed via the `Parent`
+   property.
+9. `## Parameters` (required if any parameters) -- single table:
+   `Name | Type | Default | Valid range | Behavioral impact |
+   Source-anchor`.
+10. `## Functional Behavior` -- `### End-to-end behavior` prose,
+    `### Operation flow` numbered list (each item naming a backtick-quoted
+    operation id + brief purpose + anchor), `### Data movement` prose.
+11. `## Timing, Latency, and Throughput` -- optional `### Latency`
+    table, `### Throughput` prose, `### Stall and backpressure` prose.
+12. `## Pipeline and Hierarchy` -- short prose summary that points at
+    the Blocks section for detail.
+13. `## Reset, Initialization, Flush, Drain` -- prose subsections
+    `### Reset`, `### Initialization`, `### Flush and drain`.
+14. `## Worked Examples` -- at least one `### Example N: <title>` with
+    Inputs / Expected flow / Expected outputs.
+15. `## Source-Spec Anchors` -- index table
+    `spec.md section | Source | Chunk id | Page range` mapping each
+    structured section to its supporting source-spec chunk.
+16. `## Open Questions` -- bullet list of unresolved TBDs.
+17. `## Auto-decisions` -- bullet list of `Decision; rationale: ...`
+    entries for every non-trivial inference you made.
+
+### Optional sections (include only when applicable)
+
+- `## State Machines` -- per-FSM `### FSM: <name>` with States bullets
+  and a Transitions table (`From | Input/Event | To | Output/Action`).
+- `## Encodings` -- per-field `### Encoding: <name>` with bit width +
+  `Value | Name | Abbreviation` table.
+- `## Memory Map` -- `Start | End | Name | Purpose | Access |
+  Source-anchor` table.
+- `## Connectivity` -- `### Nodes` and `### Edges` tables plus
+  `### Routing rules` prose; used for mesh / NoC / topology designs.
+- `## Error Handling` -- single table
+  `Error type | Detecting component | Detection behavior | Bus response
+  | Master behavior | Software response | Source-anchor`.
+- `## Cycle-Accurate Behavior` -- per-scenario `### Scenario: <name>`
+  with a per-cycle stage table and a Source-anchor footer.
+- `## Figures` -- per-figure `### Figure: <title>` with Source page /
+  Raster / Role / Referenced blocks property block, a `#### Caption`
+  prose paragraph, and an `#### Elements depicted` table.
+
+If an optional section does not apply, omit it entirely. Do NOT leave
+empty headings or placeholder bullets behind.
+
+### Source-spec anchor format
+
+Anchors are short strings keyed to chunks in the ingest manifest. Three
+forms:
+
+- `<source>:p<N>` -- single page, e.g. `primary:p13`.
+- `<source>:p<N>-<M>` -- page range, e.g. `primary:p12-13`.
+- `<source>:chunk-<NNN>` -- direct chunk reference; used most often in
+  the `## Source-Spec Anchors` index.
+
+`<source>` is `primary` or a peer ID registered in
+`.sim-flow/spec-ingest/manifest.toml.peers[].id`. The DM0 gate checks
+that every anchor in spec.md resolves to a real chunk in the manifest.
+
+### Column-header alias rules
+
+The parser accepts a small set of aliases (e.g. `Name` for `Signal`,
+`Notes` for `Description`, `Dir` for `Direction`). Prefer the canonical
+column names; alias use produces a warning at gate time.
+
+## What you arrive to
+
+By the time this work session starts, the orchestrator has already run
+the auto-populate step (when a source spec is registered). On arrival you
+will find:
+
+- `docs/spec.md` already containing the structured skeleton. The
+  REQUIRED section headings are all present. Tables that the ingest
+  pipeline could populate deterministically (signal tables per block,
+  parameters, encodings, FSMs, error tables, the metadata block, the
+  figure index, the source-anchor index) are already filled. Anchors
+  for the auto-populated rows point at the source-spec chunks they
+  came from.
+- An auto-populated `## Open Questions` section listing every TBD the
+  ingest pipeline detected.
+- Empty prose subsections (Purpose / Scope / Non-goals / per-block
+  `Behavior summary` / Functional Behavior `End-to-end behavior` /
+  Functional Behavior `Data movement` / `Worked Examples`) for you to
+  fill.
+- `.sim-flow/spec-ingest/manifest.toml` describing the corpus, plus the
+  per-chunk markdown under `.sim-flow/spec-ingest/primary/chunks/` and
+  any peer specs under `.sim-flow/spec-ingest/<peer-id>/chunks/`.
+
+When there is no source spec (`manifest.toml.source_kind = "none"` or
+no manifest at all), the orchestrator drives a separate interactive Q&A
+loop on top of `ask_user`; you do not author from scratch turn by turn
+in this work session. Your job in the no-source case is to review what
+the Q&A loop produced and tidy up the prose.
+
+## What you own this turn
+
+Your responsibilities:
+
+1. **Prose subsections.** Write concise normalizations of:
+   - `## Purpose` (one paragraph)
+   - `## Scope` (one paragraph)
+   - `## Non-goals` (one paragraph)
+   - Per-block `#### Behavior summary` (one to three short paragraphs
+     each)
+   - `## Functional Behavior > ### End-to-end behavior`
+   - `## Functional Behavior > ### Data movement`
+   - `## Worked Examples` (at least one representative scenario)
+   - `## Timing, Latency, and Throughput > ### Throughput` and
+     `### Stall and backpressure`
+   - `## Reset, Initialization, Flush, Drain` subsections
+   - `## Pipeline and Hierarchy`
+
+   Each prose subsection should be one to three short paragraphs --
+   conciseness matters. With retrieval available, verbose paraphrasing
+   of the source spec is wasted work.
+
+2. **Open Question resolution.** Walk the auto-populated `## Open
+   Questions` list. For each TBD:
+   - If the source spec actually answers it (the ingest pipeline missed
+     it), retrieve the answer via `spec_semantic_search` + `read_file`
+     and resolve the question: remove it from `## Open Questions` and
+     update the relevant spec.md section to carry the answer.
+   - If the source is genuinely silent and the question blocks forward
+     progress for DM1+, call `ask_user` (see the nudge below) to ask
+     the user. On a clean reply, record an Auto-decision in
+     `## Auto-decisions` and remove the question from `## Open
+     Questions`.
+   - If the source is silent but the question is non-blocking, leave
+     it in `## Open Questions` for the critique pass and downstream
+     steps to handle.
+
+3. **Auto-decisions.** Any non-trivial inference you make (default
+   parameter value, peripheral interpretation, ambiguous-but-decidable
+   detail) lands as an `## Auto-decisions` bullet with a one-line
+   rationale.
+
+4. **Validate the structural tables.** The agent should spot-check that
+   the auto-populated signal tables and parameter tables match the
+   source spec; if a mismatch is real, fix the table and record the
+   change in `## Auto-decisions`.
+
+5. **Write the result.** When the prose is complete and the TBDs are
+   either resolved, auto-decided, or genuinely open, emit a single
+   `write_file docs/spec.md` call carrying the full updated document.
+
+## Tools you should reach for
+
+### `spec_semantic_search`
+
+Source-spec retrieval. When you need detail beyond what the
+auto-populated `docs/spec.md` carries -- prose context for a block,
+the underlying explanation behind a signal, the page that originally
+described a parameter -- call `spec_semantic_search` with a
+natural-language query. The hit list returns `chunk_path` (a relative
+path under `.sim-flow/spec-ingest/`), `breadcrumb`,
+`section_heading`, `source_page_range`, and a short snippet. When the
+snippet is insufficient, `read_file` the `chunk_path` for the full
+body.
+
+Each hit also returns `contained_signal_tables` and
+`contained_figures` so you can pivot to the structured artifact
+without a second search.
+
+spec.md is the normalized truth for the design; the source spec is the
+underlying material. Use `spec_semantic_search` when spec.md is too
+brief; otherwise prefer what's already in spec.md.
+
+### `signal_table_query`
+
+Structured query over the project's signal-table rows (both
+source-spec rows and the rows already in spec.md). Use this to:
+
+- Enumerate the I/O for a stage / block: `filter = { stage = "<block
+  name>" }`.
+- Look up a specific signal across blocks: `filter = { signal_name =
+  "<name>" }`.
+- After you edit a signal row in spec.md, set
+  `conflicts_only = true` to verify your edits still match the source
+  spec on direction, peer, and meaning.
+
+### `ask_user`
+
+The user-interaction tool. Use it ONLY for blocking unknowns -- a TBD
+that prevents you from finishing a required section, a design choice
+the spec doesn't make for you, or an ambiguity `spec_semantic_search`
+cannot resolve. Do NOT use it for retrievable information; do NOT use
+it for casual confirmation.
+
+Turn-boundary discipline (Architecture Chapter 6 §6.5.1):
+
+- Call `ask_user` as the LAST tool call of the turn. Complete every
+  other useful operation you can in the same turn first (additional
+  reads, partial spec.md writes, Auto-decision drafting). The
+  orchestrator suspends execution after `ask_user`; later tool calls
+  in the same turn are discarded and produce a regression warning.
+- The user's reply arrives as the tool result on the next turn.
+
+Chaining for ambiguous replies (Architecture Chapter 4 §4.5):
+
+- The first `ask_user` call in a thread omits `thread_id`; the
+  orchestrator generates one and returns it on the answer.
+- Use `record_as = "none"` on this first call -- persistence is
+  deferred to the closing call of the thread.
+- If the reply is partial, ambiguous, or itself a question, emit a
+  follow-up `ask_user` with the SAME `thread_id`, again with
+  `record_as = "none"`, and ask a more focused clarification.
+- Once you have a clean answer, close the thread with a final
+  `ask_user` call that carries the same `thread_id` plus the
+  persistable `record_as` -- for DM0, this is almost always
+  `"auto-decision"` (every design choice you commit to is by
+  definition a persistable decision). For a non-answer that should
+  remain open, close with `record_as = "open-question"` marked
+  unresolved.
+- Do NOT chain indefinitely. Target three exchanges or fewer per
+  thread; the orchestrator warns at five.
+
+Mode-flip note: if you invoke `ask_user` while the run is in
+automated mode, the orchestrator flips the run to manual for the rest
+of the session. This is intentional -- once a human is needed,
+automated mode no longer applies. The `mode_changed` field on the
+returned `AskUserAnswer` signals the flip; subsequent turns proceed
+in manual mode.
 
 ## Procedure
 
-1. Check whether `docs/spec.md` exists.
-   - If yes, review it against `docs/spec.md.tmpl` and fill in any
-     missing or incomplete sections.
-   - If no, copy `docs/spec.md.tmpl` to `docs/spec.md` and use the
-     template as the required structure for this step.
-2. Check whether `.sim-flow/source-spec*` exists (for example via
-   `read_file` on `.sim-flow/source-spec-toc.md` or `Glob`).
-   - If yes, the user provided a source document. Read it selectively
-     (use the TOC and per-page files for large specs; do not request
-     everything at once) and fill in `docs/spec.md` from it.
-   - Treat the source spec as authoritative. Do not silently invent
-     requirements that are not supported by the source.
-   - When the source is ambiguous, incomplete, or contradictory, record
-     that in `## Open Questions` and cite source-spec page numbers.
-3. If no source spec was provided, or if the source spec does not answer
-   everything needed to complete `docs/spec.md`, fill in the template
-   from the listed predecessor inputs and target artifacts as far as
-   you can. For the rest:
-   - In automated mode (the automated-mode notes appear earlier in
-     the system context above), make your best educated guess and
-     record each non-trivial assumption in `## Auto-decisions`.
-   - In manual mode (the manual-mode notes appear earlier in the
-     system context above), pick the single most important missing
-     field and ask the user one concrete question about it. Update
-     `docs/spec.md` once they answer, then ask about the next most
-     important missing field on the next turn. Do not bulk-guess in
-     manual mode.
-4. Use the template headings as the required document structure, but use
-   engineering judgement about depth. The template is scaffolding for a
-   clear, consistent spec; it is not a demand that every field be
-   exhaustively detailed. Focus on capturing enough normative information
-   for downstream modeling.
-5. Prefer explicit requirements over inferred detail.
-   - If the source material or user gives a detail explicitly, preserve it.
-   - If two explicit requirements conflict, call that out in
-     `## Open Questions`; do not silently pick one.
-   - If a secondary detail is omitted but can be reasonably inferred
-     without changing architectural behavior, interface semantics, timing
-     intent, or correctness expectations, you may infer it.
-   - If a missing detail would likely cause two competent agents to build
-     materially different models, do not guess silently. Ask the user in
-     manual mode or record an auto-decision in automated mode.
-6. At minimum, `docs/spec.md` must include enough information for later
-   steps to infer the rest reasonably. That usually means:
-   - **Clock frequency** matching regex `\d+\s*(MHz|GHz)` (REQUIRED).
-   - **Gates per cycle** as an explicit concrete number on a single
-     line, matching regex `[Gg]ates\s+per\s+cycle.*\d+` (REQUIRED).
-     If the source material gives an explicit value, copy it verbatim.
-     If the source material does NOT give a number, ASK the user in
-     manual mode or record an auto-decision in automated mode -- do
-     NOT silently invent a number or derive one yourself. Downstream
-     steps depend on this number being a real budget from the source,
-     not an LLM estimate. Acceptable forms:
-     `Gates per cycle: 25`
-     `Gates per cycle: 50-100` (range form when the source gave one)
-   - **Technology node** matching regex `\d+\s*nm` (OPTIONAL context
-     for power / area discussions; not gate-checked).
-   - **External interfaces** with names, widths, protocols, direction,
-     and semantics
-   - **Functional behavior** detailed enough to derive named operations
-     and data movement
-   - **Timing, latency, throughput, and flow-control behavior**
-   - **Pipeline and hierarchy intent**
-   - **Reset / initialization / flush behavior**
-   - **Parameters and valid ranges**, when applicable
-   - **Representative examples or scenarios** detailed enough to trace
-     expected behavior when the design would otherwise be ambiguous
-   - **Open Questions** for unresolved ambiguity and **Auto-decisions**
-     for non-trivial assumptions in automated mode
-7. Remove placeholder text as you replace it with real content. If a
-   section truly does not apply, say so explicitly rather than leaving
-   the placeholder in place.
-8. The gates-per-cycle requirement is hard because DM2 needs it to
-   reason about functional decomposition and pipeline staging. The
-   number MUST come from the source material -- do not estimate or
-   derive it yourself. Frequency + technology node is NOT enough; an
-   LLM-derived gate count is an unreliable budget that propagates
-   incorrect assumptions through DM2/DM3. If the source material
-   omits the number, surface that gap as a `## Open Questions` entry
-   (manual mode) or `## Auto-decisions` entry (automated mode) and
-   stop -- the human needs to provide the budget before DM2 can
-   meaningfully plan.
-9. Do not stop after creating a partially filled scaffold. The goal of
-   this step is a model-ready `docs/spec.md` that preserves explicit
-   requirements and makes downstream inference safe and bounded.
+1. Read `docs/spec.md` and skim every auto-populated section so you
+   know the shape of the structured skeleton.
+2. Read `.sim-flow/spec-ingest/manifest.toml` (if present) to learn
+   the source-spec inventory.
+3. For each empty prose subsection you own, run a focused
+   `spec_semantic_search` for the relevant material, `read_file` the
+   most promising chunk(s), and write a concise normalization in
+   spec.md. Do not bulk-quote the source -- normalize and anchor.
+4. For each entry in `## Open Questions`:
+   - Search for an answer in the source via
+     `spec_semantic_search`.
+   - If found, resolve and remove from Open Questions; update the
+     relevant section.
+   - If not found but blocking, `ask_user` (last tool call of the
+     turn) and close the thread with `record_as = "auto-decision"`.
+   - If not found and non-blocking, leave for the critique pass.
+5. Spot-check signal tables with `signal_table_query` (especially
+   `conflicts_only = true`) and reconcile any discrepancies via
+   Auto-decisions or table edits.
+6. When the prose is complete and TBDs are resolved / auto-decided /
+   recorded, write the final `docs/spec.md` via a single `write_file`
+   call.
 
 ## Output
 
 {{ output_intro }}
 
-EITHER:
+- `docs/spec.md` at the project root, updated with the completed
+  prose, resolved Open Questions, and recorded Auto-decisions. The
+  document must conform to the schema described above (REQUIRED
+  sections present, signal-table column conventions respected,
+  source-spec anchors resolvable, `Clock frequency` and `Gate budget
+  per cycle` rows present in the Quantitative table).
 
-- `docs/spec.md` at the project root, updated or newly created
-  (single-file layout for small specs).
-
-OR:
-
-- `docs/spec/<NN>-<slug>.md` files for each section, numbered to
-  establish reading order (e.g.
-  `docs/spec/01-overview.md`,
-  `docs/spec/02-interfaces.md`,
-  `docs/spec/03-functional-behavior.md`,
-  `docs/spec/04-timing-throughput.md`,
-  `docs/spec/05-reset-and-corner-cases.md`,
-  `docs/spec/06-examples.md`,
-  `docs/spec/07-open-questions.md`).
-  The numbered prefix is REQUIRED for canonical ordering; the
-  slug after the number is free-form (lower-case, hyphenated).
-  Cover the same content as the single-file layout -- the
-  template's section structure maps onto one or more numbered
-  files per section group.
-
-When the artifacts above are complete, stop. Do not write
-`docs/critiques/DM0-critique.json` (the critique is a distinct
-task) and do not write a hand-rolled `docs/spec.md` index when
-using the paginated layout (the orchestrator surfaces the
-section listing automatically). Do not `/exit` on your own --
-the user and the orchestrator control session boundaries.
+When the artifact above is complete, stop. Do not write
+`docs/critiques/DM0-critique.json` (the critique is a distinct task)
+and do not `/exit` on your own -- the user and the orchestrator
+control session boundaries.
