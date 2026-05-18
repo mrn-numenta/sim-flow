@@ -19,7 +19,9 @@
 pub mod anchor;
 pub mod parser;
 pub mod types;
+pub mod validate;
 
 pub use anchor::{AnchorParseError, AnchorParseReason};
 pub use parser::{SpecMdParseError, parse};
 pub use types::*;
+pub use validate::{IssueSeverity, ValidationIssue};

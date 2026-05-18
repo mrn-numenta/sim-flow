@@ -249,17 +249,17 @@ Gate: anchor unit tests pass.
 
 ### Milestone 1.14: Cross-reference validation
 
-- [ ] Create `validate.rs`.
-- [ ] Implement `SpecMd::validate(&self) -> Vec<ValidationIssue>`.
-- [ ] Check every Block's `parent` references an existing
+- [x] Create `validate.rs`.
+- [x] Implement `SpecMd::validate(&self) -> Vec<ValidationIssue>`.
+- [x] Check every Block's `parent` references an existing
       block or the literal `(none -- top-level)`.
-- [ ] Check every signal-row's `peer` references an existing
+- [x] Check every signal-row's `peer` references an existing
       block or external interface.
-- [ ] Check every source-spec anchor parses cleanly.
-- [ ] Check required Quantitative rows are present (Clock
+- [x] Check every source-spec anchor parses cleanly.
+- [x] Check required Quantitative rows are present (Clock
       frequency matching `\d+\s*(MHz|GHz)`, Gate budget per
       cycle matching `\d+`).
-- [ ] Unit tests for each check.
+- [x] Unit tests for each check.
 
 Gate: validate unit tests pass.
 
