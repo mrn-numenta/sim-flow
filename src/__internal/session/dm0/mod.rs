@@ -42,15 +42,6 @@ pub(crate) fn manifest_path(project_dir: &Path) -> PathBuf {
         .join("manifest.toml")
 }
 
-/// Resolve the on-disk path to a project's `primary/` ingest corpus.
-#[allow(dead_code)]
-pub(crate) fn primary_corpus_root(project_dir: &Path) -> PathBuf {
-    project_dir
-        .join(".sim-flow")
-        .join("spec-ingest")
-        .join("primary")
-}
-
 /// Read the ingest manifest at
 /// `<project>/.sim-flow/spec-ingest/manifest.toml` and infer the
 /// DM0 mode. Returns `Err` if the manifest is missing or malformed
