@@ -95,8 +95,8 @@ Gate: `cargo build` succeeds; type-check passes.
 
 ### Milestone 3.4: Mock-server unit tests for the embedder
 
-- [ ] Add `wiremock` (or `mockito`) to `[dev-dependencies]`.
-- [ ] Write `embedder/openai_compat/tests.rs` with mock-server
+- [x] Add `wiremock` (or `mockito`) to `[dev-dependencies]`.
+- [x] Write `embedder/openai_compat/tests.rs` with mock-server
       tests covering:
   - Happy path: single batch, returns expected vectors.
   - Multi-batch: input of 80 chunks at batch_size=32 produces

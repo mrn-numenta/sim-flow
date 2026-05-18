@@ -158,22 +158,29 @@ impl OpenAiCompatEmbedder {
         // Probe embed: validate the configured dimension matches
         // what the provider actually returns. Done eagerly so a
         // misconfigured embedder fails at startup rather than at
-        // first index build.
-        let probe = this
-            .embed_one_batch(&[PROBE_TEXT.to_string()])
-            .await
-            .map_err(ConstructError::Probe)?;
-        let got = probe
-            .first()
-            .map(|v| v.len())
-            .ok_or_else(|| ConstructError::Probe(EmbedError::EmptyResponse))?;
-        if got != this.dimension {
-            return Err(ConstructError::DimensionMismatch {
-                expected: this.dimension,
-                got,
-            });
+        // first index build. We special-case dimension mismatch
+        // out of the inner `EmbedError` so callers see the more
+        // specific `ConstructError::DimensionMismatch`.
+        let probe = this.embed_one_batch(&[PROBE_TEXT.to_string()]).await;
+        match probe {
+            Ok(vecs) => {
+                let got = vecs
+                    .first()
+                    .map(|v| v.len())
+                    .ok_or(ConstructError::Probe(EmbedError::EmptyResponse))?;
+                if got != this.dimension {
+                    return Err(ConstructError::DimensionMismatch {
+                        expected: this.dimension,
+                        got,
+                    });
+                }
+                Ok(this)
+            }
+            Err(EmbedError::DimensionMismatch { expected, got }) => {
+                Err(ConstructError::DimensionMismatch { expected, got })
+            }
+            Err(other) => Err(ConstructError::Probe(other)),
         }
-        Ok(this)
     }
 
     /// Issue one HTTP request to the provider for the supplied
@@ -333,3 +340,6 @@ fn is_retryable(err: &EmbedError) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests;
