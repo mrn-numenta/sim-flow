@@ -97,6 +97,58 @@ async-trait = "0.1"
 # HTTP. Async leakage is confined to the `embedder` module and its
 # tokio-block_on shim.
 tokio = { version = "1", default-features = false, features = ["rt", "macros", "time"] }
+# LanceDB (Chapter 3 of the spec/lance architecture). The on-disk
+# vector + scalar retrieval store for framework + spec chunks and
+# signal-table rows. Pinned exactly (`=0.29.0`) per §3.13 because the
+# crate is still pre-1.0 and changes API regularly; the index
+# directory format is the long-lived contract, the Rust API is not.
+# v1 targets Lance format version 2.0 (the crate's current stable
+# default).
+lancedb = { version = "=0.29.0", default-features = false }
+# Bring the lance umbrella crate in directly with the `protoc`
+# feature enabled. Several lance sub-crates' build scripts invoke
+# the protobuf compiler to generate codec / table / index stubs;
+# without `protoc`, those builds expect `protoc` on `$PATH`. Lance's
+# `protoc` feature pulls in the vendored `protobuf-src` for every
+# affected sub-crate, so sim-flow's build is self-contained on
+# hosts that don't ship protoc.
+lance = { version = "=6.0.0", features = ["protoc"] }
+lance-encoding = { version = "=6.0.0", features = ["protoc"] }
+lance-file = { version = "=6.0.0", features = ["protoc"] }
+lance-index = { version = "=6.0.0", features = ["protoc"] }
+lance-table = { version = "=6.0.0", features = ["protoc"] }
+lance-datafusion = { version = "=6.0.0", features = ["protoc"] }
+# Arrow record batches drive every write into Lance. The lancedb
+# crate re-exports arrow types but pulling the same arrow version
+# directly keeps the schema-construction code readable without
+# going through `lancedb::arrow::...` for every symbol. Version
+# tracked to whatever lancedb=0.29 pulls in transitively (58 at
+# time of writing); if Cargo's resolver picks a different minor it
+# will fail at link time and we update the pin.
+arrow = { version = "58", default-features = false }
+arrow-array = { version = "58", default-features = false }
+arrow-schema = { version = "58", default-features = false }
+# Stream conversion when feeding Arrow record batches into Lance's
+# write APIs (`RecordBatchIterator::new` produces a
+# `RecordBatchReader` that the lancedb writer consumes).
+futures = { version = "0.3", default-features = false, features = ["std"] }
+# Top-level item parser for the framework-source walk (Chapter 3
+# §3.9.1 step 3): one chunk per top-level fn / impl block / trait
+# def / module doc-comment. `full` enables item + expr + path
+# parsing which the visitor walks.
+syn = { version = "2", features = ["full", "visit"] }
+# Quote is the canonical way to stringify a `syn::Item` back into
+# Rust source-ish text. `quote::ToTokens::to_token_stream()` is fed
+# back through `to_string()` to produce the chunk body the embedder
+# sees. Without it we'd need a heavier formatter dep
+# (prettyplease) for a small win in readability.
+quote = "1"
+proc-macro2 = "1"
+# Reliable wall-clock timestamps for the embedder + lance manifest
+# `indexed_at` fields (per §3.3 and §3.8). chrono is heavier than the
+# `time` crate but already commonly available; we use it via the
+# `serde` + `clock` defaults for RFC3339 formatting.
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 # Raw-mode termios on the controlling terminal so user keystrokes
 # pass through to the spawned PTY child unprocessed (no line
 # buffering, no echo, Ctrl-C as 0x03 byte). Same API on macOS and

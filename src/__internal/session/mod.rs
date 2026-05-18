@@ -18,6 +18,7 @@ pub mod debug_log;
 pub mod embedder;
 pub mod event_tap;
 pub mod host;
+pub mod lance_index;
 pub mod llm_adapter;
 pub mod llm_metrics;
 pub mod lsp;
