@@ -114,6 +114,15 @@ impl Tool for SpecSemanticSearchTool {
             ));
         }
 
+        // Cold-start UX: see api_semantic_search.
+        if self.service.take_cold_start() {
+            tracing::info!(
+                target: "sim_flow::diagnostics",
+                level = "info",
+                message = "warming retrieval index (first call may take 5-15s on cold embedder)"
+            );
+        }
+
         let start = std::time::Instant::now();
         let vector = match self.service.embed_one_sync(&query) {
             Ok(v) => v,

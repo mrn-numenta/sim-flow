@@ -472,6 +472,26 @@ mod tests {
     }
 
     #[test]
+    fn cold_start_flag_is_shared_across_tool_callsites() {
+        // Verify the cold-start diagnostic fires exactly once per
+        // RetrievalService -- even when the first call comes from
+        // a different retrieval tool than the second.
+        let tmp = tempfile::tempdir().unwrap();
+        let embedder: Arc<dyn EmbeddingClient> = Arc::new(MockEmbedder { dimension: 8 });
+        let service = RetrievalService::new(tmp.path(), embedder).expect("construct");
+        // First tool callsite (e.g. api_semantic_search): cold-start
+        // returns true.
+        assert!(service.take_cold_start());
+        // Second tool callsite (e.g. spec_semantic_search) on the
+        // SAME service: returns false -- the diagnostic is already
+        // emitted.
+        assert!(!service.take_cold_start());
+        // mark_warmed remains idempotent.
+        service.mark_warmed();
+        assert!(!service.take_cold_start());
+    }
+
+    #[test]
     fn embedder_label_combines_provider_and_model() {
         let tmp = tempfile::tempdir().unwrap();
         let embedder: Arc<dyn EmbeddingClient> = Arc::new(MockEmbedder { dimension: 8 });

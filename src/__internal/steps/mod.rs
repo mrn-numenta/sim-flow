@@ -50,6 +50,16 @@ pub const UNIVERSAL_TOOLS: &[&str] = &[
     "api_impls",
     "api_references",
     "api_expand_macro",
+    // Phase 5 (Chapter 4) tools: three retrieval tools backed by the
+    // lance index plus the user-interaction `ask_user` tool. These
+    // require runtime state (RetrievalService / AskUserRuntime);
+    // call sites that don't have them get the catalog without these
+    // entries -- the dispatcher's stateful builder
+    // (`build_dispatcher_with_runtime`) is the production wiring.
+    "api_semantic_search",
+    "spec_semantic_search",
+    "signal_table_query",
+    "ask_user",
 ];
 
 #[derive(Debug, Clone)]

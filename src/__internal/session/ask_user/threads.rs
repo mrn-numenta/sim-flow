@@ -194,7 +194,7 @@ impl ThreadRegistry {
         });
         tracing::info!(
             target: "sim_flow::metrics",
-            event = "ask_user_call",
+            event = "ask_user_turn_recorded",
             thread_id = thread_id,
             step = thread.step_id.as_str(),
             thread_turn_index = turn_index,

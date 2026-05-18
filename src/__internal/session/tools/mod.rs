@@ -374,7 +374,24 @@ pub fn image_mime_from_path(path: &Path) -> Option<&'static str> {
 /// Build the orchestrator's tool dispatcher from a list of tool
 /// names. Unknown names are skipped silently so descriptors can
 /// declare aspirational tools that aren't implemented yet.
+///
+/// The Phase 5 tools (`api_semantic_search`, `spec_semantic_search`,
+/// `signal_table_query`, `ask_user`) require runtime state
+/// (`Arc<RetrievalService>` / `Arc<AskUserRuntime>`). This entry
+/// point omits them. Callers that have the runtime should use
+/// [`build_dispatcher_with_runtime`] instead.
 pub fn build_dispatcher(names: &[&'static str]) -> Vec<Box<dyn Tool>> {
+    build_dispatcher_with_runtime(names, None, None)
+}
+
+/// Build the dispatcher with the Phase 5 stateful tools wired in.
+/// Each `Arc<_>` is optional so callers that don't have a retrieval
+/// service or ask_user runtime can still build a partial catalog.
+pub fn build_dispatcher_with_runtime(
+    names: &[&'static str],
+    retrieval: Option<std::sync::Arc<crate::__internal::session::retrieval::RetrievalService>>,
+    ask_user: Option<std::sync::Arc<crate::__internal::session::ask_user::AskUserRuntime>>,
+) -> Vec<Box<dyn Tool>> {
     let mut out: Vec<Box<dyn Tool>> = Vec::new();
     for name in names {
         match *name {
@@ -395,6 +412,26 @@ pub fn build_dispatcher(names: &[&'static str]) -> Vec<Box<dyn Tool>> {
             "api_impls" => out.push(Box::new(ApiImplsTool)),
             "api_references" => out.push(Box::new(ApiReferencesTool)),
             "api_expand_macro" => out.push(Box::new(ApiExpandMacroTool)),
+            "api_semantic_search" => {
+                if let Some(svc) = retrieval.clone() {
+                    out.push(Box::new(ApiSemanticSearchTool::new(svc)));
+                }
+            }
+            "spec_semantic_search" => {
+                if let Some(svc) = retrieval.clone() {
+                    out.push(Box::new(SpecSemanticSearchTool::new(svc)));
+                }
+            }
+            "signal_table_query" => {
+                if let Some(svc) = retrieval.clone() {
+                    out.push(Box::new(SignalTableQueryTool::new(svc)));
+                }
+            }
+            "ask_user" => {
+                if let Some(rt) = ask_user.clone() {
+                    out.push(Box::new(AskUserTool::new(rt)));
+                }
+            }
             _ => {} // unknown tool name; skip
         }
     }
@@ -718,6 +755,209 @@ mod tests {
         let tools = build_dispatcher(&names);
         let got: Vec<_> = tools.iter().map(|t| t.name()).collect();
         assert_eq!(got, names);
+    }
+
+    #[test]
+    fn dispatcher_with_runtime_includes_phase5_tools() {
+        use crate::__internal::session::ask_user::AskUserRuntime;
+        use crate::__internal::session::embedder::{EmbedError, EmbeddingClient};
+        use crate::__internal::session::retrieval::RetrievalService;
+        use async_trait::async_trait;
+        use std::sync::Arc;
+
+        struct MockEmbedder;
+
+        #[async_trait]
+        impl EmbeddingClient for MockEmbedder {
+            fn provider(&self) -> &str {
+                "mock"
+            }
+            fn model_id(&self) -> &str {
+                "mock-embed"
+            }
+            fn dimension(&self) -> usize {
+                8
+            }
+            async fn embed(
+                &self,
+                texts: &[&str],
+            ) -> std::result::Result<Vec<Vec<f32>>, EmbedError> {
+                Ok(texts.iter().map(|_| vec![0.0; 8]).collect())
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let embedder: Arc<dyn EmbeddingClient> = Arc::new(MockEmbedder);
+        let service = Arc::new(RetrievalService::new(tmp.path(), embedder).unwrap());
+        let runtime = Arc::new(AskUserRuntime::new(
+            tmp.path().to_path_buf(),
+            "DM0".to_string(),
+        ));
+        let names = [
+            "api_semantic_search",
+            "spec_semantic_search",
+            "signal_table_query",
+            "ask_user",
+        ];
+        let tools = build_dispatcher_with_runtime(&names, Some(service), Some(runtime));
+        let got: Vec<_> = tools.iter().map(|t| t.name()).collect();
+        assert_eq!(got, names);
+    }
+
+    #[test]
+    fn phase5_tools_advertise_schemas_conforming_to_spec() {
+        // Architecture Chapter 4 §§4.2-4.5 specifies the JSON-schema
+        // shape for each tool's args. The advertise-shape (built from
+        // `args_schema()` by the agent layer at session start) feeds
+        // straight into the LLM provider's tool-call API. This test
+        // asserts each schema's required fields, top-level shape,
+        // and enum values match the spec.
+        use crate::__internal::session::ask_user::AskUserRuntime;
+        use crate::__internal::session::embedder::{EmbedError, EmbeddingClient};
+        use crate::__internal::session::retrieval::RetrievalService;
+        use async_trait::async_trait;
+        use std::sync::Arc;
+
+        struct MockEmbedder;
+
+        #[async_trait]
+        impl EmbeddingClient for MockEmbedder {
+            fn provider(&self) -> &str {
+                "mock"
+            }
+            fn model_id(&self) -> &str {
+                "mock-embed"
+            }
+            fn dimension(&self) -> usize {
+                8
+            }
+            async fn embed(
+                &self,
+                texts: &[&str],
+            ) -> std::result::Result<Vec<Vec<f32>>, EmbedError> {
+                Ok(texts.iter().map(|_| vec![0.0; 8]).collect())
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let embedder: Arc<dyn EmbeddingClient> = Arc::new(MockEmbedder);
+        let service = Arc::new(RetrievalService::new(tmp.path(), embedder).unwrap());
+        let runtime = Arc::new(AskUserRuntime::new(
+            tmp.path().to_path_buf(),
+            "DM0".to_string(),
+        ));
+
+        let api_tool = ApiSemanticSearchTool::new(service.clone());
+        let api_schema = api_tool.args_schema();
+        assert_eq!(api_schema["type"], "object");
+        assert!(
+            api_schema["required"]
+                .as_array()
+                .map(|a| a.iter().any(|v| v == "query"))
+                .unwrap_or(false),
+            "api_semantic_search required = [\"query\"]"
+        );
+        // `k` has min/max from §4.2.
+        assert_eq!(api_schema["properties"]["k"]["minimum"], 1);
+        assert_eq!(api_schema["properties"]["k"]["maximum"], 20);
+        // `kind` enum from §4.2.
+        let api_kinds = api_schema["properties"]["kind"]["enum"]
+            .as_array()
+            .expect("api_semantic_search.kind.enum");
+        for required in [
+            "api-page",
+            "src-fn",
+            "src-impl",
+            "src-trait",
+            "src-mod-doc",
+            "src-other",
+        ] {
+            assert!(
+                api_kinds.iter().any(|v| v == required),
+                "{required} missing from api_semantic_search.kind"
+            );
+        }
+
+        let spec_tool = SpecSemanticSearchTool::new(service.clone());
+        let spec_schema = spec_tool.args_schema();
+        assert_eq!(spec_schema["type"], "object");
+        let spec_kinds = spec_schema["properties"]["kind"]["enum"]
+            .as_array()
+            .expect("spec_semantic_search.kind.enum");
+        for required in ["prose", "table", "stub", "mixed"] {
+            assert!(
+                spec_kinds.iter().any(|v| v == required),
+                "{required} missing from spec_semantic_search.kind"
+            );
+        }
+        assert!(spec_schema["properties"]["source"].is_object());
+
+        let sig_tool = SignalTableQueryTool::new(service);
+        let sig_schema = sig_tool.args_schema();
+        assert_eq!(sig_schema["type"], "object");
+        assert!(
+            sig_schema["required"]
+                .as_array()
+                .map(|a| a.iter().any(|v| v == "filter"))
+                .unwrap_or(false),
+            "signal_table_query required = [\"filter\"]"
+        );
+        // additionalProperties: false guards filter shape per §4.4.
+        assert_eq!(
+            sig_schema["properties"]["filter"]["additionalProperties"],
+            false
+        );
+
+        let ask_tool = AskUserTool::new(runtime);
+        let ask_schema = ask_tool.args_schema();
+        assert_eq!(ask_schema["type"], "object");
+        assert!(
+            ask_schema["required"]
+                .as_array()
+                .map(|a| a.iter().any(|v| v == "question"))
+                .unwrap_or(false),
+            "ask_user required = [\"question\"]"
+        );
+        let ask_kinds = ask_schema["properties"]["kind"]["enum"]
+            .as_array()
+            .expect("ask_user.kind.enum");
+        for required in ["free-form", "yes-no", "choice", "value"] {
+            assert!(
+                ask_kinds.iter().any(|v| v == required),
+                "{required} missing from ask_user.kind"
+            );
+        }
+        let record_as_kinds = ask_schema["properties"]["record_as"]["enum"]
+            .as_array()
+            .expect("ask_user.record_as.enum");
+        for required in ["open-question", "auto-decision", "none"] {
+            assert!(
+                record_as_kinds.iter().any(|v| v == required),
+                "{required} missing from ask_user.record_as"
+            );
+        }
+        // thread_id must be optional (i.e. NOT in required).
+        let ask_required = ask_schema["required"].as_array().unwrap();
+        assert!(
+            !ask_required.iter().any(|v| v == "thread_id"),
+            "thread_id must be optional"
+        );
+    }
+
+    #[test]
+    fn universal_tools_lists_phase5_tools() {
+        let names: Vec<&str> = crate::__internal::steps::UNIVERSAL_TOOLS.to_vec();
+        for required in [
+            "api_semantic_search",
+            "spec_semantic_search",
+            "signal_table_query",
+            "ask_user",
+        ] {
+            assert!(
+                names.contains(&required),
+                "{required} missing from UNIVERSAL_TOOLS: {names:?}"
+            );
+        }
     }
 
     #[test]

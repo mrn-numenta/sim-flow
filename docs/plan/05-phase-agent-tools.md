@@ -332,7 +332,7 @@ Gate: persistence unit tests pass.
 
 ### Milestone 5.9: Tool registration in universal catalog
 
-- [ ] Edit `src/__internal/session/tools/mod.rs`:
+- [x] Edit `src/__internal/session/tools/mod.rs`:
   - Add `mod api_semantic_search;`,
     `mod spec_semantic_search;`, `mod signal_table_query;`,
     `mod ask_user;`.
@@ -341,21 +341,21 @@ Gate: persistence unit tests pass.
     `AskUserTool`.
   - Add the four to the universal tool catalog list (the
     array used by `for_step`) per Architecture §4.9.
-- [ ] Edit `src/__internal/steps/mod.rs`:
+- [x] Edit `src/__internal/steps/mod.rs`:
   - Add the four names to the `UNIVERSAL_TOOL_NAMES`
     constant (or equivalent) so the prompt-side catalog
     advertisement includes them.
-- [ ] Unit test: enumerate the universal tool catalog and
+- [x] Unit test: enumerate the universal tool catalog and
       assert all four new tools are present.
 
 Gate: catalog test passes.
 
 ### Milestone 5.10: Native function-call schema export
 
-- [ ] For each new tool (all four), export its JSON-schema
+- [x] For each new tool (all four), export its JSON-schema
       in the shape the existing `ToolAdvertise`
       infrastructure expects.
-- [ ] Add a unit test that constructs the tool catalog,
+- [x] Add a unit test that constructs the tool catalog,
       serializes each tool's advertise shape to JSON, and
       asserts the JSON conforms to the per-tool schema in
       Architecture §4.2 / §4.3 / §4.4 / §4.5.
@@ -364,15 +364,15 @@ Gate: advertise-shape test passes.
 
 ### Milestone 5.11: Observability metrics
 
-- [ ] In each retrieval tool's dispatch, emit a
+- [x] In each retrieval tool's dispatch, emit a
       `tracing::info!` event with `target =
       "sim_flow::metrics"`, `event = "retrieval_call"`, plus
       the fields per Architecture §4.10.
-- [ ] In `ask_user`'s dispatch, emit `event =
+- [x] In `ask_user`'s dispatch, emit `event =
       "ask_user_call"` per Architecture §4.10, including
       `mode_before`, `mode_after`, `record_as`,
       `user_wait_ms`, `answer_length`, `cancelled`.
-- [ ] Verify the metrics event fields land in the existing
+- [x] Verify the metrics event fields land in the existing
       `metrics.jsonl` capture flow (sanity-test by setting
       `SIM_FLOW_CAPTURE_METRICS=<tmp>` and asserting the
       file is written).
@@ -381,12 +381,12 @@ Gate: metrics-emission unit tests pass for both event kinds.
 
 ### Milestone 5.12: Cold-start UX surfacing
 
-- [ ] On the first retrieval-tool call within an orchestrator
+- [x] On the first retrieval-tool call within an orchestrator
       session, emit a `Diagnostic::Info`
       with message `"warming retrieval index (first call may
       take 5-15s on cold embedder)"` BEFORE the dispatch
       begins. Subsequent calls do not emit this.
-- [ ] Unit test: first call emits the diagnostic; second
+- [x] Unit test: first call emits the diagnostic; second
       call does not.
 
 Gate: cold-start unit test passes.

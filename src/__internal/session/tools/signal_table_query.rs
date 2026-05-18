@@ -131,6 +131,15 @@ impl Tool for SignalTableQueryTool {
             return Ok(ToolResult::ok(payload.to_string()));
         }
 
+        // Cold-start UX: see api_semantic_search.
+        if self.service.take_cold_start() {
+            tracing::info!(
+                target: "sim_flow::diagnostics",
+                level = "info",
+                message = "warming retrieval index (first call may take 5-15s on cold embedder)"
+            );
+        }
+
         let filter = SignalFilter {
             signal_name: read_string(filter_value, "signal_name"),
             stage: read_string(filter_value, "stage"),

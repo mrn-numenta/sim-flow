@@ -93,6 +93,16 @@ impl Tool for ApiSemanticSearchTool {
             ));
         }
 
+        // Cold-start UX: announce the warming delay before issuing
+        // the first retrieval call against this service.
+        if self.service.take_cold_start() {
+            tracing::info!(
+                target: "sim_flow::diagnostics",
+                level = "info",
+                message = "warming retrieval index (first call may take 5-15s on cold embedder)"
+            );
+        }
+
         let start = std::time::Instant::now();
         let vector = match self.service.embed_one_sync(&query) {
             Ok(v) => v,
