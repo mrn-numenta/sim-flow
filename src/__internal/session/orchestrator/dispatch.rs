@@ -10,14 +10,17 @@
 //! the multi-phase iteration loop (author / build / test / coverage)
 //! for code-authoring steps.
 
+use std::sync::Arc;
+
 use crate::client::SessionKind;
 use crate::config::Config;
+use crate::session::ask_user::{AskUserRuntime, mode_flip::read_current_step_mode};
 use crate::session::auto::session_kind_to_protocol;
 use crate::session::llm_adapter::LlmAdapter;
 use crate::session::presenter::Presenter;
 use crate::session::protocol::{
     DiagnosticLevel, Event, HostEvent, LlmMessage, LlmRole, PROTOCOL_VERSION, SessionEndReason,
-    SessionKindOut, SessionTag,
+    SessionKindOut, SessionTag, StepMode,
 };
 use crate::session::tools::{self};
 use crate::state::State;
@@ -139,7 +142,32 @@ where
     //     in-process tool dispatcher can run fenced tool calls). The
     //     library / framework root detectors stay here too because
     //     `invoke_tool` builds a `ToolContext` that references them.
-    let dispatcher = tools::build_dispatcher(crate::steps::UNIVERSAL_TOOLS);
+    //
+    //     The `ask_user` tool (Phase 5) needs a per-session
+    //     `AskUserRuntime` to hold its pending-ask slot and thread
+    //     registry. We construct one here and pass it through
+    //     `build_dispatcher_with_runtime`; the orchestrator also
+    //     keeps a clone so the suspend/resume cycle below can drive
+    //     `resume_from_user_ask` directly. Recovery from a
+    //     checkpoint runs eagerly so a reload mid-suspend restores
+    //     the previous turn's pending state (Architecture §6.5.4).
+    let ask_user_runtime: Arc<AskUserRuntime> = Arc::new(AskUserRuntime::new(
+        opts.project_dir.clone(),
+        step.id.to_string(),
+    ));
+    let _recovered_pending = ask_user_runtime.recover_from_checkpoint().ok().flatten();
+    let dispatcher = tools::build_dispatcher_with_runtime(
+        crate::steps::UNIVERSAL_TOOLS,
+        None,
+        Some(ask_user_runtime.clone()),
+    );
+    // Tracks whether the auto→manual flip has already fired in this
+    // session. The `ask_user` tool flips `state.toml` itself; the
+    // orchestrator owns the matching `StepModeChanged` +
+    // `Diagnostic::Info` emission (Architecture §6.5.2). One flip per
+    // session: subsequent `ask_user` calls in the same run see the
+    // already-manual mode and don't re-emit.
+    let mut ask_user_mode_flip_emitted: bool = false;
     let library_root = detect_library_root(&opts.project_dir);
     let framework_root = detect_framework_root(&opts.foundation_root);
     let framework_docs_root = detect_framework_docs_root(&opts.foundation_root);
@@ -1320,7 +1348,32 @@ where
                 // native_tool_calls[i].id. Fenced calls bundle into
                 // a User-role feedback message.
                 let mut per_call_displays: Vec<String> = Vec::with_capacity(tool_calls.len());
-                for call in &tool_calls {
+                // When `ask_user` suspends the turn, capture the index
+                // of the suspending call here and exit the dispatch
+                // loop. Calls AFTER this index are discarded with a
+                // `tool_calls_after_ask_user` diagnostic per
+                // Architecture §6.5.1. The suspension itself is
+                // handled below: RequestUserInput, wait for
+                // UserMessage, push Tool-role result, restart the
+                // outer turn loop without going through the normal
+                // tool-result feedback bundling for the suspended
+                // call (its result is the user's reply, not the
+                // tool's display string).
+                let mut suspended_call: Option<(
+                    usize,
+                    crate::__internal::session::ask_user::SuspendOutcome,
+                )> = None;
+                let mut discarded_after_ask_user: u32 = 0;
+                for (call_idx, call) in tool_calls.iter().enumerate() {
+                    if suspended_call.is_some() {
+                        // Architecture §6.5.1: discard subsequent
+                        // tool calls in the same model response so
+                        // the suspending `ask_user` is effectively
+                        // the LAST call of the turn.
+                        discarded_after_ask_user += 1;
+                        continue;
+                    }
+                    let _ = call_idx;
                     let started_unix = crate::session::tool_timings::now_unix_seconds();
                     let started = std::time::Instant::now();
                     // Read the current milestone's body fresh for
@@ -1346,7 +1399,73 @@ where
                     .with_milestone_path(milestone_rel.as_deref())
                     .with_approved_deletes(&approved_deletes)
                     .with_step_id(step.id);
+                    // Snapshot the step-mode before dispatch so we
+                    // can detect the `ask_user` auto→manual flip
+                    // (Architecture §6.5.2). The `ask_user` tool
+                    // performs the flip itself via `state.toml`;
+                    // the orchestrator owns the matching
+                    // `StepModeChanged` + `Diagnostic::Info`
+                    // emission. We snapshot for ALL calls to keep
+                    // the branchy logic simple; only an actual
+                    // change drives the emit.
+                    let mode_before = read_current_step_mode(&opts.project_dir);
                     let outcome = invoke_tool(&dispatcher, &ctx, call);
+                    // Detect suspend BEFORE the success/failure
+                    // counters: a suspended ask_user is neither a
+                    // success nor a failure in the streak sense --
+                    // its outcome depends on what the user types.
+                    if let Some(susp) = outcome.suspend.as_ref() {
+                        // Auto→manual flip side-effects per
+                        // Architecture §6.5.2. The tool already
+                        // wrote `state.toml`; emit the user-
+                        // visible events here exactly once per
+                        // session.
+                        let mode_after = read_current_step_mode(&opts.project_dir);
+                        if mode_before == StepMode::Auto
+                            && mode_after == StepMode::Manual
+                            && !ask_user_mode_flip_emitted
+                        {
+                            host.send(&Event::StepModeChanged {
+                                mode: StepMode::Manual,
+                            })?;
+                            host.send(&Event::Diagnostic {
+                                level: DiagnosticLevel::Info,
+                                message:
+                                    "ask_user invoked during auto run; flipping to manual mode. \
+                                    Re-enable auto via the chat panel toggle when ready."
+                                        .into(),
+                            })?;
+                            ask_user_mode_flip_emitted = true;
+                        }
+                        // Tool dispatch event for visibility. The
+                        // `display` is empty (suspended); the
+                        // status string captures the suspension so
+                        // hosts can render a "waiting for user"
+                        // affordance if they want.
+                        let wall_ms = started.elapsed().as_millis() as u64;
+                        let args_summary = tool_args_summary(call);
+                        tool_timings.record(&crate::session::tool_timings::ToolTimingRecord {
+                            started_unix,
+                            step: Some(step.id.to_string()),
+                            caller_kind: crate::session::tool_timings::CallerKind::Llm,
+                            tool_name: call.name.clone(),
+                            args_summary: args_summary.clone(),
+                            status: "suspended".to_string(),
+                            wall_ms,
+                            exit_code: None,
+                            request_id: None,
+                            turn_index: None,
+                        });
+                        host.send(&Event::ToolInvoked {
+                            name: call.name.clone(),
+                            args_summary,
+                            status: "suspended".into(),
+                            duration_ms: wall_ms,
+                        })?;
+                        per_call_displays.push(String::new());
+                        suspended_call = Some((call_idx, susp.clone()));
+                        continue;
+                    }
                     let status = if outcome.ok { "ok" } else { "error" };
                     if outcome.ok {
                         tool_successes += 1;
@@ -1397,6 +1516,149 @@ where
                             source: Some(att.source_path),
                         });
                     }
+                }
+                // `ask_user` suspend handling (Architecture §6.5 +
+                // §6.5.1). When the dispatch loop detected a
+                // suspending call, we:
+                //
+                //   1. Warn about any calls discarded after it (per
+                //      §6.5.1 "subsequent calls in the same model
+                //      response are discarded with a
+                //      tool_calls_after_ask_user warning").
+                //   2. Emit `RequestUserInput` derived from the
+                //      pending ask so the host surfaces the
+                //      question, with a `kind`-appropriate
+                //      placeholder.
+                //   3. Wait for the next `UserMessage` (or `Cancel`
+                //      per existing patterns).
+                //   4. Call `runtime.resume_from_user_ask(...)` and
+                //      push a Tool-role message whose content is
+                //      the serialized `AskUserAnswer` JSON keyed
+                //      by the suspending call's `tool_call_id` so
+                //      the next LLM turn sees the answer as the
+                //      synthetic tool-result of the suspended
+                //      `ask_user` call (Architecture §6.5.1 final
+                //      bullet).
+                //   5. Restart the turn loop. We skip the normal
+                //      tool-result feedback bundling for this turn
+                //      because the suspended call's "result" is the
+                //      AskUserAnswer JSON we just pushed, not the
+                //      tool's empty display string.
+                if let Some((suspended_idx, suspend_outcome)) = suspended_call.take() {
+                    if discarded_after_ask_user > 0 {
+                        tracing::warn!(
+                            target: "sim_flow::ask_user",
+                            event = "tool_calls_after_ask_user",
+                            step = step.id,
+                            discarded_calls = discarded_after_ask_user,
+                            "discarded {discarded_after_ask_user} tool call(s) after ask_user; \
+                             ask_user must be the LAST tool call of the turn"
+                        );
+                        host.send(&Event::Diagnostic {
+                            level: DiagnosticLevel::Warning,
+                            message: format!(
+                                "tool_calls_after_ask_user: discarded {discarded_after_ask_user} \
+                                 tool call(s) emitted after `ask_user` in the same turn. \
+                                 `ask_user` must be the LAST tool call of a turn (Architecture §6.5.1)."
+                            ),
+                        })?;
+                    }
+                    let pending = &suspend_outcome.pending;
+                    let placeholder = ask_user_placeholder(pending);
+                    let prompt = build_ask_user_prompt(pending);
+                    host.send(&Event::RequestUserInput {
+                        prompt: Some(prompt),
+                        placeholder: Some(placeholder),
+                    })?;
+                    let (reply_text, cancelled, thread_cancelled) = match host.recv()? {
+                        Some(HostEvent::UserMessage { text }) => {
+                            let trimmed = text.trim();
+                            if trimmed == "/cancel-thread" {
+                                (String::new(), true, true)
+                            } else if trimmed == "/cancel" {
+                                (String::new(), true, false)
+                            } else {
+                                (text, false, false)
+                            }
+                        }
+                        Some(HostEvent::Cancel) | None => {
+                            host.send(&Event::SessionEnd {
+                                reason: SessionEndReason::Cancelled,
+                                message: None,
+                            })?;
+                            return Ok(());
+                        }
+                        Some(other) => {
+                            host.send(&Event::Diagnostic {
+                                level: DiagnosticLevel::Warning,
+                                message: format!(
+                                    "unexpected host event during ask_user suspend: {other:?}; \
+                                     treating as cancel-thread"
+                                ),
+                            })?;
+                            (String::new(), true, true)
+                        }
+                    };
+                    let answer = ask_user_runtime
+                        .resume_from_user_ask(&reply_text, cancelled, thread_cancelled)
+                        .map_err(|e| Error::Protocol(format!("ask_user resume failed: {e}")))?;
+                    let answer_json = serde_json::to_string(&answer).unwrap_or_else(|_| {
+                        // Serialization of `AskUserAnswer` is
+                        // structurally infallible (all fields are
+                        // primitives / Strings) but the fallback
+                        // string keeps the agent unblocked even on
+                        // an OOM-style failure.
+                        format!(
+                            "{{\"answer\":\"{}\",\"thread_id\":\"{}\"}}",
+                            answer.answer.replace('"', "\\\""),
+                            answer.thread_id,
+                        )
+                    });
+                    // Bind the suspended ParsedToolCall's index back
+                    // to the originating native_tool_call to recover
+                    // the LLM's tool_call_id. Only native calls have
+                    // ids; a fenced ask_user call (rare in practice)
+                    // gets an empty tool_call_id which the openai-
+                    // compat converter flattens to a User-role line.
+                    let suspended_tool_call_id = if suspended_idx < native_tool_calls.len() {
+                        native_tool_calls[suspended_idx].id.clone()
+                    } else {
+                        None
+                    };
+                    messages.push(LlmMessage {
+                        role: LlmRole::Tool,
+                        content: answer_json,
+                        attachments: Vec::new(),
+                        tool_call_id: suspended_tool_call_id,
+                        tool_calls: Vec::new(),
+                        reasoning: None,
+                    });
+                    // The remaining tool-result emission (Tool-role
+                    // messages for prior native calls, fenced
+                    // bundling) still has to fire for calls that
+                    // succeeded BEFORE the suspension. The for loop
+                    // collected their per_call_displays already.
+                    // Cap per_call_displays so the existing emit
+                    // loop only sees pre-suspend entries.
+                    per_call_displays.truncate(suspended_idx);
+                    for (i, native) in native_tool_calls.iter().enumerate() {
+                        if i >= per_call_displays.len() {
+                            break;
+                        }
+                        messages.push(LlmMessage {
+                            role: LlmRole::Tool,
+                            content: per_call_displays[i].clone(),
+                            attachments: Vec::new(),
+                            tool_call_id: native.id.clone(),
+                            tool_calls: Vec::new(),
+                            reasoning: None,
+                        });
+                    }
+                    // No fenced-bundle / no scope-override / no
+                    // no-progress classifier: ask_user is a turn-
+                    // boundary tool, and the next LLM turn starts
+                    // fresh with the answer in its working memory.
+                    continue;
                 }
                 // Tool-error-streak tracking. All-failed turn -> bump
                 // streak; any-succeeded turn -> reset.
@@ -2219,5 +2481,54 @@ where
             })?;
             return Ok(());
         }
+    }
+}
+
+/// Build the `RequestUserInput.prompt` string the host renders for an
+/// `ask_user` suspension. Combines the question with the optional
+/// `context` paragraph and `choices` list so the chat panel can show
+/// the question in full without re-querying the orchestrator. Mirrors
+/// the Architecture §4.5 "Return shape" expectations: agent emits a
+/// focused question, optional rationale, and (for choice questions) an
+/// inline set of allowed values.
+fn build_ask_user_prompt(pending: &crate::__internal::session::ask_user::PendingUserAsk) -> String {
+    let mut out = pending.question.clone();
+    if !pending.context.trim().is_empty() {
+        out.push_str("\n\n");
+        out.push_str(pending.context.trim());
+    }
+    if !pending.choices.is_empty() {
+        out.push_str("\n\nChoices: ");
+        out.push_str(&pending.choices.join(" / "));
+    }
+    if let Some(def) = pending.default.as_ref().filter(|d| !d.is_empty()) {
+        out.push_str("\n\n(Default: ");
+        out.push_str(def);
+        out.push(')');
+    }
+    out
+}
+
+/// Map the pending ask's `kind` to a chat-input placeholder hint. The
+/// orchestrator passes this to `RequestUserInput.placeholder` so the
+/// host can prefill its composer hint or render an inline reply
+/// affordance (quick-pick chips for yes-no / choice, free-form
+/// text input for the rest). Cancel commands are documented inline
+/// for every kind so the user discovers them without having to consult
+/// help.
+fn ask_user_placeholder(pending: &crate::__internal::session::ask_user::PendingUserAsk) -> String {
+    use crate::__internal::session::ask_user::AskUserKind;
+    let suffix = " (or /cancel, /cancel-thread)";
+    match pending.kind {
+        AskUserKind::YesNo => format!("yes / no{suffix}"),
+        AskUserKind::Choice => {
+            if pending.choices.is_empty() {
+                format!("choose one{suffix}")
+            } else {
+                format!("{}{suffix}", pending.choices.join(" / "))
+            }
+        }
+        AskUserKind::Value => format!("a value{suffix}"),
+        AskUserKind::FreeForm => format!("answer{suffix}"),
     }
 }
