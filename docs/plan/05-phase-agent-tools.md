@@ -92,13 +92,13 @@ Gate: service unit tests pass.
 
 ### Milestone 5.2: `api_semantic_search` tool
 
-- [ ] Create `tools/api_semantic_search.rs`.
-- [ ] Implement `ApiSemanticSearchTool` matching the existing
+- [x] Create `tools/api_semantic_search.rs`.
+- [x] Implement `ApiSemanticSearchTool` matching the existing
       tool-trait pattern (study `tools/api_search.rs` for the
       pattern).
-- [ ] Define the JSON-schema for arguments per Architecture
+- [x] Define the JSON-schema for arguments per Architecture
       §4.2 (query / k / kind).
-- [ ] Implement `dispatch(args: &ToolArgs, ctx: &ToolCtx) ->
+- [x] Implement `dispatch(args: &ToolArgs, ctx: &ToolCtx) ->
       ToolResult`:
   - Resolve the `RetrievalService` from the orchestrator
     context.
@@ -108,7 +108,7 @@ Gate: service unit tests pass.
   - Call `semantic_search_framework_sync` with the embedding.
   - Construct the return JSON per §4.2 (hits, embedder_used,
     elapsed_ms).
-- [ ] Unit test with a mock RetrievalService:
+- [x] Unit test with a mock RetrievalService:
   - Tool returns expected hits for a fixture index.
   - Tool returns the "index missing" error when no
     framework connection.
@@ -119,35 +119,35 @@ Gate: api_semantic_search unit tests pass.
 
 ### Milestone 5.3: `spec_semantic_search` tool
 
-- [ ] Create `tools/spec_semantic_search.rs` mirroring 5.2's
+- [x] Create `tools/spec_semantic_search.rs` mirroring 5.2's
       shape.
-- [ ] JSON-schema per Architecture §4.3 (query / k / source /
+- [x] JSON-schema per Architecture §4.3 (query / k / source /
       kind).
-- [ ] Implement dispatch: embed query, call
+- [x] Implement dispatch: embed query, call
       `semantic_search_spec_sync`, augment results with
       `chunk_path` (absolute path to the chunk md file) and
       `contained_signal_tables` / `contained_figures` from
       the chunk's front matter.
-- [ ] Return-shape per §4.3.
-- [ ] Special-case the no-source-spec case: return
+- [x] Return-shape per §4.3.
+- [x] Special-case the no-source-spec case: return
       `{"hits": [], "note": "no source spec registered"}`
       rather than an error.
-- [ ] Unit tests.
+- [x] Unit tests.
 
 Gate: spec_semantic_search unit tests pass.
 
 ### Milestone 5.4: `signal_table_query` tool
 
-- [ ] Create `tools/signal_table_query.rs`.
-- [ ] JSON-schema per Architecture §4.4 (filter object /
+- [x] Create `tools/signal_table_query.rs`.
+- [x] JSON-schema per Architecture §4.4 (filter object /
       conflicts_only / limit).
-- [ ] Implement dispatch: call `query_signal_table_sync` for
+- [x] Implement dispatch: call `query_signal_table_sync` for
       regular queries; call `find_signal_conflicts_sync` when
       `conflicts_only=true`.
-- [ ] Return-shape per §4.4 with `conflict_pairs` field
+- [x] Return-shape per §4.4 with `conflict_pairs` field
       populated in conflicts mode.
-- [ ] Validate filter object schema (no extra keys).
-- [ ] Unit tests covering: filter by signal_name; filter by
+- [x] Validate filter object schema (no extra keys).
+- [x] Unit tests covering: filter by signal_name; filter by
       stage; conflicts_only; limit truncation.
 
 Gate: signal_table_query unit tests pass.
