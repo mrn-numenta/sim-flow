@@ -169,6 +169,25 @@ pub(crate) fn shared_pdfium() -> Result<&'static Pdfium> {
     Ok(ptr)
 }
 
+/// Global serializing lock for any pdfium access. Returns a guard
+/// that must be held across the full lifetime of any pdfium method
+/// calls. pdfium-render is `!Send + !Sync`; even with a cached
+/// handle, two threads invoking pdfium concurrently produces
+/// undefined behaviour. Callers should:
+///
+/// ```ignore
+/// let _guard = pdfium_lock()?;
+/// let pdfium = shared_pdfium()?;
+/// // ... use pdfium / load_pdf_from_file / etc ...
+/// ```
+pub(crate) fn pdfium_lock() -> Result<std::sync::MutexGuard<'static, ()>> {
+    use std::sync::{Mutex, OnceLock};
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|e| Error::State(format!("spec ingest: pdfium serial lock poisoned: {e}")))
+}
+
 fn load_text_like(source: &Path, kind: SourceKind) -> Result<LoadedSource> {
     let bytes = std::fs::read(source).map_err(|e| {
         Error::State(format!(

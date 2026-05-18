@@ -187,6 +187,7 @@ mod tests {
         f.write_all(&bytes).unwrap();
         drop(f);
 
+        let _guard = crate::session::spec_ingest::stages::loading::pdfium_lock().unwrap();
         let pdfium = crate::session::spec_ingest::stages::loading::shared_pdfium().unwrap();
         let document = pdfium.load_pdf_from_file(&path, None).unwrap();
         let config = IngestConfig::default();

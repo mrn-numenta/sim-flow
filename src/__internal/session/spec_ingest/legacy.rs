@@ -173,7 +173,10 @@ fn chunk_pdf(source_path: &Path, images_dir: &Path) -> Result<Vec<Page>> {
 
     // Use the process-shared pdfium handle so concurrent unit tests
     // (and any caller that runs the pipeline + legacy ingest in the
-    // same process) don't bind the C library twice.
+    // same process) don't bind the C library twice. Hold the
+    // serialising lock across the whole pdfium-using section
+    // because pdfium-render is `!Send + !Sync`.
+    let _guard = super::stages::loading::pdfium_lock()?;
     let pdfium = super::stages::loading::shared_pdfium()?;
     let document = pdfium
         .load_pdf_from_file(source_path, None)
