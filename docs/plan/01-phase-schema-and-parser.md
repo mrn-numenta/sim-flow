@@ -200,11 +200,11 @@ Gate: encodings unit test passes.
 
 ### Milestone 1.10: Per-section parsers — Memory Map, Connectivity, Error Handling
 
-- [ ] Implement `parser/memory_map.rs` (single typed table).
-- [ ] Implement `parser/connectivity.rs` (Nodes table + Edges
+- [x] Implement `parser/memory_map.rs` (single typed table).
+- [x] Implement `parser/connectivity.rs` (Nodes table + Edges
       table + Routing-rules prose).
-- [ ] Implement `parser/errors.rs` (single typed error table).
-- [ ] Unit test each.
+- [x] Implement `parser/errors.rs` (single typed error table).
+- [x] Unit test each.
 
 Gate: per-section unit tests pass.
 

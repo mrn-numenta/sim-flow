@@ -14,8 +14,11 @@ use super::types::SpecMd;
 
 pub(crate) mod assumptions;
 pub(crate) mod blocks;
+pub(crate) mod connectivity;
 pub(crate) mod encodings;
+pub(crate) mod errors;
 pub(crate) mod external_interfaces;
+pub(crate) mod memory_map;
 pub(crate) mod metadata;
 pub(crate) mod parameters;
 pub(crate) mod prose;
@@ -263,9 +266,18 @@ fn dispatch_section(section: &Section, spec: &mut SpecMd) -> Result<(), SpecMdPa
             spec.encodings = encodings::parse_encodings(&section.body)?;
             Ok(())
         }
-        "Memory Map" => Ok(()),
-        "Connectivity" => Ok(()),
-        "Error Handling" => Ok(()),
+        "Memory Map" => {
+            spec.memory_map = memory_map::parse_memory_map(&section.body)?;
+            Ok(())
+        }
+        "Connectivity" => {
+            spec.connectivity = connectivity::parse_connectivity(&section.body)?;
+            Ok(())
+        }
+        "Error Handling" => {
+            spec.error_handling = errors::parse_errors(&section.body)?;
+            Ok(())
+        }
         "Functional Behavior" => Ok(()),
         "Timing, Latency, and Throughput" => Ok(()),
         "Pipeline and Hierarchy" => Ok(()),
