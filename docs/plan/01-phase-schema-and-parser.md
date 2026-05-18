@@ -189,12 +189,12 @@ Gate: state_machines unit test passes.
 
 ### Milestone 1.9: Per-section parsers — Encodings
 
-- [ ] Implement `parser/encodings.rs`.
-- [ ] Handle the `### Encoding: <field>` heading pattern.
-- [ ] Parse the property block (Bit width / Source-anchor).
-- [ ] Parse the values table (Value / Name / Abbreviation).
-- [ ] Parse the optional Reserved / illegal line.
-- [ ] Unit test against a fixture with one encoding.
+- [x] Implement `parser/encodings.rs`.
+- [x] Handle the `### Encoding: <field>` heading pattern.
+- [x] Parse the property block (Bit width / Source-anchor).
+- [x] Parse the values table (Value / Name / Abbreviation).
+- [x] Parse the optional Reserved / illegal line.
+- [x] Unit test against a fixture with one encoding.
 
 Gate: encodings unit test passes.
 

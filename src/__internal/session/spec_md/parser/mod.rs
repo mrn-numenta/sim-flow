@@ -14,6 +14,7 @@ use super::types::SpecMd;
 
 pub(crate) mod assumptions;
 pub(crate) mod blocks;
+pub(crate) mod encodings;
 pub(crate) mod external_interfaces;
 pub(crate) mod metadata;
 pub(crate) mod parameters;
@@ -258,7 +259,10 @@ fn dispatch_section(section: &Section, spec: &mut SpecMd) -> Result<(), SpecMdPa
             spec.state_machines = state_machines::parse_state_machines(&section.body)?;
             Ok(())
         }
-        "Encodings" => Ok(()),
+        "Encodings" => {
+            spec.encodings = encodings::parse_encodings(&section.body)?;
+            Ok(())
+        }
         "Memory Map" => Ok(()),
         "Connectivity" => Ok(()),
         "Error Handling" => Ok(()),
