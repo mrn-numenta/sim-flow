@@ -1,5 +1,5 @@
 <root>: 1 files [manifest.toml]
 primary: 3 files [references.toml, stubs.toml, tbds.toml]
-primary/chunks: 135 files
+primary/chunks: 52 files
 primary/figures: 110 files
-primary/tables/signals: 6 files
+primary/tables/signals: 2 files
