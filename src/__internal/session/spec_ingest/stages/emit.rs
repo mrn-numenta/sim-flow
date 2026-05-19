@@ -121,11 +121,11 @@ pub fn run_with_format(
     let format_driven = format.is_some() && classify_outputs.is_some();
     if format_driven {
         let co = classify_outputs.expect("format_driven implies classify_outputs is Some");
-        write_format_driven_signal_tables(&primary_dir, &co.block_signals)?;
+        write_format_driven_signal_tables(&primary_dir, &co.block_signals, &chunk_specs)?;
         write_format_driven_parameters(&primary_dir, &co.typed_parameters)?;
-        write_format_driven_encodings(&primary_dir, &co.typed_encodings)?;
+        write_format_driven_encodings(&primary_dir, &co.typed_encodings, &chunk_specs)?;
         write_format_driven_errors(&primary_dir, &co.typed_errors)?;
-        write_format_driven_fsms(&primary_dir, &co.fsm_transitions)?;
+        write_format_driven_fsms(&primary_dir, &co.fsm_transitions, &chunk_specs)?;
         write_format_driven_pmu_events(&primary_dir, &co.pmu_events)?;
     } else {
         write_signal_tables(&primary_dir, &outputs.signals, &chunk_ids)?;
@@ -888,6 +888,7 @@ fn write_csr_tables(primary_dir: &Path, classify_outputs: Option<&ClassifyOutput
 fn write_format_driven_signal_tables(
     primary_dir: &Path,
     groups: &[super::classify::BlockSignalGroup],
+    chunk_specs: &[&Section],
 ) -> Result<()> {
     if groups.is_empty() {
         return Ok(());
@@ -919,6 +920,9 @@ fn write_format_driven_signal_tables(
         out.push_str("table_kind = \"signal_table\"\n");
         out.push_str(&format!("stage = {}\n", toml_escape_inline(block_name)));
         out.push_str(&format!("source_page_range = [{min_page}, {max_page}]\n"));
+        if let Some(ord) = chunk_ordinal_for_page(chunk_specs, min_page) {
+            out.push_str(&format!("source_chunk_ordinal = \"{ord}\"\n"));
+        }
         for g in group {
             for row in &g.rows {
                 out.push_str("\n[[rows]]\n");
@@ -984,6 +988,7 @@ fn write_format_driven_parameters(primary_dir: &Path, params: &[spec_md::Paramet
 fn write_format_driven_encodings(
     primary_dir: &Path,
     groups: &[super::classify::EncodingGroup],
+    chunk_specs: &[&Section],
 ) -> Result<()> {
     if groups.is_empty() {
         return Ok(());
@@ -1004,6 +1009,9 @@ fn write_format_driven_encodings(
             "source_page_range = [{}, {}]\n",
             g.source_page, g.source_page
         ));
+        if let Some(ord) = chunk_ordinal_for_page(chunk_specs, g.source_page) {
+            out.push_str(&format!("source_chunk_ordinal = \"{ord}\"\n"));
+        }
         for v in &g.values {
             out.push_str("\n[[rows]]\n");
             out.push_str(&format!("value = {}\n", toml_escape_inline(&v.value)));
@@ -1080,6 +1088,7 @@ fn write_format_driven_errors(primary_dir: &Path, errors: &[spec_md::ErrorEntry]
 fn write_format_driven_fsms(
     primary_dir: &Path,
     transitions: &[super::classify::FsmTransitionGroup],
+    chunk_specs: &[&Section],
 ) -> Result<()> {
     if transitions.is_empty() {
         return Ok(());
@@ -1110,6 +1119,9 @@ fn write_format_driven_fsms(
         out.push_str("table_kind = \"fsm_transition_table\"\n");
         out.push_str(&format!("name = {}\n", toml_escape_inline(name)));
         out.push_str(&format!("source_page_range = [{min_page}, {max_page}]\n"));
+        if let Some(ord) = chunk_ordinal_for_page(chunk_specs, min_page) {
+            out.push_str(&format!("source_chunk_ordinal = \"{ord}\"\n"));
+        }
         for g in group {
             for t in &g.transitions {
                 out.push_str("\n[[transitions]]\n");
@@ -1177,6 +1189,28 @@ where
         .into_iter()
         .filter_map(|k| buckets.remove(&k).map(|v| (k, v)))
         .collect()
+}
+
+/// Find the chunk ordinal whose `page_range` covers `target`. Returns
+/// the 3-digit zero-padded position matching the on-disk chunk
+/// filename (`primary/chunks/NNN-<slug>.md`), or `None` when no chunk
+/// owns the page. DM0's anchor builder consumes this to emit
+/// `primary:chunk-NNN` instead of `primary:p<N>`.
+///
+/// Linear scan over `chunk_specs` is fine: the spec has ~50-100
+/// chunks even on big specs, and callers (the format-driven
+/// writers) invoke this once per shard.
+fn chunk_ordinal_for_page(chunk_specs: &[&Section], target: u32) -> Option<String> {
+    if target == 0 {
+        return None;
+    }
+    for (idx, section) in chunk_specs.iter().enumerate() {
+        let (start, end) = section.page_range;
+        if start <= target && target <= end {
+            return Some(format!("{idx:03}"));
+        }
+    }
+    None
 }
 
 fn page_range<I: IntoIterator<Item = u32>>(iter: I) -> (u32, u32) {
@@ -1905,7 +1939,7 @@ mod tests {
                 }],
             },
         ];
-        write_format_driven_signal_tables(&primary, &groups).unwrap();
+        write_format_driven_signal_tables(&primary, &groups, &[]).unwrap();
         let if_path = primary.join("tables/signals/000-instruction-fetch-if.toml");
         let pd_path = primary.join("tables/signals/001-pre-decode-pd.toml");
         assert!(if_path.exists());
@@ -1924,7 +1958,7 @@ mod tests {
         assert_eq!(count, 2);
 
         // Idempotency check: writing again is safe.
-        write_format_driven_signal_tables(&primary, &groups).unwrap();
+        write_format_driven_signal_tables(&primary, &groups, &[]).unwrap();
         assert_eq!(
             fs::read_dir(primary.join("tables/signals"))
                 .unwrap()
@@ -1955,7 +1989,7 @@ mod tests {
                 role: Default::default(),
             }],
         }];
-        write_format_driven_signal_tables(&primary, &groups).unwrap();
+        write_format_driven_signal_tables(&primary, &groups, &[]).unwrap();
         let body = fs::read_to_string(primary.join("tables/signals/000-execute-ex.toml")).unwrap();
         #[derive(serde::Deserialize)]
         struct RawSignal {
@@ -2078,7 +2112,7 @@ mod tests {
                 },
             ],
         }];
-        write_format_driven_encodings(&primary, &groups).unwrap();
+        write_format_driven_encodings(&primary, &groups, &[]).unwrap();
         let body = fs::read_to_string(primary.join("tables/encodings/000-opcode.toml")).unwrap();
         assert!(body.contains("field = \"opcode\""));
         assert!(body.contains("0b0110011"));
@@ -2116,7 +2150,7 @@ mod tests {
                 }],
             },
         ];
-        write_format_driven_fsms(&primary, &groups).unwrap();
+        write_format_driven_fsms(&primary, &groups, &[]).unwrap();
         let body = fs::read_to_string(primary.join("tables/fsms/000-dcache.toml")).unwrap();
         assert!(body.contains("name = \"DCache\""));
         assert!(body.contains("source_page_range = [60, 61]"));

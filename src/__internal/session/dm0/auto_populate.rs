@@ -329,7 +329,11 @@ pub fn populate_encodings(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize
     for path in list_toml_files(&dir) {
         let body = read_required(&path)?;
         let table: RawEncodingTable = parse_toml(&path, &body)?;
-        let anchor = page_anchor("primary", &table.source_page_range);
+        let anchor = prefer_chunk_anchor(
+            table.source_chunk_ordinal.as_deref(),
+            "primary",
+            &table.source_page_range,
+        );
         let already = spec
             .encodings
             .iter()
@@ -408,7 +412,11 @@ pub fn populate_fsms(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
     for path in list_toml_files(&dir) {
         let body = read_required(&path)?;
         let table: RawFsmTable = parse_toml(&path, &body)?;
-        let anchor = page_anchor("primary", &table.source_page_range);
+        let anchor = prefer_chunk_anchor(
+            table.source_chunk_ordinal.as_deref(),
+            "primary",
+            &table.source_page_range,
+        );
         let already = spec
             .state_machines
             .iter()
@@ -509,7 +517,11 @@ pub fn populate_blocks_with_format(
     for (idx, path) in shard_paths.iter().enumerate() {
         let body = read_required(path)?;
         let table: RawSignalTable = parse_toml(path, &body)?;
-        let anchor = page_anchor("primary", &table.source_page_range);
+        let anchor = prefer_chunk_anchor(
+            table.source_chunk_ordinal.as_deref(),
+            "primary",
+            &table.source_page_range,
+        );
         let hint = descriptor_blocks.get(idx);
         // Resolve canonical block name + layer from the descriptor
         // when present; otherwise fall back to the shard's `stage`
@@ -1418,6 +1430,20 @@ fn parse_toml<T: for<'de> Deserialize<'de>>(path: &Path, body: &str) -> Result<T
     })
 }
 
+/// Prefer the format-driven `source_chunk_ordinal` when present —
+/// emit-side already resolved it to the on-disk chunk filename's
+/// 3-digit prefix. Fall back to page form when the shard didn't
+/// record an ordinal (legacy markdown path, pre-9.11 shards, or no
+/// chunk overlapping the page range).
+fn prefer_chunk_anchor(chunk_ordinal: Option<&str>, source: &str, page_range: &[u32]) -> String {
+    if let Some(ord) = chunk_ordinal
+        && !ord.trim().is_empty()
+    {
+        return format!("{source}:chunk-{ord}");
+    }
+    page_anchor(source, page_range)
+}
+
 /// Build a `<source>:p<N>` or `<source>:p<N>-<M>` anchor from a
 /// 2-element page-range array. Returns just `<source>` if the range
 /// is invalid (zero / inverted).
@@ -1499,6 +1525,12 @@ struct RawSignalTable {
     stage: String,
     #[serde(default)]
     source_page_range: Vec<u32>,
+    /// Emit-side `chunk_ordinal_for_page` lookup. Three-digit
+    /// zero-padded string matching the chunk filename prefix
+    /// (`primary/chunks/NNN-<slug>.md`). When present DM0 builds
+    /// `primary:chunk-NNN` anchors; absent falls back to page form.
+    #[serde(default)]
+    source_chunk_ordinal: Option<String>,
     #[serde(default)]
     rows: Vec<RawSignalRow>,
 }
@@ -1565,6 +1597,8 @@ struct RawEncodingTable {
     #[serde(default)]
     source_page_range: Vec<u32>,
     #[serde(default)]
+    source_chunk_ordinal: Option<String>,
+    #[serde(default)]
     rows: Vec<RawEncodingRow>,
 }
 
@@ -1583,6 +1617,8 @@ struct RawFsmTable {
     reset_state: Option<String>,
     #[serde(default)]
     source_page_range: Vec<u32>,
+    #[serde(default)]
+    source_chunk_ordinal: Option<String>,
     #[serde(default)]
     transitions: Vec<RawFsmTransition>,
 }
@@ -2732,6 +2768,62 @@ mod tests {
         // Idempotent under the format-driven path.
         let n2 = populate_blocks_with_format(&corpus, &mut spec, Some(&fmt)).unwrap();
         assert_eq!(n2, 0);
+    }
+
+    #[test]
+    fn populate_blocks_uses_chunk_anchor_when_shard_carries_ordinal() {
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        // Shard carries source_chunk_ordinal — DM0 should emit a
+        // chunk-form anchor instead of falling back to page form.
+        write(
+            &corpus.join("tables").join("signals").join("000-if.toml"),
+            "schema_version = 1\n\
+             table_kind = \"signal_table\"\n\
+             source_chunk_id = \"c1\"\n\
+             source_page_range = [12, 13]\n\
+             source_chunk_ordinal = \"017\"\n\
+             stage = \"IF\"\n\
+             breadcrumb = [\"Pipeline\", \"IF\"]\n\
+             \n\
+             [[rows]]\n\
+             name = \"if_valid\"\n\
+             direction = \"out\"\n\
+             peer = \"PD\"\n\
+             description = \"valid flag\"\n",
+        );
+        let mut spec = SpecMd::default();
+        let n = populate_blocks_with_format(&corpus, &mut spec, None).unwrap();
+        assert_eq!(n, 1);
+        let block = &spec.blocks[0];
+        assert_eq!(block.source_anchors, vec!["primary:chunk-017".to_string()]);
+    }
+
+    #[test]
+    fn populate_blocks_falls_back_to_page_anchor_when_ordinal_absent() {
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        write(
+            &corpus.join("tables").join("signals").join("000-if.toml"),
+            "schema_version = 1\n\
+             table_kind = \"signal_table\"\n\
+             source_chunk_id = \"c1\"\n\
+             source_page_range = [12, 13]\n\
+             stage = \"IF\"\n\
+             breadcrumb = [\"Pipeline\", \"IF\"]\n\
+             \n\
+             [[rows]]\n\
+             name = \"if_valid\"\n\
+             direction = \"out\"\n\
+             peer = \"PD\"\n\
+             description = \"valid flag\"\n",
+        );
+        let mut spec = SpecMd::default();
+        let n = populate_blocks_with_format(&corpus, &mut spec, None).unwrap();
+        assert_eq!(n, 1);
+        let block = &spec.blocks[0];
+        // No ordinal → page form (the existing pre-9.15 behavior).
+        assert_eq!(block.source_anchors, vec!["primary:p12-13".to_string()]);
     }
 
     #[test]
