@@ -102,7 +102,9 @@ pub fn run_with_format(
     let numerical_conventions = populate_numerical_conventions(&corpus, spec)?;
     let performance_counters = populate_performance_counters(&corpus, spec)?;
     let anchors = populate_anchors(spec)?;
-    let open_questions = populate_open_questions_from_tbds(&corpus, spec)?;
+    let open_questions_tbds = populate_open_questions_from_tbds(&corpus, spec)?;
+    let open_questions_unknown = populate_open_questions_from_unknown_tables(&corpus, spec)?;
+    let open_questions = open_questions_tbds + open_questions_unknown;
     Ok(AutoPopulateReport {
         blocks,
         parameters,
@@ -1269,6 +1271,63 @@ pub fn populate_anchors(spec: &mut SpecMd) -> Result<usize> {
 /// and the page number.
 ///
 /// Idempotent on the rendered question text.
+/// Read `tables/unknown/*.toml` shards (written by classify when a
+/// table's `(kind, target)` pair doesn't match any typed dispatch
+/// arm) and surface one Open Question per shard so DM0 can ask the
+/// user how to interpret the rows. Without this read, classify's
+/// catch-all bucket is silently dropped — losing potentially useful
+/// data the LLM critique pass left as `Unknown`.
+///
+/// Idempotent on the rendered question text.
+pub fn populate_open_questions_from_unknown_tables(
+    corpus_root: &Path,
+    spec: &mut SpecMd,
+) -> Result<usize> {
+    let dir = corpus_root.join("tables").join("unknown");
+    let mut appended = 0usize;
+    for path in list_toml_files(&dir) {
+        let body = read_required(&path)?;
+        let raw: RawUnknownTable = parse_toml(&path, &body)?;
+        let header_summary = if raw.header_row.is_empty() {
+            String::new()
+        } else {
+            raw.header_row.join(" | ")
+        };
+        let text = match (raw.source_table_id.is_empty(), header_summary.is_empty()) {
+            (true, true) => format!(
+                "Unclassified table on primary:p{} ({} row(s)). How should this be modeled?",
+                raw.source_page,
+                raw.rows.len()
+            ),
+            (true, false) => format!(
+                "Unclassified table on primary:p{} (columns: {header_summary}; {} row(s)). \
+                 How should this be modeled?",
+                raw.source_page,
+                raw.rows.len()
+            ),
+            (false, true) => format!(
+                "Unclassified table {} on primary:p{} ({} row(s)). How should this be modeled?",
+                raw.source_table_id,
+                raw.source_page,
+                raw.rows.len()
+            ),
+            (false, false) => format!(
+                "Unclassified table {} on primary:p{} (columns: {header_summary}; \
+                 {} row(s)). How should this be modeled?",
+                raw.source_table_id,
+                raw.source_page,
+                raw.rows.len()
+            ),
+        };
+        let already = spec.open_questions.iter().any(|q| q.text == text);
+        if !already {
+            spec.open_questions.push(OpenQuestion { text });
+            appended += 1;
+        }
+    }
+    Ok(appended)
+}
+
 pub fn populate_open_questions_from_tbds(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
     let path = corpus_root.join("tbds.toml");
     if !path.is_file() {
@@ -1541,6 +1600,25 @@ struct RawFsmTransition {
 struct RawTbds {
     #[serde(default)]
     tbds: Vec<RawTbd>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawUnknownTable {
+    #[serde(default)]
+    source_table_id: String,
+    #[serde(default)]
+    source_page: u32,
+    #[serde(default)]
+    header_row: Vec<String>,
+    #[serde(default)]
+    rows: Vec<RawUnknownRow>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawUnknownRow {
+    #[serde(default)]
+    #[allow(dead_code)]
+    cells: Vec<String>,
 }
 
 // ---- Phase 9 milestone 9.12 on-disk shapes ----
@@ -2132,6 +2210,47 @@ mod tests {
         // Idempotency.
         let n2 = populate_open_questions_from_tbds(&corpus, &mut spec).unwrap();
         assert_eq!(n2, 0);
+    }
+
+    #[test]
+    fn open_questions_from_unknown_tables_surfaces_header_and_table_id() {
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        write(
+            &corpus.join("tables").join("unknown").join("000-T38.toml"),
+            "schema_version = 1\n\
+             table_kind = \"unknown\"\n\
+             source_table_id = \"T38\"\n\
+             source_page = 45\n\
+             header_row = [\"Mnemonic\", \"Opcode\", \"Description\"]\n\
+             \n\
+             [[rows]]\n\
+             cells = [\"ADD\", \"0110011\", \"Add registers\"]\n\
+             \n\
+             [[rows]]\n\
+             cells = [\"SUB\", \"0110011\", \"Subtract registers\"]\n",
+        );
+        let mut spec = SpecMd::default();
+        let n = populate_open_questions_from_unknown_tables(&corpus, &mut spec).unwrap();
+        assert_eq!(n, 1);
+        let q = &spec.open_questions[0].text;
+        assert!(q.contains("T38"), "got `{q}`");
+        assert!(q.contains("primary:p45"), "got `{q}`");
+        assert!(q.contains("Mnemonic | Opcode | Description"), "got `{q}`");
+        assert!(q.contains("2 row(s)"), "got `{q}`");
+        // Idempotency.
+        let n2 = populate_open_questions_from_unknown_tables(&corpus, &mut spec).unwrap();
+        assert_eq!(n2, 0);
+    }
+
+    #[test]
+    fn open_questions_from_unknown_tables_missing_dir_is_noop() {
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        let mut spec = SpecMd::default();
+        let n = populate_open_questions_from_unknown_tables(&corpus, &mut spec).unwrap();
+        assert_eq!(n, 0);
+        assert!(spec.open_questions.is_empty());
     }
 
     #[test]

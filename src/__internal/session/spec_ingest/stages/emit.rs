@@ -118,6 +118,7 @@ pub fn run_with_format(
     write_encoding_tables(&primary_dir, &outputs.encodings, &chunk_ids)?;
     write_fsm_tables(&primary_dir, &outputs.fsms, &chunk_ids)?;
     write_csr_tables(&primary_dir, classify_outputs)?;
+    write_unknown_tables(&primary_dir, classify_outputs)?;
 
     // Figures.
     let figures_dir = primary_dir.join("figures");
@@ -855,6 +856,56 @@ fn write_csr_tables(primary_dir: &Path, classify_outputs: Option<&ClassifyOutput
     Ok(())
 }
 
+/// Persist tables the classifier couldn't route to a typed shard so
+/// DM0 can surface them as Open Questions. Without this, the raw rows
+/// classify collected into `ClassifyOutputs::unknown_tables` are
+/// dropped after the ingest run and DM0 never sees them.
+fn write_unknown_tables(
+    primary_dir: &Path,
+    classify_outputs: Option<&ClassifyOutputs>,
+) -> Result<()> {
+    let Some(outputs) = classify_outputs else {
+        return Ok(());
+    };
+    if outputs.unknown_tables.is_empty() {
+        return Ok(());
+    }
+    let dir = primary_dir.join("tables/unknown");
+    fs::create_dir_all(&dir).map_err(io_err("create unknown dir", &dir))?;
+    for (idx, t) in outputs.unknown_tables.iter().enumerate() {
+        let filename = format!("{idx:03}-{}.toml", t.table_id);
+        let mut out = String::new();
+        out.push_str(&format!("schema_version = {SCHEMA_VERSION}\n"));
+        out.push_str("table_kind = \"unknown\"\n");
+        out.push_str(&format!(
+            "source_table_id = {}\n",
+            toml_escape_inline(&t.table_id)
+        ));
+        out.push_str(&format!("source_page = {}\n", t.source_page));
+        out.push_str(&format!(
+            "header_row = [{}]\n",
+            t.header_row
+                .iter()
+                .map(|c| toml_escape_inline(c))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        for row in &t.rows {
+            out.push_str("\n[[rows]]\n");
+            out.push_str(&format!(
+                "cells = [{}]\n",
+                row.cells
+                    .iter()
+                    .map(|c| toml_escape_inline(c))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        write_atomic(&dir.join(filename), out.as_bytes())?;
+    }
+    Ok(())
+}
+
 fn chunk_id_for(section: &Section, chunk_ids: &[(String, &Section)]) -> String {
     chunk_ids
         .iter()
@@ -1049,6 +1100,12 @@ fn render_manifest(
         "primary_latency_row_count = {latency_row_count}\n"
     ));
     out.push_str(&format!("primary_glossary_count = {glossary_count}\n"));
+    let unknown_table_count = classify_outputs
+        .map(|o| o.unknown_tables.len())
+        .unwrap_or(0);
+    out.push_str(&format!(
+        "primary_unknown_table_count = {unknown_table_count}\n"
+    ));
 
     out.push_str("\n[chrome_stripping]\n");
     out.push_str(&format!(
@@ -1420,5 +1477,63 @@ mod tests {
         let signals_dir = project.join(".sim-flow/spec-ingest/primary/tables/signals");
         assert!(signals_dir.exists());
         assert_eq!(fs::read_dir(&signals_dir).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn unknown_tables_persist_to_primary_tables_unknown() {
+        use super::super::classify::{ClassifyOutputs, UnknownRow, UnknownTable};
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary");
+        fs::create_dir_all(&primary).unwrap();
+        let mut outputs = ClassifyOutputs::default();
+        outputs.unknown_tables.push(UnknownTable {
+            table_id: "T38".to_string(),
+            source_page: 45,
+            header_row: vec![
+                "Mnemonic".to_string(),
+                "Opcode".to_string(),
+                "Description".to_string(),
+            ],
+            rows: vec![
+                UnknownRow {
+                    cells: vec![
+                        "ADD".to_string(),
+                        "0110011".to_string(),
+                        "Add registers".to_string(),
+                    ],
+                },
+                UnknownRow {
+                    cells: vec![
+                        "SUB".to_string(),
+                        "0110011".to_string(),
+                        "Subtract registers".to_string(),
+                    ],
+                },
+            ],
+        });
+        write_unknown_tables(&primary, Some(&outputs)).unwrap();
+        let path = primary.join("tables/unknown/000-T38.toml");
+        assert!(path.exists(), "expected shard at {}", path.display());
+        let body = fs::read_to_string(&path).unwrap();
+        assert!(body.contains("table_kind = \"unknown\""));
+        assert!(body.contains("source_table_id = \"T38\""));
+        assert!(body.contains("source_page = 45"));
+        assert!(body.contains("Mnemonic"));
+        assert!(body.contains("ADD"));
+        assert!(body.contains("SUB"));
+    }
+
+    #[test]
+    fn unknown_tables_empty_writes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary");
+        fs::create_dir_all(&primary).unwrap();
+        // None case.
+        write_unknown_tables(&primary, None).unwrap();
+        assert!(!primary.join("tables/unknown").exists());
+        // Some(empty) case.
+        let outputs = super::super::classify::ClassifyOutputs::default();
+        write_unknown_tables(&primary, Some(&outputs)).unwrap();
+        assert!(!primary.join("tables/unknown").exists());
     }
 }
