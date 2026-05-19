@@ -176,6 +176,20 @@ impl Tool for WriteFileTool {
                 parent.display()
             )));
         }
+        // Enforce-on-write: when the agent writes `docs/spec.md`,
+        // parse + validate the proposed content BEFORE persisting.
+        // If validation fails the write is refused and the agent
+        // gets a structured listing of every violation. This makes
+        // the structured schema actually mandatory rather than
+        // advisory — the agent cannot land a spec.md that would
+        // trip the DM0 gate. See the user-led discussion in
+        // 2026-05-19 (Phase 9.x) for the motivation.
+        if path == "docs/spec.md"
+            && let Err(spec_err) =
+                crate::__internal::session::spec_md::validate_proposed_spec_md(&content)
+        {
+            return Ok(ToolResult::err(spec_err.to_agent_message()));
+        }
         // When the agent writes a critique JSON, render the markdown
         // sibling AFTER the JSON write -- but roll the JSON write
         // back if render fails. Previously the JSON was committed
@@ -253,6 +267,53 @@ mod tests {
         let body = std::fs::read_to_string(tmp.path().join("out/a.txt")).unwrap();
         assert_eq!(body, "hello\n");
         assert_eq!(result.touched_paths, vec!["out/a.txt".to_string()]);
+    }
+
+    #[test]
+    fn spec_md_invalid_content_is_rejected_without_writing() {
+        // Agent tries to write a freeform spec.md (the
+        // pre-Phase-1 layout the rv12 project hit). The
+        // validator rejects it; file on disk is unchanged.
+        let tmp = tempfile::tempdir().unwrap();
+        let writes = vec!["docs/".to_string()];
+        // Pre-existing content the write should NOT overwrite.
+        std::fs::create_dir_all(tmp.path().join("docs")).unwrap();
+        std::fs::write(tmp.path().join("docs/spec.md"), "preexisting\n").unwrap();
+        let bad_content = "# Bad spec\n\n## Purpose And Scope\n\nfreeform body\n";
+        let result = WriteFileTool
+            .invoke(
+                &ctx(tmp.path(), &writes),
+                &json!({"path": "docs/spec.md", "content": bad_content}),
+            )
+            .unwrap();
+        assert!(!result.ok, "expected rejection, got: {}", result.display);
+        assert!(
+            result.display.contains("docs/spec.md rejected"),
+            "missing rejection header: {}",
+            result.display
+        );
+        // File on disk is unchanged.
+        let on_disk = std::fs::read_to_string(tmp.path().join("docs/spec.md")).unwrap();
+        assert_eq!(on_disk, "preexisting\n");
+    }
+
+    #[test]
+    fn spec_md_valid_content_passes_the_guard() {
+        // The minimal-valid body from `gate.rs::tests::minimal_valid_body`
+        // satisfies `spec.validate()`. The write guard MUST let
+        // this through unchanged.
+        let tmp = tempfile::tempdir().unwrap();
+        let writes = vec!["docs/".to_string()];
+        let minimal_valid = "## Metadata\n\n\n## Purpose\n\n## Scope\n\n## Non-goals\n\n## Assumptions and Constraints\n\n### Quantitative\n\n| Constraint | Value | Source-anchor |\n| --- | --- | --- |\n| Clock frequency | 1 GHz | primary:p1 |\n| Gate budget per cycle | 50 | primary:p1 |\n\n## Blocks\n\n## Functional Behavior\n\n## Timing, Latency, and Throughput\n\n## Pipeline and Hierarchy\n\n## Reset, Initialization, Flush, Drain\n\n## Worked Examples\n\n## Source-Spec Anchors\n\n## Open Questions\n\n## Auto-decisions\n\n";
+        let result = WriteFileTool
+            .invoke(
+                &ctx(tmp.path(), &writes),
+                &json!({"path": "docs/spec.md", "content": minimal_valid}),
+            )
+            .unwrap();
+        assert!(result.ok, "expected success, got: {}", result.display);
+        let on_disk = std::fs::read_to_string(tmp.path().join("docs/spec.md")).unwrap();
+        assert_eq!(on_disk, minimal_valid);
     }
 
     #[test]

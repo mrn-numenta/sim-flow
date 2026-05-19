@@ -46,6 +46,36 @@ that feature. The orchestrator parses your output with a markdown parser
 that keys on H2 headings and column-header conventions, so heading text
 must match exactly.
 
+### Enforced on write (NEW)
+
+`docs/spec.md` is special: every `write_file` and `edit_file` call
+targeting it runs the structured-schema validator BEFORE the write
+lands on disk. If the proposed content fails to parse, is missing a
+required H2 section, or fails cross-reference / anchor / quantitative-
+row checks, the write is REFUSED with a structured error listing
+every violation. The file on disk is unchanged. You must fix every
+listed issue and retry. The orchestrator will not "round down" or
+silently accept a malformed spec.md — there is no path where DM0
+advances on an invalid file.
+
+Practical consequences:
+
+- Prefer `edit_file` over `write_file docs/spec.md`. The
+  auto-populate step on session start seeds the canonical schema;
+  `edit_file` targeted edits preserve it. A full `write_file
+  docs/spec.md` rewrite is allowed but you must match the schema
+  exactly or the write will be rejected.
+- Heading strings are case-sensitive and verbatim. `## Purpose And
+  Scope` is NOT the same as `## Purpose` + `## Scope` + `## Non-goals`
+  — the validator names each missing section explicitly.
+- Table column headers must match the documented set exactly.
+- Block parents must reference a declared block by name, or be empty,
+  or be the literal `(none -- top-level)`. The validator rejects any
+  other value.
+- Anchors must be `<source>:p<N>`, `<source>:p<N>-<M>`, or
+  `<source>:chunk-<NNN>`. Stray text, missing colon, or unknown
+  form → rejected.
+
 ### Required sections (in this order)
 
 1. `# <Project Name> Design Specification` -- H1 title.

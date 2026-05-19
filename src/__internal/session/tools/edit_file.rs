@@ -129,6 +129,18 @@ impl Tool for EditFileTool {
             )));
         }
         let updated = body.replacen(&old_string, &new_string, 1);
+        // Enforce-on-write for `docs/spec.md`: parse + validate the
+        // POST-edit content before persisting. Mirrors the
+        // `write_file` guard; see `validate_proposed_spec_md` for
+        // the contract. An edit that breaks the structured schema
+        // is rejected with a structured error and the file on disk
+        // is unchanged.
+        if path == "docs/spec.md"
+            && let Err(spec_err) =
+                crate::__internal::session::spec_md::validate_proposed_spec_md(&updated)
+        {
+            return Ok(ToolResult::err(spec_err.to_agent_message()));
+        }
         if let Err(err) = std::fs::write(&abs, updated.as_bytes()) {
             return Ok(ToolResult::err(format!(
                 "edit_file: cannot write `{path}`: {err}"
@@ -198,6 +210,65 @@ mod tests {
             "n.md".to_string(),
             "a.txt".to_string(),
         ]
+    }
+
+    #[test]
+    fn spec_md_edit_that_breaks_schema_is_rejected_and_reverts() {
+        // Agent edits docs/spec.md to break the structured
+        // schema (renames `## Purpose` to `## Purpose And Scope`).
+        // The validator rejects; file unchanged on disk.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("docs")).unwrap();
+        let valid_body = "## Metadata\n\n\n## Purpose\n\n## Scope\n\n## Non-goals\n\n## Assumptions and Constraints\n\n### Quantitative\n\n| Constraint | Value | Source-anchor |\n| --- | --- | --- |\n| Clock frequency | 1 GHz | primary:p1 |\n| Gate budget per cycle | 50 | primary:p1 |\n\n## Blocks\n\n## Functional Behavior\n\n## Timing, Latency, and Throughput\n\n## Pipeline and Hierarchy\n\n## Reset, Initialization, Flush, Drain\n\n## Worked Examples\n\n## Source-Spec Anchors\n\n## Open Questions\n\n## Auto-decisions\n\n";
+        std::fs::write(tmp.path().join("docs/spec.md"), valid_body).unwrap();
+        let writes = vec!["docs/".to_string()];
+        // Concat `## Purpose\n\n## Scope` into the freeform combo
+        // that breaks the parser's section-order dispatch.
+        let result = EditFileTool
+            .invoke(
+                &ctx(tmp.path(), &writes),
+                &json!({
+                    "path": "docs/spec.md",
+                    "old_string": "## Purpose\n\n## Scope\n\n## Non-goals",
+                    "new_string": "## Purpose And Scope"
+                }),
+            )
+            .unwrap();
+        assert!(!result.ok, "expected rejection, got: {}", result.display);
+        assert!(
+            result.display.contains("docs/spec.md rejected"),
+            "missing rejection header: {}",
+            result.display
+        );
+        // File on disk is unchanged.
+        let on_disk = std::fs::read_to_string(tmp.path().join("docs/spec.md")).unwrap();
+        assert_eq!(on_disk, valid_body);
+    }
+
+    #[test]
+    fn spec_md_edit_that_preserves_schema_succeeds() {
+        // Agent edits an existing valid spec.md by changing a
+        // quantitative value. The structured schema is preserved
+        // so the guard lets the write through.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("docs")).unwrap();
+        let valid_body = "## Metadata\n\n\n## Purpose\n\n## Scope\n\n## Non-goals\n\n## Assumptions and Constraints\n\n### Quantitative\n\n| Constraint | Value | Source-anchor |\n| --- | --- | --- |\n| Clock frequency | 1 GHz | primary:p1 |\n| Gate budget per cycle | 50 | primary:p1 |\n\n## Blocks\n\n## Functional Behavior\n\n## Timing, Latency, and Throughput\n\n## Pipeline and Hierarchy\n\n## Reset, Initialization, Flush, Drain\n\n## Worked Examples\n\n## Source-Spec Anchors\n\n## Open Questions\n\n## Auto-decisions\n\n";
+        std::fs::write(tmp.path().join("docs/spec.md"), valid_body).unwrap();
+        let writes = vec!["docs/".to_string()];
+        let result = EditFileTool
+            .invoke(
+                &ctx(tmp.path(), &writes),
+                &json!({
+                    "path": "docs/spec.md",
+                    "old_string": "1 GHz",
+                    "new_string": "2 GHz"
+                }),
+            )
+            .unwrap();
+        assert!(result.ok, "expected success, got: {}", result.display);
+        let on_disk = std::fs::read_to_string(tmp.path().join("docs/spec.md")).unwrap();
+        assert!(on_disk.contains("2 GHz"));
+        assert!(!on_disk.contains("1 GHz"));
     }
 
     #[test]
