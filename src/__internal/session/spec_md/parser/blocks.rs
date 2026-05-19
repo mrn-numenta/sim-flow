@@ -14,7 +14,7 @@ use super::section_util::{
     collect_prose, collect_top_level_bullets, parse_bold_properties, split_h3, split_h4,
 };
 use super::table::{CanonicalColumn, MarkdownTable};
-use crate::session::spec_md::types::{Block, BlockSignalRow, BlockState};
+use crate::session::spec_md::types::{Block, BlockSignalRow, BlockState, Layer, SignalRole};
 
 pub(crate) fn parse_blocks(body: &str) -> Result<Vec<Block>, SpecMdParseError> {
     let mut out: Vec<Block> = Vec::new();
@@ -33,6 +33,9 @@ pub(crate) fn parse_blocks(body: &str) -> Result<Vec<Block>, SpecMdParseError> {
                 "role" => block.role = v,
                 "parent" => block.parent = v,
                 "clock domain" => block.clock_domain = v,
+                "power domain" => block.power_domain = v,
+                "reset domain" => block.reset_domain = v,
+                "layer" => block.layer = parse_layer(&v),
                 "parameterized by" => block.parameterized_by = parse_param_list(&v),
                 _ => {}
             }
@@ -86,6 +89,13 @@ fn parse_block_signal_rows(t: &MarkdownTable) -> Result<Vec<BlockSignalRow>, Spe
         (CanonicalColumn::Peer, "Peer"),
         (CanonicalColumn::Description, "Description"),
     ])?;
+    // Optional Role column (Phase 9 §7.7). Lookup by header text so
+    // we don't collide with CanonicalColumn::Role (used in
+    // connectivity nodes) or shift CanonicalColumn semantics.
+    let role_idx = t
+        .headers
+        .iter()
+        .position(|h| h.eq_ignore_ascii_case("role"));
     let mut rows = Vec::with_capacity(t.rows.len());
     for row in &t.rows {
         rows.push(BlockSignalRow {
@@ -93,10 +103,30 @@ fn parse_block_signal_rows(t: &MarkdownTable) -> Result<Vec<BlockSignalRow>, Spe
             direction: t.cell(row, idxs[1]).to_string(),
             peer: t.cell(row, idxs[2]).to_string(),
             description: t.cell(row, idxs[3]).to_string(),
-            ..Default::default()
+            role: role_idx
+                .map(|i| parse_signal_role(t.cell(row, i)))
+                .unwrap_or_default(),
         });
     }
     Ok(rows)
+}
+
+fn parse_layer(value: &str) -> Layer {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "architectural" => Layer::Architectural,
+        "micro" => Layer::Micro,
+        "mixed" => Layer::Mixed,
+        _ => Layer::Unknown,
+    }
+}
+
+fn parse_signal_role(value: &str) -> SignalRole {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "control" => SignalRole::Control,
+        "data" => SignalRole::Data,
+        "status" => SignalRole::Status,
+        _ => SignalRole::Unknown,
+    }
 }
 
 /// Parse a single State bullet of the form:

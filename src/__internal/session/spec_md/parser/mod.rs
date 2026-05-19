@@ -16,19 +16,27 @@ pub(crate) mod anchors;
 pub(crate) mod assumptions;
 pub(crate) mod auto_decisions;
 pub(crate) mod blocks;
+pub(crate) mod clock_domains;
 pub(crate) mod connectivity;
+pub(crate) mod csrs;
 pub(crate) mod cycle_accurate;
 pub(crate) mod encodings;
 pub(crate) mod errors;
 pub(crate) mod external_interfaces;
 pub(crate) mod figures;
 pub(crate) mod functional_behavior;
+pub(crate) mod glossary;
 pub(crate) mod memory_map;
 pub(crate) mod metadata;
+pub(crate) mod numerical_conventions;
 pub(crate) mod open_questions;
 pub(crate) mod parameters;
+pub(crate) mod performance_counters;
+pub(crate) mod power_domains;
 pub(crate) mod prose;
+pub(crate) mod reset_domains;
 pub(crate) mod section_util;
+pub(crate) mod security_boundaries;
 pub(crate) mod state_machines;
 pub(crate) mod table;
 pub(crate) mod timing;
@@ -346,10 +354,51 @@ fn dispatch_section(section: &Section, spec: &mut SpecMd) -> Result<(), SpecMdPa
             spec.auto_decisions = auto_decisions::parse_auto_decisions(&section.body);
             Ok(())
         }
+        // ---- Phase 9 §7.7 extensions ----
+        other if eq_any_ci(other, &["CSRs", "Control and Status Registers"]) => {
+            spec.csrs = csrs::parse_csrs(&section.body)?;
+            Ok(())
+        }
+        other if other.eq_ignore_ascii_case("Glossary") => {
+            spec.glossary = glossary::parse_glossary(&section.body)?;
+            Ok(())
+        }
+        other if other.eq_ignore_ascii_case("Clock Domains") => {
+            spec.clock_domains = clock_domains::parse_clock_domains(&section.body)?;
+            Ok(())
+        }
+        other if other.eq_ignore_ascii_case("Power Domains") => {
+            spec.power_domains = power_domains::parse_power_domains(&section.body)?;
+            Ok(())
+        }
+        other if other.eq_ignore_ascii_case("Reset Domains") => {
+            spec.reset_domains = reset_domains::parse_reset_domains(&section.body)?;
+            Ok(())
+        }
+        other if eq_any_ci(other, &["Security Boundaries", "Privilege Levels"]) => {
+            spec.security_boundaries =
+                security_boundaries::parse_security_boundaries(&section.body)?;
+            Ok(())
+        }
+        other if other.eq_ignore_ascii_case("Numerical Conventions") => {
+            spec.numerical_conventions =
+                numerical_conventions::parse_numerical_conventions(&section.body)?;
+            Ok(())
+        }
+        other if eq_any_ci(other, &["Performance Counters", "PMU Events"]) => {
+            spec.performance_counters =
+                performance_counters::parse_performance_counters(&section.body)?;
+            Ok(())
+        }
         // Unknown sections are tolerated (forward compatibility) but
         // produce no parsed output.
         _ => Ok(()),
     }
+}
+
+/// Case-insensitive match of `s` against any of `candidates`.
+fn eq_any_ci(s: &str, candidates: &[&str]) -> bool {
+    candidates.iter().any(|c| s.eq_ignore_ascii_case(c))
 }
 
 #[cfg(test)]

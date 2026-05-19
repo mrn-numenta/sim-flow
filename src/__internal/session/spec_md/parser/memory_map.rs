@@ -19,6 +19,11 @@ pub(crate) fn parse_memory_map(body: &str) -> Result<Vec<MemoryRegion>, SpecMdPa
         (CanonicalColumn::Access, "Access"),
         (CanonicalColumn::SourceAnchor, "Source-anchor"),
     ])?;
+    // Optional Required-privilege column (Phase 9 §7.7).
+    let priv_idx = t.headers.iter().position(|h| {
+        let lc = h.to_ascii_lowercase();
+        lc == "required privilege" || lc == "required-privilege" || lc == "privilege"
+    });
     let mut out = Vec::with_capacity(t.rows.len());
     for row in &t.rows {
         out.push(MemoryRegion {
@@ -28,7 +33,9 @@ pub(crate) fn parse_memory_map(body: &str) -> Result<Vec<MemoryRegion>, SpecMdPa
             purpose: t.cell(row, idxs[3]).to_string(),
             access: t.cell(row, idxs[4]).to_string(),
             source_anchor: t.cell(row, idxs[5]).to_string(),
-            ..Default::default()
+            required_privilege: priv_idx
+                .map(|i| t.cell(row, i).to_string())
+                .unwrap_or_default(),
         });
     }
     Ok(out)
