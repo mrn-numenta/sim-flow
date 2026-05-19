@@ -218,6 +218,8 @@ impl SpecMd {
                 kind: MissingFieldKind::Scalar,
             });
         }
+        // ---- Phase 9 §7.7 conditional requirements ----
+        push_phase9_required(self, &mut out);
         out
     }
 }
@@ -320,6 +322,147 @@ fn push_block_required(b: &super::types::Block, out: &mut Vec<MissingField>) {
         "Which block is this block's parent? Use `(none -- top-level)` for the top.",
         out,
     );
+}
+
+/// Phase 9 §7.7 conditional requirements. Empty sections produce
+/// no MissingField (the relevant ingest may not have discovered
+/// any tables); populated sections must have their structurally-
+/// required fields. Later phases will tighten this to "this
+/// section is REQUIRED when format.json::tables[].kind == ..."
+/// per the plan's conditional-requirement contract.
+fn push_phase9_required(spec: &SpecMd, out: &mut Vec<MissingField>) {
+    for (i, csr) in spec.csrs.iter().enumerate() {
+        let label = if csr.name.is_empty() {
+            format!("#{}", i + 1)
+        } else {
+            csr.name.clone()
+        };
+        let prefix = format!("CSRs > {label}");
+        push_scalar(
+            &csr.address,
+            &format!("{prefix} > Address"),
+            "What is this CSR's architectural address?",
+            out,
+        );
+        push_scalar(
+            &csr.name,
+            &format!("{prefix} > Name"),
+            "What is this CSR's name?",
+            out,
+        );
+    }
+    for (i, g) in spec.glossary.iter().enumerate() {
+        let label = if g.term.is_empty() {
+            format!("#{}", i + 1)
+        } else {
+            g.term.clone()
+        };
+        let prefix = format!("Glossary > {label}");
+        push_scalar(
+            &g.term,
+            &format!("{prefix} > Term"),
+            "What is the acronym / term?",
+            out,
+        );
+        push_scalar(
+            &g.expansion,
+            &format!("{prefix} > Expansion"),
+            "What is the expanded / spelled-out form?",
+            out,
+        );
+    }
+    for (i, d) in spec.clock_domains.iter().enumerate() {
+        let label = if d.name.is_empty() {
+            format!("#{}", i + 1)
+        } else {
+            d.name.clone()
+        };
+        push_scalar(
+            &d.name,
+            &format!("Clock Domains > {label} > Name"),
+            "Clock-domain name?",
+            out,
+        );
+    }
+    for (i, d) in spec.power_domains.iter().enumerate() {
+        let label = if d.name.is_empty() {
+            format!("#{}", i + 1)
+        } else {
+            d.name.clone()
+        };
+        push_scalar(
+            &d.name,
+            &format!("Power Domains > {label} > Name"),
+            "Power-domain name?",
+            out,
+        );
+    }
+    for (i, d) in spec.reset_domains.iter().enumerate() {
+        let label = if d.name.is_empty() {
+            format!("#{}", i + 1)
+        } else {
+            d.name.clone()
+        };
+        push_scalar(
+            &d.name,
+            &format!("Reset Domains > {label} > Name"),
+            "Reset-domain name?",
+            out,
+        );
+    }
+    for (i, level) in spec.security_boundaries.iter().enumerate() {
+        let label = if level.name.is_empty() {
+            format!("#{}", i + 1)
+        } else {
+            level.name.clone()
+        };
+        let prefix = format!("Security Boundaries > {label}");
+        push_scalar(
+            &level.id,
+            &format!("{prefix} > Id"),
+            "Stable id for this privilege level (e.g. `M`, `S`, `U`)?",
+            out,
+        );
+        push_scalar(
+            &level.name,
+            &format!("{prefix} > Name"),
+            "Human-readable name for this privilege level?",
+            out,
+        );
+    }
+    for (i, conv) in spec.numerical_conventions.iter().enumerate() {
+        let label = if conv.name.is_empty() {
+            format!("#{}", i + 1)
+        } else {
+            conv.name.clone()
+        };
+        push_scalar(
+            &conv.name,
+            &format!("Numerical Conventions > {label} > Name"),
+            "Numerical-convention name?",
+            out,
+        );
+    }
+    for (i, ev) in spec.performance_counters.iter().enumerate() {
+        let label = if ev.id.is_empty() {
+            format!("#{}", i + 1)
+        } else {
+            ev.id.clone()
+        };
+        let prefix = format!("Performance Counters > {label}");
+        push_scalar(
+            &ev.id,
+            &format!("{prefix} > Id"),
+            "Stable id for this PMU event?",
+            out,
+        );
+        push_scalar(
+            &ev.name,
+            &format!("{prefix} > Name"),
+            "Human-readable name for this PMU event?",
+            out,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -480,6 +623,82 @@ mod tests {
         assert!(
             missing.is_empty(),
             "expected no missing fields, got: {missing:#?}"
+        );
+    }
+
+    #[test]
+    fn empty_phase9_sections_produce_no_missing_fields() {
+        // Per the plan, empty Phase 9 §7.7 sections do NOT surface
+        // as MissingField (the relevant ingest may not have
+        // discovered any tables). Confirm the default spec yields
+        // no Phase 9 paths.
+        let spec = SpecMd::default();
+        let missing = spec.missing_required_fields();
+        let paths: Vec<&str> = missing.iter().map(|m| m.section_path.as_str()).collect();
+        for p in &paths {
+            assert!(
+                !p.starts_with("CSRs > "),
+                "unexpected CSRs MissingField: {p}"
+            );
+            assert!(
+                !p.starts_with("Glossary > "),
+                "unexpected Glossary MissingField: {p}"
+            );
+            assert!(
+                !p.starts_with("Clock Domains > "),
+                "unexpected Clock Domains MissingField: {p}"
+            );
+            assert!(
+                !p.starts_with("Power Domains > "),
+                "unexpected Power Domains MissingField: {p}"
+            );
+            assert!(
+                !p.starts_with("Reset Domains > "),
+                "unexpected Reset Domains MissingField: {p}"
+            );
+            assert!(
+                !p.starts_with("Security Boundaries > "),
+                "unexpected Security Boundaries MissingField: {p}"
+            );
+            assert!(
+                !p.starts_with("Numerical Conventions > "),
+                "unexpected Numerical Conventions MissingField: {p}"
+            );
+            assert!(
+                !p.starts_with("Performance Counters > "),
+                "unexpected Performance Counters MissingField: {p}"
+            );
+        }
+    }
+
+    #[test]
+    fn populated_phase9_section_with_empty_required_field_fires_missing() {
+        let mut spec = SpecMd::default();
+        spec.csrs.push(super::super::types::Csr {
+            address: String::new(),
+            name: "mstatus".into(),
+            ..Default::default()
+        });
+        spec.glossary.push(super::super::types::GlossaryEntry {
+            term: "IF".into(),
+            expansion: String::new(),
+            ..Default::default()
+        });
+        spec.clock_domains
+            .push(super::super::types::ClockDomain::default());
+        let missing = spec.missing_required_fields();
+        let paths: Vec<&str> = missing.iter().map(|m| m.section_path.as_str()).collect();
+        assert!(
+            paths.contains(&"CSRs > mstatus > Address"),
+            "expected MissingField for empty CSR address; got {paths:?}"
+        );
+        assert!(
+            paths.contains(&"Glossary > IF > Expansion"),
+            "expected MissingField for empty glossary expansion; got {paths:?}"
+        );
+        assert!(
+            paths.contains(&"Clock Domains > #1 > Name"),
+            "expected MissingField for empty clock-domain name; got {paths:?}"
         );
     }
 }
