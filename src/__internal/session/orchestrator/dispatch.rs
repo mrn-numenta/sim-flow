@@ -156,9 +156,22 @@ where
         step.id.to_string(),
     ));
     let _recovered_pending = ask_user_runtime.recover_from_checkpoint().ok().flatten();
+
+    // Retrieval service powers `spec_semantic_search`,
+    // `signal_table_query`, and `api_semantic_search`. Construction is
+    // best-effort: when the project has no embedder config (or the
+    // embedder construction fails — e.g. LM Studio isn't running) the
+    // service is `None` and `build_dispatcher_with_runtime` silently
+    // drops those three tools from the agent's catalog. The agent then
+    // never sees the tool in its function list and treats it as
+    // unavailable. Surface a Diagnostic on failure so the operator
+    // knows why retrieval tools aren't available in this run, rather
+    // than wondering why the agent is searching `lib:docs` for the
+    // tool name instead of calling it.
+    let retrieval = build_retrieval_service(&opts.project_dir, host)?;
     let dispatcher = tools::build_dispatcher_with_runtime(
         crate::steps::UNIVERSAL_TOOLS,
-        None,
+        retrieval.clone(),
         Some(ask_user_runtime.clone()),
     );
     // Tracks whether the auto→manual flip has already fired in this
@@ -2482,6 +2495,69 @@ where
             return Ok(());
         }
     }
+}
+
+/// Best-effort RetrievalService construction for the per-session
+/// tool dispatcher. The service powers `spec_semantic_search`,
+/// `signal_table_query`, and `api_semantic_search`. Returns `None`
+/// (with a Diagnostic surfaced through the presenter) when:
+///
+/// - no `embedder.toml` is reachable (project / env / home priority),
+/// - the embedder construction fails (LM Studio not running, etc.),
+/// - the runtime construction fails.
+///
+/// `build_dispatcher_with_runtime` silently drops the retrieval tools
+/// when the service is `None`; the per-step prompts already mention
+/// them, so without this Diagnostic the operator has no clue why the
+/// agent searches `lib:docs` for "spec_semantic_search" instead of
+/// calling it.
+///
+/// Errors here are NEVER fatal to the session: the agent can still
+/// drive the work with the non-retrieval tools (read_file, write_file,
+/// search, etc.), so we surface the warning and continue.
+fn build_retrieval_service<P: Presenter + ?Sized>(
+    project_dir: &std::path::Path,
+    presenter: &mut P,
+) -> Result<Option<Arc<crate::__internal::session::retrieval::RetrievalService>>> {
+    use crate::__internal::session::embedder::EmbedderConfig;
+    use crate::__internal::session::retrieval::RetrievalService;
+
+    let config = match EmbedderConfig::load() {
+        Ok(c) => c,
+        Err(e) => {
+            presenter.send(&Event::Diagnostic {
+                level: DiagnosticLevel::Warning,
+                message: format!(
+                    "retrieval tools disabled (spec_semantic_search, \
+                     signal_table_query, api_semantic_search): no embedder \
+                     config found. Create `.sim-flow/embedder.toml` (or \
+                     `~/.sim-flow/embedder.toml`) pointing at your embedding \
+                     server (e.g. LM Studio's nomic-embed model). Underlying \
+                     error: {e}"
+                ),
+            })?;
+            return Ok(None);
+        }
+    };
+
+    let service = match RetrievalService::from_embedder_config(project_dir, config) {
+        Ok(s) => s,
+        Err(e) => {
+            presenter.send(&Event::Diagnostic {
+                level: DiagnosticLevel::Warning,
+                message: format!(
+                    "retrieval tools disabled: failed to construct \
+                     RetrievalService for project `{}`: {e}. Verify the \
+                     embedder server is reachable and the project's lance \
+                     index has been built (`sim-flow build-spec-index`).",
+                    project_dir.display(),
+                ),
+            })?;
+            return Ok(None);
+        }
+    };
+
+    Ok(Some(Arc::new(service)))
 }
 
 /// Build the `RequestUserInput.prompt` string the host renders for an
