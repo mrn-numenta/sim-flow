@@ -58,14 +58,39 @@ hidden so each milestone gets a focused review.
 7. Are open decisions surfaced as explicit `DECIDE:` (or
    `OPEN:` for DM3-bound items) rows with the format
    `- [ ] DECIDE: <question> -- options: <A | B>; default:
-   <pick>; rationale: <one line>`? Decisions buried as
-   parenthetical asides inside other tasks = `BLOCKER:`.
-8. Does the task list trace cleanly to the milestone's Trace
-   section (which DM2c set)? Tasks that lack any link back to
-   `decomposition.md` / `data-movement.md` /
-   `pipeline-mapping.md` entries are `UNRESOLVED:` (might be
-   legitimate scaffolding) but tasks that contradict the trace
-   are `BLOCKER:`.
+   <pick>; rationale: <one line>`?
+
+   Flag as `BLOCKER:` any task whose body contains an embedded
+   unmade choice. Patterns to grep for:
+   - `"could be A or B"`, `"either ... or ..."`, `"A vs B"`,
+   - `"TBD"`, `"to be decided"`, `"pending review"`,
+   - `"decide later"`, `"we'll figure this out"`,
+   - parenthetical asides naming multiple alternatives,
+   - `"default ... but could be ..."`.
+
+   The fix is always the same: lift the choice into a separate
+   `DECIDE:` row and reference it from the original task with
+   `- depends on: DECIDE row above`. Buried-decision tasks are
+   the dominant DM2cd quality regression.
+
+8. Does the task list trace cleanly to the milestone's `## Trace`
+   section (which DM2c set)? Run the check BOTH directions:
+
+   - **Tasks → trace.** Tasks that lack any `traces to:` link
+     back to `decomposition.md` / `data-movement.md` /
+     `pipeline-mapping.md` entries are `UNRESOLVED:` when they
+     look like legitimate scaffolding; tasks that contradict
+     the trace are `BLOCKER:`.
+   - **Trace → tasks.** Every operation, payload, and analysis
+     line referenced in `## Trace` MUST be the `traces to:`
+     target of at least one task. An operation with no covering
+     task is `UNRESOLVED:` unless `## Auto-decisions` explicitly
+     records the fold ("- decided to fold X into Y; rationale:
+     ..."); in that case the omission is acceptable and the
+     finding can be `RESOLVED:`. A silent omission (no covering
+     task AND no Auto-decision) is always `UNRESOLVED:` at
+     minimum and `BLOCKER:` when the operation is on the
+     milestone's critical path.
 9. Does the milestone stay within DM2d scope? Reject pre-empts
    of DM3 (directed verification, coverage targets,
    scoreboards) as `BLOCKER:`.

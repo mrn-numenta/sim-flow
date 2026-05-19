@@ -66,6 +66,40 @@ Read on demand:
 
    Decisions DM3 must resolve get `OPEN:` instead.
 
+   **Decision discipline (BLOCKER-class if violated).** A task
+   body that prose-embeds an unresolved choice is wrong. Every
+   pattern below means an unmade design decision is hiding inside
+   another task:
+
+   - "X (could be A or B)" / "either A or B" / "A vs B"
+   - "TBD" / "to be decided" / "pending review"
+   - "decide later" / "we'll figure this out in DM2d"
+   - parenthetical asides naming multiple options
+   - "default is A, but could be B"
+
+   When you find yourself writing any of those, STOP. Lift the
+   choice into a sibling `DECIDE:` row with the format above and
+   reference it from the original task as
+   `- depends on: DECIDE row above`. The critique BLOCKS on
+   buried decisions; surfacing them up-front keeps the milestone
+   reviewable.
+
+   **Trace coverage (UNRESOLVED-class if violated).** Before you
+   stop, re-read the milestone stub's `## Trace` section and
+   verify EVERY operation, payload, and analysis line referenced
+   there appears as the `traces to:` target of at least one task
+   you wrote. If an operation has no covering task, either:
+
+   - add a task for it, OR
+   - record the deliberate omission in `## Auto-decisions`
+     (`- decided to fold X into Y; rationale: ...`) so the
+     critique can audit the choice rather than flag it as a
+     gap.
+
+   The critique runs both directions of the trace check — tasks
+   without traces AND operations without tasks — so silent
+   omissions don't pass.
+
 4. Add a `## Auto-decisions` trailing section recording any
    structural choices you made expanding the stub (e.g. "split
    per-stage logic into avg / gray / rev tasks rather than one
