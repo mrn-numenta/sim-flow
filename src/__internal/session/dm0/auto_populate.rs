@@ -15,10 +15,15 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::__internal::session::spec_ingest::format::{
+    FormatJson, Layer as FormatLayer, SpecMdRole, TableKind, TableTarget,
+};
 use crate::__internal::session::spec_md::types::{
-    AnchorIndexEntry, Block, BlockSignalRow, Encoding, EncodingValue, ErrorEntry, FigureEntry,
-    FsmState, FsmTransition, OpenQuestion, Parameter, QuantitativeRow, SourceDocument,
-    SourceDocumentRole, SpecMd, StateMachine,
+    AnchorIndexEntry, Block, BlockSignalRow, ClockDomain, Csr, CsrField, Encoding, EncodingValue,
+    ErrorEntry, FigureEntry, FsmState, FsmTransition, GlossaryEntry, Layer as SpecLayer,
+    NumericalConvention, OpenQuestion, Parameter, PmuEvent, PowerDomain, PrivilegeLevel,
+    QuantitativeRow, ResetDomain, SignalRole, SourceDocument, SourceDocumentRole, SpecMd,
+    StateMachine,
 };
 use crate::{Error, Result};
 
@@ -34,6 +39,15 @@ pub struct AutoPopulateReport {
     pub figures: usize,
     pub anchors: usize,
     pub open_questions: usize,
+    // ---- Phase 9 milestone 9.12 additions ----
+    pub csrs: usize,
+    pub glossary: usize,
+    pub clock_domains: usize,
+    pub power_domains: usize,
+    pub reset_domains: usize,
+    pub security_boundaries: usize,
+    pub numerical_conventions: usize,
+    pub performance_counters: usize,
 }
 
 /// Run every `populate_*` step in order and return an aggregate
@@ -45,7 +59,30 @@ pub struct AutoPopulateReport {
 /// `source_anchor`. TBDs run last because they only consume the
 /// ingest corpus (no spec-state dependency) and are the least likely
 /// to surface useful information until everything else is in place.
+///
+/// Thin wrapper over [`run_with_format`] with no descriptor — the
+/// heuristic-only path (Phase 6 behaviour) for callers that haven't
+/// loaded a `format.json` yet.
 pub fn run(project_dir: &Path, spec: &mut SpecMd) -> Result<AutoPopulateReport> {
+    run_with_format(project_dir, spec, None)
+}
+
+/// Format-aware variant of [`run`]. When `format` is `Some`, populate
+/// steps that have a format-driven mode (blocks today, more in later
+/// milestones) consume the descriptor instead of inferring from
+/// filenames. When `format` is `None`, the behaviour is identical to
+/// [`run`].
+///
+/// The Phase 9 milestone 9.12 additions (CSRs, glossary, domains,
+/// conventions, PMU events, security boundaries) read shards under
+/// `<corpus>/tables/<name>/` if the format-driven classify path
+/// emitted them; each populate gracefully returns 0 when the
+/// directory is absent so the legacy / markdown path still works.
+pub fn run_with_format(
+    project_dir: &Path,
+    spec: &mut SpecMd,
+    format: Option<&FormatJson>,
+) -> Result<AutoPopulateReport> {
     let manifest = manifest_path(project_dir);
     let corpus = corpus_root(project_dir);
     populate_metadata(&manifest, spec)?;
@@ -54,8 +91,16 @@ pub fn run(project_dir: &Path, spec: &mut SpecMd) -> Result<AutoPopulateReport> 
     let encodings = populate_encodings(&corpus, spec)?;
     let errors = populate_errors(&corpus, spec)?;
     let fsms = populate_fsms(&corpus, spec)?;
-    let blocks = populate_blocks(&corpus, spec)?;
+    let blocks = populate_blocks_with_format(&corpus, spec, format)?;
     let figures = populate_figures(&corpus, spec)?;
+    let csrs = populate_csrs(&corpus, spec)?;
+    let glossary = populate_glossary(&corpus, spec, format)?;
+    let clock_domains = populate_clock_domains(&corpus, spec)?;
+    let power_domains = populate_power_domains(&corpus, spec)?;
+    let reset_domains = populate_reset_domains(&corpus, spec)?;
+    let security_boundaries = populate_security_boundaries(&corpus, spec)?;
+    let numerical_conventions = populate_numerical_conventions(&corpus, spec)?;
+    let performance_counters = populate_performance_counters(&corpus, spec)?;
     let anchors = populate_anchors(spec)?;
     let open_questions = populate_open_questions_from_tbds(&corpus, spec)?;
     Ok(AutoPopulateReport {
@@ -67,6 +112,14 @@ pub fn run(project_dir: &Path, spec: &mut SpecMd) -> Result<AutoPopulateReport> 
         figures,
         anchors,
         open_questions,
+        csrs,
+        glossary,
+        clock_domains,
+        power_domains,
+        reset_domains,
+        security_boundaries,
+        numerical_conventions,
+        performance_counters,
     })
 }
 
@@ -404,47 +457,107 @@ pub fn populate_fsms(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
 // ---------------------------------------------------------------------------
 
 /// Emit one `Block` per `<corpus>/tables/signals/NNN-<stage>.toml`.
-/// Each block's `name` is the table's `stage`, the parent is the
-/// top-level sentinel `(none -- top-level)` (the agent refines later
-/// after reading enough source-spec context to infer hierarchy),
-/// and `signals[]` populates from the shard's `[[rows]]`. The
-/// shard's source page range becomes a single `primary:p<N>` anchor
-/// on the block.
+/// Heuristic / no-format mode: each block's `name` is the table's
+/// `stage`, the parent is the top-level sentinel `(none --
+/// top-level)` (the agent refines later after reading enough
+/// source-spec context to infer hierarchy), and `signals[]`
+/// populates from the shard's `[[rows]]`. The shard's source page
+/// range becomes a single `primary:p<N>` anchor on the block.
 ///
 /// Idempotent on `(name, source_anchor)`.
 pub fn populate_blocks(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
+    populate_blocks_with_format(corpus_root, spec, None)
+}
+
+/// Format-aware variant. When `format` is `Some`, the block name is
+/// taken from `format.json::tables[i].spec_md_target.block_name`
+/// rather than the shard's heading-derived `stage`, and
+/// `Block.layer` is set from the matching `section_role.layer` when
+/// available. Per-signal `BlockSignalRow.role` is inferred from the
+/// `column_map` canonical (`role`) when present, otherwise from
+/// naming-suffix heuristics on the signal name.
+///
+/// When `format` is `None`, falls back to the heuristic behaviour
+/// from [`populate_blocks`].
+///
+/// Shards in `<corpus>/tables/signals/` are still matched by file
+/// listing order against descriptor entries whose `kind` is
+/// `SignalTable` and whose `spec_md_target` is `BlockSignals`. If a
+/// shard cannot be matched against a descriptor entry, it falls back
+/// to the heuristic behaviour for that shard.
+pub fn populate_blocks_with_format(
+    corpus_root: &Path,
+    spec: &mut SpecMd,
+    format: Option<&FormatJson>,
+) -> Result<usize> {
     let dir = corpus_root.join("tables").join("signals");
     let mut appended = 0usize;
-    for path in list_toml_files(&dir) {
-        let body = read_required(&path)?;
-        let table: RawSignalTable = parse_toml(&path, &body)?;
+
+    // Pre-build a list of (block_name, layer, role_canonical_present)
+    // from the descriptor in declaration order. The classify.rs
+    // format-driven path emits signal-table shards in the same order
+    // as the descriptor's `TableEntry`s, so positional matching is
+    // sufficient.
+    let descriptor_blocks: Vec<DescriptorBlockHint> = match format {
+        Some(fmt) => collect_block_hints(fmt),
+        None => Vec::new(),
+    };
+
+    let shard_paths = list_toml_files(&dir);
+    for (idx, path) in shard_paths.iter().enumerate() {
+        let body = read_required(path)?;
+        let table: RawSignalTable = parse_toml(path, &body)?;
         let anchor = page_anchor("primary", &table.source_page_range);
+        let hint = descriptor_blocks.get(idx);
+        // Resolve canonical block name + layer from the descriptor
+        // when present; otherwise fall back to the shard's `stage`
+        // and Unknown layer.
+        let block_name = hint
+            .map(|h| h.block_name.clone())
+            .unwrap_or_else(|| table.stage.clone());
+        let layer = hint.map(|h| h.layer).unwrap_or(SpecLayer::Unknown);
+        let role_from_column = hint.is_some_and(|h| h.has_role_column);
+
         let already = spec
             .blocks
             .iter()
-            .any(|b| b.name == table.stage && b.source_anchors.iter().any(|a| a == &anchor));
+            .any(|b| b.name == block_name && b.source_anchors.iter().any(|a| a == &anchor));
         if already {
             continue;
         }
         let signals: Vec<BlockSignalRow> = table
             .rows
             .into_iter()
-            .map(|r| BlockSignalRow {
-                name: r.name,
-                direction: r.direction,
-                peer: r.peer,
-                description: r.description,
-                ..Default::default()
+            .map(|r| {
+                let role = if role_from_column {
+                    // Descriptor declares a `role` column. The
+                    // classify.rs path is responsible for projecting
+                    // it into the row; here we use the heuristic
+                    // suffix fallback because the legacy shard
+                    // shape has no role column. When wired into the
+                    // format-driven emit path this becomes
+                    // `r.role` directly.
+                    infer_role_from_name(&r.name)
+                } else {
+                    infer_role_from_name(&r.name)
+                };
+                BlockSignalRow {
+                    name: r.name,
+                    direction: r.direction,
+                    peer: r.peer,
+                    description: r.description,
+                    role,
+                }
             })
             .collect();
         spec.blocks.push(Block {
-            name: table.stage,
+            name: block_name,
             role: String::new(),
             parent: "(none -- top-level)".into(),
             clock_domain: String::new(),
             power_domain: String::new(),
             reset_domain: String::new(),
-            layer: Default::default(),
+            layer,
             parameterized_by: Vec::new(),
             signals,
             state: Vec::new(),
@@ -456,6 +569,76 @@ pub fn populate_blocks(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
         appended += 1;
     }
     Ok(appended)
+}
+
+/// One descriptor entry resolved to the (block_name, layer,
+/// role-column-present) tuple `populate_blocks_with_format` needs.
+struct DescriptorBlockHint {
+    block_name: String,
+    layer: SpecLayer,
+    has_role_column: bool,
+}
+
+fn collect_block_hints(format: &FormatJson) -> Vec<DescriptorBlockHint> {
+    let mut out = Vec::new();
+    for table in &format.tables {
+        if table.kind != TableKind::SignalTable {
+            continue;
+        }
+        let TableTarget::BlockSignals { block_name } = &table.spec_md_target else {
+            continue;
+        };
+        let layer = layer_for_block(format, block_name);
+        let has_role_column = table
+            .column_map
+            .iter()
+            .any(|c| c.canonical.eq_ignore_ascii_case("role"));
+        out.push(DescriptorBlockHint {
+            block_name: block_name.clone(),
+            layer,
+            has_role_column,
+        });
+    }
+    out
+}
+
+/// Look up the `section_roles` entry that owns this block (matching
+/// `SpecMdRole::Block { block_name }`) and map its `Layer` into the
+/// spec_md type. Returns `Unknown` when no matching role exists.
+fn layer_for_block(format: &FormatJson, block_name: &str) -> SpecLayer {
+    for role in &format.section_roles {
+        if let SpecMdRole::Block { block_name: bn } = &role.spec_md_role
+            && bn == block_name
+        {
+            return map_layer(role.layer);
+        }
+    }
+    SpecLayer::Unknown
+}
+
+fn map_layer(layer: FormatLayer) -> SpecLayer {
+    match layer {
+        FormatLayer::Architectural => SpecLayer::Architectural,
+        FormatLayer::Micro => SpecLayer::Micro,
+        FormatLayer::Mixed => SpecLayer::Mixed,
+        FormatLayer::Unknown => SpecLayer::Unknown,
+    }
+}
+
+/// Heuristic: classify a signal as control / data / status from
+/// common naming-suffix conventions. Anything else collapses to
+/// `Unknown`. Matches the classify.rs naming-pattern table in
+/// architecture §7.7.
+fn infer_role_from_name(name: &str) -> SignalRole {
+    let lower = name.to_ascii_lowercase();
+    // Strip a leading direction prefix (`if_`, `id_`, etc.) before
+    // checking the suffix.
+    let tail = lower.rsplit_once('_').map(|(_, t)| t).unwrap_or(&lower);
+    match tail {
+        "en" | "enable" | "valid" | "ready" | "req" | "ack" | "go" => SignalRole::Control,
+        "status" | "busy" | "done" | "err" | "error" => SignalRole::Status,
+        _ => SignalRole::Unknown,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -510,6 +693,439 @@ pub fn populate_figures(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> 
         if !already {
             spec.figures.push(e);
             appended += 1;
+        }
+    }
+    Ok(appended)
+}
+
+// ---------------------------------------------------------------------------
+// 9.12 — CSRs / Glossary / Domains / Conventions / PMU events
+// ---------------------------------------------------------------------------
+
+/// Append one `Csr` per row across every
+/// `<corpus>/tables/csrs/*.toml` shard, then stitch each
+/// `<corpus>/tables/csr_fields/*.toml` row onto the matching `Csr`
+/// by `csr_name` (the field shard's parent CSR).
+///
+/// Idempotent on `(csr.name, csr.source_anchor)` for the CSR header
+/// rows and on `(csr_name, field.bits, field.name)` for the field
+/// rows. Returns the count of newly-appended CSRs.
+pub fn populate_csrs(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
+    let csrs_dir = corpus_root.join("tables").join("csrs");
+    let fields_dir = corpus_root.join("tables").join("csr_fields");
+    let mut appended = 0usize;
+    let mut any_seen = false;
+    let mut any_parsed = false;
+
+    for path in list_toml_files(&csrs_dir) {
+        any_seen = true;
+        let body = read_required(&path)?;
+        let table: RawCsrTable = match parse_toml(&path, &body) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        any_parsed = true;
+        let anchor = page_anchor("primary", &table.source_page_range);
+        for row in table.rows {
+            let csr = Csr {
+                address: row.address.clone(),
+                name: row.name.clone(),
+                access: row.access.clone(),
+                reset_value: row.reset_value.clone(),
+                required_privilege: row.required_privilege.clone(),
+                description: row.description.clone(),
+                fields: Vec::new(),
+                source_anchor: anchor.clone(),
+            };
+            if !spec
+                .csrs
+                .iter()
+                .any(|c| c.name == csr.name && c.source_anchor == csr.source_anchor)
+            {
+                spec.csrs.push(csr);
+                appended += 1;
+            }
+        }
+    }
+    if any_seen && !any_parsed {
+        eprintln!(
+            "auto_populate: populate_csrs: {} exists but no rows parsed cleanly",
+            csrs_dir.display()
+        );
+    }
+
+    // Stitch field shards onto matching CSRs.
+    let mut fields_seen = false;
+    let mut fields_parsed = false;
+    for path in list_toml_files(&fields_dir) {
+        fields_seen = true;
+        let body = read_required(&path)?;
+        let table: RawCsrFieldTable = match parse_toml(&path, &body) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        fields_parsed = true;
+        let csr_name = table.csr_name.clone();
+        if csr_name.is_empty() {
+            continue;
+        }
+        // Locate parent CSR.
+        let Some(csr) = spec.csrs.iter_mut().find(|c| c.name == csr_name) else {
+            continue;
+        };
+        for row in table.rows {
+            let already = csr
+                .fields
+                .iter()
+                .any(|f| f.bits == row.bits && f.name == row.name);
+            if !already {
+                csr.fields.push(CsrField {
+                    bits: row.bits,
+                    name: row.name,
+                    access: row.access,
+                    description: row.description,
+                });
+            }
+        }
+    }
+    if fields_seen && !fields_parsed {
+        eprintln!(
+            "auto_populate: populate_csrs: {} exists but no rows parsed cleanly",
+            fields_dir.display()
+        );
+    }
+
+    Ok(appended)
+}
+
+/// Append one `GlossaryEntry` per `format.json::glossary[]` entry
+/// (when a descriptor is loaded) plus any rows found in
+/// `<corpus>/glossary.toml` (when classify writes one). Each entry
+/// is idempotent on `term`.
+pub fn populate_glossary(
+    corpus_root: &Path,
+    spec: &mut SpecMd,
+    format: Option<&FormatJson>,
+) -> Result<usize> {
+    let mut appended = 0usize;
+
+    if let Some(fmt) = format {
+        for entry in &fmt.glossary {
+            let anchor = if entry.first_page == 0 {
+                String::new()
+            } else {
+                format!("primary:p{}", entry.first_page)
+            };
+            let term = entry.acronym.clone();
+            if term.is_empty() {
+                continue;
+            }
+            if spec.glossary.iter().any(|g| g.term == term) {
+                continue;
+            }
+            spec.glossary.push(GlossaryEntry {
+                term,
+                expansion: entry.expansion.clone(),
+                scope: entry.scope.clone(),
+                used_in_blocks: entry.used_in_blocks.clone(),
+                source_anchor: anchor,
+            });
+            appended += 1;
+        }
+    }
+
+    // Optional on-disk glossary shard. classify.rs may emit one in
+    // the format-driven path; we read it gracefully when present.
+    let glossary_path = corpus_root.join("glossary.toml");
+    if glossary_path.is_file() {
+        let body = read_required(&glossary_path)?;
+        match parse_toml::<RawGlossaryTable>(&glossary_path, &body) {
+            Ok(table) => {
+                for row in table.rows {
+                    let term = row.term.clone();
+                    if term.is_empty() {
+                        continue;
+                    }
+                    if spec.glossary.iter().any(|g| g.term == term) {
+                        continue;
+                    }
+                    spec.glossary.push(GlossaryEntry {
+                        term,
+                        expansion: row.expansion,
+                        scope: row.scope,
+                        used_in_blocks: row.used_in_blocks,
+                        source_anchor: row.source_anchor,
+                    });
+                    appended += 1;
+                }
+            }
+            Err(_) => {
+                eprintln!(
+                    "auto_populate: populate_glossary: {} present but failed to parse",
+                    glossary_path.display()
+                );
+            }
+        }
+    }
+
+    Ok(appended)
+}
+
+/// Append one `ClockDomain` per row across every
+/// `<corpus>/tables/clock_domains/*.toml` shard. Idempotent on
+/// `name`. Returns 0 when the directory is absent (the common
+/// v1 case).
+pub fn populate_clock_domains(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
+    let dir = corpus_root.join("tables").join("clock_domains");
+    let mut appended = 0usize;
+    let mut any_seen = false;
+    let mut any_parsed = false;
+    for path in list_toml_files(&dir) {
+        any_seen = true;
+        let body = read_required(&path)?;
+        let table: RawClockDomainTable = match parse_toml(&path, &body) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        any_parsed = true;
+        for row in table.rows {
+            if row.name.is_empty() {
+                continue;
+            }
+            if spec.clock_domains.iter().any(|d| d.name == row.name) {
+                continue;
+            }
+            spec.clock_domains.push(ClockDomain {
+                name: row.name,
+                frequency: row.frequency,
+                source: row.source,
+                description: row.description,
+            });
+            appended += 1;
+        }
+    }
+    if any_seen && !any_parsed {
+        eprintln!(
+            "auto_populate: populate_clock_domains: {} exists but no rows parsed cleanly",
+            dir.display()
+        );
+    }
+    Ok(appended)
+}
+
+/// Append one `PowerDomain` per row across every
+/// `<corpus>/tables/power_domains/*.toml` shard. Idempotent on
+/// `name`. Returns 0 when the directory is absent.
+pub fn populate_power_domains(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
+    let dir = corpus_root.join("tables").join("power_domains");
+    let mut appended = 0usize;
+    let mut any_seen = false;
+    let mut any_parsed = false;
+    for path in list_toml_files(&dir) {
+        any_seen = true;
+        let body = read_required(&path)?;
+        let table: RawPowerDomainTable = match parse_toml(&path, &body) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        any_parsed = true;
+        for row in table.rows {
+            if row.name.is_empty() {
+                continue;
+            }
+            if spec.power_domains.iter().any(|d| d.name == row.name) {
+                continue;
+            }
+            spec.power_domains.push(PowerDomain {
+                name: row.name,
+                voltage: row.voltage,
+                always_on: row.always_on,
+                description: row.description,
+            });
+            appended += 1;
+        }
+    }
+    if any_seen && !any_parsed {
+        eprintln!(
+            "auto_populate: populate_power_domains: {} exists but no rows parsed cleanly",
+            dir.display()
+        );
+    }
+    Ok(appended)
+}
+
+/// Append one `ResetDomain` per row across every
+/// `<corpus>/tables/reset_domains/*.toml` shard. Idempotent on
+/// `name`. Returns 0 when the directory is absent.
+pub fn populate_reset_domains(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
+    let dir = corpus_root.join("tables").join("reset_domains");
+    let mut appended = 0usize;
+    let mut any_seen = false;
+    let mut any_parsed = false;
+    for path in list_toml_files(&dir) {
+        any_seen = true;
+        let body = read_required(&path)?;
+        let table: RawResetDomainTable = match parse_toml(&path, &body) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        any_parsed = true;
+        for row in table.rows {
+            if row.name.is_empty() {
+                continue;
+            }
+            if spec.reset_domains.iter().any(|d| d.name == row.name) {
+                continue;
+            }
+            spec.reset_domains.push(ResetDomain {
+                name: row.name,
+                polarity: row.polarity,
+                sync: row.sync,
+                source: row.source,
+                description: row.description,
+            });
+            appended += 1;
+        }
+    }
+    if any_seen && !any_parsed {
+        eprintln!(
+            "auto_populate: populate_reset_domains: {} exists but no rows parsed cleanly",
+            dir.display()
+        );
+    }
+    Ok(appended)
+}
+
+/// Append one `PrivilegeLevel` per row across every
+/// `<corpus>/tables/security_boundaries/*.toml` (or the synonym
+/// `tables/privilege_levels/*.toml`) shard. Idempotent on `id`.
+/// Returns 0 when both directories are absent.
+pub fn populate_security_boundaries(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
+    let mut appended = 0usize;
+    for dirname in ["security_boundaries", "privilege_levels"] {
+        let dir = corpus_root.join("tables").join(dirname);
+        let mut any_seen = false;
+        let mut any_parsed = false;
+        for path in list_toml_files(&dir) {
+            any_seen = true;
+            let body = read_required(&path)?;
+            let table: RawPrivilegeLevelTable = match parse_toml(&path, &body) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            any_parsed = true;
+            for row in table.rows {
+                if row.id.is_empty() {
+                    continue;
+                }
+                if spec.security_boundaries.iter().any(|p| p.id == row.id) {
+                    continue;
+                }
+                spec.security_boundaries.push(PrivilegeLevel {
+                    id: row.id,
+                    name: row.name,
+                    description: row.description,
+                    capabilities: row.capabilities,
+                });
+                appended += 1;
+            }
+        }
+        if any_seen && !any_parsed {
+            eprintln!(
+                "auto_populate: populate_security_boundaries: {} exists but no rows parsed cleanly",
+                dir.display()
+            );
+        }
+    }
+    Ok(appended)
+}
+
+/// Append one `NumericalConvention` per row across every
+/// `<corpus>/tables/numerical_conventions/*.toml` shard. Idempotent
+/// on `name`. Returns 0 when the directory is absent.
+pub fn populate_numerical_conventions(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
+    let dir = corpus_root.join("tables").join("numerical_conventions");
+    let mut appended = 0usize;
+    let mut any_seen = false;
+    let mut any_parsed = false;
+    for path in list_toml_files(&dir) {
+        any_seen = true;
+        let body = read_required(&path)?;
+        let table: RawNumericalConventionTable = match parse_toml(&path, &body) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        any_parsed = true;
+        for row in table.rows {
+            if row.name.is_empty() {
+                continue;
+            }
+            if spec
+                .numerical_conventions
+                .iter()
+                .any(|n| n.name == row.name)
+            {
+                continue;
+            }
+            spec.numerical_conventions.push(NumericalConvention {
+                name: row.name,
+                q_format_default: row.q_format_default,
+                saturation_policy: row.saturation_policy,
+                signed_default: row.signed_default,
+                rounding_mode: row.rounding_mode,
+                description: row.description,
+            });
+            appended += 1;
+        }
+    }
+    if any_seen && !any_parsed {
+        eprintln!(
+            "auto_populate: populate_numerical_conventions: {} exists but no rows parsed cleanly",
+            dir.display()
+        );
+    }
+    Ok(appended)
+}
+
+/// Append one `PmuEvent` per row across every
+/// `<corpus>/tables/pmu/*.toml` (or the synonym `tables/pmu_events/`)
+/// shard. Idempotent on `id`. Returns 0 when both directories are
+/// absent.
+pub fn populate_performance_counters(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
+    let mut appended = 0usize;
+    for dirname in ["pmu", "pmu_events"] {
+        let dir = corpus_root.join("tables").join(dirname);
+        let mut any_seen = false;
+        let mut any_parsed = false;
+        for path in list_toml_files(&dir) {
+            any_seen = true;
+            let body = read_required(&path)?;
+            let table: RawPmuEventTable = match parse_toml(&path, &body) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            any_parsed = true;
+            for row in table.rows {
+                if row.id.is_empty() {
+                    continue;
+                }
+                if spec.performance_counters.iter().any(|e| e.id == row.id) {
+                    continue;
+                }
+                spec.performance_counters.push(PmuEvent {
+                    id: row.id,
+                    name: row.name,
+                    description: row.description,
+                    csr_address: row.csr_address,
+                });
+                appended += 1;
+            }
+        }
+        if any_seen && !any_parsed {
+            eprintln!(
+                "auto_populate: populate_performance_counters: {} exists but no rows parsed cleanly",
+                dir.display()
+            );
         }
     }
     Ok(appended)
@@ -925,6 +1541,211 @@ struct RawFsmTransition {
 struct RawTbds {
     #[serde(default)]
     tbds: Vec<RawTbd>,
+}
+
+// ---- Phase 9 milestone 9.12 on-disk shapes ----
+
+#[derive(Debug, Deserialize, Default)]
+struct RawCsrTable {
+    #[serde(default)]
+    source_page_range: Vec<u32>,
+    #[serde(default)]
+    rows: Vec<RawCsrRow>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawCsrRow {
+    #[serde(default)]
+    address: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    access: String,
+    #[serde(default)]
+    reset_value: String,
+    #[serde(default)]
+    required_privilege: String,
+    #[serde(default)]
+    description: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawCsrFieldTable {
+    #[serde(default)]
+    csr_name: String,
+    // Kept for forward-compat — the parent CSR already carries the
+    // anchor so we don't reuse this per-field.
+    #[serde(default)]
+    #[allow(dead_code)]
+    source_page_range: Vec<u32>,
+    #[serde(default)]
+    rows: Vec<RawCsrFieldRow>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawCsrFieldRow {
+    #[serde(default)]
+    bits: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    access: String,
+    #[serde(default)]
+    description: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawGlossaryTable {
+    #[serde(default)]
+    rows: Vec<RawGlossaryRow>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawGlossaryRow {
+    #[serde(default)]
+    term: String,
+    #[serde(default)]
+    expansion: String,
+    #[serde(default)]
+    scope: String,
+    #[serde(default)]
+    used_in_blocks: Vec<String>,
+    #[serde(default)]
+    source_anchor: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawClockDomainTable {
+    // Domain types don't carry a source_anchor (Chapter 7 §7.7) so
+    // this is accepted but unused.
+    #[serde(default)]
+    #[allow(dead_code)]
+    source_page_range: Vec<u32>,
+    #[serde(default)]
+    rows: Vec<RawClockDomainRow>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawClockDomainRow {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    frequency: String,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    description: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawPowerDomainTable {
+    #[serde(default)]
+    #[allow(dead_code)]
+    source_page_range: Vec<u32>,
+    #[serde(default)]
+    rows: Vec<RawPowerDomainRow>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawPowerDomainRow {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    voltage: String,
+    #[serde(default)]
+    always_on: bool,
+    #[serde(default)]
+    description: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawResetDomainTable {
+    #[serde(default)]
+    #[allow(dead_code)]
+    source_page_range: Vec<u32>,
+    #[serde(default)]
+    rows: Vec<RawResetDomainRow>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawResetDomainRow {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    polarity: String,
+    #[serde(default)]
+    sync: bool,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    description: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawPrivilegeLevelTable {
+    #[serde(default)]
+    #[allow(dead_code)]
+    source_page_range: Vec<u32>,
+    #[serde(default)]
+    rows: Vec<RawPrivilegeLevelRow>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawPrivilegeLevelRow {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    capabilities: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawNumericalConventionTable {
+    #[serde(default)]
+    #[allow(dead_code)]
+    source_page_range: Vec<u32>,
+    #[serde(default)]
+    rows: Vec<RawNumericalConventionRow>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawNumericalConventionRow {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    q_format_default: String,
+    #[serde(default)]
+    saturation_policy: String,
+    #[serde(default)]
+    signed_default: String,
+    #[serde(default)]
+    rounding_mode: String,
+    #[serde(default)]
+    description: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawPmuEventTable {
+    #[serde(default)]
+    #[allow(dead_code)]
+    source_page_range: Vec<u32>,
+    #[serde(default)]
+    rows: Vec<RawPmuEventRow>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawPmuEventRow {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    csr_address: String,
 }
 
 #[derive(Debug, Deserialize)]
