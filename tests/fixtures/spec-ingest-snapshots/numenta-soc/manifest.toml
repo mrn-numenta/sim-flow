@@ -1,0 +1,30 @@
+schema_version = 1
+ingest_pipeline_version = "0.1.0"
+ingested_at = "1970-01-01T00:00:00Z"
+source_kind = "pdf"
+source_path = "/Users/mneilly/Downloads/Numenta SoC Specification.pdf"
+source_sha256 = "e4a0b8d4094196525f9dba59ec6ed2cec3c67c2d4c794d782dfb8cd656715d36"
+primary_chunk_count = 47
+primary_figure_count = 13
+primary_signal_table_count = 0
+primary_parameter_table_count = 0
+primary_error_table_count = 0
+primary_encoding_table_count = 0
+primary_fsm_table_count = 0
+primary_stub_count = 0
+primary_tbd_count = 0
+primary_csr_count = 0
+primary_csr_field_count = 0
+primary_memory_region_count = 0
+primary_pmu_event_count = 0
+primary_latency_row_count = 0
+primary_glossary_count = 15
+
+[chrome_stripping]
+repeated_lines = []
+total_lines_stripped = 17
+
+[embedder_expected]
+provider = "openai-compat"
+model = ""
+dimension = 0

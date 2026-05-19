@@ -1,0 +1,672 @@
+{
+  "schema_version": 1,
+  "model": "first-cut-builtin",
+  "prompt_version": "first-cut-v1",
+  "source_sha256": "e4a0b8d4094196525f9dba59ec6ed2cec3c67c2d4c794d782dfb8cd656715d36",
+  "discovered_at": "1970-01-01T00:00:00Z",
+  "section_roles": [
+    {
+      "heading": "Nu menta SoC Specification",
+      "page": 1,
+      "line": 576,
+      "font_size": 38.0,
+      "font_weight": "normal",
+      "level": 1,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "T able of Content",
+      "page": 2,
+      "line": 694,
+      "font_size": 20.0,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "1 Numenta SoC Overview",
+      "page": 3,
+      "line": 533,
+      "font_size": 20.0,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "2 HTM (Hierarchital T emporal Memory) System",
+      "page": 5,
+      "line": 694,
+      "font_size": 20.0,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "3 CPU System",
+      "page": 6,
+      "line": 694,
+      "font_size": 20.0,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "4 IO System",
+      "page": 7,
+      "line": 694,
+      "font_size": 20.0,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "5 CPU / PIO (Peripheral IO) System",
+      "page": 15,
+      "line": 691,
+      "font_size": 23.0,
+      "font_weight": "bold",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "6 Peripheral Component Interconnect",
+      "page": 16,
+      "line": 691,
+      "font_size": 23.0,
+      "font_weight": "bold",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Express System (PCIe System)",
+      "page": 16,
+      "line": 660,
+      "font_size": 23.0,
+      "font_weight": "bold",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "6.2 PCIe System Requirements",
+      "page": 16,
+      "line": 559,
+      "font_size": 17.0,
+      "font_weight": "bold",
+      "level": 4,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "6.3 Address T ranslation",
+      "page": 19,
+      "line": 597,
+      "font_size": 17.0,
+      "font_weight": "bold",
+      "level": 4,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "6.4 PCIe Device Reset Overview",
+      "page": 20,
+      "line": 614,
+      "font_size": 17.0,
+      "font_weight": "bold",
+      "level": 4,
+      "spec_md_role": {
+        "kind": "reset_init_flush_drain"
+      },
+      "layer": "micro",
+      "rationale": "first-cut heuristic: matched \"reset\""
+    },
+    {
+      "heading": "7 Me mory Syste m",
+      "page": 22,
+      "line": 694,
+      "font_size": 20.0,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "8 NoC (Network-on-Chip)",
+      "page": 23,
+      "line": 694,
+      "font_size": 20.0,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "connectivity"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: matched \"noc\""
+    },
+    {
+      "heading": "9 Memory Map",
+      "page": 24,
+      "line": 694,
+      "font_size": 20.0,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "memory_map"
+      },
+      "layer": "architectural",
+      "rationale": "first-cut heuristic: matched \"memory map\""
+    },
+    {
+      "heading": "10 Boot and Reset",
+      "page": 24,
+      "line": 647,
+      "font_size": 20.0,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "reset_init_flush_drain"
+      },
+      "layer": "micro",
+      "rationale": "first-cut heuristic: matched \"reset\""
+    },
+    {
+      "heading": "1 1 Clock",
+      "page": 24,
+      "line": 554,
+      "font_size": 20.0,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "12 Debug",
+      "page": 24,
+      "line": 508,
+      "font_size": 20.0,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "13 Error handling",
+      "page": 25,
+      "line": 694,
+      "font_size": 20.0,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "14 Register Definition",
+      "page": 30,
+      "line": 694,
+      "font_size": 20.0,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "reset_init_flush_drain"
+      },
+      "layer": "micro",
+      "rationale": "first-cut heuristic: matched \"init\""
+    },
+    {
+      "heading": "15 Syste m S W Flow",
+      "page": 31,
+      "line": 694,
+      "font_size": 20.0,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Appendix A",
+      "page": 33,
+      "line": 694,
+      "font_size": 20.0,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Appendix B",
+      "page": 37,
+      "line": 694,
+      "font_size": 20.0,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    }
+  ],
+  "tables": [
+    {
+      "id": "T01",
+      "page": 24,
+      "first_line": 508,
+      "row_count": 4,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T02",
+      "page": 28,
+      "first_line": 91,
+      "row_count": 33,
+      "col_count": 6,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T03",
+      "page": 29,
+      "first_line": 555,
+      "row_count": 8,
+      "col_count": 6,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T04",
+      "page": 35,
+      "first_line": 84,
+      "row_count": 11,
+      "col_count": 6,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T05",
+      "page": 36,
+      "first_line": 271,
+      "row_count": 26,
+      "col_count": 6,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T06",
+      "page": 38,
+      "first_line": 418,
+      "row_count": 3,
+      "col_count": 10,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    }
+  ],
+  "figures": [
+    {
+      "id": "F01",
+      "page": 2,
+      "kind": "generic",
+      "rasterized_to": "figures/page-002.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F02",
+      "page": 4,
+      "kind": "generic",
+      "rasterized_to": "figures/page-004.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F03",
+      "page": 7,
+      "kind": "generic",
+      "rasterized_to": "figures/page-007.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F04",
+      "page": 15,
+      "kind": "generic",
+      "rasterized_to": "figures/page-015.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [
+        "PIO"
+      ],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F05",
+      "page": 17,
+      "kind": "generic",
+      "rasterized_to": "figures/page-017.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F06",
+      "page": 21,
+      "kind": "generic",
+      "rasterized_to": "figures/page-021.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F07",
+      "page": 28,
+      "kind": "generic",
+      "rasterized_to": "figures/page-028.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F08",
+      "page": 33,
+      "kind": "generic",
+      "rasterized_to": "figures/page-033.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F09",
+      "page": 34,
+      "kind": "generic",
+      "rasterized_to": "figures/page-034.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F10",
+      "page": 35,
+      "kind": "generic",
+      "rasterized_to": "figures/page-035.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F11",
+      "page": 36,
+      "kind": "generic",
+      "rasterized_to": "figures/page-036.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F12",
+      "page": 37,
+      "kind": "generic",
+      "rasterized_to": "figures/page-037.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F13",
+      "page": 38,
+      "kind": "generic",
+      "rasterized_to": "figures/page-038.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    }
+  ],
+  "glossary": [
+    {
+      "acronym": "BAR",
+      "expansion": "Base Address Registers",
+      "first_page": 18,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "BP",
+      "expansion": "Device Management\nProcessor",
+      "first_page": 9,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "CRU",
+      "expansion": "Reset Unit",
+      "first_page": 8,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "DMA",
+      "expansion": "Direct Memory Access",
+      "first_page": 18,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "EP",
+      "expansion": "End\nPoint",
+      "first_page": 16,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "GPIO",
+      "expansion": "Output",
+      "first_page": 20,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "HTM",
+      "expansion": "Memory",
+      "first_page": 3,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "ISR",
+      "expansion": "Interrupt Service Routine",
+      "first_page": 27,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "NIC",
+      "expansion": "Card",
+      "first_page": 36,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "PIO",
+      "expansion": "Peripheral IO",
+      "first_page": 3,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "PLL",
+      "expansion": "Phase Lock Loop",
+      "first_page": 2,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "RC",
+      "expansion": "Root Complex",
+      "first_page": 20,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "SP",
+      "expansion": "The Boot Processor",
+      "first_page": 10,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "SRAM",
+      "expansion": "On-Chip Static Random Access Memory",
+      "first_page": 4,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "WDT",
+      "expansion": "The Watchdog Timer",
+      "first_page": 12,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    }
+  ],
+  "chrome": [],
+  "validation": {
+    "section_roles_assigned": 0,
+    "tables_classified": {},
+    "tables_unknown": 0,
+    "glossary_entries": 0,
+    "chrome_lines_stripped": 0,
+    "warnings": []
+  }
+}
