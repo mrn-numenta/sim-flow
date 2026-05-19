@@ -1,0 +1,30 @@
+schema_version = 1
+ingest_pipeline_version = "0.1.0"
+ingested_at = "1970-01-01T00:00:00Z"
+source_kind = "pdf"
+source_path = "/Users/mneilly/Downloads/Spatial Pooler 2.1.pdf"
+source_sha256 = "d9373aa33438533b15b9a7f672ad38e0241856ad1f9b974800fc12845cc3a51d"
+primary_chunk_count = 3
+primary_figure_count = 1
+primary_signal_table_count = 0
+primary_parameter_table_count = 0
+primary_error_table_count = 0
+primary_encoding_table_count = 0
+primary_fsm_table_count = 0
+primary_stub_count = 0
+primary_tbd_count = 0
+primary_csr_count = 0
+primary_csr_field_count = 0
+primary_memory_region_count = 0
+primary_pmu_event_count = 0
+primary_latency_row_count = 0
+primary_glossary_count = 1
+
+[chrome_stripping]
+repeated_lines = ["None"]
+total_lines_stripped = 230
+
+[embedder_expected]
+provider = "openai-compat"
+model = ""
+dimension = 0

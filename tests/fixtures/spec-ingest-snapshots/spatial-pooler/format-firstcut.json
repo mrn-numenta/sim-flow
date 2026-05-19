@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "model": "first-cut-builtin",
+  "prompt_version": "first-cut-v1",
+  "source_sha256": "d9373aa33438533b15b9a7f672ad38e0241856ad1f9b974800fc12845cc3a51d",
+  "discovered_at": "1970-01-01T00:00:00Z",
+  "section_roles": [],
+  "tables": [
+    {
+      "id": "T01",
+      "page": 5,
+      "first_line": 333,
+      "row_count": 16,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    }
+  ],
+  "figures": [
+    {
+      "id": "F01",
+      "page": 5,
+      "kind": "generic",
+      "rasterized_to": "figures/page-005.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: no neighbouring heading role"
+    }
+  ],
+  "glossary": [
+    {
+      "acronym": "MSB",
+      "expansion": "CT",
+      "first_page": 1,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    }
+  ],
+  "chrome": [],
+  "validation": {
+    "section_roles_assigned": 0,
+    "tables_classified": {},
+    "tables_unknown": 0,
+    "glossary_entries": 0,
+    "chrome_lines_stripped": 0,
+    "warnings": []
+  }
+}
