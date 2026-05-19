@@ -107,11 +107,10 @@ const outputPath = vsixPath(devVersion);
 console.log(`Packaging sim-flow-vscode ${devVersion} (from ${sourcePkg.version})`);
 console.log(`Staging extension package under ${stageDir}`);
 
-// Stage the sim-flow binary + libpdfium for the current platform
-// under bin/<platform-arch>/ so vsce includes them in the VSIX.
-// `bundle-bin.mjs` is fail-soft on libpdfium (warn) but hard-fails
-// when the sim-flow binary is missing -- a VSIX without sim-flow is
-// useless.
+// Stage the sim-flow binary for the current platform under
+// bin/<platform-arch>/ so vsce includes it in the VSIX.
+// `bundle-bin.mjs` hard-fails when the sim-flow binary is missing
+// -- a VSIX without sim-flow is useless.
 prepareStage();
 
 const stagePkgPath = resolve(stageDir, "package.json");

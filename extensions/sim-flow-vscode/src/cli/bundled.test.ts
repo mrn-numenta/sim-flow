@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   bundledCandidates,
   bundledFrameworkDocsRoot,
-  bundledPdfiumLibPath,
   platformDir,
   setBundledRoot,
 } from "./bundled";
@@ -51,7 +50,7 @@ describe("bundledCandidates", () => {
   });
 });
 
-describe("bundledPdfiumLibPath / bundledFrameworkDocsRoot", () => {
+describe("bundledFrameworkDocsRoot", () => {
   let tmpRoot: string;
 
   beforeEach(() => {
@@ -61,38 +60,6 @@ describe("bundledPdfiumLibPath / bundledFrameworkDocsRoot", () => {
   afterEach(() => {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
     setBundledRoot("");
-  });
-
-  it("bundledPdfiumLibPath returns undefined when the bundled root is unset", () => {
-    setBundledRoot("");
-    expect(bundledPdfiumLibPath()).toBeUndefined();
-  });
-
-  it("bundledPdfiumLibPath returns undefined when the library file is missing", () => {
-    setBundledRoot(tmpRoot); // dir exists, but no bin/<dir>/libpdfium.*
-    expect(bundledPdfiumLibPath()).toBeUndefined();
-  });
-
-  it("bundledPdfiumLibPath finds the platform-correct lib when present", () => {
-    const mapped = platformDir(process.platform, process.arch);
-    if (!mapped) {
-      // Unsupported platform -- helper must short-circuit to undefined.
-      setBundledRoot(tmpRoot);
-      expect(bundledPdfiumLibPath()).toBeUndefined();
-      return;
-    }
-    const libname =
-      process.platform === "win32"
-        ? "pdfium.dll"
-        : process.platform === "darwin"
-          ? "libpdfium.dylib"
-          : "libpdfium.so";
-    const dir = path.join(tmpRoot, "bin", mapped);
-    fs.mkdirSync(dir, { recursive: true });
-    const lib = path.join(dir, libname);
-    fs.writeFileSync(lib, "");
-    setBundledRoot(tmpRoot);
-    expect(bundledPdfiumLibPath()).toBe(lib);
   });
 
   it("bundledFrameworkDocsRoot returns undefined when the root is unset", () => {

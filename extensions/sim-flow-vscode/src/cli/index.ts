@@ -5,7 +5,6 @@ export { resolveBinary, type ResolveOptions } from "./resolve";
 export {
   bundledCandidates,
   bundledFrameworkDocsRoot,
-  bundledPdfiumLibPath,
   platformDir,
   setBundledRoot,
 } from "./bundled";

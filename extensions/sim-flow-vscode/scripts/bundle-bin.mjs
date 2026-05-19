@@ -1,10 +1,9 @@
-// Stage the sim-flow binary + libpdfium for one platform under
-// <ext>/bin/<platform-arch>/ so vsce includes them in the VSIX.
+// Stage the sim-flow binary under <ext>/bin/<platform-arch>/ so vsce
+// includes it in the VSIX.
 //
 // Single-platform mode (the dev / `npm run package` default): pick
 // the platform from `process.platform`+`process.arch`, source the
-// binary from `target/release/sim-flow[.exe]`, source pdfium from
-// `tools/sim-flow/vendor/pdfium/<map>/...`. This is what runs when
+// binary from `target/release/sim-flow[.exe]`. This is what runs when
 // you invoke the script with no env overrides.
 //
 // CI / cross-platform mode: the GitHub Actions release workflow
@@ -23,10 +22,6 @@
 //                            for that target. When unset we fall
 //                            back to <repoRoot>/target/release/sim-flow[.exe]
 //                            (the local-dev path).
-//   SIM_FLOW_BUNDLE_PDFIUM   Absolute path to the libpdfium library
-//                            for that target. When unset we fall
-//                            back to the vendored copy under
-//                            tools/sim-flow/vendor/pdfium/<map>/<libname>.
 //
 // The script is idempotent across invocations: each call writes to
 // its own bin/<platform-arch>/ subdir, so running it twice with
@@ -34,11 +29,9 @@
 // staging tree. API-doc staging is repeated each call but lands on
 // the same dest, so it's a no-op after the first.
 //
-// Layout produced (must match `cli/bundled.ts::platformDir` and
-// `bundledPdfiumLibPath`):
+// Layout produced (must match `cli/bundled.ts::platformDir`):
 //
 //   bin/<platform-arch>/sim-flow[.exe]
-//   bin/<platform-arch>/libpdfium.{dylib,so} | pdfium.dll
 
 import { copyFileSync, cpSync, existsSync, mkdirSync, statSync, chmodSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -83,29 +76,7 @@ if (targetOverride && !VALID_TARGETS.has(targetOverride)) {
 
 const PLATFORM_DIR = targetOverride ?? detectCurrentPlatformDir();
 
-// Map platform-arch -> pdfium-vendor key. These names differ because
-// `tools/sim-flow/scripts/fetch-pdfium.mjs` uses the upstream pdfium
-// distribution's naming convention, not Node's.
-const PDFIUM_DIR_FOR = {
-  "darwin-arm64": "macos-arm64",
-  "darwin-x64": "macos-x64",
-  "linux-x64": "linux-x64",
-  "linux-arm64": "linux-arm64",
-  "win32-x64": "windows-x64",
-};
-const PDFIUM_DIR = PLATFORM_DIR ? PDFIUM_DIR_FOR[PLATFORM_DIR] : null;
-
-// Library filename also depends on the target platform, not the host.
-const PDFIUM_LIBNAME_FOR = {
-  "darwin-arm64": "libpdfium.dylib",
-  "darwin-x64": "libpdfium.dylib",
-  "linux-x64": "libpdfium.so",
-  "linux-arm64": "libpdfium.so",
-  "win32-x64": "pdfium.dll",
-};
-const PDFIUM_LIBNAME = PLATFORM_DIR ? PDFIUM_LIBNAME_FOR[PLATFORM_DIR] : null;
-
-if (!PLATFORM_DIR || !PDFIUM_DIR) {
+if (!PLATFORM_DIR) {
   console.warn(
     `bundle-bin: skipping; unsupported (platform, arch) = (${process.platform}, ${process.arch}). Set SIM_FLOW_BUNDLE_TARGET to one of: ${[...VALID_TARGETS].join(", ")}.`,
   );
@@ -119,17 +90,6 @@ const exe = PLATFORM_DIR === "win32-x64" ? "sim-flow.exe" : "sim-flow";
 const sourceBin = process.env.SIM_FLOW_BUNDLE_BINARY
   ? resolve(process.env.SIM_FLOW_BUNDLE_BINARY)
   : join(repoRoot, "target", "release", exe);
-const sourcePdfium = process.env.SIM_FLOW_BUNDLE_PDFIUM
-  ? resolve(process.env.SIM_FLOW_BUNDLE_PDFIUM)
-  : join(
-      repoRoot,
-      "tools",
-      "sim-flow",
-      "vendor",
-      "pdfium",
-      PDFIUM_DIR,
-      PDFIUM_LIBNAME,
-    );
 const destDir = join(packageRoot, "bin", PLATFORM_DIR);
 
 mkdirSync(destDir, { recursive: true });
@@ -149,18 +109,6 @@ if (process.platform !== "win32") {
   chmodSync(destBin, 0o755);
 }
 console.log(`copied ${sourceBin} -> ${destBin} (${prettyBytes(destBin)})`);
-
-if (!existsSync(sourcePdfium)) {
-  console.warn(
-    `bundle-bin: ${sourcePdfium} not found.\n` +
-      `  PDF spec ingestion will fall back to system libpdfium at runtime.\n` +
-      `  Run \`node tools/sim-flow/scripts/fetch-pdfium.mjs --only ${PDFIUM_DIR}\` to populate.`,
-  );
-} else {
-  const destPdfium = join(destDir, PDFIUM_LIBNAME);
-  copyFileSync(sourcePdfium, destPdfium);
-  console.log(`copied ${sourcePdfium} -> ${destPdfium} (${prettyBytes(destPdfium)})`);
-}
 
 if (!existsSync(join(apiDocsSourceDir, "toc.md"))) {
   console.error(

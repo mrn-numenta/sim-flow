@@ -168,11 +168,9 @@ press **F5** ("Run Extension"). Open any folder with
 ```text
 build/stage/bin/
   <platform>-<arch>/sim-flow[.exe]
-  <platform>-<arch>/libpdfium.{dylib,so} | pdfium.dll
 ```
 
-The bundling script copies `target/release/sim-flow` plus the matching
-PDFium shared library from `tools/sim-flow/vendor/pdfium/` into that
-staging tree before it invokes `vsce package`. Local developer builds
-that rely on `$PATH` can still skip the bundled binary entirely; the
+The bundling script copies `target/release/sim-flow` into that staging
+tree before it invokes `vsce package`. Local developer builds that
+rely on `$PATH` can still skip the bundled binary entirely; the
 resolver silently falls through when the packaged binary is missing.

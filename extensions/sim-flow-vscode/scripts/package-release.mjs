@@ -14,9 +14,8 @@
 //      (comma-separated `platform-arch` keys), invoke
 //      `bundle-bin.mjs` with per-target env overrides so a single
 //      VSIX gets bin/<platform-arch>/ subtrees for ALL listed
-//      targets. The per-target env vars are
-//      `SIM_FLOW_BUNDLE_<TARGET>_BINARY` and
-//      `SIM_FLOW_BUNDLE_<TARGET>_PDFIUM` (target uppercased, `-`
+//      targets. The per-target env var is
+//      `SIM_FLOW_BUNDLE_<TARGET>_BINARY` (target uppercased, `-`
 //      preserved -- see normalizeTargetEnv below).
 //   4. Run `vsce package` from the staging dir.
 //
@@ -24,9 +23,7 @@
 //   SIM_FLOW_RELEASE_VERSION=0.1.0 \
 //   SIM_FLOW_BUNDLE_TARGETS=darwin-arm64,linux-x64 \
 //   SIM_FLOW_BUNDLE_DARWIN_ARM64_BINARY=/abs/path/to/sim-flow \
-//   SIM_FLOW_BUNDLE_DARWIN_ARM64_PDFIUM=/abs/path/to/libpdfium.dylib \
 //   SIM_FLOW_BUNDLE_LINUX_X64_BINARY=/abs/path/to/sim-flow \
-//   SIM_FLOW_BUNDLE_LINUX_X64_PDFIUM=/abs/path/to/libpdfium.so \
 //     node scripts/package-release.mjs
 //
 // Local smoke (single platform, current binary):
@@ -143,14 +140,12 @@ writePkg(stagePkgPath, stagePkg);
 for (const target of targets) {
   const envKey = normalizeTargetEnv(target);
   const binary = process.env[`SIM_FLOW_BUNDLE_${envKey}_BINARY`];
-  const pdfium = process.env[`SIM_FLOW_BUNDLE_${envKey}_PDFIUM`];
   const env = {
     ...process.env,
     SIM_FLOW_BUNDLE_TARGET: target,
   };
   if (binary) env.SIM_FLOW_BUNDLE_BINARY = binary;
-  if (pdfium) env.SIM_FLOW_BUNDLE_PDFIUM = pdfium;
-  console.log(`Staging target ${target} (binary=${binary ?? "(local)"}, pdfium=${pdfium ?? "(local)"})`);
+  console.log(`Staging target ${target} (binary=${binary ?? "(local)"})`);
   const bundle = spawnSync("node", [resolve(extDir, "scripts", "bundle-bin.mjs"), stageDir], {
     cwd: extDir,
     env,

@@ -10,7 +10,7 @@ Each spec gets its own subdirectory. The snapshot is a single
 emits, plus per-category file counts. We do not snapshot
 individual chunk bodies because they depend on the PDF text
 extraction (font encoding, layout heuristics) which is sensitive
-to pdfium-render and libpdfium version drift.
+to pdf_oxide version drift.
 
 ## Regenerating
 

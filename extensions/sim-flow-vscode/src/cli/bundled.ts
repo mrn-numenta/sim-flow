@@ -3,10 +3,6 @@
 // resolver in `resolve.ts` uses the candidate list produced here when
 // neither `sim-flow.binaryPath` nor `$PATH` turns up a usable binary.
 //
-// libpdfium ships in `<extensionRoot>/bin/<platform>-<arch>/<libname>`
-// alongside sim-flow; `bundledPdfiumLibPath()` returns the path so the
-// extension can set `SIM_FLOW_PDFIUM_LIB_PATH` when spawning the CLI.
-//
 // Normalized framework API docs ship under
 // `<extensionRoot>/foundation-docs/api/`; `bundledFrameworkDocsRoot()`
 // returns that root so the orchestrator can expose them via `fw:api/...`.
@@ -41,32 +37,6 @@ export function bundledCandidates(): string[] {
   }
   const exe = process.platform === "win32" ? "sim-flow.exe" : "sim-flow";
   return [path.join(bundledRoot, "bin", dir, exe)];
-}
-
-/**
- * Path to the bundled libpdfium for the current platform, or
- * `undefined` if the extension root hasn't been registered yet, the
- * platform isn't one we bundle for, or the file isn't present (e.g.
- * a dev build that hasn't run `npm run package`). Used by the
- * SessionPump to set `SIM_FLOW_PDFIUM_LIB_PATH` when spawning
- * `sim-flow auto`.
- */
-export function bundledPdfiumLibPath(): string | undefined {
-  if (!bundledRoot) {
-    return undefined;
-  }
-  const dir = platformDir(process.platform, process.arch);
-  if (!dir) {
-    return undefined;
-  }
-  const libname =
-    process.platform === "win32"
-      ? "pdfium.dll"
-      : process.platform === "darwin"
-        ? "libpdfium.dylib"
-        : "libpdfium.so";
-  const candidate = path.join(bundledRoot, "bin", dir, libname);
-  return fs.existsSync(candidate) ? candidate : undefined;
 }
 
 /**
