@@ -15,6 +15,7 @@
 
 pub mod default;
 pub mod descriptor;
+pub mod discover;
 pub mod first_cut;
 pub mod skeleton;
 
