@@ -565,6 +565,7 @@ fn run_ingest_with_format_resolution(
         &source_sha256,
         no_format_discovery,
         llm_config,
+        Some(&request.project_root),
         &mut warnings,
     );
 
@@ -644,6 +645,7 @@ fn build_format_descriptor(
     source_sha256: &str,
     no_format_discovery: bool,
     llm_config: Option<&IngestLlmConfig<'_>>,
+    project_root: Option<&std::path::Path>,
     warnings: &mut Vec<sim_flow::__internal::session::spec_ingest::IngestWarning>,
 ) -> FormatBuildOutcome {
     use sim_flow::__internal::session::spec_ingest::format::{discover, first_cut, skeleton};
@@ -711,7 +713,24 @@ fn build_format_descriptor(
     );
 
     let first_cut_for_fallback = first_cut.clone();
-    match discover::discover(&skeleton, &first_cut, agent.as_mut(), warnings) {
+    // Debug dump dir for format-discovery failures. On a malformed
+    // `<patch>` block (`discover_no_patch_parsed`) or absent block
+    // (`discover_failed`), the raw LLM response(s) land here so the
+    // operator can inspect what the model emitted.
+    //
+    // Lives at `.sim-flow/debug/` — a sibling of `spec-ingest/`,
+    // NOT inside it. The emit stage atomically replaces the entire
+    // `spec-ingest/` directory at the end of a successful run, so
+    // anything written under `spec-ingest/` during discover would be
+    // overwritten before the operator could read it.
+    let debug_dump_dir = project_root.map(|root| root.join(".sim-flow").join("debug"));
+    match discover::discover_with_debug(
+        &skeleton,
+        &first_cut,
+        agent.as_mut(),
+        warnings,
+        debug_dump_dir.as_deref(),
+    ) {
         Ok(mut refined) => {
             refined.source_sha256 = source_sha256.to_string();
             FormatBuildOutcome {

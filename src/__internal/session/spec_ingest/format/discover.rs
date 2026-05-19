@@ -240,6 +240,25 @@ pub fn discover<A: LlmAdapter + ?Sized>(
     llm: &mut A,
     warnings: &mut Vec<IngestWarning>,
 ) -> Result<FormatJson> {
+    discover_with_debug(skeleton, first_cut, llm, warnings, None)
+}
+
+/// Variant of [`discover`] that captures the raw LLM response(s) to a
+/// debug directory on parse failure. Use this from the ingest CLI
+/// (where `.sim-flow/spec-ingest/` is a natural destination) so the
+/// operator can inspect what the model actually emitted when the
+/// `discover_no_patch_parsed` / `discover_failed` warnings fire.
+///
+/// `debug_dump_dir` is optional; tests and callers without a
+/// filesystem context pass `None` (matching the existing [`discover`]
+/// contract).
+pub fn discover_with_debug<A: LlmAdapter + ?Sized>(
+    skeleton: &Skeleton,
+    first_cut: &FormatJson,
+    llm: &mut A,
+    warnings: &mut Vec<IngestWarning>,
+    debug_dump_dir: Option<&std::path::Path>,
+) -> Result<FormatJson> {
     let descriptor_json = serde_json::to_string_pretty(first_cut)
         .map_err(|e| crate::Error::State(format!("format discover: serialise first cut: {e}")))?;
     let skeleton_text = skeleton.render();
@@ -251,6 +270,9 @@ pub fn discover<A: LlmAdapter + ?Sized>(
         ..LlmMessage::default()
     }])?;
 
+    // Track both responses so a parse failure on the retry can dump
+    // both for post-mortem.
+    let mut raw_second_owned: Option<String> = None;
     let patch_text = match extract_patch_text(&raw_first) {
         Some(text) => Some(text),
         None => {
@@ -269,7 +291,9 @@ pub fn discover<A: LlmAdapter + ?Sized>(
                 content: retry_prompt,
                 ..LlmMessage::default()
             }])?;
-            extract_patch_text(&raw_second)
+            let extracted = extract_patch_text(&raw_second);
+            raw_second_owned = Some(raw_second);
+            extracted
         }
     };
 
@@ -283,6 +307,14 @@ pub fn discover<A: LlmAdapter + ?Sized>(
                     .to_string(),
                 DISCOVER_STAGE,
             ));
+            dump_raw_responses(
+                debug_dump_dir,
+                "discover_failed",
+                &raw_first,
+                raw_second_owned.as_deref(),
+                None,
+                warnings,
+            );
             return Ok(stamp_metadata(first_cut, llm.name()));
         }
     };
@@ -295,6 +327,14 @@ pub fn discover<A: LlmAdapter + ?Sized>(
                 format!("patch block did not decode as JSON array of adjustments: {e}",),
                 DISCOVER_STAGE,
             ));
+            dump_raw_responses(
+                debug_dump_dir,
+                "discover_no_patch_parsed",
+                &raw_first,
+                raw_second_owned.as_deref(),
+                Some(&patch_text),
+                warnings,
+            );
             return Ok(stamp_metadata(first_cut, llm.name()));
         }
     };
@@ -306,6 +346,63 @@ pub fn discover<A: LlmAdapter + ?Sized>(
     reconcile_column_maps_after_patch(&mut refined, warnings);
 
     Ok(stamp_metadata(&refined, llm.name()))
+}
+
+/// Write the raw LLM response(s) plus the extracted patch text (if
+/// any) to `<dir>/discover-last-response.txt` so the operator can
+/// inspect what the model actually emitted on a parse failure.
+///
+/// Best-effort: a write failure adds an Info-class warning but does
+/// not propagate. The dump file is rewritten on every failure so the
+/// operator always sees the LATEST failure, not a historical pile.
+fn dump_raw_responses(
+    debug_dump_dir: Option<&std::path::Path>,
+    failure_code: &str,
+    raw_first: &str,
+    raw_second: Option<&str>,
+    extracted_patch: Option<&str>,
+    warnings: &mut Vec<IngestWarning>,
+) {
+    let Some(dir) = debug_dump_dir else {
+        return;
+    };
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        warnings.push(IngestWarning::new(
+            "discover_debug_dump_failed",
+            format!("could not create debug-dump dir {}: {e}", dir.display()),
+            DISCOVER_STAGE,
+        ));
+        return;
+    }
+    let path = dir.join("discover-last-response.txt");
+    let mut body = String::new();
+    body.push_str("# format-discovery raw response dump\n");
+    body.push_str(&format!("# failure_code: {failure_code}\n"));
+    body.push_str(&format!(
+        "# written_at: {}\n",
+        chrono::Utc::now().to_rfc3339()
+    ));
+    body.push_str("# ---------------------------------------------------\n\n");
+    body.push_str("## RAW RESPONSE 1 (initial dispatch)\n\n");
+    body.push_str(raw_first);
+    body.push_str("\n\n");
+    if let Some(second) = raw_second {
+        body.push_str("## RAW RESPONSE 2 (retry dispatch)\n\n");
+        body.push_str(second);
+        body.push_str("\n\n");
+    }
+    if let Some(patch) = extracted_patch {
+        body.push_str("## EXTRACTED PATCH TEXT (parsed as JSON; failed)\n\n");
+        body.push_str(patch);
+        body.push('\n');
+    }
+    if let Err(e) = std::fs::write(&path, body) {
+        warnings.push(IngestWarning::new(
+            "discover_debug_dump_failed",
+            format!("could not write {}: {e}", path.display()),
+            DISCOVER_STAGE,
+        ));
+    }
 }
 
 /// Walk every table and, when its `column_map` contains canonicals
@@ -1368,6 +1465,74 @@ mod tests {
                     && w.message.contains("\"id\"")),
             "warnings: {warnings:?}"
         );
+    }
+
+    /// On a malformed JSON patch, the debug-dump dir gets a file
+    /// containing both raw responses (if applicable) plus the
+    /// extracted-but-unparseable patch text. Caller uses this to
+    /// post-mortem qwen3.6 response-variance failures without
+    /// rerunning the ingest.
+    #[test]
+    fn debug_dump_captures_malformed_patch_response() {
+        let first_cut = sample_first_cut();
+        let skel = empty_skeleton();
+        // Response contains a <patch>...</patch> wrapper but the
+        // inner content is malformed JSON (trailing comma in array).
+        let bad = "<patch>[\n  { \"target\": { \"kind\": \"table\", \"id\": \"T01\" },\n    \"field\": \"kind\",\n    \"old_value\": \"unknown\",\n    \"new_value\": \"signal_table\",\n  },\n]</patch>";
+        let agent = MockAgent::new();
+        agent.enqueue(bad);
+        let mut llm: Box<dyn LlmAdapter> = Box::new(agent);
+        let mut warnings: Vec<IngestWarning> = Vec::new();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let debug_dir = tmp.path().to_path_buf();
+
+        let _refined = discover_with_debug(
+            &skel,
+            &first_cut,
+            llm.as_mut(),
+            &mut warnings,
+            Some(&debug_dir),
+        )
+        .expect("discover");
+
+        // discover_no_patch_parsed warning fired.
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.code == "discover_no_patch_parsed"),
+            "warnings: {warnings:?}"
+        );
+        // Dump file exists and carries both the raw response AND
+        // the extracted patch text so an operator can diff what the
+        // model produced vs what the parser tried.
+        let dump_path = debug_dir.join("discover-last-response.txt");
+        assert!(
+            dump_path.exists(),
+            "expected dump at {}",
+            dump_path.display()
+        );
+        let body = std::fs::read_to_string(&dump_path).unwrap();
+        assert!(body.contains("failure_code: discover_no_patch_parsed"));
+        assert!(body.contains("RAW RESPONSE 1"));
+        assert!(body.contains("EXTRACTED PATCH TEXT"));
+        assert!(
+            body.contains("signal_table"),
+            "raw response missing in dump: `{body}`"
+        );
+    }
+
+    /// `discover` (no-debug variant) still works without a dump dir.
+    /// Regression guard against API breakage.
+    #[test]
+    fn legacy_discover_signature_still_compiles_and_runs() {
+        let first_cut = sample_first_cut();
+        let skel = empty_skeleton();
+        let agent = MockAgent::new();
+        agent.enqueue("<patch>[]</patch>");
+        let mut llm: Box<dyn LlmAdapter> = Box::new(agent);
+        let mut warnings: Vec<IngestWarning> = Vec::new();
+        let _ = discover(&skel, &first_cut, llm.as_mut(), &mut warnings).expect("discover");
     }
 
     /// Patch extraction also handles fenced JSON when the model
