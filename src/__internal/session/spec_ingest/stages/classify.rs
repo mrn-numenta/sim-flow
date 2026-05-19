@@ -4,9 +4,25 @@
 //! and extracts structured tables (signal, parameter, error,
 //! encoding, FSM). Per architecture §1.4 stage 4 each kind has its
 //! own header-row matcher; mismatches stay as markdown.
+//!
+//! Phase 9 milestone 9.9 adds the **format-driven** dispatch path:
+//! when a `format.json` descriptor is available (see
+//! [`super::super::format::FormatJson`]), [`classify_with_format`]
+//! locates each declared `TableEntry` against the per-page
+//! [`PageTable`]s in [`LoadedSource`], applies `wrap_strategy`,
+//! projects rows through `column_map`, and emits typed spec_md row
+//! records (`BlockSignalRow`, `Parameter`, `Csr`, etc.). The legacy
+//! per-section heuristic extractors stay as the `format = None`
+//! fallback so markdown / text inputs that never run discovery keep
+//! working unchanged.
 
+use super::super::format::{
+    ColumnMapping, FormatJson, TableEntry, TableKind, TableTarget, WrapStrategy,
+};
 use super::super::pipeline::{IngestConfig, IngestWarning};
+use super::loading::{LoadedSource, PageTable};
 use super::parse::{Section, SectionKind, SectionTree};
+use crate::session::spec_md::types as spec_md;
 
 // ---------------------------------------------------------------------
 // Records produced by this stage. The pipeline accumulates them and
@@ -118,18 +134,143 @@ pub struct ClassifyOutputs {
     pub errors: Vec<ErrorTable>,
     pub encodings: Vec<EncodingTable>,
     pub fsms: Vec<FsmTable>,
+    // ---- Phase 9 milestone 9.9: format-driven typed outputs ----
+    /// Block-scoped signal rows. One group per `(table_id, block_name)`
+    /// emitted from `signal_table` entries targeting
+    /// [`TableTarget::BlockSignals`]. Owned by the descriptor's
+    /// `spec_md_target.block_name` field — no heading inference.
+    pub block_signals: Vec<BlockSignalGroup>,
+    /// External-interface signal rows, emitted from
+    /// `external_signal_table` entries.
+    pub external_signals: Vec<spec_md::ExternalSignalRow>,
+    /// Typed parameter rows (Chapter 2 `## Parameters` schema), as
+    /// produced by `parameter_table` entries targeting
+    /// [`TableTarget::Parameters`]. The legacy `parameters` field
+    /// above is preserved for the None-format path.
+    pub typed_parameters: Vec<spec_md::Parameter>,
+    /// CSR rows, indexed by `spec_md_target.csr_name` when
+    /// `csr_field_table` entries follow up with bit-field rows.
+    pub csrs: Vec<spec_md::Csr>,
+    /// Memory-map rows.
+    pub memory_regions: Vec<spec_md::MemoryRegion>,
+    /// Typed encoding tables: one group per encoding name.
+    pub typed_encodings: Vec<EncodingGroup>,
+    /// Typed error rows (Chapter 2 `## Error Handling` schema).
+    pub typed_errors: Vec<spec_md::ErrorEntry>,
+    /// FSM state-list groups, one per `fsm_name`.
+    pub fsm_states: Vec<FsmStateGroup>,
+    /// FSM transition-list groups, one per `fsm_name`.
+    pub fsm_transitions: Vec<FsmTransitionGroup>,
+    /// Latency rows.
+    pub latencies: Vec<spec_md::LatencyRow>,
+    /// Performance-monitoring-unit events.
+    pub pmu_events: Vec<spec_md::PmuEvent>,
+    /// Connectivity nodes / edges.
+    pub connectivity_nodes: Vec<spec_md::Node>,
+    pub connectivity_edges: Vec<spec_md::Edge>,
+    /// Tables the descriptor could not classify; raw rows preserved
+    /// so DM0 can `ask_user` about them.
+    pub unknown_tables: Vec<UnknownTable>,
+}
+
+/// Block-scoped signal rows. Emitted from `signal_table` entries
+/// with [`TableTarget::BlockSignals`]; `block_name` carries the
+/// descriptor's `spec_md_target.block_name`.
+#[derive(Debug, Clone)]
+pub struct BlockSignalGroup {
+    pub table_id: String,
+    pub block_name: String,
+    pub source_page: u32,
+    pub rows: Vec<spec_md::BlockSignalRow>,
+}
+
+/// Encoding-table rows grouped by the descriptor's
+/// `spec_md_target.encoding_name`.
+#[derive(Debug, Clone)]
+pub struct EncodingGroup {
+    pub table_id: String,
+    pub encoding_name: String,
+    pub source_page: u32,
+    pub values: Vec<spec_md::EncodingValue>,
+}
+
+/// FSM state-list rows grouped by `fsm_name`.
+#[derive(Debug, Clone)]
+pub struct FsmStateGroup {
+    pub table_id: String,
+    pub fsm_name: String,
+    pub source_page: u32,
+    pub states: Vec<spec_md::FsmState>,
+}
+
+/// FSM transition-list rows grouped by `fsm_name`.
+#[derive(Debug, Clone)]
+pub struct FsmTransitionGroup {
+    pub table_id: String,
+    pub fsm_name: String,
+    pub source_page: u32,
+    pub transitions: Vec<spec_md::FsmTransition>,
+}
+
+/// Raw rows for tables the descriptor's `kind` was `Unknown` or
+/// whose target could not be matched. DM0 surfaces these via
+/// `ask_user`.
+#[derive(Debug, Clone)]
+pub struct UnknownTable {
+    pub table_id: String,
+    pub source_page: u32,
+    pub header_row: Vec<String>,
+    pub rows: Vec<UnknownRow>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UnknownRow {
+    pub cells: Vec<String>,
 }
 
 /// Entry point. Walks the tree, mutating each section to record its
 /// kind / extracted-table refs / tbd counts and returning the
 /// aggregated classify outputs.
+///
+/// Thin wrapper over [`classify_with_format`] with no descriptor —
+/// the per-section heuristic extractors run as they did before
+/// Phase 9 milestone 9.9.
 pub fn classify(
     tree: &mut SectionTree,
+    config: &IngestConfig,
+    warnings: &mut Vec<IngestWarning>,
+) -> ClassifyOutputs {
+    classify_with_format(None, tree, config, None, warnings)
+}
+
+/// Format-aware classify entry point (Phase 9 milestone 9.9).
+///
+/// When `format` is `Some(&FormatJson)`, dispatches each declared
+/// `TableEntry` against the matching [`PageTable`] in `loaded` and
+/// projects rows through the descriptor's `column_map` into typed
+/// spec_md row records. When `format` is `None`, falls back to the
+/// per-section heuristic extractors (legacy / markdown path).
+///
+/// `loaded` is required for the format-driven path so we can locate
+/// `(page, first_line)` against `PageLayout.tables`. The heuristic
+/// path tolerates a missing `loaded` because it reads only
+/// `section.body`.
+pub fn classify_with_format(
+    loaded: Option<&LoadedSource>,
+    tree: &mut SectionTree,
     _config: &IngestConfig,
-    _warnings: &mut Vec<IngestWarning>,
+    format: Option<&FormatJson>,
+    warnings: &mut Vec<IngestWarning>,
 ) -> ClassifyOutputs {
     let mut out = ClassifyOutputs::default();
-    classify_sections(&mut tree.roots, &mut out);
+    match (format, loaded) {
+        (Some(fmt), Some(loaded)) => {
+            classify_format_driven(loaded, fmt, &mut out, warnings);
+        }
+        _ => {
+            classify_sections(&mut tree.roots, &mut out);
+        }
+    }
     out
 }
 
@@ -853,6 +994,557 @@ pub fn reassemble_tables(section: &mut Section) {
     } else {
         new_body
     };
+}
+
+// ---------------------------------------------------------------------
+// Phase 9 milestone 9.9: format-driven dispatch.
+//
+// For each `TableEntry` in the descriptor, locate the matching
+// `PageTable` in `LoadedSource.pages[entry.page - 1]`, coalesce
+// continuation rows per `wrap_strategy`, project source headers to
+// canonical row-field names via `column_map`, then build the typed
+// spec_md row record per `kind` / `spec_md_target`.
+// ---------------------------------------------------------------------
+
+/// Tolerance, in points, used when matching a `TableEntry.first_line`
+/// against a `PageTable.bbox.y`. The descriptor records the line
+/// number of the table's first row; in practice we compare the
+/// top-of-bbox Y of every detected table on the page against the
+/// entry's line and accept the closest match within a generous band.
+const TABLE_LOCATE_Y_TOLERANCE_PT: f32 = 24.0;
+
+fn classify_format_driven(
+    loaded: &LoadedSource,
+    format: &FormatJson,
+    out: &mut ClassifyOutputs,
+    warnings: &mut Vec<IngestWarning>,
+) {
+    for entry in &format.tables {
+        let Some(table) = locate_page_table(loaded, entry, warnings) else {
+            continue;
+        };
+        let coalesced_rows = apply_wrap_strategy(&table.rows, entry, warnings);
+        if coalesced_rows.is_empty() {
+            continue;
+        }
+        // First row is the header; data rows follow.
+        let (header, data_rows) = match coalesced_rows.split_first() {
+            Some(parts) => parts,
+            None => continue,
+        };
+        let column_indices = resolve_column_map(header, entry, warnings);
+        emit_typed_rows(entry, table, header, data_rows, &column_indices, out);
+    }
+}
+
+/// Find the `PageTable` on `entry.page` whose bbox top-Y is closest to
+/// `entry.first_line` within
+/// [`TABLE_LOCATE_Y_TOLERANCE_PT`]. Returns `None` (and emits a
+/// `classify_table_location_missed` warning) on miss.
+fn locate_page_table<'a>(
+    loaded: &'a LoadedSource,
+    entry: &TableEntry,
+    warnings: &mut Vec<IngestWarning>,
+) -> Option<&'a PageTable> {
+    let page_idx = entry.page as usize;
+    let Some(page) = page_idx
+        .checked_sub(1)
+        .and_then(|idx| loaded.pages.get(idx))
+    else {
+        warnings.push(IngestWarning::new(
+            "classify_table_location_missed",
+            format!(
+                "table {} at page {} line {} not found in PageLayout",
+                entry.id, entry.page, entry.first_line
+            ),
+            4,
+        ));
+        return None;
+    };
+    if page.tables.is_empty() {
+        warnings.push(IngestWarning::new(
+            "classify_table_location_missed",
+            format!(
+                "table {} at page {} line {} not found in PageLayout",
+                entry.id, entry.page, entry.first_line
+            ),
+            4,
+        ));
+        return None;
+    }
+    // Match by bbox top-Y proximity. The descriptor's `first_line`
+    // is a 1-based line number; the PDF coordinate is a Y in points.
+    // We compare the entry's line-as-Y against each table's bbox.y
+    // and accept the closest within tolerance.
+    let target_y = entry.first_line as f32;
+    let mut best: Option<(f32, &PageTable)> = None;
+    for table in &page.tables {
+        let dy = (table.bbox.y - target_y).abs();
+        match best {
+            Some((cur, _)) if cur <= dy => {}
+            _ => best = Some((dy, table)),
+        }
+    }
+    match best {
+        Some((dy, table)) if dy <= TABLE_LOCATE_Y_TOLERANCE_PT => Some(table),
+        _ => {
+            // Fallback: if there is exactly one table on the page, use
+            // it. This is conservative; many descriptors will record
+            // `first_line` in line-units rather than PDF-points and
+            // we don't want to drop their tables on the floor.
+            if page.tables.len() == 1 {
+                Some(&page.tables[0])
+            } else {
+                warnings.push(IngestWarning::new(
+                    "classify_table_location_missed",
+                    format!(
+                        "table {} at page {} line {} not found in PageLayout",
+                        entry.id, entry.page, entry.first_line
+                    ),
+                    4,
+                ));
+                None
+            }
+        }
+    }
+}
+
+/// Apply `entry.wrap_strategy` to `rows`. Emits a
+/// `wrap_strategy_zero_merges` warning if a merging strategy was
+/// requested but produced zero merges.
+fn apply_wrap_strategy(
+    rows: &[Vec<String>],
+    entry: &TableEntry,
+    warnings: &mut Vec<IngestWarning>,
+) -> Vec<Vec<String>> {
+    match entry.wrap_strategy {
+        WrapStrategy::SingleRow => rows.to_vec(),
+        WrapStrategy::MergeContinuationRows => {
+            let (merged, merge_count) = merge_continuation_rows(rows);
+            if merge_count == 0 && rows.len() > 1 {
+                warnings.push(IngestWarning::new(
+                    "wrap_strategy_zero_merges",
+                    format!(
+                        "table {} wrap_strategy=merge_continuation_rows but no continuations",
+                        entry.id
+                    ),
+                    4,
+                ));
+            }
+            merged
+        }
+        WrapStrategy::JoinOnBlankFirstCol => {
+            let (merged, merge_count) = join_on_blank_first_col(rows);
+            if merge_count == 0 && rows.len() > 1 {
+                warnings.push(IngestWarning::new(
+                    "wrap_strategy_zero_merges",
+                    format!(
+                        "table {} wrap_strategy=join_on_blank_first_col but no continuations",
+                        entry.id
+                    ),
+                    4,
+                ));
+            }
+            merged
+        }
+    }
+}
+
+/// Merge rows whose first non-empty cell is in the same column as
+/// the previous row's first non-empty cell, but whose own first
+/// column is empty. Continuation cells are appended to the previous
+/// row's cells with a `" "` separator. Returns the merged rows and
+/// the number of merges performed.
+fn merge_continuation_rows(rows: &[Vec<String>]) -> (Vec<Vec<String>>, usize) {
+    let mut out: Vec<Vec<String>> = Vec::with_capacity(rows.len());
+    let mut merges = 0usize;
+    for row in rows {
+        let is_continuation = match out.last() {
+            Some(prev) => {
+                let prev_first = first_nonempty_col(prev);
+                let cur_first = first_nonempty_col(row);
+                let cur_col_empty = row.first().map(|c| c.trim().is_empty()).unwrap_or(true);
+                cur_col_empty && cur_first.is_some() && prev_first == cur_first
+            }
+            None => false,
+        };
+        if is_continuation {
+            let prev = out.last_mut().expect("checked above");
+            for (i, cell) in row.iter().enumerate() {
+                if let Some(prev_cell) = prev.get_mut(i) {
+                    let trimmed = cell.trim();
+                    if !trimmed.is_empty() {
+                        if prev_cell.is_empty() {
+                            *prev_cell = trimmed.to_string();
+                        } else {
+                            prev_cell.push(' ');
+                            prev_cell.push_str(trimmed);
+                        }
+                    }
+                }
+            }
+            merges += 1;
+        } else {
+            out.push(row.clone());
+        }
+    }
+    (out, merges)
+}
+
+/// Fold rows whose first column is empty into the immediately
+/// previous row. Returns the merged rows and merge count.
+fn join_on_blank_first_col(rows: &[Vec<String>]) -> (Vec<Vec<String>>, usize) {
+    let mut out: Vec<Vec<String>> = Vec::with_capacity(rows.len());
+    let mut merges = 0usize;
+    for row in rows {
+        let cur_col_empty = row.first().map(|c| c.trim().is_empty()).unwrap_or(true);
+        if cur_col_empty && !out.is_empty() {
+            let prev = out.last_mut().expect("checked above");
+            for (i, cell) in row.iter().enumerate() {
+                if let Some(prev_cell) = prev.get_mut(i) {
+                    let trimmed = cell.trim();
+                    if !trimmed.is_empty() {
+                        if prev_cell.is_empty() {
+                            *prev_cell = trimmed.to_string();
+                        } else {
+                            prev_cell.push(' ');
+                            prev_cell.push_str(trimmed);
+                        }
+                    }
+                }
+            }
+            merges += 1;
+        } else {
+            out.push(row.clone());
+        }
+    }
+    (out, merges)
+}
+
+fn first_nonempty_col(row: &[String]) -> Option<usize> {
+    row.iter().position(|c| !c.trim().is_empty())
+}
+
+/// Resolve each `ColumnMapping` to a column index in `header`.
+/// Returns a `canonical -> col_idx` map. Unknown sources or
+/// canonicals not in the target's row-schema are skipped; the
+/// latter emits a `classify_unknown_canonical` warning.
+fn resolve_column_map(
+    header: &[String],
+    entry: &TableEntry,
+    warnings: &mut Vec<IngestWarning>,
+) -> std::collections::HashMap<String, usize> {
+    let mut out = std::collections::HashMap::new();
+    let valid: &[&str] = canonical_fields_for_kind(entry.kind);
+    for ColumnMapping { source, canonical } in &entry.column_map {
+        // Validate canonical against the target row schema.
+        if !valid.is_empty() && !valid.iter().any(|v| *v == canonical) {
+            warnings.push(IngestWarning::new(
+                "classify_unknown_canonical",
+                format!(
+                    "table {} maps source `{}` to unknown canonical `{}`",
+                    entry.id, source, canonical
+                ),
+                4,
+            ));
+            continue;
+        }
+        // Locate source column, case-insensitively.
+        if let Some(idx) = header
+            .iter()
+            .position(|h| h.trim().eq_ignore_ascii_case(source.trim()))
+        {
+            out.insert(canonical.clone(), idx);
+        }
+    }
+    out
+}
+
+/// Canonical row-schema fields per `TableKind`. Used to validate
+/// `ColumnMapping::canonical` references. An empty slice means
+/// "any canonical accepted" (e.g. `Unknown` kind).
+fn canonical_fields_for_kind(kind: TableKind) -> &'static [&'static str] {
+    match kind {
+        TableKind::SignalTable => &["name", "direction", "peer", "description", "role"],
+        TableKind::ExternalSignalTable => &[
+            "name",
+            "direction",
+            "width",
+            "type",
+            "required",
+            "description",
+        ],
+        TableKind::ParameterTable => &[
+            "name",
+            "type",
+            "default",
+            "valid_range",
+            "behavioral_impact",
+        ],
+        TableKind::CsrTable => &[
+            "address",
+            "name",
+            "access",
+            "reset_value",
+            "required_privilege",
+            "description",
+        ],
+        TableKind::CsrFieldTable => &["bits", "name", "access", "description"],
+        TableKind::RegisterFileTable => &["name", "width", "count", "description"],
+        TableKind::MemoryMapTable => &[
+            "start",
+            "end",
+            "name",
+            "purpose",
+            "access",
+            "required_privilege",
+        ],
+        TableKind::EncodingTable => &["value", "name", "abbreviation"],
+        TableKind::ErrorTable => &[
+            "error_type",
+            "detecting_component",
+            "detection_behavior",
+            "bus_response",
+            "master_behavior",
+            "software_response",
+        ],
+        TableKind::FsmStateTable => &["name", "description"],
+        TableKind::FsmTransitionTable => &["from", "input", "to", "output"],
+        TableKind::LatencyTable => &["operation", "best_case", "worst_case", "notes"],
+        TableKind::ConnectivityTable => {
+            &["id", "type", "coordinate", "role", "from", "to", "channel"]
+        }
+        TableKind::PmuEventTable => &["id", "name", "description", "csr_address"],
+        TableKind::Unknown => &[],
+    }
+}
+
+fn pick(cols: &std::collections::HashMap<String, usize>, key: &str, row: &[String]) -> String {
+    cols.get(key)
+        .and_then(|idx| row.get(*idx))
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Build the typed records for one matched table per its
+/// `kind` / `spec_md_target` and append them to `out`.
+fn emit_typed_rows(
+    entry: &TableEntry,
+    _table: &PageTable,
+    header: &[String],
+    data_rows: &[Vec<String>],
+    cols: &std::collections::HashMap<String, usize>,
+    out: &mut ClassifyOutputs,
+) {
+    match (entry.kind, &entry.spec_md_target) {
+        (TableKind::SignalTable, TableTarget::BlockSignals { block_name }) => {
+            let rows: Vec<spec_md::BlockSignalRow> = data_rows
+                .iter()
+                .map(|r| spec_md::BlockSignalRow {
+                    name: pick(cols, "name", r),
+                    direction: normalize_direction(&pick(cols, "direction", r)),
+                    peer: pick(cols, "peer", r),
+                    description: pick(cols, "description", r),
+                    role: spec_md::SignalRole::default(),
+                })
+                .collect();
+            out.block_signals.push(BlockSignalGroup {
+                table_id: entry.id.clone(),
+                block_name: block_name.clone(),
+                source_page: entry.page,
+                rows,
+            });
+        }
+        (TableKind::ExternalSignalTable, TableTarget::ExternalSignals) => {
+            for r in data_rows {
+                out.external_signals.push(spec_md::ExternalSignalRow {
+                    name: pick(cols, "name", r),
+                    direction: normalize_direction(&pick(cols, "direction", r)),
+                    width: pick(cols, "width", r),
+                    ty: pick(cols, "type", r),
+                    required: pick(cols, "required", r).eq_ignore_ascii_case("true")
+                        || pick(cols, "required", r).eq_ignore_ascii_case("yes"),
+                    description: pick(cols, "description", r),
+                });
+            }
+        }
+        (TableKind::ParameterTable, TableTarget::Parameters) => {
+            for r in data_rows {
+                out.typed_parameters.push(spec_md::Parameter {
+                    name: pick(cols, "name", r),
+                    ty: pick(cols, "type", r),
+                    default: pick(cols, "default", r),
+                    valid_range: pick(cols, "valid_range", r),
+                    behavioral_impact: pick(cols, "behavioral_impact", r),
+                    source_anchor: format!("table:{}", entry.id),
+                });
+            }
+        }
+        (TableKind::CsrTable, TableTarget::Csrs) => {
+            for r in data_rows {
+                out.csrs.push(spec_md::Csr {
+                    address: pick(cols, "address", r),
+                    name: pick(cols, "name", r),
+                    access: pick(cols, "access", r),
+                    reset_value: pick(cols, "reset_value", r),
+                    required_privilege: pick(cols, "required_privilege", r),
+                    description: pick(cols, "description", r),
+                    fields: Vec::new(),
+                    source_anchor: format!("table:{}", entry.id),
+                });
+            }
+        }
+        (TableKind::CsrFieldTable, TableTarget::CsrFields { csr_name }) => {
+            let fields: Vec<spec_md::CsrField> = data_rows
+                .iter()
+                .map(|r| spec_md::CsrField {
+                    bits: pick(cols, "bits", r),
+                    name: pick(cols, "name", r),
+                    access: pick(cols, "access", r),
+                    description: pick(cols, "description", r),
+                })
+                .collect();
+            if let Some(csr) = out.csrs.iter_mut().find(|c| c.name == *csr_name) {
+                csr.fields.extend(fields);
+            } else {
+                // Parent CSR not (yet) seen — stash a placeholder so a
+                // later pass can stitch fields without losing them.
+                out.csrs.push(spec_md::Csr {
+                    name: csr_name.clone(),
+                    fields,
+                    source_anchor: format!("table:{}", entry.id),
+                    ..spec_md::Csr::default()
+                });
+            }
+        }
+        (TableKind::MemoryMapTable, TableTarget::MemoryMap) => {
+            for r in data_rows {
+                out.memory_regions.push(spec_md::MemoryRegion {
+                    start: pick(cols, "start", r),
+                    end: pick(cols, "end", r),
+                    name: pick(cols, "name", r),
+                    purpose: pick(cols, "purpose", r),
+                    access: pick(cols, "access", r),
+                    required_privilege: pick(cols, "required_privilege", r),
+                    source_anchor: format!("table:{}", entry.id),
+                });
+            }
+        }
+        (TableKind::EncodingTable, TableTarget::Encoding { encoding_name }) => {
+            let values: Vec<spec_md::EncodingValue> = data_rows
+                .iter()
+                .map(|r| spec_md::EncodingValue {
+                    value: pick(cols, "value", r),
+                    name: pick(cols, "name", r),
+                    abbreviation: pick(cols, "abbreviation", r),
+                })
+                .collect();
+            out.typed_encodings.push(EncodingGroup {
+                table_id: entry.id.clone(),
+                encoding_name: encoding_name.clone(),
+                source_page: entry.page,
+                values,
+            });
+        }
+        (TableKind::ErrorTable, TableTarget::Errors) => {
+            for r in data_rows {
+                out.typed_errors.push(spec_md::ErrorEntry {
+                    error_type: pick(cols, "error_type", r),
+                    detecting_component: pick(cols, "detecting_component", r),
+                    detection_behavior: pick(cols, "detection_behavior", r),
+                    bus_response: pick(cols, "bus_response", r),
+                    master_behavior: pick(cols, "master_behavior", r),
+                    software_response: pick(cols, "software_response", r),
+                    source_anchor: format!("table:{}", entry.id),
+                });
+            }
+        }
+        (TableKind::FsmStateTable, TableTarget::StateMachineStates { fsm_name }) => {
+            let states: Vec<spec_md::FsmState> = data_rows
+                .iter()
+                .map(|r| spec_md::FsmState {
+                    name: pick(cols, "name", r),
+                    description: pick(cols, "description", r),
+                })
+                .collect();
+            out.fsm_states.push(FsmStateGroup {
+                table_id: entry.id.clone(),
+                fsm_name: fsm_name.clone(),
+                source_page: entry.page,
+                states,
+            });
+        }
+        (TableKind::FsmTransitionTable, TableTarget::StateMachineTransitions { fsm_name }) => {
+            let transitions: Vec<spec_md::FsmTransition> = data_rows
+                .iter()
+                .map(|r| spec_md::FsmTransition {
+                    from: pick(cols, "from", r),
+                    input: pick(cols, "input", r),
+                    to: pick(cols, "to", r),
+                    output: pick(cols, "output", r),
+                })
+                .collect();
+            out.fsm_transitions.push(FsmTransitionGroup {
+                table_id: entry.id.clone(),
+                fsm_name: fsm_name.clone(),
+                source_page: entry.page,
+                transitions,
+            });
+        }
+        (TableKind::LatencyTable, TableTarget::TimingLatency) => {
+            for r in data_rows {
+                out.latencies.push(spec_md::LatencyRow {
+                    operation: pick(cols, "operation", r),
+                    best_case: pick(cols, "best_case", r),
+                    worst_case: pick(cols, "worst_case", r),
+                    notes: pick(cols, "notes", r),
+                });
+            }
+        }
+        (TableKind::PmuEventTable, TableTarget::PmuEvents) => {
+            for r in data_rows {
+                out.pmu_events.push(spec_md::PmuEvent {
+                    id: pick(cols, "id", r),
+                    name: pick(cols, "name", r),
+                    description: pick(cols, "description", r),
+                    csr_address: pick(cols, "csr_address", r),
+                });
+            }
+        }
+        (TableKind::ConnectivityTable, TableTarget::ConnectivityNodes) => {
+            for r in data_rows {
+                out.connectivity_nodes.push(spec_md::Node {
+                    id: pick(cols, "id", r),
+                    ty: pick(cols, "type", r),
+                    coordinate: pick(cols, "coordinate", r),
+                    role: pick(cols, "role", r),
+                });
+            }
+        }
+        (TableKind::ConnectivityTable, TableTarget::ConnectivityEdges) => {
+            for r in data_rows {
+                out.connectivity_edges.push(spec_md::Edge {
+                    from: pick(cols, "from", r),
+                    to: pick(cols, "to", r),
+                    channel: pick(cols, "channel", r),
+                    source_anchor: format!("table:{}", entry.id),
+                });
+            }
+        }
+        // Unknown or unmatched (kind, target) pair — emit raw rows.
+        _ => {
+            let rows: Vec<UnknownRow> = data_rows
+                .iter()
+                .map(|r| UnknownRow { cells: r.clone() })
+                .collect();
+            out.unknown_tables.push(UnknownTable {
+                table_id: entry.id.clone(),
+                source_page: entry.page,
+                header_row: header.to_vec(),
+                rows,
+            });
+        }
+    }
 }
 
 fn slugify(s: &str) -> String {
