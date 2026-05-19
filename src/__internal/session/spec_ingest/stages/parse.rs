@@ -1,18 +1,26 @@
 //! Stage 3: hierarchical parsing.
 //!
 //! Builds a `SectionTree` of `Section { heading, level, breadcrumb,
-//! body, page_range, children }`. PDF and markdown inputs both flow
-//! through [`parse_markdown`]: `pdf_oxide`'s `to_markdown()`
-//! converts each PDF page into markdown with `#`-prefixed headings
-//! (driven by font-size clustering), and the loading stage joins
-//! those per-page markdowns with `<!-- spec-ingest:page=N -->`
-//! markers that this stage uses to recover per-section page ranges
-//! before stripping them from the chunked bodies.
+//! body, page_range, children }`.
+//!
+//! Markdown / text inputs flow through [`parse_markdown`], a tiny
+//! line-based scanner over the flat-text representation produced by
+//! loading.
+//!
+//! PDF inputs flow through [`parse_pdf_spans`]: it walks every
+//! page's structured `PageLine` records (built in milestone 9.7
+//! from `pdf_oxide::extract_text_lines`), clusters their dominant
+//! font sizes across the whole document, treats lines whose size
+//! lands in one of the top heading clusters as headings, and
+//! assembles a `SectionTree` directly — no markdown round-trip and
+//! no `<!-- spec-ingest:page=N -->` marker injection. Per-section
+//! `page_range` is read natively from the page numbers of the
+//! constituent lines.
 
 use crate::Result;
 
 use super::super::pipeline::{IngestWarning, SourceKind};
-use super::loading::{LoadedSource, PageLayout};
+use super::loading::{BBox, LoadedSource, PageLine, PageTable};
 
 /// One section node in the heading tree.
 #[derive(Debug, Clone)]
@@ -156,9 +164,7 @@ pub fn parse_hierarchy(
         }
         SourceKind::Pdf => {
             let total_pages = loaded.pages.len() as u32;
-            let joined = join_pdf_pages_for_markdown(&loaded.pages);
-            let mut tree = parse_markdown(&joined, warnings)?;
-            recover_page_ranges_and_strip_markers(&mut tree, total_pages);
+            let tree = parse_pdf_spans(loaded, warnings)?;
             Ok(SectionTree {
                 source_kind: Some(SourceKind::Pdf),
                 source_label: String::new(),
@@ -308,80 +314,345 @@ fn build_nested(flat: Vec<(u8, String, String)>, page_range: (u32, u32)) -> Vec<
 }
 
 // ---------------------------------------------------------------------
-// PDF parser. `pdf_oxide::PdfDocument::to_markdown` runs heading
-// clustering (by font size + weight), bold/italic preservation, and
-// simple table detection on each page, producing per-page markdown
-// that we splice together with `<!-- spec-ingest:page=N -->` markers.
-// `parse_markdown` handles the resulting concatenated document; this
-// stage's only PDF-specific work is recovering per-section page
-// ranges from those markers and stripping the markers from chunked
-// section bodies.
+// PDF span-based parser. Walks `LoadedSource::pages[].lines` (the
+// structured per-line records built in milestone 9.7 from
+// `pdf_oxide::extract_text_lines`), clusters their dominant font
+// sizes across all pages, and treats lines whose size lands in one
+// of the top heading-size clusters as headings. Body lines append
+// to the current section's body. Per-section `page_range` is set
+// natively from the page numbers of the constituent lines — no
+// marker injection / stripping required.
 // ---------------------------------------------------------------------
 
-/// HTML-comment marker emitted between PDF pages so we can recover
-/// per-section page ranges after running the markdown parser. The
-/// markdown parser treats these as opaque body text.
-const PAGE_MARKER_PREFIX: &str = "<!-- spec-ingest:page=";
-const PAGE_MARKER_SUFFIX: &str = " -->";
+/// Bin width (PDF user-space points) used when grouping font sizes
+/// into clusters. Sizes within `±FONT_BIN/2` of a cluster center
+/// are folded into that cluster.
+const FONT_BIN: f32 = 0.5;
 
-/// Build the synthetic markdown body the markdown parser consumes.
-/// Appends a `<!-- spec-ingest:page=N -->` marker AFTER each page's
-/// content so it always lands inside the section whose body it
-/// belongs to (rather than in document preamble when the first
-/// page has no heading). The post-pass scans every section's body
-/// for these markers and pins section.page_range from them.
-pub(crate) fn join_pdf_pages_for_markdown(pages: &[PageLayout]) -> String {
-    let mut out = String::new();
-    for p in pages {
-        out.push_str(&p.flat_text);
-        if !p.flat_text.ends_with('\n') {
-            out.push('\n');
+/// Minimum number of lines a font-size cluster must contain before
+/// it is considered as a heading candidate. A single oversized
+/// glyph on one page should not turn the entire document into
+/// chapters — but a small spec may legitimately have only a few
+/// top-level sections, so we keep the floor at 2.
+const MIN_CLUSTER_OCCURRENCES: usize = 2;
+
+/// Maximum heading depth we surface (`Section::level` is capped at
+/// 6 to mirror markdown H1-H6). Excess clusters collapse to H6.
+const MAX_HEADING_LEVEL: u8 = 6;
+
+/// Fraction of pages on which a line must repeat to be treated as
+/// chrome (running header / footer) and skipped at parse time. The
+/// dedicated chrome.rs pass (milestone 9.10) handles the broader
+/// stripping; this is a narrow guard against page-chrome lines that
+/// happen to share a heading-size cluster.
+const CHROME_REPEAT_THRESHOLD: f32 = 0.6;
+
+/// Span-based PDF parser. Builds a `SectionTree` directly from the
+/// per-page `PageLine` records carried on `LoadedSource`.
+pub(crate) fn parse_pdf_spans(
+    loaded: &LoadedSource,
+    warnings: &mut Vec<IngestWarning>,
+) -> Result<SectionTree> {
+    let total_pages = loaded.pages.len() as u32;
+
+    // 1. Sweep all lines, sort each page top-to-bottom.
+    // PDF user-space Y origin is at the bottom of the page, so
+    // "first in reading order" is the line with the largest Y.
+    let mut ordered: Vec<(u32, &PageLine, &[PageTable])> = Vec::new();
+    for page in &loaded.pages {
+        let mut page_lines: Vec<&PageLine> = page.lines.iter().collect();
+        page_lines.sort_by(|a, b| {
+            b.bbox
+                .y
+                .partial_cmp(&a.bbox.y)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for line in page_lines {
+            ordered.push((page.page_number, line, page.tables.as_slice()));
         }
-        out.push_str(PAGE_MARKER_PREFIX);
-        out.push_str(&p.page_number.to_string());
-        out.push_str(PAGE_MARKER_SUFFIX);
-        out.push('\n');
     }
-    out
-}
 
-/// Walk the section tree, scan each section's body for
-/// `<!-- spec-ingest:page=N -->` markers, set page_range from
-/// min/max markers seen, and strip the markers from the body so
-/// downstream chunk emission sees clean text. Sections with no
-/// marker fall back to `(1, total_pages)`.
-pub(crate) fn recover_page_ranges_and_strip_markers(tree: &mut SectionTree, total_pages: u32) {
-    for section in tree.iter_mut() {
-        let (range, cleaned) = extract_and_strip(&section.body, total_pages);
-        section.page_range = range;
-        section.body = cleaned;
-    }
-}
+    // 2. Cluster dominant font sizes.
+    let clusters = cluster_font_sizes(&ordered);
 
-fn extract_and_strip(body: &str, total_pages: u32) -> ((u32, u32), String) {
-    let mut min_page: Option<u32> = None;
-    let mut max_page: Option<u32> = None;
-    let mut out = String::with_capacity(body.len());
-    for line in body.split_inclusive('\n') {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed
-            .strip_prefix(PAGE_MARKER_PREFIX)
-            .and_then(|s| s.strip_suffix(PAGE_MARKER_SUFFIX))
-        {
-            if let Ok(n) = rest.parse::<u32>() {
-                min_page = Some(min_page.map(|m| m.min(n)).unwrap_or(n));
-                max_page = Some(max_page.map(|m| m.max(n)).unwrap_or(n));
-            }
-            // Drop the marker line; do not append to `out`.
+    // 3. Identify chrome-candidate lines (repeated text on a large
+    //    fraction of pages). We use this only to suppress heading
+    //    promotion of running headers/footers — the body remains
+    //    in place; chrome.rs (9.10) handles broader stripping.
+    let chrome_lines = detect_chrome_lines(loaded);
+
+    // 4. Walk lines in order, emit flat (level, heading, body,
+    //    page_range) records.
+    type FlatSection = (u8, String, String, (u32, u32));
+    let mut flat: Vec<FlatSection> = Vec::new();
+    let mut current: Option<FlatSection> = None;
+    let mut preamble = String::new();
+    let mut preamble_pages: Option<(u32, u32)> = None;
+
+    for (page_no, line, tables) in &ordered {
+        let trimmed = line.text.trim();
+        if trimmed.is_empty() {
             continue;
         }
-        out.push_str(line);
+        let in_table = line_is_in_table(&line.bbox, tables);
+        let is_chrome = chrome_lines.contains(trimmed);
+        let level = heading_level(line.dominant_font_size, &clusters);
+
+        if let Some(level) = level
+            && !in_table
+            && !is_chrome
+        {
+            if let Some(prev) = current.take() {
+                flat.push(prev);
+            }
+            let range = (*page_no, *page_no);
+            current = Some((level, trimmed.to_string(), String::new(), range));
+            continue;
+        }
+        // Heading-size line that landed in a table or is chrome:
+        // fall through and treat it as body.
+
+        if let Some((_, _, body, range)) = current.as_mut() {
+            if !body.is_empty() {
+                body.push('\n');
+            }
+            body.push_str(&line.text);
+            range.0 = range.0.min(*page_no);
+            range.1 = range.1.max(*page_no);
+        } else {
+            if !preamble.is_empty() {
+                preamble.push('\n');
+            }
+            preamble.push_str(&line.text);
+            preamble_pages = Some(match preamble_pages {
+                Some((lo, hi)) => (lo.min(*page_no), hi.max(*page_no)),
+                None => (*page_no, *page_no),
+            });
+        }
     }
-    let range = match (min_page, max_page) {
-        (Some(lo), Some(hi)) => (lo, hi),
-        _ => (1, total_pages.max(1)),
-    };
-    (range, out)
+    if let Some(prev) = current.take() {
+        flat.push(prev);
+    }
+
+    // 5. Degenerate case: no headings detected anywhere.
+    if flat.is_empty() {
+        warnings.push(IngestWarning::new(
+            "no_headings_detected",
+            "PDF source had no heading-cluster lines; emitting a single root section",
+            3,
+        ));
+        let body_text = if !preamble.is_empty() {
+            preamble
+        } else {
+            // No body either; assemble one from line texts.
+            let mut acc = String::new();
+            for (_page_no, line, _tables) in &ordered {
+                if line.text.trim().is_empty() {
+                    continue;
+                }
+                if !acc.is_empty() {
+                    acc.push('\n');
+                }
+                acc.push_str(&line.text);
+            }
+            acc
+        };
+        let range = preamble_pages.unwrap_or_else(|| (1, total_pages.max(1)));
+        return Ok(SectionTree {
+            roots: vec![make_section(
+                "(document)",
+                1,
+                &["(document)".to_string()],
+                body_text,
+                range,
+            )],
+            ..Default::default()
+        });
+    }
+
+    // 6. Attach preamble (lines before the first heading) as a
+    //    synthetic first section if it has nontrivial content.
+    if !preamble.trim().is_empty() {
+        let range = preamble_pages.unwrap_or((1, 1));
+        flat.insert(0, (1, "(front matter)".into(), preamble, range));
+    }
+
+    let roots = build_nested_with_ranges(flat);
+    Ok(SectionTree {
+        roots,
+        ..Default::default()
+    })
+}
+
+/// One font-size cluster: the representative size and its heading
+/// level. Lower level = larger size = closer to H1.
+#[derive(Debug, Clone, Copy)]
+struct FontCluster {
+    size: f32,
+    level: u8,
+}
+
+/// Group dominant font sizes seen across all lines into clusters,
+/// keep those with at least `MIN_CLUSTER_OCCURRENCES` lines, sort
+/// descending by size, and assign heading levels 1..=MAX_HEADING_LEVEL.
+fn cluster_font_sizes(ordered: &[(u32, &PageLine, &[PageTable])]) -> Vec<FontCluster> {
+    // Greedy single-pass clustering: keep a list of (center, count);
+    // for each new size pick the closest center within FONT_BIN/2,
+    // otherwise start a new cluster.
+    let mut centers: Vec<(f32, usize)> = Vec::new();
+    for (_page, line, _tables) in ordered {
+        let size = line.dominant_font_size;
+        if size <= 0.0 {
+            continue;
+        }
+        let mut best: Option<(usize, f32)> = None;
+        for (idx, (center, _count)) in centers.iter().enumerate() {
+            let d = (center - size).abs();
+            if d <= FONT_BIN / 2.0 && best.map(|(_, bd)| d < bd).unwrap_or(true) {
+                best = Some((idx, d));
+            }
+        }
+        match best {
+            Some((idx, _)) => {
+                let (center, count) = centers[idx];
+                let new_count = count + 1;
+                // Running average of the cluster center so it
+                // tracks the true mean as new samples land.
+                let new_center = (center * count as f32 + size) / new_count as f32;
+                centers[idx] = (new_center, new_count);
+            }
+            None => centers.push((size, 1)),
+        }
+    }
+
+    // Keep only well-populated clusters.
+    let mut kept: Vec<(f32, usize)> = centers
+        .into_iter()
+        .filter(|(_, count)| *count >= MIN_CLUSTER_OCCURRENCES)
+        .collect();
+    // Sort descending by size — largest sizes become H1.
+    kept.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Determine the body-text cluster: the most populous cluster is
+    // body, and any cluster at the same size as body (or smaller)
+    // is also body. Heading clusters are those with size strictly
+    // larger than the body cluster's size.
+    let body_size = kept
+        .iter()
+        .max_by_key(|(_, c)| *c)
+        .map(|(s, _)| *s)
+        .unwrap_or(0.0);
+
+    kept.into_iter()
+        .filter(|(size, _)| *size > body_size + FONT_BIN / 2.0)
+        .enumerate()
+        .map(|(idx, (size, _))| FontCluster {
+            size,
+            level: ((idx as u8) + 1).clamp(1, MAX_HEADING_LEVEL),
+        })
+        .collect()
+}
+
+/// Return the heading level a line's size maps to, if any.
+fn heading_level(size: f32, clusters: &[FontCluster]) -> Option<u8> {
+    if size <= 0.0 {
+        return None;
+    }
+    for c in clusters {
+        if (c.size - size).abs() <= FONT_BIN / 2.0 {
+            return Some(c.level);
+        }
+    }
+    None
+}
+
+/// True if the line's bounding box vertically overlaps any table on
+/// the same page. Tables are not headings — their first row often
+/// has bold / mid-size text that would otherwise look heading-like.
+fn line_is_in_table(line_bbox: &BBox, tables: &[PageTable]) -> bool {
+    let line_top = line_bbox.y + line_bbox.h;
+    let line_bottom = line_bbox.y;
+    for t in tables {
+        let t_top = t.bbox.y + t.bbox.h;
+        let t_bottom = t.bbox.y;
+        // Treat any vertical overlap (with a small tolerance) as
+        // "inside this table".
+        if line_top >= t_bottom - 1.0 && line_bottom <= t_top + 1.0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// Detect lines whose trimmed text repeats on a high fraction of
+/// pages. These are running headers / footers that we suppress as
+/// heading candidates.
+fn detect_chrome_lines(loaded: &LoadedSource) -> std::collections::HashSet<String> {
+    use std::collections::HashMap;
+
+    let page_count = loaded.pages.len();
+    if page_count == 0 {
+        return Default::default();
+    }
+    let mut per_page_seen: HashMap<String, usize> = HashMap::new();
+    for page in &loaded.pages {
+        let mut seen_this_page: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for line in &page.lines {
+            let trimmed = line.text.trim().to_string();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if seen_this_page.insert(trimmed.clone()) {
+                *per_page_seen.entry(trimmed).or_insert(0) += 1;
+            }
+        }
+    }
+    let threshold = (page_count as f32 * CHROME_REPEAT_THRESHOLD).ceil() as usize;
+    per_page_seen
+        .into_iter()
+        .filter(|(_, c)| *c >= threshold.max(2))
+        .map(|(s, _)| s)
+        .collect()
+}
+
+/// Like `build_nested`, but each entry carries its own page_range
+/// so PDF sections retain native page numbers rather than being
+/// pinned to a single document-wide range.
+fn build_nested_with_ranges(flat: Vec<(u8, String, String, (u32, u32))>) -> Vec<Section> {
+    let mut roots: Vec<Section> = Vec::new();
+    let mut stack: Vec<*mut Section> = Vec::new();
+    let roots_ptr: *mut Vec<Section> = &mut roots;
+    for (level, heading, body, page_range) in flat {
+        while let Some(top) = stack.last() {
+            let top_level = unsafe { (**top).level };
+            if top_level >= level {
+                stack.pop();
+            } else {
+                break;
+            }
+        }
+        let mut breadcrumb: Vec<String> = stack
+            .iter()
+            .map(|p| unsafe { (**p).heading.clone() })
+            .collect();
+        breadcrumb.push(heading.clone());
+        let new_section = make_section(&heading, level, &breadcrumb, body, page_range);
+        let parent_children: *mut Vec<Section> = match stack.last() {
+            Some(top) => {
+                let top_section: &mut Section = unsafe { &mut **top };
+                &mut top_section.children as *mut _
+            }
+            None => roots_ptr,
+        };
+        // SAFETY: see `build_nested` — same pattern, with pointers
+        // into a tree we exclusively own.
+        let parent_vec: &mut Vec<Section> = unsafe { &mut *parent_children };
+        parent_vec.push(new_section);
+        let added: *mut Section = parent_vec.last_mut().unwrap() as *mut _;
+        stack.push(added);
+    }
+    roots
 }
 
 #[cfg(test)]
@@ -412,57 +683,216 @@ mod tests {
         assert!(warnings.iter().any(|w| w.code == "no_headings_detected"));
     }
 
-    fn flat_page(n: u32, text: &str) -> PageLayout {
+    use super::super::loading::PageLayout;
+
+    fn line(text: &str, size: f32, y: f32) -> PageLine {
+        PageLine {
+            text: text.into(),
+            bbox: BBox {
+                x: 50.0,
+                y,
+                w: 400.0,
+                h: size,
+            },
+            dominant_font_size: size,
+            is_bold: false,
+        }
+    }
+
+    fn page(n: u32, lines: Vec<PageLine>) -> PageLayout {
+        page_with_tables(n, lines, Vec::new())
+    }
+
+    fn page_with_tables(n: u32, lines: Vec<PageLine>, tables: Vec<PageTable>) -> PageLayout {
         PageLayout {
             page_number: n,
             spans: Vec::new(),
-            lines: Vec::new(),
-            tables: Vec::new(),
+            lines,
+            tables,
             path_count: 0,
             image_count: 0,
-            flat_text: text.into(),
+            flat_text: String::new(),
+        }
+    }
+
+    /// Build a `LoadedSource` whose lines collectively put body-size
+    /// 12.0 above the `MIN_CLUSTER_OCCURRENCES` floor (otherwise no
+    /// cluster would qualify and the heading detector trivially
+    /// matches anything). Repeats the requested body line so the
+    /// 12pt cluster crosses the threshold.
+    fn loaded_with_body_padding(pages: Vec<PageLayout>) -> LoadedSource {
+        let mut padded = pages;
+        // Append a final page of body filler to ensure the body
+        // cluster (size 12) has enough samples to be detected as
+        // the body baseline.
+        let last_page_no = padded.last().map(|p| p.page_number).unwrap_or(1) + 1;
+        let filler_lines: Vec<PageLine> = (0..MIN_CLUSTER_OCCURRENCES + 2)
+            .map(|i| line("filler body line", 12.0, 700.0 - i as f32 * 15.0))
+            .collect();
+        padded.push(page(last_page_no, filler_lines));
+        LoadedSource {
+            kind: SourceKind::Pdf,
+            pages: padded,
+            pdf: None,
         }
     }
 
     #[test]
-    fn pdf_pages_join_with_page_markers_then_recover_ranges() {
-        // pdf_oxide produces markdown per page; the loader joins them
-        // with `<!-- spec-ingest:page=N -->` markers. parse_hierarchy
-        // runs the markdown parser and the post-pass strips markers
-        // while recovering per-section page ranges.
+    fn pdf_spans_two_top_level_sections_with_native_page_ranges() {
+        // Introduction (size 20) appears on page 1 with one body line,
+        // body continues onto page 2, Architecture (size 20) opens on
+        // page 3 with its own body line.
         let pages = vec![
-            flat_page(1, "# Introduction\n\nintro body\n"),
-            flat_page(2, "more intro body on page 2\n"),
-            flat_page(3, "## Background\n\nbackground body\n"),
+            page(
+                1,
+                vec![
+                    line("Introduction", 20.0, 720.0),
+                    line("body line one", 12.0, 700.0),
+                ],
+            ),
+            page(2, vec![line("body line two", 12.0, 720.0)]),
+            page(
+                3,
+                vec![
+                    line("Architecture", 20.0, 720.0),
+                    line("arch body", 12.0, 700.0),
+                ],
+            ),
         ];
-        let joined = join_pdf_pages_for_markdown(&pages);
+        let loaded = loaded_with_body_padding(pages);
         let mut warnings = Vec::new();
-        let mut tree = parse_markdown(&joined, &mut warnings).unwrap();
-        recover_page_ranges_and_strip_markers(&mut tree, 3);
-        assert_eq!(tree.roots.len(), 1);
-        let intro = &tree.roots[0];
-        assert_eq!(intro.heading, "Introduction");
-        // Introduction spans pages 1-2.
-        assert_eq!(intro.page_range, (1, 2));
-        // Markers were stripped from body.
-        assert!(!intro.body.contains("spec-ingest:page="));
-        // Background is page 3 only.
-        assert_eq!(intro.children.len(), 1);
-        assert_eq!(intro.children[0].heading, "Background");
-        assert_eq!(intro.children[0].page_range, (3, 3));
-        assert!(!intro.children[0].body.contains("spec-ingest:page="));
+        let tree = parse_pdf_spans(&loaded, &mut warnings).unwrap();
+        assert_eq!(tree.roots.len(), 2, "{:?}", tree.roots);
+        assert_eq!(tree.roots[0].heading, "Introduction");
+        assert_eq!(tree.roots[0].page_range, (1, 2));
+        assert!(tree.roots[0].body.contains("body line one"));
+        assert!(tree.roots[0].body.contains("body line two"));
+        assert_eq!(tree.roots[1].heading, "Architecture");
+        assert_eq!(tree.roots[1].page_range.0, 3);
+        assert!(tree.roots[1].body.contains("arch body"));
     }
 
     #[test]
-    fn pdf_no_headings_emits_warning() {
-        let pages = vec![flat_page(
-            1,
-            "this is just prose\nwith no heading-like lines\n",
-        )];
-        let joined = join_pdf_pages_for_markdown(&pages);
+    fn pdf_spans_nests_h2_under_h1_by_cluster_id() {
+        // H1 (size 24) > H2 (size 16) > body (size 12). Repeat each
+        // heading several times across pages so every heading-size
+        // cluster crosses MIN_CLUSTER_OCCURRENCES.
+        let mut pages = Vec::new();
+        // Five H1s, each followed by body.
+        for p in 1..=5 {
+            pages.push(page(
+                p,
+                vec![
+                    line(&format!("Chapter {p}"), 24.0, 720.0),
+                    line("intro paragraph", 12.0, 700.0),
+                    line(&format!("Section {p}.1"), 16.0, 680.0),
+                    line("sub paragraph", 12.0, 660.0),
+                    line("more sub paragraph", 12.0, 640.0),
+                    line("more body", 12.0, 620.0),
+                    line("more body", 12.0, 600.0),
+                ],
+            ));
+        }
+        let loaded = LoadedSource {
+            kind: SourceKind::Pdf,
+            pages,
+            pdf: None,
+        };
         let mut warnings = Vec::new();
-        let mut tree = parse_markdown(&joined, &mut warnings).unwrap();
-        recover_page_ranges_and_strip_markers(&mut tree, 1);
+        let tree = parse_pdf_spans(&loaded, &mut warnings).unwrap();
+        // Expect five chapters, each containing a child section.
+        assert_eq!(tree.roots.len(), 5);
+        let first = &tree.roots[0];
+        assert_eq!(first.heading, "Chapter 1");
+        assert_eq!(first.level, 1);
+        assert_eq!(first.children.len(), 1);
+        let sub = &first.children[0];
+        assert_eq!(sub.heading, "Section 1.1");
+        assert_eq!(sub.level, 2);
+        assert_eq!(
+            sub.breadcrumb,
+            vec!["Chapter 1".to_string(), "Section 1.1".to_string()]
+        );
+    }
+
+    #[test]
+    fn pdf_spans_skips_table_header_lines_for_heading_promotion() {
+        // A table sits on page 1 with bold mid-size header text in
+        // the first row. The parser must not promote the table
+        // header line into a heading — there are no other
+        // heading-size clusters, so the result is the degenerate
+        // (document) root.
+        let table_bbox = BBox {
+            x: 40.0,
+            y: 600.0,
+            w: 500.0,
+            h: 80.0,
+        };
+        let header_line = PageLine {
+            text: "Signal | Direction | To/From | Description".into(),
+            bbox: BBox {
+                x: 40.0,
+                y: 660.0,
+                w: 500.0,
+                h: 16.0,
+            },
+            // Bigger than body so it would otherwise tempt the
+            // heading detector — table guard must suppress it.
+            dominant_font_size: 16.0,
+            is_bold: true,
+        };
+        let body_lines: Vec<PageLine> = (0..MIN_CLUSTER_OCCURRENCES + 1)
+            .map(|i| line("table cell text", 12.0, 640.0 - i as f32 * 15.0))
+            .collect();
+        let mut p1_lines = vec![header_line];
+        p1_lines.extend(body_lines);
+        let table = PageTable {
+            bbox: table_bbox,
+            row_count: 3,
+            col_count: 4,
+            has_header: true,
+            header_row: vec![
+                "Signal".into(),
+                "Direction".into(),
+                "To/From".into(),
+                "Description".into(),
+            ],
+            rows: vec![vec![
+                "Signal".into(),
+                "Direction".into(),
+                "To/From".into(),
+                "Description".into(),
+            ]],
+        };
+        let pages = vec![page_with_tables(1, p1_lines, vec![table])];
+        let loaded = LoadedSource {
+            kind: SourceKind::Pdf,
+            pages,
+            pdf: None,
+        };
+        let mut warnings = Vec::new();
+        let tree = parse_pdf_spans(&loaded, &mut warnings).unwrap();
+        assert_eq!(tree.roots.len(), 1);
+        assert_eq!(tree.roots[0].heading, "(document)");
+        assert!(warnings.iter().any(|w| w.code == "no_headings_detected"));
+    }
+
+    #[test]
+    fn pdf_spans_no_heading_clusters_emits_degenerate_root_with_warning() {
+        // Every line is body-size; no cluster qualifies as a
+        // heading. We expect the degenerate `(document)` root and
+        // a `no_headings_detected` warning.
+        let body_lines: Vec<PageLine> = (0..(MIN_CLUSTER_OCCURRENCES + 3))
+            .map(|i| line(&format!("body line {i}"), 12.0, 700.0 - i as f32 * 15.0))
+            .collect();
+        let pages = vec![page(1, body_lines)];
+        let loaded = LoadedSource {
+            kind: SourceKind::Pdf,
+            pages,
+            pdf: None,
+        };
+        let mut warnings = Vec::new();
+        let tree = parse_pdf_spans(&loaded, &mut warnings).unwrap();
         assert_eq!(tree.roots.len(), 1);
         assert_eq!(tree.roots[0].heading, "(document)");
         assert!(warnings.iter().any(|w| w.code == "no_headings_detected"));
