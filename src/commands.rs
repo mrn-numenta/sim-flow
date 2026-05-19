@@ -228,6 +228,9 @@ fn embedder_cmd(action: &EmbedderAction) -> sim_flow::Result<()> {
             out,
             rebuild,
             status,
+            rediscover_format,
+            format,
+            no_format_discovery,
         } => ingest_cmd(
             &project_dir,
             source.as_deref(),
@@ -236,6 +239,9 @@ fn embedder_cmd(action: &EmbedderAction) -> sim_flow::Result<()> {
             out.as_deref(),
             *rebuild,
             *status,
+            *rediscover_format,
+            format.as_deref(),
+            *no_format_discovery,
         ),
         Command::BuildFrameworkIndex {
             framework_root,
@@ -270,7 +276,9 @@ fn embedder_cmd(action: &EmbedderAction) -> sim_flow::Result<()> {
 /// Driver for `sim-flow ingest`. Resolves project root, optional
 /// config, and primary/peer paths into an `IngestRequest` and runs
 /// the pipeline. Supports the `--rebuild` and `--status` flavours
-/// per chapter 1.8.
+/// per chapter 1.8 plus the Phase 9 milestone 9.6 format-discovery
+/// flags (`--rediscover-format`, `--format`, `--no-format-discovery`).
+#[allow(clippy::too_many_arguments)]
 fn ingest_cmd(
     project_dir: &Path,
     source: Option<&Path>,
@@ -279,9 +287,12 @@ fn ingest_cmd(
     out: Option<&Path>,
     rebuild: bool,
     status: bool,
+    rediscover_format: bool,
+    format_path: Option<&Path>,
+    no_format_discovery: bool,
 ) -> sim_flow::Result<()> {
     use sim_flow::__internal::session::spec_ingest::{
-        IngestConfig, IngestRequest, PeerSpec, SourceSpec, pipeline::run as run_pipeline,
+        IngestConfig, IngestRequest, PeerSpec, SourceSpec,
     };
 
     let project_root: std::path::PathBuf = out
@@ -305,6 +316,17 @@ fn ingest_cmd(
         })?;
         println!("{body}");
         return Ok(());
+    }
+
+    if format_path.is_some() && rediscover_format {
+        return Err(sim_flow::Error::State(
+            "sim-flow ingest: --format and --rediscover-format are mutually exclusive".into(),
+        ));
+    }
+    if format_path.is_some() && no_format_discovery {
+        return Err(sim_flow::Error::State(
+            "sim-flow ingest: --format and --no-format-discovery are mutually exclusive".into(),
+        ));
     }
 
     let cfg = match config {
@@ -346,7 +368,13 @@ fn ingest_cmd(
         config: cfg,
         project_root: project_root.clone(),
     };
-    let outcome = run_pipeline(request)?;
+
+    let outcome = run_ingest_with_format_resolution(
+        request,
+        rediscover_format,
+        format_path,
+        no_format_discovery,
+    )?;
     println!(
         "sim-flow ingest: wrote {} ({} chunks, {} figures, {} signal tables, {} stubs, {} TBDs)",
         outcome.manifest_path.display(),
@@ -363,6 +391,322 @@ fn ingest_cmd(
         }
     }
     Ok(())
+}
+
+/// Where the resolved `format.json` descriptor came from. Drives the
+/// stderr diagnostic line emitted after a successful ingest.
+enum FormatProvenance {
+    /// Operator supplied an explicit `--format <path>`; the cache was
+    /// not consulted and is not written.
+    Explicit,
+    /// Loaded from `.sim-flow/spec-ingest/format.json` because its
+    /// `source_sha256` matched the current input.
+    CacheHit,
+    /// Built fresh from the deterministic first-cut classifier (LLM
+    /// critique skipped: `--no-format-discovery`, no LLM resolver, or
+    /// LLM endpoint unavailable). Cache file was written.
+    FirstCutOnly,
+    /// Built fresh through skeleton → first-cut → LLM critique → cache
+    /// write. This path is not reachable today because no LLM resolver
+    /// is wired into `sim-flow ingest`; the variant is retained for
+    /// the follow-up milestone that lights up the LLM path.
+    #[allow(dead_code)]
+    Discovered,
+    /// No descriptor used at all (markdown / text / empty corpus, or
+    /// the source path couldn't be hashed). Pipeline runs the legacy
+    /// heuristic path.
+    #[allow(dead_code)]
+    None,
+}
+
+/// Resolve `format.json` per the milestone 9.6 precedence and run the
+/// ingest pipeline. The split mirrors the prompt's specification:
+///
+///   `--format <path>` > cached descriptor (matching `source_sha256`) >
+///   `--rediscover-format` > built-in first-cut (when discovery is
+///   skipped) > legacy heuristic path (when no source is available).
+///
+/// The resolved descriptor (when any) is threaded through phase B of
+/// the pipeline via `pipeline::run_phase_b`, which passes it to
+/// `classify_with_format` + `emit::run_with_format`. Phase A also
+/// honours the descriptor when one is already known, so chrome
+/// stripping picks up the descriptor's regex filters per milestone
+/// 9.10.
+fn run_ingest_with_format_resolution(
+    request: sim_flow::__internal::session::spec_ingest::IngestRequest,
+    rediscover_format: bool,
+    format_path: Option<&Path>,
+    no_format_discovery: bool,
+) -> sim_flow::Result<sim_flow::__internal::session::spec_ingest::IngestOutcome> {
+    use sim_flow::__internal::session::spec_ingest::format::FormatJson;
+    use sim_flow::__internal::session::spec_ingest::pipeline::{run_phase_a, run_phase_b};
+
+    // ---- Branch 1: explicit --format <path>. -------------------------
+    if let Some(path) = format_path {
+        let format = FormatJson::load(path)?;
+        if format.schema_version != FormatJson::current_schema_version() {
+            return Err(sim_flow::Error::State(format!(
+                "--format {}: schema_version {} unsupported (expected {})",
+                path.display(),
+                format.schema_version,
+                FormatJson::current_schema_version()
+            )));
+        }
+        eprintln!(
+            "sim-flow ingest: using format descriptor from {} (model={}, prompt_version={})",
+            path.display(),
+            format.model,
+            format.prompt_version
+        );
+        let mut warnings = Vec::new();
+        let phase_a = run_phase_a(&request, Some(&format), &mut warnings)?;
+        let outcome = run_phase_b(&request, phase_a, Some(&format), warnings)?;
+        emit_format_summary(&format, &FormatProvenance::Explicit, None);
+        return Ok(outcome);
+    }
+
+    // ---- Branch 2: cache lookup + (maybe) discovery. -----------------
+    let cache_path = request
+        .project_root
+        .join(".sim-flow")
+        .join("spec-ingest")
+        .join("format.json");
+
+    // Compute the new source's SHA-256 if one was supplied. Markdown /
+    // text / empty-corpus sources skip format discovery entirely; the
+    // pipeline falls through to the heuristic path.
+    let primary_path = request.primary.as_ref().map(|s| s.path.clone());
+    let source_sha256 = match &primary_path {
+        Some(p) if is_format_eligible(p) => sha256_of_path(p).ok(),
+        _ => None,
+    };
+
+    if source_sha256.is_none() {
+        // No PDF source: skip format discovery. The legacy
+        // heuristic path produces the same outputs as today.
+        return run_format_aware(request, None);
+    }
+    let source_sha256 = source_sha256.unwrap();
+
+    // Cache hit? Reuse iff sha matches AND --rediscover-format is off.
+    // The cache lives INSIDE the spec-ingest directory that emit
+    // atomically replaces, so we have to re-write it after phase B
+    // even on a cache hit (otherwise the old file gets wiped by the
+    // directory swap and subsequent runs re-discover unnecessarily).
+    if cache_path.exists() && !rediscover_format {
+        match FormatJson::load(&cache_path) {
+            Ok(format) if format.source_sha256 == source_sha256 => {
+                eprintln!(
+                    "sim-flow ingest: reusing cached format.json (model={}, prompt_version={})",
+                    format.model, format.prompt_version
+                );
+                let outcome = run_format_aware(request, Some(&format))?;
+                // Re-write the cache so emit's directory swap
+                // doesn't strand us. The body is byte-identical to
+                // what we just loaded so `discovered_at` doesn't
+                // advance on a cache-hit run.
+                if let Err(e) = format.write(&cache_path) {
+                    eprintln!(
+                        "sim-flow ingest: failed to re-write {} after cache hit ({e})",
+                        cache_path.display()
+                    );
+                }
+                emit_format_summary(&format, &FormatProvenance::CacheHit, Some(&cache_path));
+                return Ok(outcome);
+            }
+            Ok(_) => {
+                eprintln!(
+                    "sim-flow ingest: cached format.json source_sha256 mismatch; rediscovering"
+                );
+            }
+            Err(e) => {
+                eprintln!("sim-flow ingest: cached format.json unreadable ({e}); rediscovering");
+            }
+        }
+    }
+
+    // Cache miss (or --rediscover-format). Build a new descriptor.
+    // Run phase A first so we have a `LoadedSource` to feed the
+    // skeleton builder.
+    let mut warnings = Vec::new();
+    let phase_a = run_phase_a(&request, None, &mut warnings)?;
+
+    let format = build_format_descriptor(
+        &phase_a.loaded,
+        &request.config,
+        &source_sha256,
+        no_format_discovery,
+        &mut warnings,
+    );
+
+    // Note: phase B's emit stage replaces the entire
+    // `.sim-flow/spec-ingest/` directory atomically (it removes the
+    // existing dir then renames a `.tmp` sibling over it). We
+    // therefore have to write the cache file AFTER phase B runs so
+    // it isn't wiped by emit's directory swap.
+    let outcome = run_phase_b(&request, phase_a, Some(&format), warnings)?;
+
+    if let Some(parent) = cache_path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        eprintln!(
+            "sim-flow ingest: failed to mkdir {} ({e}); descriptor not cached",
+            parent.display()
+        );
+    }
+    if let Err(e) = format.write(&cache_path) {
+        eprintln!(
+            "sim-flow ingest: failed to write {} ({e}); descriptor not cached",
+            cache_path.display()
+        );
+    }
+
+    let provenance = if no_format_discovery {
+        FormatProvenance::FirstCutOnly
+    } else {
+        // Today the LLM critique path is not wired into ingest; the
+        // first-cut classifier IS the descriptor. Surfacing this as
+        // `FirstCutOnly` lets the diagnostic line tell the operator
+        // that the LLM pass was skipped.
+        FormatProvenance::FirstCutOnly
+    };
+    emit_format_summary(&format, &provenance, Some(&cache_path));
+    Ok(outcome)
+}
+
+/// Run phase A + phase B with the supplied descriptor (or `None`).
+/// Helper for the cache-hit / no-source paths where phase A doesn't
+/// need to be reused for skeleton building.
+fn run_format_aware(
+    request: sim_flow::__internal::session::spec_ingest::IngestRequest,
+    format: Option<&sim_flow::__internal::session::spec_ingest::format::FormatJson>,
+) -> sim_flow::Result<sim_flow::__internal::session::spec_ingest::IngestOutcome> {
+    use sim_flow::__internal::session::spec_ingest::pipeline::{run_phase_a, run_phase_b};
+    let mut warnings = Vec::new();
+    let phase_a = run_phase_a(&request, format, &mut warnings)?;
+    run_phase_b(&request, phase_a, format, warnings)
+}
+
+/// Build a fresh `format.json` descriptor from the loaded source.
+/// Always runs the deterministic first-cut classifier. The LLM
+/// critique pass is gated by `no_format_discovery` AND the
+/// availability of an LLM adapter — milestone 9.6 wires the gate but
+/// the LLM-resolver-from-ingest-config plumbing lands in a follow-up
+/// milestone; absent that resolver we silently fall back to first-cut
+/// and surface the skipped-critique state in the descriptor's
+/// `model = "first-cut-builtin"` sentinel.
+fn build_format_descriptor(
+    loaded: &sim_flow::__internal::session::spec_ingest::stages::loading::LoadedSource,
+    config: &sim_flow::__internal::session::spec_ingest::IngestConfig,
+    source_sha256: &str,
+    no_format_discovery: bool,
+    _warnings: &mut Vec<sim_flow::__internal::session::spec_ingest::IngestWarning>,
+) -> sim_flow::__internal::session::spec_ingest::format::FormatJson {
+    use sim_flow::__internal::session::spec_ingest::format::{first_cut, skeleton};
+
+    let skeleton = skeleton::build_skeleton_with(loaded, config);
+    let mut first_cut = first_cut::classify(&skeleton);
+    first_cut.source_sha256 = source_sha256.to_string();
+
+    if no_format_discovery {
+        eprintln!(
+            "sim-flow ingest: format discovery skipped (--no-format-discovery); \
+             using first-cut classifier only"
+        );
+        return first_cut;
+    }
+
+    // No LLM adapter is plumbed into ingest yet. Per the milestone's
+    // "no LLM configured → fall back to --no-format-discovery with a
+    // stderr warning" semantics, we emit a warning and return the
+    // first-cut descriptor unchanged. The follow-up milestone wires a
+    // real resolver against `.sim-flow/config.toml` + the `sim-flow
+    // ingest --llm-*` flags.
+    eprintln!(
+        "sim-flow ingest: no LLM endpoint resolver configured for ingest; \
+         falling back to first-cut classifier (run with --no-format-discovery \
+         to suppress this warning)"
+    );
+    first_cut
+}
+
+/// Whether a primary source path is a candidate for format discovery.
+/// Only PDF inputs carry the structural signal the descriptor models;
+/// markdown / text / unknown extensions fall through to the legacy
+/// heuristic path.
+fn is_format_eligible(path: &Path) -> bool {
+    use sim_flow::__internal::session::spec_ingest::SourceKind;
+    matches!(SourceKind::from_path(path), Some(SourceKind::Pdf))
+}
+
+/// SHA-256 of a file's bytes. Matches the digest emit.rs uses for
+/// the manifest's `source_sha256` field so a cache hit lines up with
+/// the manifest the same ingest run produces.
+fn sha256_of_path(path: &Path) -> sim_flow::Result<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path)
+        .map_err(|e| sim_flow::Error::State(format!("sha256 read {}: {e}", path.display())))?;
+    let mut h = Sha256::new();
+    h.update(&bytes);
+    Ok(format!("{:x}", h.finalize()))
+}
+
+/// Emit the milestone 9.6 stderr diagnostic block summarising the
+/// resolved descriptor's classification counts. `cached_at` is the
+/// path the descriptor was persisted to (or `None` when the caller
+/// supplied `--format <path>` and the cache wasn't touched).
+fn emit_format_summary(
+    format: &sim_flow::__internal::session::spec_ingest::format::FormatJson,
+    provenance: &FormatProvenance,
+    cached_at: Option<&Path>,
+) {
+    let provenance_str = match provenance {
+        FormatProvenance::Explicit => format!("explicit (model={})", format.model),
+        FormatProvenance::CacheHit => format!("cache (model={})", format.model),
+        FormatProvenance::FirstCutOnly => format!("first-cut (model={})", format.model),
+        FormatProvenance::Discovered => format!("discovered from {}", format.model),
+        FormatProvenance::None => "none".to_string(),
+    };
+    eprintln!("sim-flow ingest: format descriptor: {provenance_str}");
+    if let Some(path) = cached_at {
+        let display = path
+            .strip_prefix(std::env::current_dir().unwrap_or_default())
+            .unwrap_or(path);
+        eprintln!("                 (cached at {})", display.display());
+    }
+
+    let mut classified: Vec<(String, u32)> = Vec::new();
+    let mut unknown_tables: u32 = 0;
+    for table in &format.tables {
+        let kind_name = serde_json::to_value(table.kind)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_else(|| "unknown".to_string());
+        if kind_name == "unknown" {
+            unknown_tables += 1;
+        } else if let Some(slot) = classified.iter_mut().find(|(k, _)| k == &kind_name) {
+            slot.1 += 1;
+        } else {
+            classified.push((kind_name, 1));
+        }
+    }
+    let tables_classified_str = classified
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    eprintln!("  section_roles: {} assigned", format.section_roles.len());
+    if classified.is_empty() {
+        eprintln!("  tables_classified: (none)");
+    } else {
+        eprintln!("  tables_classified: {tables_classified_str}");
+    }
+    eprintln!("  tables_unknown: {unknown_tables}");
+    eprintln!("  glossary_entries: {}", format.glossary.len());
+    let chrome_match_count: u32 = format.chrome.iter().map(|c| c.match_count).sum();
+    eprintln!("  chrome_lines_stripped: {chrome_match_count}");
+    eprintln!("  warnings: {}", format.validation.warnings.len());
 }
 
 /// Pull `source_path = "..."` out of a manifest TOML body. Returns
