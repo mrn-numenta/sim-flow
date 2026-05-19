@@ -184,6 +184,25 @@ where
     let library_root = detect_library_root(&opts.project_dir);
     let framework_root = detect_framework_root(&opts.foundation_root);
     let framework_docs_root = detect_framework_docs_root(&opts.foundation_root);
+
+    // Pre-warm rust-analyzer for implementation-heavy steps so the
+    // agent's first `api_search` / `api_hover` / etc. call doesn't
+    // block 2-3 min on cold indexing. DM2d / DM3b / DM3c are the
+    // steps where the agent reaches into the framework's public
+    // API; earlier steps (DM0 / DM1 / DM2a-c / DM3a / DM4a) read
+    // analysis docs and rarely need rust-analyzer.
+    //
+    // Best-effort: spawn fails silently with a tracing::warn (see
+    // `lsp::prewarm`), so if the workspace can't be derived from
+    // `framework_root` or the rust-analyzer binary is missing, the
+    // session continues with whatever `api_*` calls eventually
+    // pay the cold-start tax themselves.
+    if matches!(step.id, "DM2d" | "DM3b" | "DM3c")
+        && let Some(fr) = framework_root.as_deref()
+        && let Some(workspace_root) = fr.parent().and_then(|p| p.parent())
+    {
+        let _ = crate::__internal::session::lsp::prewarm(workspace_root.to_path_buf());
+    }
     let write_paths: Vec<String> = crate::steps::allowed_write_paths(&step, opts.kind);
     let work_retry_has_prior_blockers = opts.kind == SessionKind::Work
         && !retry_gate_finding_blocks(&opts.project_dir, step.id).is_empty();

@@ -684,6 +684,43 @@ pub fn __test_client_is_attached() -> bool {
     guard.is_some()
 }
 
+/// Spawn rust-analyzer against `workspace_root` in a background
+/// thread so the agent's first `api_*` tool call doesn't pay the
+/// cold-start indexing tax (2-3 min on a cold sim-foundation
+/// workspace). Idempotent: if the client is already attached (or
+/// spawn already in flight via a prior call), the new thread is a
+/// cheap no-op because `with_client` short-circuits on the
+/// already-populated `CLIENT`.
+///
+/// Errors are logged via `tracing::warn` and swallowed — pre-warm
+/// is best-effort. A failed pre-warm just means the eventual
+/// `api_*` call still pays the cold-start tax; the user-facing
+/// behavior degrades to "no pre-warm" rather than failing the
+/// session.
+///
+/// Returns the spawned thread's `JoinHandle` so callers in tests
+/// can synchronize on completion; production callers ignore the
+/// handle.
+pub fn prewarm(workspace_root: std::path::PathBuf) -> std::thread::JoinHandle<()> {
+    std::thread::Builder::new()
+        .name("sim-flow:lsp-prewarm".into())
+        .spawn(move || {
+            // `with_client` with a no-op closure triggers the
+            // lazy spawn + initial indexing pass. The result is
+            // intentionally discarded; tracing the warning on
+            // failure is enough.
+            if let Err(e) = with_client(&workspace_root, |_c| Ok(())) {
+                tracing::warn!(
+                    target: "sim_flow::diagnostics",
+                    workspace_root = %workspace_root.display(),
+                    error = %e,
+                    "LSP pre-warm failed; first api_* call will pay the cold-start tax",
+                );
+            }
+        })
+        .expect("thread spawn for LSP pre-warm")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
