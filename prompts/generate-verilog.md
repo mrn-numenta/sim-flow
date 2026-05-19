@@ -50,11 +50,14 @@ Read all of the following before writing code:
 - `tests/`
 - `lib:docs/modeling-guide/04-testing-models.md`
 - `lib:docs/modeling-guide/06-design-patterns.md`
-- `fw:api/toc.md`, then only the specific `fw:api/pages/...` files you
-  need
+- `api_semantic_search(query)` then `api_hover(symbol)` for any
+  framework symbol you need to look up. Do NOT `read_file` paths
+  under `fw:api/pages/*.md`; the lance API index + LSP queries
+  supersede the static page mirror.
 
-Use `fw:src/...` only when the curated docs and guides are insufficient
-to answer an exact signature or semantic question.
+Use `fw:src/...` only when even `api_hover` cannot show the
+exact source detail you need (rare; almost always an internal
+helper body that the LSP-backed tools intentionally hide).
 
 ## Generation goals
 

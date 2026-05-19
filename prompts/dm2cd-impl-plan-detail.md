@@ -26,11 +26,19 @@ Read on demand:
 - `docs/plan-management.md` -- task / state conventions
   (`- [ ]` / `- [x]` / `- [-]` formats, the 10-task cap,
   `DECIDE:` / `OPEN:` shapes for unresolved choices).
-- `docs/spec.md`, `docs/analysis/decomposition.md`,
+- `docs/spec.md` -- use `read_markdown(path: "docs/spec.md",
+  section: "Block: <name>")` to fetch only the sections the
+  current milestone's `## Trace` block references. The full
+  spec.md is large (40-60 KB on real designs); pulling it whole
+  wastes context. Each block's `#### Retrieval hints` lists
+  `spec_semantic_search` queries for source-spec context beyond
+  what spec.md inlines.
+- `docs/analysis/decomposition.md`,
   `docs/analysis/pipeline-mapping.md`,
-  `docs/analysis/data-movement.md` -- the predecessor inputs your
+  `docs/analysis/data-movement.md` -- predecessor inputs your
   current stub's `## Dependencies` and `## Trace` sections
-  reference. Read only the sections relevant to THIS milestone.
+  reference. Use `read_markdown` per-section here too; do NOT
+  bulk-read.
 
 ## Procedure
 

@@ -49,11 +49,14 @@ internal priors):
     judging "Foundation conventions".
 - **Secondary** (large; consult on demand for exact API signatures
   only -- do NOT bulk-read):
-  - `fw:api/toc.md` to find a specific page, then
-    `fw:api/pages/...` for the one signature you need.
-  - `cargo doc --workspace --no-deps` rendered output is also
-    available but is verbose; prefer the curated `fw:api/pages/...`
-    files unless a signature is genuinely missing there.
+  - `api_semantic_search(query)` to find a candidate symbol
+    when the name isn't known, then `api_hover(symbol)` for the
+    live signature + rustdoc.
+  - `api_search(name)` when the symbol name IS known, to confirm
+    kind and location before hovering.
+  - Do NOT `read_file` paths under `fw:api/pages/*.md` -- those
+    static pages are superseded by `api_semantic_search`'s lance
+    index and the LSP-backed live queries.
 
 ## Evaluation
 

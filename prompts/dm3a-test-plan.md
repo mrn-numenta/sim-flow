@@ -23,16 +23,25 @@ Read these before writing the outline:
 
 - `docs/plan-management.md` -- plan-file conventions
   (milestone numbering, the 10-task-per-milestone cap).
-- `docs/spec.md` -- the specification.
+- `docs/spec.md` -- the specification. Use
+  `read_markdown(path: "docs/spec.md", section: "Block: <name>")`
+  or `section: "External Interfaces"` to fetch only the relevant
+  sections; the full spec.md is large (40-60 KB on real designs),
+  pulling it whole wastes context. Each block's `#### Retrieval
+  hints` lists `spec_semantic_search` queries for source-spec
+  context beyond what spec.md inlines.
 - `docs/targets.md` -- quantitative targets DM3c must measure.
+  Use `read_markdown` per section.
 - `docs/testbench.md` -- DM1's verification strategy and the
   named `lib:examples/<NN-name>/test/` baseline DM3b will mirror.
+  Use `read_markdown` per section.
 - `docs/analysis/decomposition.md` -- operations whose
-  correctness must be verified.
+  correctness must be verified. Use `read_markdown` per section.
 - `docs/analysis/pipeline-mapping.md` -- pipeline shape and
-  observability points.
+  observability points. Use `read_markdown` per section.
 - `docs/analysis/data-movement.md` -- payload shapes for
-  Sequencers / Drivers / Monitors.
+  Sequencers / Drivers / Monitors. Use `read_markdown` per
+  section.
 - `docs/impl-plan/plan.md` -- the implementation plan.
 - `src/` -- the model under test as it stands.
 
@@ -43,9 +52,11 @@ Reference material (read on demand):
 - The named baseline from `docs/testbench.md`'s
   `## Implementation Baseline` -- the canonical reference DM3b
   will mirror.
-- `fw:api/toc.md` and specific `fw:api/pages/...` files for
-  exact types (`SimEnv`, `SimEnvBuilder`, `Sequencer`,
-  `Driver`, `Monitor`, `Scoreboard`, `Port`).
+- `api_semantic_search(query)` + `api_hover(symbol)` for the
+  exact types you need (`SimEnv`, `SimEnvBuilder`, `Sequencer`,
+  `Driver`, `Monitor`, `Scoreboard`, `Port`). Do NOT `read_file`
+  paths under `fw:api/pages/*.md` -- the static pages are
+  superseded by the lance API index + live LSP queries.
 
 ## Procedure
 

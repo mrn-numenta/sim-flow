@@ -29,14 +29,17 @@ Read these before starting:
 - `docs/test-plan/tb-milestone-NN-<name>.md` -- DM3b's per-milestone
   task lists. The first file with at least one `- [ ]` row is your
   current milestone.
-- `docs/testbench.md` -- DM1's verification strategy. Specifically
-  the `## Implementation Baseline` section names the
-  `lib:examples/<NN-name>/test/` directory whose layout this
-  testbench mirrors. DM3b copies that example's `test/` file
-  structure as a starting point and adapts component bodies.
+- `docs/testbench.md` -- DM1's verification strategy. Use
+  `read_markdown(path: "docs/testbench.md", section:
+  "Implementation Baseline")` to grab the baseline pointer
+  (`lib:examples/<NN-name>/test/`) -- the rest of testbench.md
+  is large and you typically only need a section at a time.
 - `docs/spec.md`, `docs/analysis/data-movement.md`,
   `docs/analysis/pipeline-mapping.md` -- payload widths and port
-  names you'll wire to.
+  names you'll wire to. Use `read_markdown` per section here too;
+  do NOT bulk-read. Spec.md blocks list `spec_semantic_search`
+  queries under `#### Retrieval hints` for source-spec context
+  beyond what spec.md inlines.
 - `src/` -- the model under test; modules and payload types DM2d
   landed.
 
@@ -50,10 +53,13 @@ Reference material (read on demand):
   `lib:docs/modeling-guide/04-testing-models.md`. Consult for
   invariants the baseline isn't already demonstrating (flow
   control, idle cycles).
-- **Foundation framework** public API via the `fw:` prefix.
-  `fw:api/toc.md` -> the specific `fw:api/pages/.../*.md` for
-  exact signatures of `SimEnv`, `SimEnvBuilder`, `Sequencer`,
-  `Driver`, `Monitor`, `Scoreboard`, `Port`. Last resort.
+- **Foundation framework** public API via the `api_*` retrieval
+  / LSP tools. Start with `api_semantic_search(query)` when the
+  symbol name isn't known; follow up with `api_hover(symbol)` for
+  the live signature + rustdoc on `SimEnv`, `SimEnvBuilder`,
+  `Sequencer`, `Driver`, `Monitor`, `Scoreboard`, `Port`. Do NOT
+  `read_file` paths under `fw:api/pages/*.md` -- those static
+  pages are superseded by the lance API index.
 
 ## Procedure
 

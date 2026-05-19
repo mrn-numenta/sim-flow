@@ -26,8 +26,10 @@ for the paired critique. Do NOT chain milestones.
   intent.
 - `lib:docs/modeling-guide/06-design-patterns.md` -- the hardware
   pattern guide the plan classified each module against.
-- `fw:api/toc.md` then specific `fw:api/pages/...` files when you
-  need exact framework API semantics.
+- `api_semantic_search(query)` + `api_hover(symbol)` when you
+  need exact framework API semantics. Do NOT `read_file` paths
+  under `fw:api/pages/*.md`; the lance API index + LSP queries
+  supersede the static page mirror.
 
 ## Procedure
 

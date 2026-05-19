@@ -20,15 +20,22 @@ Read these before writing the outline:
 
 - `docs/plan-management.md` -- plan-file conventions.
 - `docs/spec.md` -- workload assumptions, parameterization,
-  design intent.
+  design intent. Use `read_markdown(path: "docs/spec.md",
+  section: "Block: <name>")` or `section: "Assumptions and
+  Constraints"` to fetch only what you need; pulling the full
+  spec.md (40-60 KB) wastes context. Each block's `#### Retrieval
+  hints` lists `spec_semantic_search` queries for source-spec
+  context beyond what spec.md inlines.
 - `docs/targets.md` -- the quantitative targets every milestone
-  must trace back to.
+  must trace back to. Use `read_markdown` per section.
 - `docs/analysis/decomposition.md` -- module list (per-module
-  utilization + bottleneck reporting).
+  utilization + bottleneck reporting). Use `read_markdown` per
+  section.
 - `docs/analysis/pipeline-mapping.md` -- pipeline shape
-  (stall / occupancy reporting).
+  (stall / occupancy reporting). Use `read_markdown` per section.
 - `docs/test-plan/test-plan.md` -- the verification surface;
   Stress milestones name workloads usable as perf experiments.
+  Use `read_markdown` per section.
 - `src/`, `tests/` -- the model under test.
 
 ## Procedure

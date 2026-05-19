@@ -37,8 +37,10 @@ earlier milestones.
     compare structure when judging baseline fidelity.
   - `lib:docs/modeling-guide/04-testing-models.md` for canonical
     UVM-lite patterns.
-  - `fw:api/toc.md` -> the specific `fw:api/pages/...` pages for
-    exact API signatures.
+  - `api_semantic_search(query)` + `api_hover(symbol)` for exact
+    API signatures. Do NOT `read_file` paths under
+    `fw:api/pages/*.md`; those static pages are superseded by
+    the lance API index + live LSP queries.
 
 ## Evaluation
 

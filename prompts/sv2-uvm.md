@@ -24,8 +24,10 @@ the paired critique. Do NOT chain milestones.
 - `docs/test-plan/test-plan.md` -- the verification contract.
 - `lib:examples/02-multiple-ports/test/` -- baseline UVM
   structural reference.
-- `fw:api/toc.md` then specific `fw:api/pages/...` for framework
-  API parity.
+- `api_semantic_search(query)` + `api_hover(symbol)` for
+  framework API parity. Do NOT `read_file` paths under
+  `fw:api/pages/*.md`; the lance API index + LSP queries
+  supersede the static page mirror.
 
 ## Procedure
 

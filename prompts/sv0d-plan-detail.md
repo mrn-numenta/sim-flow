@@ -31,8 +31,10 @@ Read on demand:
 - `lib:examples/01-three-stage-pipeline/test/` and
   `lib:examples/02-multiple-ports/test/` -- structural references
   for UVM-side roles.
-- `fw:api/toc.md` then specific `fw:api/pages/...` files only when
-  you need exact framework API signatures.
+- `api_semantic_search(query)` + `api_hover(symbol)` only when
+  you need exact framework API signatures. Do NOT `read_file`
+  paths under `fw:api/pages/*.md`; the lance API index + LSP
+  queries supersede the static page mirror.
 
 ## Procedure
 

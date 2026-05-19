@@ -18,12 +18,18 @@ Read these before starting:
 - `docs/impl-plan/milestone-*.md` -- per-milestone task lists. The plan
   is your source of truth for what to build and in what order;
   follow it task by task.
-- `docs/spec.md`
-- `docs/targets.md`
-- `docs/testbench.md`
-- `docs/analysis/decomposition.md`
-- `docs/analysis/pipeline-mapping.md`
-- `docs/analysis/data-movement.md`
+- `docs/spec.md` -- use `read_markdown(path: "docs/spec.md",
+  section: "Block: <name>")` to fetch only the block sections
+  the current milestone touches. The full spec.md is large
+  (40-60 KB on real designs); pulling it whole wastes context.
+  Each block's `#### Retrieval hints` lists `spec_semantic_search`
+  queries for source-spec context beyond what spec.md inlines.
+- `docs/targets.md` -- same pattern; `read_markdown` per section.
+- `docs/testbench.md` -- same pattern.
+- `docs/analysis/decomposition.md`,
+  `docs/analysis/pipeline-mapping.md`,
+  `docs/analysis/data-movement.md` -- use `read_markdown` for the
+  operations / payloads the current milestone traces to.
 
 Reference material (read on demand; do NOT bulk-read upfront):
 
@@ -33,31 +39,41 @@ Reference material (read on demand; do NOT bulk-read upfront):
   framework?". Always check here first.
 - **SECONDARY -- foundation framework public API**. The framework
   is large; consult it on demand, NOT upfront, and only when `lib:`
-  doesn't answer your question. Two routes, in order:
-    1. **`api_*` tools (preferred)** -- talk to a live
-       `rust-analyzer` rooted at the foundation workspace, so the
-       content always matches the current code. Read `fw:api/toc.md`
-       once for the tool palette and the curated starting-point
-       symbols, then use:
-         - `api_search(query)` to find symbols by name,
-         - `api_hover(query)` for a symbol's signature + rustdoc
-           (the live replacement for `fw:api/pages/.../*.md`),
-         - `api_impls(query)` to enumerate every `impl` of a trait,
-         - `api_references(query)` to see how a type is consumed,
-         - `api_expand_macro(path, line)` to see what a derive
-           (`HasLogic`, `ConfigModel`, ...) actually generates.
-       First call per session spawns rust-analyzer and waits for
-       initial indexing (2-3 min on a cold workspace, capped at
-       5 min); subsequent
-       calls are fast.
-    2. **`fw:api/pages/.../*.md` snapshot (fallback)** -- a static
-       rustdoc mirror, still under `fw:api/pages/...`. Use it when
-       the live tools don't cover something or rust-analyzer is
-       unavailable. Use `fw:src/prelude.rs` or other `fw:src/...`
-       paths only when you need an exact signature missing from
-       both routes. Do not browse internal helpers; treat anything
-       outside the curated public API surface as implementation
-       detail.
+  doesn't answer your question. The full API surface is indexed:
+  - **`api_semantic_search(query)`** -- semantic retrieval over
+    the framework's API surface when you do not yet know the
+    symbol name. Describe the operation / signature shape /
+    behavior in natural language; the tool returns a ranked
+    list of candidates. Use this FIRST when you have a concept
+    but no symbol.
+  - **`api_search(query)`** -- LSP-backed exact / fuzzy name
+    lookup. Use when you have a symbol name and want its kind
+    and file location. Reflects the live workspace.
+  - **`api_hover(query)`** -- LSP-backed signature + rustdoc
+    for a named symbol. The canonical source of truth for "what
+    does this function actually take and return?".
+  - **`api_impls(query)`** -- enumerate every `impl` of a
+    trait, or every concrete instantiation of a generic.
+  - **`api_references(query)`** -- list every reference to a
+    symbol across the workspace; useful for "who calls X?" /
+    "how is Y consumed?".
+  - **`api_expand_macro(path, line)`** -- expand a `#[derive(...)]`
+    or other macro invocation to see the generated code.
+  First LSP-backed call per session spawns rust-analyzer and
+  waits for initial indexing (2-3 min on a cold workspace,
+  capped at 5 min); subsequent calls are sub-second.
+  `api_semantic_search` does NOT pay the LSP cold-start tax --
+  it queries the lance API index directly, so it's a cheap
+  first step.
+
+  Do NOT `read_file` paths under `fw:api/pages/*.md`. Those static
+  rustdoc pages were the pre-retrieval-tool fallback; the lance
+  index ingests their content + the framework source, so
+  `api_semantic_search` is strictly more recent and more complete.
+  Reach for `fw:src/<path>.rs` ONLY when you need an exact source
+  detail no LSP-backed tool can show (e.g. an internal helper
+  body you have to read inline) -- and even then, prefer
+  `api_hover` first.
 
 Each top-level `lib:` directory has a `README.md` that indexes its
 contents -- start there before diving into individual files. Consult
@@ -83,12 +99,13 @@ contents -- start there before diving into individual files. Consult
   use older idioms or non-standard patterns; prefer the modeling
   guide / examples / library when they conflict.
 
-You MAY consult the foundation framework's public API via `fw:`
-(start with `fw:api/toc.md`); do NOT browse other sim-foundation
-crates or the framework crate's internal helper modules. Use `fw:` and
-`lib:` to answer "how do I express this in the framework?", not
-"what should I build?" The DM2c plan remains the source of truth for
-scope and structure.
+You MAY consult the foundation framework's public API via the
+`api_*` retrieval / LSP tools described above; do NOT browse
+other sim-foundation crates or the framework crate's internal
+helper modules. Use the api_* tools and `lib:` to answer
+"how do I express this in the framework?", not "what should I
+build?" The DM2c plan remains the source of truth for scope and
+structure.
 
 ## Procedure
 
