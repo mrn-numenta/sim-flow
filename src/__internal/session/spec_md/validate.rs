@@ -265,6 +265,7 @@ mod tests {
                 direction: "in".into(),
                 peer: "MysteryPeer".into(),
                 description: String::new(),
+                ..Default::default()
             }],
             ..Default::default()
         });
@@ -289,6 +290,7 @@ mod tests {
                 direction: "in".into(),
                 peer: "Bus Interface".into(),
                 description: String::new(),
+                ..Default::default()
             }],
             ..Default::default()
         });

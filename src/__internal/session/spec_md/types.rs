@@ -66,6 +66,239 @@ pub struct SpecMd {
     pub open_questions: Vec<OpenQuestion>,
     #[serde(default)]
     pub auto_decisions: Vec<AutoDecision>,
+    // ---- Phase 9 §7.7 extensions ----
+    /// Control & Status Registers (Chapter 7 §7.7). One entry per
+    /// CSR; bit-level fields live on `Csr::fields`. Empty when the
+    /// design has no CSRs.
+    #[serde(default)]
+    pub csrs: Vec<Csr>,
+    /// Glossary of acronyms and domain terms (Chapter 7 §7.7).
+    #[serde(default)]
+    pub glossary: Vec<GlossaryEntry>,
+    /// Named clock domains the design exposes / consumes.
+    #[serde(default)]
+    pub clock_domains: Vec<ClockDomain>,
+    /// Named power domains.
+    #[serde(default)]
+    pub power_domains: Vec<PowerDomain>,
+    /// Named reset domains.
+    #[serde(default)]
+    pub reset_domains: Vec<ResetDomain>,
+    /// Security boundaries / privilege levels (Chapter 7 §7.7).
+    #[serde(default)]
+    pub security_boundaries: Vec<PrivilegeLevel>,
+    /// Numerical conventions (Q-format defaults, saturation policy,
+    /// rounding mode). Vec supports per-block overrides; the
+    /// usual case is a single "default" entry.
+    #[serde(default)]
+    pub numerical_conventions: Vec<NumericalConvention>,
+    /// Performance-monitoring unit events. Ties into `csrs` via
+    /// `PmuEvent::csr_address` when the counter is read through a
+    /// CSR.
+    #[serde(default)]
+    pub performance_counters: Vec<PmuEvent>,
+}
+
+/// Layer tag (Chapter 7 §7.3.2 / §7.7) attached to a [`Block`] or
+/// section. `Architectural` describes software-visible behavior
+/// (registers, instructions, privilege model); `Micro` describes
+/// implementation (bypass paths, cache geometry). Drives chunk
+/// tagging so retrieval can filter implementation prose vs.
+/// software-visible prose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Layer {
+    Architectural,
+    Micro,
+    Mixed,
+    #[default]
+    Unknown,
+}
+
+/// Per-signal classification (Chapter 7 §7.7) attached to a
+/// [`BlockSignalRow`]. Set by classify.rs from naming-pattern
+/// heuristics where unambiguous; LLM-assigned at format-discovery
+/// for novel cases; user-confirmed at DM0 time when both fail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SignalRole {
+    Control,
+    Data,
+    Status,
+    #[default]
+    Unknown,
+}
+
+/// One Control & Status Register (Chapter 7 §7.7). Replaces the
+/// ad-hoc Parameter / Encoding overload for register
+/// documentation. `fields` carries the per-bit definitions; the
+/// CSR itself has an address and access policy.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Csr {
+    /// Architectural address (e.g. `0x300`, `mstatus`). Required.
+    pub address: String,
+    /// Register name. Required.
+    pub name: String,
+    /// Access policy (e.g. `RW`, `RO`, `WARL`).
+    #[serde(default)]
+    pub access: String,
+    /// Architectural reset value.
+    #[serde(default)]
+    pub reset_value: String,
+    /// Required privilege to access this CSR. References an entry
+    /// in [`SpecMd::security_boundaries`] by `id` when populated.
+    #[serde(default)]
+    pub required_privilege: String,
+    /// Free-form description / purpose.
+    #[serde(default)]
+    pub description: String,
+    /// Bit-field breakdown (zero or more).
+    #[serde(default)]
+    pub fields: Vec<CsrField>,
+    /// Source-spec anchor pointing back to the originating chunk.
+    #[serde(default)]
+    pub source_anchor: String,
+}
+
+/// One bit-field row within a [`Csr`]. `bits` is the textual
+/// bit-range (e.g. `31:0`, `2`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CsrField {
+    pub bits: String,
+    pub name: String,
+    #[serde(default)]
+    pub access: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// One glossary entry (Chapter 7 §7.7). Captures acronyms +
+/// domain terms. `scope` is free-form (commonly "spec" /
+/// "vendor" / "user_added") so the discovery layer can mark
+/// provenance without enumerating every possible source.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GlossaryEntry {
+    /// The acronym or term being defined. Required.
+    pub term: String,
+    /// Spelled-out form / definition. Required.
+    pub expansion: String,
+    /// Free-form scope tag (e.g. `spec`, `vendor`, `user_added`).
+    #[serde(default)]
+    pub scope: String,
+    /// Block names that reference this term.
+    #[serde(default)]
+    pub used_in_blocks: Vec<String>,
+    /// Source-spec anchor pointing back to the originating chunk.
+    #[serde(default)]
+    pub source_anchor: String,
+}
+
+/// One named clock domain (Chapter 7 §7.7). Per-block clock
+/// references live on [`Block::clock_domain`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ClockDomain {
+    /// Domain name. Required.
+    pub name: String,
+    /// Target frequency (e.g. `1 GHz`).
+    #[serde(default)]
+    pub frequency: String,
+    /// Clock source (PLL name, external pin, etc.).
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// One named power domain (Chapter 7 §7.7).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PowerDomain {
+    /// Domain name. Required.
+    pub name: String,
+    /// Operating voltage (e.g. `0.85V`).
+    #[serde(default)]
+    pub voltage: String,
+    /// Whether this domain is always on (never gated).
+    #[serde(default)]
+    pub always_on: bool,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// One named reset domain (Chapter 7 §7.7). `polarity` is
+/// `"active_high"` / `"active_low"` (free-form for now).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ResetDomain {
+    /// Domain name. Required.
+    pub name: String,
+    /// Reset polarity (`active_high` / `active_low`).
+    #[serde(default)]
+    pub polarity: String,
+    /// Whether the reset is synchronous to the local clock.
+    #[serde(default)]
+    pub sync: bool,
+    /// Reset source (power-on, watchdog, external pin, etc.).
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// One privilege level / security boundary (Chapter 7 §7.7).
+/// `id` is a short stable identifier (e.g. `M`, `S`, `U`); `name`
+/// is the human-readable label.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PrivilegeLevel {
+    /// Stable identifier (e.g. `M`, `S`, `U`). Required.
+    pub id: String,
+    /// Human-readable name. Required.
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// Capability names this level grants.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}
+
+/// One numerical convention (Chapter 7 §7.7). `name` lets a spec
+/// carry multiple conventions (e.g. a default plus a
+/// "synapse_permanence" override). Most specs ship a single
+/// "default" entry.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct NumericalConvention {
+    /// Convention name (e.g. `default`, `synapse_permanence`).
+    /// Required.
+    pub name: String,
+    /// Default Q-format (e.g. `Q16.16`).
+    #[serde(default)]
+    pub q_format_default: String,
+    /// Saturation policy (e.g. `saturate`, `wrap`).
+    #[serde(default)]
+    pub saturation_policy: String,
+    /// Default signedness (e.g. `signed`, `unsigned`).
+    #[serde(default)]
+    pub signed_default: String,
+    /// Rounding mode (e.g. `round_half_even`).
+    #[serde(default)]
+    pub rounding_mode: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// One performance-monitoring-unit event (Chapter 7 §7.7). Ties
+/// into [`SpecMd::csrs`] via `csr_address` when the counter is
+/// read through a CSR.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PmuEvent {
+    /// Stable event id (e.g. `cycles`, `icache_miss`). Required.
+    pub id: String,
+    /// Human-readable name. Required.
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// Address of the CSR through which this counter is read
+    /// (empty when not CSR-accessible).
+    #[serde(default)]
+    pub csr_address: String,
 }
 
 /// `## Metadata` section. Key/value pairs from the definition-list
@@ -177,6 +410,20 @@ pub struct Block {
     pub parent: String,
     #[serde(default)]
     pub clock_domain: String,
+    /// Phase 9 (§7.7): power-domain reference. Empty when
+    /// unspecified or when the design has no power-domain story.
+    /// Matches the `name` of an entry in
+    /// [`SpecMd::power_domains`].
+    #[serde(default)]
+    pub power_domain: String,
+    /// Phase 9 (§7.7): reset-domain reference. Empty when
+    /// unspecified.
+    #[serde(default)]
+    pub reset_domain: String,
+    /// Phase 9 (§7.7): architectural / micro layer tag. Drives
+    /// retrieval filtering (Chapter 7 §7.8).
+    #[serde(default)]
+    pub layer: Layer,
     #[serde(default)]
     pub parameterized_by: Vec<String>,
     #[serde(default)]
@@ -194,7 +441,7 @@ pub struct Block {
 }
 
 /// One row of a Block I/O signal table (four-column form).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BlockSignalRow {
     pub name: String,
     pub direction: String,
@@ -202,6 +449,10 @@ pub struct BlockSignalRow {
     pub peer: String,
     #[serde(default)]
     pub description: String,
+    /// Phase 9 (§7.7): per-signal role classification (control /
+    /// data / status). Defaults to `Unknown` when unspecified.
+    #[serde(default)]
+    pub role: SignalRole,
 }
 
 /// One bullet under a Block's `#### State` subsection.
@@ -287,7 +538,7 @@ pub struct EncodingValue {
 }
 
 /// One row of the `## Memory Map` table.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MemoryRegion {
     pub start: String,
     pub end: String,
@@ -296,6 +547,11 @@ pub struct MemoryRegion {
     pub purpose: String,
     #[serde(default)]
     pub access: String,
+    /// Phase 9 (§7.7): required privilege to access this region.
+    /// References an entry in [`SpecMd::security_boundaries`] by
+    /// `id` when populated.
+    #[serde(default)]
+    pub required_privilege: String,
     #[serde(default)]
     pub source_anchor: String,
 }

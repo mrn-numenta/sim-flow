@@ -795,6 +795,7 @@ mod tests {
                 direction: "out".into(),
                 peer: "Bus".into(),
                 description: "addr line".into(),
+                ..Default::default()
             }],
             state: vec![super::super::types::BlockState {
                 name: "pc".into(),

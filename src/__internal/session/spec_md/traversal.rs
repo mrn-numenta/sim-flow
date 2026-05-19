@@ -421,6 +421,7 @@ mod tests {
                 purpose: "p".into(),
                 access: "RW".into(),
                 source_anchor: "primary:p1".into(),
+                ..Default::default()
             }],
             connectivity: Some(Default::default()),
             error_handling: vec![super::super::types::ErrorEntry {
@@ -473,6 +474,7 @@ mod tests {
                 decision: "none".into(),
                 rationale: "none".into(),
             }],
+            ..Default::default()
         };
         let missing = spec.missing_required_fields();
         assert!(

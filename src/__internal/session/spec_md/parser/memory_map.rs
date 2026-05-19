@@ -28,6 +28,7 @@ pub(crate) fn parse_memory_map(body: &str) -> Result<Vec<MemoryRegion>, SpecMdPa
             purpose: t.cell(row, idxs[3]).to_string(),
             access: t.cell(row, idxs[4]).to_string(),
             source_anchor: t.cell(row, idxs[5]).to_string(),
+            ..Default::default()
         });
     }
     Ok(out)

@@ -434,6 +434,7 @@ pub fn populate_blocks(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
                 direction: r.direction,
                 peer: r.peer,
                 description: r.description,
+                ..Default::default()
             })
             .collect();
         spec.blocks.push(Block {
@@ -441,6 +442,9 @@ pub fn populate_blocks(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
             role: String::new(),
             parent: "(none -- top-level)".into(),
             clock_domain: String::new(),
+            power_domain: String::new(),
+            reset_domain: String::new(),
+            layer: Default::default(),
             parameterized_by: Vec::new(),
             signals,
             state: Vec::new(),

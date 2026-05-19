@@ -93,6 +93,7 @@ fn parse_block_signal_rows(t: &MarkdownTable) -> Result<Vec<BlockSignalRow>, Spe
             direction: t.cell(row, idxs[1]).to_string(),
             peer: t.cell(row, idxs[2]).to_string(),
             description: t.cell(row, idxs[3]).to_string(),
+            ..Default::default()
         });
     }
     Ok(rows)
