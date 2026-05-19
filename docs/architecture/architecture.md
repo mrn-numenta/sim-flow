@@ -250,6 +250,17 @@ invariants) in enough detail to drive an implementation plan.
    (TOML-roundtrip and foreign-key validation in addition to
    the existing regex), and critique-pass changes that read
    structured artifacts.
+7. [07-spec-format-discovery.md](07-spec-format-discovery.md) —
+   The semantic-mapping pre-pass that turns a source PDF into
+   `format.json`, a per-spec descriptor of section roles, table
+   kinds + column maps, figure kinds, glossary entries, and
+   chrome regexes. Specifies the schema, the decision policy
+   (deterministic / LLM at discovery / user at DM0), the CLI
+   surface, the spec_md extensions for CSRs / glossary / layer
+   tags / clock / power / reset domains / security / numerical
+   conventions / PMU, and how the descriptor's role tags drive
+   both DM0 auto-populate and Chapter 3's lance-index chunk
+   tagging.
 
 ## Reading order
 
@@ -257,6 +268,10 @@ Chapters are designed to be read top-to-bottom: Chapter 1's
 output schema is Chapter 2 and Chapter 3's input. Chapter 4's
 tools query Chapter 3's index. Chapter 5 sits behind Chapter
 4's query path. Chapter 6 integrates everything into DMF.
+Chapter 7 specifies the format-discovery pre-pass that runs
+before Chapter 1's classify stage and produces the `format.json`
+that drives chunk tagging, table classification, and DM0
+auto-populate.
 
 A reader who only cares about one component can skim the
 component map above and read only that chapter — each chapter
