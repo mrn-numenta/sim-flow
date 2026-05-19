@@ -21,7 +21,7 @@ regress earlier milestones.
 
 ## Inputs
 
-- `docs/impl-plan/plan-management.md` -- plan-file conventions
+- `docs/plan-management.md` -- plan-file conventions
   including the 10-task cap.
 - `docs/test-plan/test-plan.md` -- index. Verify the
   `## Coverage` section names a measured percentage + report

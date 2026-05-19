@@ -63,7 +63,7 @@ pub(super) fn dm4a() -> StepDescriptor {
 /// DM4ad (Performance Analysis Plan, DETAIL) — walks each
 /// `docs/perf-plan/perf-milestone-NN-*.md` stub and replaces its
 /// `<!-- detail-pending` placeholder with the full task list per
-/// `docs/impl-plan/plan-management.md`. Tasks reference workload
+/// `docs/plan-management.md`. Tasks reference workload
 /// configs, target rows, and run-id schemes that DM4b later
 /// executes.
 pub(super) fn dm4ad() -> StepDescriptor {
@@ -94,7 +94,7 @@ pub(super) fn dm4ad() -> StepDescriptor {
             "docs/analysis/pipeline-mapping.md",
             "docs/analysis/pipeline-mapping/",
             "docs/perf-plan/perf-plan.md",
-            "docs/impl-plan/plan-management.md",
+            "docs/plan-management.md",
         ],
         work_write_paths: &["docs/perf-plan/"],
         work_phases: &["chat"],

@@ -7,7 +7,7 @@ Conversion Flow. Prerequisite: SV0 gate passed.
 
 Walk each milestone STUB written by SV0 and replace its
 `<!-- detail-pending -->` placeholder with the full task list per
-`docs/impl-plan/plan-management.md`'s conventions (10-task cap,
+`docs/plan-management.md`'s conventions (10-task cap,
 `- [ ]` rows naming concrete artifacts, pass criteria, trace).
 The orchestrator scopes you to ONE stub per work + critique
 session, walking `rtl-milestone-NN-*.md` and `uvm-milestone-NN-*.md`
@@ -23,7 +23,7 @@ The orchestrator inlines:
 
 Read on demand:
 
-- `docs/impl-plan/plan-management.md` -- task / state conventions.
+- `docs/plan-management.md` -- task / state conventions.
 - `src/model/<file>.rs` -- the Foundation module referenced by the
   current stub's Trace section.
 - `tests/testbench/<file>.rs` -- the Rust testbench role for UVM

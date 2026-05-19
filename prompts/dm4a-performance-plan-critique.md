@@ -7,7 +7,7 @@ milestones.
 
 ## Inputs
 
-- `docs/impl-plan/plan-management.md` -- plan-file conventions.
+- `docs/plan-management.md` -- plan-file conventions.
 - `docs/perf-plan/perf-plan.md` -- the outline index.
 - `docs/perf-plan/perf-milestone-NN-*.md` -- one stub per
   milestone (Scope / Workloads / Trace +

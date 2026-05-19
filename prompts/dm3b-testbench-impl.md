@@ -22,7 +22,7 @@ paired critique after each. Do NOT chain milestones.
 
 Read these before starting:
 
-- `docs/impl-plan/plan-management.md` -- the plan-file conventions
+- `docs/plan-management.md` -- the plan-file conventions
   (task states, order, deferring, the 10-task cap).
 - `docs/test-plan/test-plan.md` -- index. Read first to orient on
   testbench architecture and to see the TOC of milestone files.

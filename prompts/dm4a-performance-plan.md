@@ -18,7 +18,7 @@ fit alongside the spec / targets / decomposition in one prompt.
 
 Read these before writing the outline:
 
-- `docs/impl-plan/plan-management.md` -- plan-file conventions.
+- `docs/plan-management.md` -- plan-file conventions.
 - `docs/spec.md` -- workload assumptions, parameterization,
   design intent.
 - `docs/targets.md` -- the quantitative targets every milestone
@@ -107,7 +107,7 @@ Read these before writing the outline:
    ## Tasks
 
    <!-- detail-pending: DM4ad replaces this section with the full
-   task list per `docs/impl-plan/plan-management.md`. The scope +
+   task list per `docs/plan-management.md`. The scope +
    workloads + trace above are the contract this milestone
    delivers; expand into concrete `- [ ]` rows naming run-ids,
    sweep configs, metric extractions, report paths. -->

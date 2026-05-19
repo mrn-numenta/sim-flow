@@ -7,7 +7,7 @@ milestones.
 
 ## Inputs
 
-- `docs/impl-plan/plan-management.md` -- plan-file conventions.
+- `docs/plan-management.md` -- plan-file conventions.
 - `docs/test-plan/` -- the outline under review:
   - `test-plan.md` -- index. Testbench architecture +
     traceability + per-milestone scope blurbs + TOCs.

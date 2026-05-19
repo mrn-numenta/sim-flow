@@ -8,7 +8,7 @@ Direct Modeling Flow. Prerequisite: DM2c gate passed.
 Walk each `docs/impl-plan/milestone-NN-<name>.md` STUB written by
 DM2c and replace its `<!-- detail-pending -->` placeholder with the
 full per-milestone task list per
-`docs/impl-plan/plan-management.md`. **One milestone per work +
+`docs/plan-management.md`. **One milestone per work +
 critique session** -- the orchestrator scopes you to a single
 stub each iteration so the per-milestone task list gets a focused
 review.
@@ -23,7 +23,7 @@ The orchestrator inlines:
 
 Read on demand:
 
-- `docs/impl-plan/plan-management.md` -- task / state conventions
+- `docs/plan-management.md` -- task / state conventions
   (`- [ ]` / `- [x]` / `- [-]` formats, the 10-task cap,
   `DECIDE:` / `OPEN:` shapes for unresolved choices).
 - `docs/spec.md`, `docs/analysis/decomposition.md`,

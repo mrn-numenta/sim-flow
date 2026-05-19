@@ -493,7 +493,7 @@ Read the step instructions provided. Read spec.md, targets.md,
 testbench.md, analysis/decomposition.md, analysis/pipeline-mapping.md,
 and analysis/data-movement.md and:
 
-1. Create an implementation plan under `docs/plan/` that breaks the work
+1. Create an implementation plan under `docs/impl-plan/` that breaks the work
    into ordered milestones and concrete tasks.
 2. Trace every decomposition operation and every payload to at least one
    task.
@@ -529,8 +529,8 @@ issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
 
 **Gate checks:**
 
-1. `docs/plan/plan.md` exists
-2. `docs/plan/milestone-*.md` exists
+1. `docs/impl-plan/plan.md` exists
+2. `docs/impl-plan/milestone-*.md` exists
 3. Plan tasks trace to the decomposition / data-movement artifacts
 4. `.sim-flow/critiques/DM2c-critique.md` exists without blockers
 
@@ -551,7 +551,7 @@ You are executing step DM2d (Model Implementation) of the Direct
 Modeling Flow.
 
 Read the step instructions provided. Read the implementation plan in
-docs/plan/, plus spec.md, targets.md, testbench.md, decomposition.md,
+docs/impl-plan/, docs/test-plan/, docs/perf-plan/, plus spec.md, targets.md, testbench.md, decomposition.md,
 pipeline-mapping.md, and data-movement.md.
 
 1. Execute the plan milestone by milestone.
@@ -625,7 +625,7 @@ execute.
 You are executing step DM3a (Test Plan) of the Direct Modeling Flow.
 
 Read the step instructions provided. Start from
-`docs/plan/test-plan.md.tmpl`, then produce `docs/plan/test-plan.md`
+`docs/test-plan/test-plan.md.tmpl`, then produce `docs/test-plan/test-plan.md`
 covering:
 
 1. Testbench architecture (Sequencers, Drivers, Monitors, Scoreboards,
@@ -647,7 +647,7 @@ A separate critique session will review your output.
 
 ```text
 You are a critique session reviewing the work produced by the DM3a work
-session. Read `docs/plan/test-plan.md` plus the spec, targets, and
+session. Read `docs/test-plan/test-plan.md` plus the spec, targets, and
 analysis docs and evaluate:
 - Is the testbench architecture concrete enough for DM3b?
 - Are all four test categories present with concrete pass criteria?
@@ -658,7 +658,7 @@ analysis docs and evaluate:
 
 **Gate checks:**
 
-1. `docs/plan/test-plan.md` exists
+1. `docs/test-plan/test-plan.md` exists
 2. The plan contains `## Testbench`, `## Smoke`, `## Edge`,
    `## Stress`, `## Random`, `## Coverage`, and `## Traceability`
    sections
@@ -681,7 +681,7 @@ test plan.
 You are executing step DM3b (Testbench Implementation) of the Direct Modeling
 Flow.
 
-Read the step instructions provided. Read `docs/plan/test-plan.md`.
+Read the step instructions provided. Read `docs/test-plan/test-plan.md`.
 
 1. Implement the named testbench components and `SimEnvBuilder` wiring.
 2. If framework API guidance is needed, start with `fw:api/toc.md`,
@@ -699,7 +699,7 @@ A separate critique session will review your output.
 
 ```text
 You are a critique session reviewing the work produced by the DM3b work
-session. Read the testbench source plus `docs/plan/test-plan.md`,
+session. Read the testbench source plus `docs/test-plan/test-plan.md`,
 consult `fw:api/toc.md` / specific `fw:api/pages/...` files as needed,
 and
 evaluate:
@@ -739,14 +739,14 @@ coverage targets.
 You are executing step DM3c (Test Execution and Coverage) of the Direct
 Modeling Flow.
 
-Read the step instructions provided. Read docs/plan/test-plan.md.
+Read the step instructions provided. Read docs/test-plan/test-plan.md.
 
 1. Implement planned tests category by category: Smoke, then Edge, then
    Stress, then Random.
 2. Use the DM3b testbench scaffolding; if the scaffolding is wrong, flag
    it rather than silently redesigning it here.
 3. Run tests, fix design or test bugs as needed, and mark completed rows
-   in docs/plan/test-plan.md.
+   in docs/test-plan/test-plan.md.
 4. Measure coverage with the plan's `cargo-llvm-cov` strategy and meet
    the declared threshold.
 5. If coverage is below threshold, add tests or document concrete
@@ -764,7 +764,7 @@ review.
 ```text
 You are a critique session reviewing the work produced by the DM3c work
 session. Read the test sources, coverage report, and
-docs/plan/test-plan.md
+docs/test-plan/test-plan.md
 and evaluate:
 - Are all plan rows resolved or explicitly deferred with a concrete
   `defer reason:`?
@@ -789,7 +789,7 @@ issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
 2. Coverage measurement exists (coverage report file)
 3. Coverage meets the plan's declared threshold, with any uncovered lines
    either tested or documented in `## Coverage > Exclusions`
-4. `docs/plan/test-plan.md` has completed or explicitly deferred
+4. `docs/test-plan/test-plan.md` has completed or explicitly deferred
    checklist entries
 5. `docs/critiques/DM3c-critique.md` exists without blockers
 
@@ -818,9 +818,9 @@ You are executing step DM4a (Performance Analysis Plan) of the Direct
 Modeling Flow.
 
 Read the step instructions provided. Start from
-`docs/plan/perf-plan.md.tmpl` and `docs/plan/perf-milestone.md.tmpl`,
-then produce `docs/plan/perf-plan.md` plus
-`docs/plan/perf-milestone-NN-<name>.md` files covering:
+`docs/perf-plan/perf-plan.md.tmpl` and `docs/perf-plan/perf-milestone.md.tmpl`,
+then produce `docs/perf-plan/perf-plan.md` plus
+`docs/perf-plan/perf-milestone-NN-<name>.md` files covering:
 
 1. Baseline measurement workloads and run-ids.
 2. Parameter sweeps or an explicit no-sweeps rationale.
@@ -840,7 +840,7 @@ A separate critique session will review your output.
 
 ```text
 You are a critique session reviewing the work produced by the DM4a work
-session. Read `docs/plan/perf-plan.md`, the per-milestone files, and
+session. Read `docs/perf-plan/perf-plan.md`, the per-milestone files, and
 the supporting spec / target / analysis docs and evaluate:
 - Does the plan follow the perf-plan template and plan-management
   conventions?
@@ -858,8 +858,8 @@ issue lines with `UNRESOLVED:` and gate-blocking lines with `BLOCKER:`.
 
 **Gate checks:**
 
-1. `docs/plan/perf-plan.md` exists
-2. `docs/plan/perf-milestone-*.md` exists
+1. `docs/perf-plan/perf-plan.md` exists
+2. `docs/perf-plan/perf-milestone-*.md` exists
 3. Every `docs/targets.md` row traces to at least one measurement task
 4. `docs/critiques/DM4a-critique.md` exists without blockers
 
@@ -880,7 +880,7 @@ results, and write the analysis reports.
 You are executing step DM4b (Performance Analysis) of the Direct
 Modeling Flow.
 
-Read the step instructions provided. Read `docs/plan/perf-plan.md` and
+Read the step instructions provided. Read `docs/perf-plan/perf-plan.md` and
 the `perf-milestone-*.md` files.
 
 1. Execute the plan milestone by milestone.

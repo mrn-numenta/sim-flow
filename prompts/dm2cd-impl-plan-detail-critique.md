@@ -15,7 +15,7 @@ The orchestrator inlines:
 
 Read on demand:
 
-- `docs/impl-plan/plan-management.md` -- task / state
+- `docs/plan-management.md` -- task / state
   conventions.
 - `docs/spec.md`, `docs/analysis/decomposition.md`,
   `docs/analysis/pipeline-mapping.md`,

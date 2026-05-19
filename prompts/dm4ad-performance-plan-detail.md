@@ -8,7 +8,7 @@ of the Direct Modeling Flow. Prerequisite: DM4a gate passed.
 Walk each `docs/perf-plan/perf-milestone-NN-<name>.md` STUB
 written by DM4a and replace its `<!-- detail-pending -->`
 placeholder with the full task list per
-`docs/impl-plan/plan-management.md`. The orchestrator scopes
+`docs/plan-management.md`. The orchestrator scopes
 you to ONE milestone per work + critique session.
 
 ## Inputs
@@ -21,7 +21,7 @@ The orchestrator inlines:
 
 Read on demand:
 
-- `docs/impl-plan/plan-management.md` -- task / state
+- `docs/plan-management.md` -- task / state
   conventions.
 - `docs/spec.md`, `docs/targets.md`,
   `docs/analysis/decomposition.md`,

@@ -158,7 +158,7 @@ pub(super) fn dm2c() -> StepDescriptor {
 /// DM2cd (Implementation Plan, DETAIL) — walks each
 /// `docs/impl-plan/milestone-NN-*.md` stub and replaces the
 /// `<!-- detail-pending` placeholder with the full task list per
-/// `docs/impl-plan/plan-management.md`'s task format. One milestone
+/// `docs/plan-management.md`'s task format. One milestone
 /// per work + critique session, so the per-milestone task list gets
 /// a focused review and a critique can flag e.g. "milestone 03
 /// task list is too coarse" without blocking the rest of the plan.
@@ -189,7 +189,7 @@ pub(super) fn dm2cd() -> StepDescriptor {
             "docs/analysis/pipeline-mapping.md",
             "docs/analysis/pipeline-mapping/",
             "docs/impl-plan/plan.md",
-            "docs/impl-plan/plan-management.md",
+            "docs/plan-management.md",
         ],
         work_write_paths: &["docs/impl-plan/"],
         work_phases: &["chat"],

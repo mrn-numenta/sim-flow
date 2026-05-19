@@ -21,7 +21,7 @@ fit alongside the spec / decomposition / targets in one prompt.
 
 Read these before writing the outline:
 
-- `docs/impl-plan/plan-management.md` -- plan-file conventions
+- `docs/plan-management.md` -- plan-file conventions
   (milestone numbering, the 10-task-per-milestone cap).
 - `docs/spec.md` -- the specification.
 - `docs/targets.md` -- quantitative targets DM3c must measure.
@@ -187,7 +187,7 @@ Reference material (read on demand):
    ## Tasks
 
    <!-- detail-pending: DM3ad replaces this section with the full
-   task list per `docs/impl-plan/plan-management.md`. The scope +
+   task list per `docs/plan-management.md`. The scope +
    components + trace above are the contract this milestone
    delivers; expand into concrete `- [ ]` rows naming files,
    symbols, pass criteria. -->

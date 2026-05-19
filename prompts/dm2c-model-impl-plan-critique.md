@@ -8,7 +8,7 @@ write the critique file.
 
 ## Inputs
 
-- `docs/impl-plan/plan-management.md` -- plan-file conventions.
+- `docs/plan-management.md` -- plan-file conventions.
 - `docs/impl-plan/plan.md` -- plan index + per-milestone scope
   blurbs.
 - `docs/impl-plan/milestone-*.md` -- one stub file per

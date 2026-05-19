@@ -7,7 +7,7 @@ Modeling Flow. Prerequisite: DM3a gate passed.
 
 Walk each milestone STUB written by DM3a and replace its
 `<!-- detail-pending -->` placeholder with the full task list per
-`docs/impl-plan/plan-management.md`. The orchestrator scopes you
+`docs/plan-management.md`. The orchestrator scopes you
 to ONE stub per work + critique session, walking
 `tb-milestone-NN-*.md` and `test-milestone-NN-*.md` files in
 lexicographic order.
@@ -22,7 +22,7 @@ The orchestrator inlines:
 
 Read on demand:
 
-- `docs/impl-plan/plan-management.md` -- task / state
+- `docs/plan-management.md` -- task / state
   conventions.
 - `docs/test-plan/coverage.md` -- coverage strategy (relevant
   for `test-milestone-05-coverage.md`).

@@ -18,7 +18,7 @@ Do NOT chain milestones.
 
 ## Inputs
 
-- `docs/impl-plan/plan-management.md` -- plan-file conventions
+- `docs/plan-management.md` -- plan-file conventions
   (task states, ordering, the 10-task cap).
 - `docs/test-plan/test-plan.md` -- index. Read first to orient
   on testbench architecture and the TOC of milestone files.

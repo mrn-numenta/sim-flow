@@ -16,7 +16,7 @@ The orchestrator inlines:
 
 Read on demand:
 
-- `docs/impl-plan/plan-management.md` -- task / state
+- `docs/plan-management.md` -- task / state
   conventions.
 - `docs/test-plan/coverage.md` -- relevant for
   `test-milestone-05-coverage.md` review.

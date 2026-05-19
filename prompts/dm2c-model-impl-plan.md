@@ -22,7 +22,7 @@ expands each.
 
 Read these before writing the outline:
 
-- `docs/impl-plan/plan-management.md` -- plan-file conventions
+- `docs/plan-management.md` -- plan-file conventions
   (index + per-milestone files, milestone / task numbering,
   `[ ]` checkbox format).
 - `docs/spec.md` -- the specification.
@@ -105,7 +105,7 @@ That belongs in DM2d when the agent writes code.
    ## Tasks
 
    <!-- detail-pending: DM2cd replaces this section with the full
-   task list per `docs/impl-plan/plan-management.md`. The scope +
+   task list per `docs/plan-management.md`. The scope +
    dependencies + trace above are the contract this milestone
    delivers; expand into concrete `- [ ]` rows naming files,
    symbols, and acceptance signals. -->

@@ -134,7 +134,7 @@ pub(super) fn dm3ad() -> StepDescriptor {
             "docs/analysis/pipeline-mapping/",
             "docs/test-plan/test-plan.md",
             "docs/test-plan/coverage.md",
-            "docs/impl-plan/plan-management.md",
+            "docs/plan-management.md",
         ],
         work_write_paths: &["docs/test-plan/"],
         work_phases: &["chat"],
