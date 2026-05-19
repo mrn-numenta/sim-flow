@@ -106,7 +106,8 @@ export class DashboardHost {
   /**
    * Debounce window for watcher-driven refreshes. The state watcher
    * fires `onDidChange` for every individual file write under
-   * `.sim-flow/` and `docs/critiques/` and `docs/plan/` -- during an
+   * `.sim-flow/`, `docs/critiques/`, and the plan directories
+   * (`docs/{impl,test,perf}-plan/` + `docs/plan-management.md`) -- during an
    * active flow run the agent emits dozens of writes per turn
    * (artifact-write, plan checkbox flip, critique JSON, critique
    * markdown render, gate state.toml update) and each one fired a

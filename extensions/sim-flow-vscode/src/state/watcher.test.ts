@@ -117,7 +117,10 @@ describe("createStateWatcher", () => {
     expect(patterns).toContain("docs/critiques/*.json");
     expect(patterns).toContain("docs/critiques/*.md");
     expect(patterns).toContain(".sim-flow/experiments.db");
-    expect(patterns).toContain("docs/plan/*.md");
+    expect(patterns).toContain("docs/impl-plan/*.md");
+    expect(patterns).toContain("docs/test-plan/*.md");
+    expect(patterns).toContain("docs/perf-plan/*.md");
+    expect(patterns).toContain("docs/plan-management.md");
     expect(patterns).toContain(".sim-flow/control.sock");
     // And every watcher is rooted in the project dir.
     for (const wr of watchers) {
@@ -166,13 +169,19 @@ describe("createStateWatcher", () => {
     w.dispose();
   });
 
-  test("emits plan for docs/plan/*.md changes", () => {
+  test("emits plan for impl-plan / test-plan / perf-plan / plan-management changes", () => {
     const w = createStateWatcher("/proj");
     const events: string[] = [];
     w.onDidChange((e) => events.push(e.kind));
-    const planW = watchers.find((wr) => wr.pattern.pattern === "docs/plan/*.md")!;
-    planW.changeCbs[0]({ fsPath: "/proj/docs/plan/DM0.md" });
-    expect(events).toEqual(["plan"]);
+    const implW = watchers.find((wr) => wr.pattern.pattern === "docs/impl-plan/*.md")!;
+    const testW = watchers.find((wr) => wr.pattern.pattern === "docs/test-plan/*.md")!;
+    const perfW = watchers.find((wr) => wr.pattern.pattern === "docs/perf-plan/*.md")!;
+    const mgmtW = watchers.find((wr) => wr.pattern.pattern === "docs/plan-management.md")!;
+    implW.changeCbs[0]({ fsPath: "/proj/docs/impl-plan/milestone-01-foo.md" });
+    testW.changeCbs[0]({ fsPath: "/proj/docs/test-plan/tb-milestone-01.md" });
+    perfW.changeCbs[0]({ fsPath: "/proj/docs/perf-plan/perf-plan.md" });
+    mgmtW.changeCbs[0]({ fsPath: "/proj/docs/plan-management.md" });
+    expect(events).toEqual(["plan", "plan", "plan", "plan"]);
     w.dispose();
   });
 

@@ -291,11 +291,11 @@ describe("SimFlowCli.newModel", () => {
 describe("SimFlowCli.planProgress / planProgressAll", () => {
   it("planProgress forwards the current step", async () => {
     const { execute, calls } = capturing(
-      JSON.stringify({ milestones: [], current_task: null, plan_path: "docs/plan/DM0.md" }),
+      JSON.stringify({ milestones: [], current_task: null, plan_path: "docs/impl-plan/plan.md" }),
     );
     const cli = makeCli(execute);
     const out = await cli.planProgress("DM0");
-    expect(out.plan_path).toBe("docs/plan/DM0.md");
+    expect(out.plan_path).toBe("docs/impl-plan/plan.md");
     expect(calls[0][1]).toEqual([
       "--project",
       "/proj",

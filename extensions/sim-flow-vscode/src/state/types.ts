@@ -67,9 +67,9 @@ export interface PlanProgress {
    * Identifies which plan we're tracking; the panel uses this to
    * label the progress row.
    *
-   * - "impl"  : implementation plan (`docs/plan/plan.md`).
-   * - "test"  : test plan (`docs/plan/test-plan.md`).
-   * - "perf"  : performance plan (`docs/plan/perf-plan.md`).
+   * - "impl"  : implementation plan (`docs/impl-plan/plan.md`).
+   * - "test"  : test plan (`docs/test-plan/test-plan.md`).
+   * - "perf"  : performance plan (`docs/perf-plan/perf-plan.md`).
    * - "none"  : the active step doesn't drive a plan; nothing to render.
    */
   kind: "impl" | "test" | "perf" | "none";

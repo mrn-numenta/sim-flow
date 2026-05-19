@@ -63,7 +63,18 @@ export function createStateWatcher(projectDir: string): SimFlowStateWatcher {
   // Plan files drive the progress panel under the step buttons. Edits
   // by the agent (flipping `- [ ]` to `- [x]`) need to refresh the
   // dashboard so the milestone boxes + current-task line stay live.
-  register("docs/plan/*.md", "plan");
+  //
+  // Each DM tier has its own plan directory now (DM2 -> impl-plan/,
+  // DM3 -> test-plan/, DM4 -> perf-plan/). The shared
+  // `plan-management.md` lives one level up under `docs/`. Watch all
+  // four globs so an agent edit anywhere refreshes the dashboard.
+  // (The legacy `docs/plan/*.md` location was retired when
+  // plan-management.md was moved to `docs/`; existing projects had
+  // their plan-management.md migrated as part of that change.)
+  register("docs/impl-plan/*.md", "plan");
+  register("docs/test-plan/*.md", "plan");
+  register("docs/perf-plan/*.md", "plan");
+  register("docs/plan-management.md", "plan");
   // The single-session control socket. The orchestrator binds this
   // ~1s after `sim-flow auto --session-mode single` starts; presence
   // of the file is the dashboard's primary "session is live" signal
