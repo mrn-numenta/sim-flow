@@ -97,7 +97,7 @@ impl Args {
         let mut max_auto_iters = 6u32;
         let mut max_critique_iters = 10u32;
         let mut max_critique_no_progress_iters = 3u32;
-        let mut max_llm_requests = 50u32;
+        let mut max_llm_requests = 500u32;
         let mut watch_socket: Option<PathBuf> = None;
         let mut watch_disabled = false;
         let mut capture_jsonl: Option<PathBuf> = None;
@@ -315,6 +315,9 @@ fn run(args: &Args) -> std::result::Result<(), String> {
         .arg(args.max_llm_requests.to_string());
     if let Some(model) = &args.model {
         cmd.arg("--llm-model").arg(model);
+    }
+    if let Some(base_url) = &args.base_url {
+        cmd.arg("--llm-base-url").arg(base_url);
     }
     if let Some(spec) = &args.spec {
         cmd.arg("--spec").arg(spec);
