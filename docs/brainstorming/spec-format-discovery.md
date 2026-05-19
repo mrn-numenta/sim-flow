@@ -18,39 +18,50 @@ the four-spec evaluation thread from the pdf_oxide swap.
 ## 1. Why this matters
 
 The pdf_oxide swap (commit `d611b7f`) replaced pdfium's flat text
-dump with layout-aware Markdown extraction. Heading detection
-now anchors on font-size clustering inside pdf_oxide instead of
-on regex pattern-matching against numeric prefixes. On RV12 the
-quality jumped from 135 chunks / 112 stubs (83% noise) to 205
-chunks / 20 stubs (10% noise). Headings are real document
-headings, not fragments of table rows.
+dump with layout-aware extraction. Heading detection now anchors
+on font-size clustering instead of regex pattern-matching against
+numeric prefixes. On RV12 the quality jumped from 135 chunks /
+112 stubs (83% noise) to 205 chunks / 20 stubs (10% noise).
+Headings are real document headings, not fragments of table rows.
 
-What we lost in the swap: the per-section table extractors
-(`extract_signal_tables_pdf_text`, `extract_parameter_tables`,
-`extract_error_tables`, `extract_encoding_tables`,
-`extract_fsm_tables`) all anchored on PDF column-header lines
-like `Signal Direction To/From Description`. pdf_oxide's
-column-major Markdown breaks these into separate `### Signal`,
-`### Direction`, `### To/From`, `### Description` micro-sections,
-so the anchor regexes match nothing. The Phase 2 ingest of RV12
-now emits 0 signal tables, 0 parameter tables, 0 error tables.
-That's a real loss — downstream DM0 auto-populate
-(`populate_blocks`, `populate_parameters`, `populate_errors`)
-depends on these.
+The immediate post-swap ingest also reported 0 signal tables / 0
+parameter tables / 0 error tables on RV12. That was alarming
+until we realised it was self-inflicted: the legacy
+`extract_signal_tables_pdf_text` and friends in `classify.rs`
+were still running against `pdf_oxide`'s `to_markdown()` output,
+which breaks column-major tables into separate H3 micro-sections
+(one per column — `Signal`, `Direction`, `To/From`,
+`Description`). The anchor regexes
+(`^Signal\s+Direction\s+...\s+Description$`) match nothing, so
+the extractors produced empty results.
 
-A "go fix the regex" patch is the wrong shape of fix. The four
-reference specs (RV12, Numenta SoC, Apical NoC, Spatial Pooler)
-use four different table conventions — different column orderings,
-different header words, different cell layouts. Hand-rolling a
-new anchor regex for each is the trap we just climbed out of.
+What we actually have — confirmed by probing pdf_oxide's full
+Rust surface — is rich. `pdf_oxide::PdfDocument` exposes
+`extract_tables(page)`, which runs a spatial-projection table
+detector that returns `Vec<Table>` with rows, columns, cells,
+bboxes, header detection, and span metadata. On RV12 it
+recovers the privilege table (5×4, clean), per-stage signal
+tables (clean 4-column data), and on Apical NoC the parameter
+table (29×3 with wrapped comment cells). The extractor sees
+PDF layout primitives, not text patterns, so column-header
+phrasing doesn't matter.
 
-The right shape: have an LLM look at a few pages of the spec
-once, emit a structured **format descriptor** that names the
-spec's heading patterns, table signatures, chrome regexes, and
-section conventions. Then the deterministic pipeline applies that
-descriptor. The descriptor is per-spec, generated once, cached on
-disk. We pay one LLM call per spec instead of growing a library
-of fragile heuristics.
+So the problem isn't "we lost tables." The problem is the larger
+one we were already heading toward: each spec uses different
+column wordings, different section conventions, and different
+chrome patterns, and we don't want to hand-roll Rust heuristics
+to recognise every variation. pdf_oxide handles **detection**
+deterministically; **classification** (is this a signal table, a
+CSR table, a memory map?) needs something adaptable per spec.
+
+The right shape: a deterministic first-cut classifier in Rust
+gets the easy cases, then an LLM critiques the first cut and
+fixes the ambiguous ones, emitting a per-spec **format
+descriptor** that names section roles, table kinds + column maps,
+figure kinds, glossary entries, and chrome regexes. The
+descriptor is cached on disk and reused unchanged across runs.
+We pay one LLM call per new spec; subsequent ingests reuse the
+descriptor.
 
 ## 2. The core idea
 
