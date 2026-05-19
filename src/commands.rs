@@ -559,7 +559,7 @@ fn run_ingest_with_format_resolution(
     let mut warnings = Vec::new();
     let phase_a = run_phase_a(&request, None, &mut warnings)?;
 
-    let format = build_format_descriptor(
+    let FormatBuildOutcome { format, provenance } = build_format_descriptor(
         &phase_a.loaded,
         &request.config,
         &source_sha256,
@@ -590,15 +590,6 @@ fn run_ingest_with_format_resolution(
         );
     }
 
-    let provenance = if no_format_discovery {
-        FormatProvenance::FirstCutOnly
-    } else {
-        // Today the LLM critique path is not wired into ingest; the
-        // first-cut classifier IS the descriptor. Surfacing this as
-        // `FirstCutOnly` lets the diagnostic line tell the operator
-        // that the LLM pass was skipped.
-        FormatProvenance::FirstCutOnly
-    };
     emit_format_summary(&format, &provenance, Some(&cache_path));
     Ok(outcome)
 }
@@ -629,6 +620,16 @@ struct IngestLlmConfig<'a> {
     base_url: Option<&'a str>,
 }
 
+/// Output of `build_format_descriptor` — the resolved `FormatJson`
+/// plus a tag indicating which path produced it. The caller uses
+/// the tag to drive the stderr diagnostic so "first-cut" only
+/// appears in the diagnostic when the LLM critique actually didn't
+/// run.
+struct FormatBuildOutcome {
+    format: sim_flow::__internal::session::spec_ingest::format::FormatJson,
+    provenance: FormatProvenance,
+}
+
 /// Build a fresh `format.json` descriptor from the loaded source.
 /// Always runs the deterministic first-cut classifier. The LLM
 /// critique pass fires only when `no_format_discovery == false` AND
@@ -644,7 +645,7 @@ fn build_format_descriptor(
     no_format_discovery: bool,
     llm_config: Option<&IngestLlmConfig<'_>>,
     warnings: &mut Vec<sim_flow::__internal::session::spec_ingest::IngestWarning>,
-) -> sim_flow::__internal::session::spec_ingest::format::FormatJson {
+) -> FormatBuildOutcome {
     use sim_flow::__internal::session::spec_ingest::format::{discover, first_cut, skeleton};
 
     let skeleton = skeleton::build_skeleton_with(loaded, config);
@@ -656,7 +657,10 @@ fn build_format_descriptor(
             "sim-flow ingest: format discovery skipped (--no-format-discovery); \
              using first-cut classifier only"
         );
-        return first_cut;
+        return FormatBuildOutcome {
+            format: first_cut,
+            provenance: FormatProvenance::FirstCutOnly,
+        };
     }
 
     let Some(llm) = llm_config else {
@@ -666,7 +670,10 @@ fn build_format_descriptor(
              SIM_FLOW_INGEST_LLM_BACKEND etc.) to enable the LLM critique pass. \
              Use --no-format-discovery to suppress this warning."
         );
-        return first_cut;
+        return FormatBuildOutcome {
+            format: first_cut,
+            provenance: FormatProvenance::FirstCutOnly,
+        };
     };
 
     let agent_config = sim_flow::__internal::session::AgentConfig {
@@ -689,7 +696,10 @@ fn build_format_descriptor(
                 llm.backend,
                 sim_flow::__internal::session::KNOWN_AGENTS.join(", ")
             );
-            return first_cut;
+            return FormatBuildOutcome {
+                format: first_cut,
+                provenance: FormatProvenance::FirstCutOnly,
+            };
         }
     };
 
@@ -704,14 +714,20 @@ fn build_format_descriptor(
     match discover::discover(&skeleton, &first_cut, agent.as_mut(), warnings) {
         Ok(mut refined) => {
             refined.source_sha256 = source_sha256.to_string();
-            refined
+            FormatBuildOutcome {
+                format: refined,
+                provenance: FormatProvenance::Discovered,
+            }
         }
         Err(err) => {
             eprintln!(
                 "sim-flow ingest: format-discovery LLM call failed ({err}); \
                  falling back to first-cut classifier"
             );
-            first_cut_for_fallback
+            FormatBuildOutcome {
+                format: first_cut_for_fallback,
+                provenance: FormatProvenance::FirstCutOnly,
+            }
         }
     }
 }

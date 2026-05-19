@@ -605,11 +605,18 @@ fn nearest_role_heading(
 /// row-field names. Unmapped columns are skipped (no
 /// `ColumnMapping` is emitted) so the LLM critique can fill in
 /// novel column meanings without us guessing wrong.
+///
+/// Every emitted canonical is validated against
+/// `valid_canonicals_for_kind` (the same list classify.rs uses) so
+/// the first cut never proposes a canonical that the classifier
+/// will reject. This eliminates the `classify_unknown_canonical`
+/// warning class for first-cut output.
 fn build_column_map(headers: &[String], kind: TableKind) -> Vec<ColumnMapping> {
     let dict: &[(&[&str], &str)] = canonical_dict_for(kind);
     if dict.is_empty() {
         return Vec::new();
     }
+    let valid = valid_canonicals_for_kind(kind);
     headers
         .iter()
         .filter_map(|cell| {
@@ -617,6 +624,14 @@ fn build_column_map(headers: &[String], kind: TableKind) -> Vec<ColumnMapping> {
             for (synonyms, canonical) in dict {
                 for syn in *synonyms {
                     if lower == *syn || lower.contains(syn) {
+                        if !valid.contains(canonical) {
+                            // The synonym dict points at a
+                            // canonical that doesn't exist on the
+                            // target row schema (e.g. an enum
+                            // value we renamed). Skip rather than
+                            // emit a classify-time warning.
+                            return None;
+                        }
                         return Some(ColumnMapping {
                             source: cell.clone(),
                             canonical: (*canonical).to_string(),
@@ -627,6 +642,66 @@ fn build_column_map(headers: &[String], kind: TableKind) -> Vec<ColumnMapping> {
             None
         })
         .collect()
+}
+
+/// Canonical field names allowed for each `TableKind`'s row schema.
+/// Mirrors `classify.rs::canonical_fields_for_kind` (which is
+/// private to that module). Kept in lockstep so the first-cut
+/// column map only proposes canonicals classify.rs will accept.
+fn valid_canonicals_for_kind(kind: TableKind) -> &'static [&'static str] {
+    match kind {
+        TableKind::SignalTable => &["name", "direction", "peer", "description", "role"],
+        TableKind::ExternalSignalTable => &[
+            "name",
+            "direction",
+            "width",
+            "type",
+            "required",
+            "description",
+        ],
+        TableKind::ParameterTable => &[
+            "name",
+            "type",
+            "default",
+            "valid_range",
+            "behavioral_impact",
+        ],
+        TableKind::CsrTable => &[
+            "address",
+            "name",
+            "access",
+            "reset_value",
+            "required_privilege",
+            "description",
+        ],
+        TableKind::CsrFieldTable => &["bits", "name", "access", "description"],
+        TableKind::RegisterFileTable => &["name", "width", "count", "description"],
+        TableKind::MemoryMapTable => &[
+            "start",
+            "end",
+            "name",
+            "purpose",
+            "access",
+            "required_privilege",
+        ],
+        TableKind::EncodingTable => &["value", "name", "abbreviation"],
+        TableKind::ErrorTable => &[
+            "error_type",
+            "detecting_component",
+            "detection_behavior",
+            "bus_response",
+            "master_behavior",
+            "software_response",
+        ],
+        TableKind::FsmStateTable => &["name", "description"],
+        TableKind::FsmTransitionTable => &["from", "input", "to", "output"],
+        TableKind::LatencyTable => &["operation", "best_case", "worst_case", "notes"],
+        TableKind::ConnectivityTable => {
+            &["id", "type", "coordinate", "role", "from", "to", "channel"]
+        }
+        TableKind::PmuEventTable => &["id", "name", "description", "csr_address"],
+        TableKind::Unknown => &[],
+    }
 }
 
 /// Per-kind canonical-word dictionaries: `(synonyms[], canonical)`.
@@ -659,7 +734,8 @@ fn canonical_dict_for(kind: TableKind) -> &'static [(&'static [&'static str], &'
             (&["address", "offset"], "address"),
             (&["name"], "name"),
             (&["access"], "access"),
-            (&["reset value", "reset"], "reset"),
+            (&["reset value", "reset"], "reset_value"),
+            (&["privilege"], "required_privilege"),
             (&["description"], "description"),
         ],
         TableKind::CsrFieldTable => &[
@@ -670,26 +746,36 @@ fn canonical_dict_for(kind: TableKind) -> &'static [(&'static [&'static str], &'
         ],
         TableKind::MemoryMapTable => &[
             (&["region"], "name"),
-            (&["base", "start"], "base"),
-            (&["size"], "size"),
-            (&["description"], "description"),
+            (&["base", "start"], "start"),
+            (&["end", "limit", "top"], "end"),
+            (&["purpose", "description"], "purpose"),
+            (&["access"], "access"),
+            (&["privilege"], "required_privilege"),
         ],
         TableKind::EncodingTable => &[
             (&["value", "code", "level"], "value"),
             (&["name", "encoding"], "name"),
-            (&["description", "abbreviation"], "description"),
+            (&["abbreviation", "abbrev"], "abbreviation"),
         ],
         TableKind::ErrorTable => &[
-            (&["exception", "interrupt"], "name"),
-            (&["code"], "code"),
-            (&["description"], "description"),
+            // ErrorEntry's canonical columns are detector-side and
+            // response-side. The first cut covers the cases where
+            // an obvious "exception"/"interrupt" header column is
+            // the error type; the LLM critique fills in the rest
+            // for richer error tables.
+            (&["exception", "interrupt", "error"], "error_type"),
+            (&["detecting component", "detector"], "detecting_component"),
+            (&["behavior", "behaviour"], "detection_behavior"),
+            (&["bus"], "bus_response"),
+            (&["master"], "master_behavior"),
+            (&["software", "sw"], "software_response"),
         ],
         TableKind::FsmStateTable => &[(&["state"], "name"), (&["description"], "description")],
         TableKind::FsmTransitionTable => &[
             (&["state"], "from"),
             (&["transition", "next state", "next"], "to"),
-            (&["condition", "trigger"], "trigger"),
-            (&["description"], "description"),
+            (&["input", "trigger", "condition"], "input"),
+            (&["output", "action"], "output"),
         ],
         TableKind::LatencyTable => &[
             (&["operation"], "name"),

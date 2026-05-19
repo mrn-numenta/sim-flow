@@ -409,7 +409,10 @@ fn apply_section_role(
             }
             let parsed: SpecMdRole = match serde_json::from_value(adj.new_value.clone()) {
                 Ok(v) => v,
-                Err(e) => return warn_drift(warnings, &adj.field, &e.to_string()),
+                Err(e) => {
+                    warn_unknown_variant(warnings, &adj.field, &e.to_string());
+                    SpecMdRole::Unknown
+                }
             };
             entry.spec_md_role = parsed;
             note_rationale(&mut entry.rationale, &adj.rationale);
@@ -424,7 +427,10 @@ fn apply_section_role(
             }
             let parsed: Layer = match serde_json::from_value(adj.new_value.clone()) {
                 Ok(v) => v,
-                Err(e) => return warn_drift(warnings, &adj.field, &e.to_string()),
+                Err(e) => {
+                    warn_unknown_variant(warnings, &adj.field, &e.to_string());
+                    Layer::Unknown
+                }
             };
             entry.layer = parsed;
             note_rationale(&mut entry.rationale, &adj.rationale);
@@ -466,7 +472,10 @@ fn apply_table(
             }
             let parsed: TableKind = match serde_json::from_value(adj.new_value.clone()) {
                 Ok(v) => v,
-                Err(e) => return warn_drift(warnings, &adj.field, &e.to_string()),
+                Err(e) => {
+                    warn_unknown_variant(warnings, &adj.field, &e.to_string());
+                    TableKind::Unknown
+                }
             };
             entry.kind = parsed;
             note_rationale(&mut entry.rationale, &adj.rationale);
@@ -485,7 +494,10 @@ fn apply_table(
             }
             let parsed: TableTarget = match serde_json::from_value(adj.new_value.clone()) {
                 Ok(v) => v,
-                Err(e) => return warn_drift(warnings, &adj.field, &e.to_string()),
+                Err(e) => {
+                    warn_unknown_variant(warnings, &adj.field, &e.to_string());
+                    TableTarget::Unknown
+                }
             };
             entry.spec_md_target = parsed;
             note_rationale(&mut entry.rationale, &adj.rationale);
@@ -557,7 +569,10 @@ fn apply_figure(
             }
             let parsed: FigureKind = match serde_json::from_value(adj.new_value.clone()) {
                 Ok(v) => v,
-                Err(e) => return warn_drift(warnings, &adj.field, &e.to_string()),
+                Err(e) => {
+                    warn_unknown_variant(warnings, &adj.field, &e.to_string());
+                    FigureKind::Generic
+                }
             };
             entry.kind = parsed;
             note_rationale(&mut entry.rationale, &adj.rationale);
@@ -576,7 +591,10 @@ fn apply_figure(
             }
             let parsed: FigureTarget = match serde_json::from_value(adj.new_value.clone()) {
                 Ok(v) => v,
-                Err(e) => return warn_drift(warnings, &adj.field, &e.to_string()),
+                Err(e) => {
+                    warn_unknown_variant(warnings, &adj.field, &e.to_string());
+                    FigureTarget::Generic
+                }
             };
             entry.spec_md_target = parsed;
             note_rationale(&mut entry.rationale, &adj.rationale);
@@ -789,6 +807,24 @@ fn warn_immutable(warnings: &mut Vec<IngestWarning>, target_kind: &str, field: &
     warnings.push(IngestWarning::new(
         "discover_immutable_field",
         format!("field '{field}' is not adjustable on target '{target_kind}'; skipping"),
+        DISCOVER_STAGE,
+    ));
+}
+
+/// Emit a soft `discover_unknown_variant` warning when the LLM
+/// proposed an enum variant or shape that doesn't match our
+/// schema. Callers fall back to the appropriate `Unknown` variant
+/// so the LLM's intent ("this entry should be reclassified") is
+/// preserved even if the specific destination it picked isn't in
+/// our schema. Compare with `warn_drift`, which skips the
+/// adjustment entirely.
+fn warn_unknown_variant(warnings: &mut Vec<IngestWarning>, field: &str, detail: &str) {
+    warnings.push(IngestWarning::new(
+        "discover_unknown_variant",
+        format!(
+            "field '{field}': {detail}; falling back to Unknown variant \
+             (LLM proposed a value not in our schema)"
+        ),
         DISCOVER_STAGE,
     ));
 }
