@@ -538,6 +538,17 @@ where
                 }
             }
 
+            // DM0 source-driven prelude (Phase 6 milestone 6.14
+            // wiring). When `docs/spec.md` doesn't exist yet and the
+            // project has a populated ingest manifest, seed spec.md
+            // from the corpus before the agent's Work turn so the
+            // DM0 work-prompt's "on arrival, X is already filled"
+            // contract holds. Gated on `!spec.md.exists()` so we
+            // don't clobber prose the agent wrote on a prior turn.
+            if *step_id == "DM0" {
+                run_dm0_auto_populate_prelude(opts, auto_host)?;
+            }
+
             // Work session. The actual host's Hello was consumed in
             // `perform_initial_handshake`, so every sub-session queues
             // a synthetic one — including the first.
@@ -975,6 +986,124 @@ fn flip_to_manual<P: Presenter + ?Sized>(auto_host: &mut AutoPresenter<P>) -> Re
             mode: StepMode::Manual,
         })?;
     }
+    Ok(())
+}
+
+/// DM0 source-driven prelude (Phase 6 milestone 6.14). When the
+/// project has an ingest manifest pointing at a source spec
+/// (pdf/markdown/text) and `docs/spec.md` doesn't exist yet, seed
+/// the structured spec.md from the corpus via
+/// [`crate::__internal::session::dm0::auto_populate::run_with_format`]
+/// and persist it before the agent's Work turn. The DM0 work-prompt
+/// assumes "on arrival, the auto-populated rows are already filled"
+/// — without this prelude the agent receives an empty spec.md and
+/// the contract breaks.
+///
+/// Gated on `!spec.md.exists()` so re-entering DM0 (retry after a
+/// failed critique, manual `RunStep` after the agent already wrote
+/// prose) doesn't clobber agent edits. No-source projects (manifest
+/// missing or `source_kind = "none"`) skip the prelude entirely —
+/// those rely on the agent driving `qa_loop` via `ask_user` during
+/// the Work session.
+///
+/// Errors are surfaced as a warning Diagnostic and swallowed: a
+/// broken manifest or format.json shouldn't block the Work session
+/// from starting (the agent can still populate manually via tools).
+fn run_dm0_auto_populate_prelude<P: Presenter + ?Sized>(
+    opts: &AutoOptions,
+    auto_host: &mut AutoPresenter<P>,
+) -> Result<()> {
+    use crate::__internal::session::dm0::{Dm0Mode, auto_populate, detect_mode};
+    use crate::__internal::session::spec_ingest::format::FormatJson;
+    use crate::__internal::session::spec_md::SpecMd;
+
+    let project_dir = &opts.project_dir;
+    let spec_md_path = project_dir.join("docs").join("spec.md");
+    if spec_md_path.exists() {
+        debug!(
+            "dm0 prelude: {} already exists, skipping auto-populate",
+            spec_md_path.display()
+        );
+        return Ok(());
+    }
+    let mode = match detect_mode(project_dir) {
+        Ok(m) => m,
+        Err(_) => return Ok(()), // No manifest → no source spec → no prelude.
+    };
+    if !matches!(mode, Dm0Mode::SourceDriven) {
+        return Ok(());
+    }
+    let format_path = project_dir
+        .join(".sim-flow")
+        .join("spec-ingest")
+        .join("format.json");
+    let format = if format_path.is_file() {
+        FormatJson::load(&format_path).ok()
+    } else {
+        None
+    };
+    let mut spec = SpecMd::default();
+    let report = match auto_populate::run_with_format(project_dir, &mut spec, format.as_ref()) {
+        Ok(r) => r,
+        Err(err) => {
+            auto_host.send(&Event::Diagnostic {
+                level: DiagnosticLevel::Warning,
+                message: format!(
+                    "dm0 prelude: auto-populate failed: {err}. \
+                     Proceeding without seeded spec.md; the agent will populate manually.",
+                ),
+            })?;
+            return Ok(());
+        }
+    };
+    if let Some(parent) = spec_md_path.parent()
+        && let Err(err) = std::fs::create_dir_all(parent)
+    {
+        auto_host.send(&Event::Diagnostic {
+            level: DiagnosticLevel::Warning,
+            message: format!(
+                "dm0 prelude: failed to create {}: {err}. Proceeding without seeded spec.md.",
+                parent.display()
+            ),
+        })?;
+        return Ok(());
+    }
+    if let Err(err) = std::fs::write(&spec_md_path, spec.to_markdown()) {
+        auto_host.send(&Event::Diagnostic {
+            level: DiagnosticLevel::Warning,
+            message: format!(
+                "dm0 prelude: failed to write {}: {err}. Proceeding without seeded spec.md.",
+                spec_md_path.display()
+            ),
+        })?;
+        return Ok(());
+    }
+    let total = report.blocks
+        + report.parameters
+        + report.encodings
+        + report.errors
+        + report.fsms
+        + report.figures
+        + report.csrs
+        + report.glossary
+        + report.clock_domains
+        + report.power_domains
+        + report.reset_domains
+        + report.security_boundaries
+        + report.numerical_conventions
+        + report.performance_counters;
+    auto_host.send(&Event::Diagnostic {
+        level: DiagnosticLevel::Info,
+        message: format!(
+            "dm0 prelude: seeded {} with {total} field(s) ({} block(s), {} CSR(s), \
+             {} figure(s)) and {} open question(s) from the ingest corpus.",
+            spec_md_path.display(),
+            report.blocks,
+            report.csrs,
+            report.figures,
+            report.open_questions,
+        ),
+    })?;
     Ok(())
 }
 
@@ -4179,6 +4308,114 @@ not a finding
         assert_eq!(findings.len(), 2, "got {findings:?}");
         assert!(findings[0].starts_with("UNRESOLVED: minor wording nit."));
         assert!(findings[1].starts_with("UNRESOLVED: future cleanup note."));
+    }
+
+    // -----------------------------------------------------------------
+    // DM0 source-driven prelude (milestone 6.14 wiring)
+    // -----------------------------------------------------------------
+
+    fn write_manifest(project: &Path, source_kind: &str) {
+        let dir = project.join(".sim-flow").join("spec-ingest");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("manifest.toml"),
+            format!("schema_version = 1\nsource_kind = \"{source_kind}\"\nsource_path = \"docs/spec.pdf\"\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn dm0_prelude_seeds_spec_md_when_source_driven_and_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().to_path_buf();
+        write_manifest(&project, "pdf");
+
+        let mut opts = options_with_llm("mock", None, None);
+        opts.project_dir = project.clone();
+        let mut host = TestHost::new();
+        let mode = Arc::new(AtomicU8::new(STEP_MODE_AUTO));
+        let mut auto_host = AutoPresenter::new(&mut host, mode);
+
+        run_dm0_auto_populate_prelude(&opts, &mut auto_host).unwrap();
+
+        let spec_path = project.join("docs").join("spec.md");
+        assert!(
+            spec_path.exists(),
+            "expected prelude to seed {}",
+            spec_path.display()
+        );
+        let body = std::fs::read_to_string(&spec_path).unwrap();
+        assert!(body.contains("## Metadata"), "got `{body}`");
+        assert!(body.contains("## Blocks"), "got `{body}`");
+        // Diagnostic should land on the inner host so the chat
+        // panel sees the seed report.
+        let saw_diag = host.written.iter().any(|e| {
+            matches!(
+                e,
+                Event::Diagnostic { level: DiagnosticLevel::Info, message }
+                    if message.contains("dm0 prelude") && message.contains("seeded")
+            )
+        });
+        assert!(saw_diag, "no info Diagnostic emitted: {:?}", host.written);
+    }
+
+    #[test]
+    fn dm0_prelude_is_noop_when_spec_md_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().to_path_buf();
+        write_manifest(&project, "pdf");
+        let docs = project.join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        let spec_path = docs.join("spec.md");
+        std::fs::write(&spec_path, "# Agent-authored content\n\nDo not clobber.\n").unwrap();
+
+        let mut opts = options_with_llm("mock", None, None);
+        opts.project_dir = project;
+        let mut host = TestHost::new();
+        let mode = Arc::new(AtomicU8::new(STEP_MODE_AUTO));
+        let mut auto_host = AutoPresenter::new(&mut host, mode);
+
+        run_dm0_auto_populate_prelude(&opts, &mut auto_host).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&spec_path).unwrap(),
+            "# Agent-authored content\n\nDo not clobber.\n"
+        );
+        assert!(
+            host.written.is_empty(),
+            "no diagnostics expected: {:?}",
+            host.written
+        );
+    }
+
+    #[test]
+    fn dm0_prelude_is_noop_when_no_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().to_path_buf();
+        let mut opts = options_with_llm("mock", None, None);
+        opts.project_dir = project.clone();
+        let mut host = TestHost::new();
+        let mode = Arc::new(AtomicU8::new(STEP_MODE_AUTO));
+        let mut auto_host = AutoPresenter::new(&mut host, mode);
+
+        run_dm0_auto_populate_prelude(&opts, &mut auto_host).unwrap();
+        assert!(!project.join("docs/spec.md").exists());
+        assert!(host.written.is_empty());
+    }
+
+    #[test]
+    fn dm0_prelude_is_noop_when_no_source_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().to_path_buf();
+        write_manifest(&project, "none");
+        let mut opts = options_with_llm("mock", None, None);
+        opts.project_dir = project.clone();
+        let mut host = TestHost::new();
+        let mode = Arc::new(AtomicU8::new(STEP_MODE_AUTO));
+        let mut auto_host = AutoPresenter::new(&mut host, mode);
+
+        run_dm0_auto_populate_prelude(&opts, &mut auto_host).unwrap();
+        assert!(!project.join("docs/spec.md").exists());
+        assert!(host.written.is_empty());
     }
 
     // -----------------------------------------------------------------
