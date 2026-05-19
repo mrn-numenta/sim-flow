@@ -363,6 +363,25 @@ pub struct PhaseAOutput {
     pub loaded: LoadedSource,
     pub chrome: ChromeRecord,
     pub tree: SectionTree,
+    /// One entry per `PeerSpec` in the request. Phase A loads and
+    /// parses each peer through the same `loading` + `parse`
+    /// stages used for the primary, but skips chrome stripping
+    /// (peers carry their own boilerplate) and format discovery
+    /// (peers are reference material, not the authoring target).
+    /// Phase B writes each peer's section tree as chunks under
+    /// `.sim-flow/spec-ingest/peers/<id>/chunks/`.
+    pub peers: Vec<PeerPhaseAOutput>,
+}
+
+/// Per-peer output of phase A. Mirrors `PhaseAOutput` for a single
+/// peer registration. `loaded` is kept on the struct so phase B can
+/// emit per-peer page-anchor metadata in the manifest if needed; in
+/// the current minimal emit it isn't consulted.
+pub struct PeerPhaseAOutput {
+    pub id: String,
+    #[allow(dead_code)]
+    pub loaded: LoadedSource,
+    pub tree: SectionTree,
 }
 
 /// Run phase A of the pipeline (loading + chrome + parse).
@@ -380,10 +399,49 @@ pub fn run_phase_a(
     let (loaded, chrome, _report) =
         stages::chrome::strip_chrome_with_format(loaded, &request.config, format, warnings);
     let tree = stages::parse::parse_hierarchy(&loaded, warnings)?;
+
+    // Peer specs: load + parse each registered peer. We deliberately
+    // skip chrome stripping (no peer-specific chrome regex set yet)
+    // and format discovery (peers are reference docs, not the
+    // primary authoring target). A peer load failure is surfaced as
+    // a warning rather than failing the whole ingest -- the primary
+    // corpus is still useful even if a peer reference is broken.
+    let mut peers: Vec<PeerPhaseAOutput> = Vec::with_capacity(request.peers.len());
+    for peer in &request.peers {
+        match stages::loading::load(&peer.source.path, warnings) {
+            Ok(peer_loaded) => match stages::parse::parse_hierarchy(&peer_loaded, warnings) {
+                Ok(peer_tree) => peers.push(PeerPhaseAOutput {
+                    id: peer.id.clone(),
+                    loaded: peer_loaded,
+                    tree: peer_tree,
+                }),
+                Err(err) => warnings.push(IngestWarning::new(
+                    "peer_parse_failed",
+                    format!(
+                        "peer `{}` at `{}`: parse failed: {err}; peer chunks will not be emitted",
+                        peer.id,
+                        peer.source.path.display(),
+                    ),
+                    2,
+                )),
+            },
+            Err(err) => warnings.push(IngestWarning::new(
+                "peer_load_failed",
+                format!(
+                    "peer `{}` at `{}`: load failed: {err}; peer chunks will not be emitted",
+                    peer.id,
+                    peer.source.path.display(),
+                ),
+                1,
+            )),
+        }
+    }
+
     Ok(PhaseAOutput {
         loaded,
         chrome,
         tree,
+        peers,
     })
 }
 
@@ -408,6 +466,14 @@ pub fn run_phase_b(
     let refs = stages::references::parse_references(&phase_a.tree, &mut warnings);
     let figures =
         stages::figures::extract_figures(&phase_a.loaded, &request.config, &mut warnings)?;
+    // Peers come from phase A's load+parse pass; emit gets them as
+    // `(id, tree)` pairs and writes their chunks under
+    // `tmp/peers/<id>/chunks/`.
+    let peers: Vec<(String, &SectionTree)> = phase_a
+        .peers
+        .iter()
+        .map(|p| (p.id.clone(), &p.tree))
+        .collect();
     let outcome = stages::emit::run_with_format(
         request,
         &phase_a.tree,
@@ -417,6 +483,7 @@ pub fn run_phase_b(
         warnings.clone(),
         format,
         Some(&classify_outputs),
+        &peers,
     )?;
     Ok(IngestOutcome {
         warnings,

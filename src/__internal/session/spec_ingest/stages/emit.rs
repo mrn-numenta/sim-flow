@@ -38,7 +38,17 @@ pub fn emit_corpus(
     figures: &[FigureOutput],
     warnings: Vec<IngestWarning>,
 ) -> Result<IngestOutcome> {
-    run_with_format(request, tree, chrome, refs, figures, warnings, None, None)
+    run_with_format(
+        request,
+        tree,
+        chrome,
+        refs,
+        figures,
+        warnings,
+        None,
+        None,
+        &[],
+    )
 }
 
 /// Format-aware emit entry point (Phase 9 milestone 9.11).
@@ -67,6 +77,7 @@ pub fn run_with_format(
     warnings: Vec<IngestWarning>,
     format: Option<&FormatJson>,
     classify_outputs: Option<&ClassifyOutputs>,
+    peers: &[(String, &SectionTree)],
 ) -> Result<IngestOutcome> {
     // Classify gates fired during pipeline construction; we need
     // their outputs to emit, but in the v1 wiring stages 4/5/6
@@ -157,6 +168,23 @@ pub fn run_with_format(
     write_tbds(&primary_dir, &outputs.tbds, &chunk_ids)?;
     write_references(&primary_dir, refs, &chunk_ids)?;
 
+    // Per-peer chunks. Each peer is loaded + parsed by phase A
+    // (see `pipeline::run_phase_a`); here we just walk the tree
+    // and emit minimal chunk markdown under
+    // `tmp/peers/<id>/chunks/NNN-<slug>.md`. The lance index build
+    // (`lance_index::build::spec::build_spec_chunks`) already walks
+    // this layout and assigns `source_id = <peer_id>` to each
+    // chunk row. Peers carry no typed-table / figure / signal
+    // extraction in v1 — they are reference material, not the
+    // authoring target.
+    let peer_chunk_counts: Vec<(String, usize)> = peers
+        .iter()
+        .map(|(peer_id, peer_tree)| {
+            let count = write_peer_chunks(&tmp, peer_id, peer_tree, format)?;
+            Ok::<_, crate::Error>((peer_id.clone(), count))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
     // Manifest at the top of the tmp tree.
     let manifest_path = tmp.join("manifest.toml");
     let manifest = render_manifest(
@@ -169,6 +197,7 @@ pub fn run_with_format(
         chunk_specs.len(),
         classify_outputs,
         format,
+        &peer_chunk_counts,
     )?;
     write_atomic(&manifest_path, manifest.as_bytes())?;
 
@@ -1227,6 +1256,42 @@ fn page_range<I: IntoIterator<Item = u32>>(iter: I) -> (u32, u32) {
     if min == u32::MAX { (0, 0) } else { (min, max) }
 }
 
+/// Write a peer's chunks under `<tmp>/peers/<peer_id>/chunks/`. The
+/// lance index build walks this layout automatically and tags each
+/// row with `source_id = <peer_id>`, so `spec_semantic_search` can
+/// filter by `source` to scope retrieval to the right document.
+///
+/// Peers carry no typed-table / figure extraction in v1; they are
+/// reference material (AHB-Lite spec, ISA references, peer designs).
+/// The frontmatter mirrors the primary chunk schema so downstream
+/// readers (the lance build's `read_chunk_md`) see the same shape.
+fn write_peer_chunks(
+    tmp: &Path,
+    peer_id: &str,
+    tree: &SectionTree,
+    format: Option<&FormatJson>,
+) -> Result<usize> {
+    let peer_dir = tmp.join("peers").join(peer_id);
+    let chunks_dir = peer_dir.join("chunks");
+    fs::create_dir_all(&chunks_dir).map_err(io_err("create peer chunks dir", &chunks_dir))?;
+
+    let mut chunk_specs = Vec::new();
+    flatten_for_emit(&tree.roots, &mut chunk_specs);
+
+    for (idx, section) in chunk_specs.iter().enumerate() {
+        let chunk_id = compute_chunk_id(section);
+        let slug = slugify(&section.heading);
+        let filename = format!("{idx:03}-{slug}.md");
+        // Peers don't get CSR-table assignments — they're reference
+        // docs, not the authoring target. Pass an empty slice so
+        // the chunk frontmatter still emits the
+        // `contained_csr_tables: []` key for shape stability.
+        let body = render_chunk(section, &chunk_id, format, &[]);
+        write_atomic(&chunks_dir.join(&filename), body.as_bytes())?;
+    }
+    Ok(chunk_specs.len())
+}
+
 /// Persist tables the classifier couldn't route to a typed shard so
 /// DM0 can surface them as Open Questions. Without this, the raw rows
 /// classify collected into `ClassifyOutputs::unknown_tables` are
@@ -1395,6 +1460,7 @@ fn render_manifest(
     chunk_count: usize,
     classify_outputs: Option<&ClassifyOutputs>,
     format: Option<&FormatJson>,
+    peer_chunk_counts: &[(String, usize)],
 ) -> Result<String> {
     let mut out = String::new();
     out.push_str(&format!("schema_version = {SCHEMA_VERSION}\n"));
@@ -1506,6 +1572,17 @@ fn render_manifest(
         let sha = sha256_file(&peer.source.path).unwrap_or_else(|_| "".into());
         out.push_str(&format!("source_sha256 = \"{sha}\"\n"));
         out.push_str("reason = \"\"\n");
+        // Phase 7+: chunk count for this peer. `0` when phase A
+        // failed to load or parse the peer (warnings carry the
+        // detail); the lance build still walks the peer directory
+        // and an empty chunk dir produces zero rows for the
+        // `<id>` source filter.
+        let count = peer_chunk_counts
+            .iter()
+            .find(|(id, _)| id == &peer.id)
+            .map(|(_, n)| *n)
+            .unwrap_or(0);
+        out.push_str(&format!("chunk_count = {count}\n"));
     }
 
     if !warnings.is_empty() {
@@ -1848,6 +1925,96 @@ mod tests {
         let signals_dir = project.join(".sim-flow/spec-ingest/primary/tables/signals");
         assert!(signals_dir.exists());
         assert_eq!(fs::read_dir(&signals_dir).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn peer_chunks_land_under_peers_id_chunks_with_count_in_manifest() {
+        // Build a primary corpus + one peer with its own
+        // section-tree, then verify (a) peer chunks land under
+        // `<spec-ingest>/peers/<id>/chunks/NNN-*.md`, (b) the
+        // manifest's `[[peers]]` block carries `chunk_count = N`,
+        // and (c) the primary corpus is unaffected.
+        let primary_body = "# Primary Top\n\nprimary body\n\n## Signals\n\n| Signal | Direction | To/From | Description |\n| --- | --- | --- | --- |\n| pri_sig | out | Bus | primary signal |\n";
+        let peer_body = "# AHB-Lite Quick Ref\n\nintro\n\n## Bus Signals\n\nHCLK, HRESETn, HADDR, HSIZE, HBURST.\n\n## Transfer Phases\n\nAddress, data, response phases.\n";
+
+        let mut primary_warnings = Vec::new();
+        let mut primary_tree = parse_markdown(primary_body, &mut primary_warnings).unwrap();
+        let config = super::super::super::pipeline::IngestConfig::default();
+        let _ = classify(&mut primary_tree, &config, &mut primary_warnings);
+        primary_tree.source_kind = Some(SourceKind::Markdown);
+
+        let mut peer_warnings = Vec::new();
+        let peer_tree = parse_markdown(peer_body, &mut peer_warnings).unwrap();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().to_path_buf();
+        let primary_src = project.join("spec.md");
+        fs::write(&primary_src, primary_body).unwrap();
+        let peer_src = project.join("ahb-lite.md");
+        fs::write(&peer_src, peer_body).unwrap();
+        let request = IngestRequest {
+            primary: Some(SourceSpec::new(primary_src)),
+            peers: vec![super::super::super::pipeline::PeerSpec {
+                id: "ahb-lite".to_string(),
+                source: SourceSpec::new(peer_src),
+            }],
+            config: config.clone(),
+            project_root: project.clone(),
+        };
+        let refs = Vec::new();
+        let figures = Vec::new();
+        let chrome = ChromeRecord::default();
+        let peers_input: Vec<(String, &SectionTree)> = vec![("ahb-lite".to_string(), &peer_tree)];
+        let outcome = run_with_format(
+            &request,
+            &primary_tree,
+            &chrome,
+            &refs,
+            &figures,
+            primary_warnings,
+            None,
+            None,
+            &peers_input,
+        )
+        .unwrap();
+
+        assert!(outcome.manifest_path.exists());
+        let manifest = fs::read_to_string(&outcome.manifest_path).unwrap();
+        // Peer block is present and tagged with the chunk count.
+        assert!(
+            manifest.contains("id = \"ahb-lite\""),
+            "manifest missing peer id; got: {manifest}"
+        );
+        assert!(
+            manifest.contains("chunk_count = "),
+            "manifest missing peer chunk_count; got: {manifest}"
+        );
+
+        // Peer chunks landed where the lance build expects them.
+        let peer_chunks = project.join(".sim-flow/spec-ingest/peers/ahb-lite/chunks");
+        assert!(
+            peer_chunks.exists(),
+            "peer chunks dir missing at {}",
+            peer_chunks.display(),
+        );
+        let entries: Vec<_> = fs::read_dir(&peer_chunks).unwrap().collect();
+        assert!(
+            !entries.is_empty(),
+            "no peer chunk files were emitted under {}",
+            peer_chunks.display(),
+        );
+        // Each peer chunk has the same frontmatter shape as primary
+        // (chunk_id, breadcrumb, source_page_range, ...). Spot-check
+        // one file.
+        let first = entries.into_iter().next().unwrap().unwrap();
+        let body = fs::read_to_string(first.path()).unwrap();
+        assert!(body.starts_with("---\n"), "missing frontmatter: {body}");
+        assert!(body.contains("chunk_id:"), "missing chunk_id: {body}");
+
+        // Primary corpus is unaffected.
+        let primary_chunks = project.join(".sim-flow/spec-ingest/primary/chunks");
+        assert!(primary_chunks.exists());
+        assert!(fs::read_dir(&primary_chunks).unwrap().next().is_some());
     }
 
     #[test]
@@ -2249,6 +2416,7 @@ mod tests {
             warnings,
             Some(&format),
             Some(&co),
+            &[],
         )
         .unwrap();
 

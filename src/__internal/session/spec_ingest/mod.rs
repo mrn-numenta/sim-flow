@@ -145,4 +145,66 @@ appearance_threshold = 0.75
         assert!(body.contains("source_kind = \"markdown\""));
         assert!(body.contains("primary_chunk_count = 2"));
     }
+
+    /// End-to-end through `pipeline::run` with a peer registration:
+    /// peer chunks land under `peers/<id>/chunks/`, manifest records
+    /// `chunk_count = N`, primary corpus is unaffected.
+    #[test]
+    fn programmatic_api_runs_with_peer_specs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().to_path_buf();
+        let primary = project.join("primary.md");
+        let peer = project.join("ahb-lite.md");
+        std::fs::write(
+            &primary,
+            "# Primary Top\nprimary body\n\n## Sub\nmore primary\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &peer,
+            "# AHB-Lite\nintro\n\n## Bus Signals\nHCLK / HRESETn.\n\n## Phases\naddr + data.\n",
+        )
+        .unwrap();
+
+        let outcome = pipeline::run(IngestRequest {
+            primary: Some(SourceSpec::new(primary)),
+            peers: vec![pipeline::PeerSpec {
+                id: "ahb-lite".to_string(),
+                source: SourceSpec::new(peer),
+            }],
+            config: IngestConfig::default(),
+            project_root: project.clone(),
+        })
+        .expect("run with peer succeeds");
+
+        // Primary is unaffected.
+        assert_eq!(outcome.primary_chunk_count, 2);
+        let primary_chunks = project.join(".sim-flow/spec-ingest/primary/chunks");
+        assert_eq!(
+            std::fs::read_dir(&primary_chunks).unwrap().count(),
+            2,
+            "primary chunk count regressed"
+        );
+
+        // Peer chunks landed.
+        let peer_chunks = project.join(".sim-flow/spec-ingest/peers/ahb-lite/chunks");
+        assert!(
+            peer_chunks.exists(),
+            "peer chunks dir missing at {}",
+            peer_chunks.display(),
+        );
+        let n_peer = std::fs::read_dir(&peer_chunks).unwrap().count();
+        assert!(n_peer >= 2, "expected at least 2 peer chunks; got {n_peer}");
+
+        // Manifest tags the peer with the chunk count.
+        let manifest_body = std::fs::read_to_string(&outcome.manifest_path).unwrap();
+        assert!(
+            manifest_body.contains("id = \"ahb-lite\""),
+            "manifest missing peer id; got: {manifest_body}"
+        );
+        assert!(
+            manifest_body.contains(&format!("chunk_count = {n_peer}")),
+            "manifest missing peer chunk_count={n_peer}; got: {manifest_body}"
+        );
+    }
 }
