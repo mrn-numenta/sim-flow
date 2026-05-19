@@ -401,6 +401,25 @@ fn write_blocks(s: &mut String, blocks: &[Block]) {
             }
             writeln!(s).unwrap();
         }
+        // Phase 9 (§7.8): retrieval hints downstream DM steps can
+        // use as ready-made `spec_semantic_search` queries. Format
+        // is `#### Retrieval hints` followed by a bullet list; the
+        // parser reads them back into `Block.retrieval_hints` so
+        // the field round-trips when the agent rewrites spec.md.
+        if !block.retrieval_hints.is_empty() {
+            writeln!(s, "#### Retrieval hints").unwrap();
+            writeln!(s).unwrap();
+            writeln!(
+                s,
+                "Suggested `spec_semantic_search` queries for this block:"
+            )
+            .unwrap();
+            writeln!(s).unwrap();
+            for q in &block.retrieval_hints {
+                writeln!(s, "- `{q}`").unwrap();
+            }
+            writeln!(s).unwrap();
+        }
     }
 }
 

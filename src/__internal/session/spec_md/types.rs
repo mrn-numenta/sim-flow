@@ -438,6 +438,16 @@ pub struct Block {
     pub figures: Vec<String>,
     #[serde(default)]
     pub sub_blocks: Vec<String>,
+    /// Phase 9 (§7.8): suggested `spec_semantic_search` queries
+    /// downstream DM steps (DM2 / DM3) can issue to retrieve the
+    /// underlying source-spec context for this block when they need
+    /// detail beyond what's already in spec.md. Seeded by
+    /// `dm0::auto_populate::populate_blocks_with_format` from the
+    /// block name + parent context; the DM0 agent may add or refine
+    /// entries during the work session. Empty when the block was
+    /// authored by hand and the agent hasn't recorded any.
+    #[serde(default)]
+    pub retrieval_hints: Vec<String>,
 }
 
 /// One row of a Block I/O signal table (four-column form).

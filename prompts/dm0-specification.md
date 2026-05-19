@@ -72,9 +72,15 @@ must match exactly.
    `Signal | Direction | Peer | Description`), a `#### State` bullet
    list, a `#### Behavior summary` of one to three prose paragraphs,
    a `#### Source-spec anchors` bullet list, and optional `#### Figures`
-   and `#### Sub-blocks` bullets. All blocks sit at heading level 3
-   regardless of nesting; hierarchy is conveyed via the `Parent`
-   property.
+   and `#### Sub-blocks` bullets, and optional `#### Retrieval hints`
+   --- a bullet list of `spec_semantic_search` queries downstream DM
+   steps (DM2 / DM3) can issue when they need source-spec detail
+   beyond what's already inlined. The auto-populate step seeds
+   `Retrieval hints` from the block name (canonical form + acronym +
+   `<name> behavior signals`); refine entries if you have better
+   queries from the search hits you ran. All blocks sit at heading
+   level 3 regardless of nesting; hierarchy is conveyed via the
+   `Parent` property.
 9. `## Parameters` (required if any parameters) -- single table:
    `Name | Type | Default | Valid range | Behavioral impact |
    Source-anchor`.

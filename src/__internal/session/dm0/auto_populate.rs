@@ -565,6 +565,7 @@ pub fn populate_blocks_with_format(
                 }
             })
             .collect();
+        let retrieval_hints = derive_block_retrieval_hints(&block_name);
         spec.blocks.push(Block {
             name: block_name,
             role: String::new(),
@@ -587,10 +588,63 @@ pub fn populate_blocks_with_format(
             source_anchors: vec![anchor],
             figures: Vec::new(),
             sub_blocks: Vec::new(),
+            retrieval_hints,
         });
         appended += 1;
     }
     Ok(appended)
+}
+
+/// Derive default `spec_semantic_search` queries for a block from
+/// its name. These hints land in `Block.retrieval_hints` and are
+/// what DM2 / DM3 prompts will pull when they need source-spec
+/// detail beyond what's inlined in `docs/spec.md`. We emit three
+/// variations so the search has multiple chances at a good hit
+/// regardless of how the spec phrases the topic:
+///
+/// 1. The block name verbatim — covers any case where the spec
+///    uses the canonical name directly.
+/// 2. The parenthesised acronym alone when present — e.g. `IF` for
+///    `Instruction Fetch (IF)`. Specs frequently refer to stages
+///    by acronym in narrative sections; the lance embedding picks
+///    that up better than the full form.
+/// 3. The block name plus the words "behavior signals" — biases
+///    toward chunks describing operational behavior + I/O over
+///    chunks that merely mention the block in passing (e.g. a
+///    table of contents).
+///
+/// All three are stripped of stray backticks. Empty queries are
+/// dropped. The agent can edit / extend the list during DM0; the
+/// parser round-trips it.
+fn derive_block_retrieval_hints(block_name: &str) -> Vec<String> {
+    let name = block_name.trim();
+    if name.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<String> = Vec::new();
+    out.push(name.to_string());
+    if let Some(acronym) = parenthesised_acronym(name) {
+        out.push(acronym);
+    }
+    out.push(format!("{name} behavior signals"));
+    out
+}
+
+/// Extract the inner text of a trailing parenthesised group from a
+/// block name like `"Instruction Fetch (IF)"` → `Some("IF")`.
+/// Returns `None` when no `(...)` group is present.
+fn parenthesised_acronym(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    let close = trimmed.rfind(')')?;
+    if close + 1 != trimmed.len() {
+        return None;
+    }
+    let open = trimmed[..close].rfind('(')?;
+    let inner = trimmed[open + 1..close].trim();
+    if inner.is_empty() {
+        return None;
+    }
+    Some(inner.to_string())
 }
 
 /// One descriptor entry resolved to the (block_name, layer,
@@ -2809,6 +2863,67 @@ mod tests {
         assert_eq!(n, 1);
         let block = &spec.blocks[0];
         assert_eq!(block.source_anchors, vec!["primary:chunk-017".to_string()]);
+    }
+
+    #[test]
+    fn populate_blocks_seeds_retrieval_hints_from_block_name() {
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        write(
+            &corpus.join("tables").join("signals").join("000-if.toml"),
+            "schema_version = 1\n\
+             table_kind = \"signal_table\"\n\
+             source_page_range = [12, 13]\n\
+             stage = \"Instruction Fetch (IF)\"\n\
+             breadcrumb = [\"Pipeline\", \"IF\"]\n\
+             \n\
+             [[rows]]\n\
+             name = \"if_valid\"\n\
+             direction = \"out\"\n\
+             peer = \"PD\"\n\
+             description = \"valid flag\"\n",
+        );
+        let mut spec = SpecMd::default();
+        let n = populate_blocks_with_format(&corpus, &mut spec, None).unwrap();
+        assert_eq!(n, 1);
+        let hints = &spec.blocks[0].retrieval_hints;
+        assert_eq!(hints.len(), 3);
+        assert_eq!(hints[0], "Instruction Fetch (IF)");
+        assert_eq!(hints[1], "IF");
+        assert_eq!(hints[2], "Instruction Fetch (IF) behavior signals");
+    }
+
+    #[test]
+    fn populate_blocks_seeds_hints_without_acronym_when_no_parens() {
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        write(
+            &corpus.join("tables").join("signals").join("000-rf.toml"),
+            "schema_version = 1\n\
+             table_kind = \"signal_table\"\n\
+             source_page_range = [40, 40]\n\
+             stage = \"Register File\"\n\
+             breadcrumb = [\"Register File\"]\n\
+             \n\
+             [[rows]]\n\
+             name = \"rf_rs1\"\n\
+             direction = \"out\"\n\
+             peer = \"ID\"\n\
+             description = \"first source\"\n",
+        );
+        let mut spec = SpecMd::default();
+        let n = populate_blocks_with_format(&corpus, &mut spec, None).unwrap();
+        assert_eq!(n, 1);
+        // Two hints (no acronym to add): the bare name and the
+        // behavior-signals variant.
+        let hints = &spec.blocks[0].retrieval_hints;
+        assert_eq!(
+            hints,
+            &vec![
+                "Register File".to_string(),
+                "Register File behavior signals".to_string(),
+            ]
+        );
     }
 
     #[test]

@@ -66,12 +66,28 @@ pub(crate) fn parse_blocks(body: &str) -> Result<Vec<Block>, SpecMdParseError> {
                 "sub-blocks" | "subblocks" => {
                     block.sub_blocks = parse_sub_blocks(&h4.body);
                 }
+                "retrieval hints" => {
+                    block.retrieval_hints = parse_retrieval_hints(&h4.body);
+                }
                 _ => {}
             }
         }
         out.push(block);
     }
     Ok(out)
+}
+
+/// Parse the bullet list that follows the leading prose line
+/// ("Suggested `spec_semantic_search` queries for this block:").
+/// Each bullet's body is one query string; leading/trailing
+/// backticks are stripped so the round-trip is symmetric with
+/// `writer.rs::write_blocks` which wraps queries in backticks.
+fn parse_retrieval_hints(body: &str) -> Vec<String> {
+    collect_top_level_bullets(body)
+        .into_iter()
+        .map(|s| s.trim().trim_matches('`').to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn parse_param_list(value: &str) -> Vec<String> {
@@ -289,5 +305,40 @@ Fetches parcels at PC, advances on success.
         assert!(f.behavior_summary.contains("Fetches parcels"));
         assert_eq!(f.source_anchors, vec!["primary:p12-13"]);
         assert_eq!(f.figures, vec!["figures/page-013.png"]);
+    }
+
+    #[test]
+    fn parses_retrieval_hints_section() {
+        let body = "\
+## Blocks
+
+### Block: Instruction Fetch (IF)
+
+**Role:** Fetch.
+**Parent:** Execution Pipeline
+**Clock domain:** core
+
+#### Source-spec anchors
+
+- primary:chunk-017
+
+#### Retrieval hints
+
+Suggested `spec_semantic_search` queries for this block:
+
+- `Instruction Fetch (IF)`
+- `IF`
+- `Instruction Fetch (IF) behavior signals`
+";
+        let blocks = parse_blocks(body).expect("parses");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(
+            blocks[0].retrieval_hints,
+            vec![
+                "Instruction Fetch (IF)".to_string(),
+                "IF".to_string(),
+                "Instruction Fetch (IF) behavior signals".to_string(),
+            ]
+        );
     }
 }
