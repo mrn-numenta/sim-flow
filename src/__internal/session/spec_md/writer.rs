@@ -114,10 +114,49 @@ fn write_h2(s: &mut String, heading: &str) {
 
 fn write_prose_section(s: &mut String, heading: &str, body: &str) {
     write_h2(s, heading);
+    // HTML-comment markers bracket the editable prose so the
+    // agent has explicit "edit here" zones. The parser ignores
+    // HTML comments (pulldown_cmark treats them as raw HTML
+    // events that the section's prose-collectors discard), and
+    // the on-write guard validates the structural schema rather
+    // than the markers, so they're pure annotation: a hint, not
+    // a constraint. An agent that overwrites a region's body
+    // wholesale keeps the markers intact when it uses
+    // `edit_file` between them; if it deletes them by accident
+    // the file still parses and validates cleanly.
+    writeln!(
+        s,
+        "<!-- spec-md-region:{} begin -->",
+        slugify_marker(heading)
+    )
+    .unwrap();
     if !body.is_empty() {
         writeln!(s, "{body}").unwrap();
-        writeln!(s).unwrap();
     }
+    writeln!(s, "<!-- spec-md-region:{} end -->", slugify_marker(heading)).unwrap();
+    writeln!(s).unwrap();
+}
+
+/// Lowercase + hyphenated form of a heading suitable for embedding
+/// in an HTML comment marker (`<!-- spec-md-region:<slug> begin -->`).
+/// Whitespace and punctuation collapse to single hyphens; everything
+/// else is lowercased ASCII. Pure ASCII so the marker stays grep-able.
+fn slugify_marker(heading: &str) -> String {
+    let mut out = String::with_capacity(heading.len());
+    let mut prev_dash = true;
+    for c in heading.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
 }
 
 fn write_table(s: &mut String, headers: &[&str], rows: &[Vec<String>]) {
@@ -1069,6 +1108,55 @@ fn write_performance_counters(s: &mut String, events: &[PmuEvent]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prose_sections_bracket_their_body_with_region_markers() {
+        let spec = SpecMd {
+            purpose: "Purpose prose here.".into(),
+            scope: "Scope prose here.".into(),
+            non_goals: "".into(),
+            ..Default::default()
+        };
+        let md = spec.to_markdown();
+        // Each prose H2 emits matching begin/end markers.
+        assert!(
+            md.contains("<!-- spec-md-region:purpose begin -->"),
+            "missing begin marker for purpose: {md}"
+        );
+        assert!(
+            md.contains("<!-- spec-md-region:purpose end -->"),
+            "missing end marker for purpose: {md}"
+        );
+        assert!(md.contains("<!-- spec-md-region:scope begin -->"));
+        assert!(md.contains("<!-- spec-md-region:scope end -->"));
+        // Even an empty section gets markers (the agent can fill
+        // the body between them later via edit_file).
+        assert!(md.contains("<!-- spec-md-region:non-goals begin -->"));
+        assert!(md.contains("<!-- spec-md-region:non-goals end -->"));
+    }
+
+    #[test]
+    fn writer_output_round_trips_through_parser_with_markers_intact() {
+        // Markers are HTML comments → pulldown_cmark treats them
+        // as raw HTML events that the prose-section collectors
+        // discard. The parsed SpecMd should be byte-equal to the
+        // original on the second emit.
+        let spec = SpecMd {
+            purpose: "Original purpose body.".into(),
+            scope: "Original scope body.".into(),
+            non_goals: "Original non-goals body.".into(),
+            ..Default::default()
+        };
+        let md1 = spec.to_markdown();
+        let parsed = super::super::parser::parse(&md1).expect("parses cleanly");
+        // The prose fields round-trip via the parser ignoring HTML
+        // comments. Each field should match the original input.
+        assert_eq!(parsed.purpose, "Original purpose body.");
+        assert_eq!(parsed.scope, "Original scope body.");
+        assert_eq!(parsed.non_goals, "Original non-goals body.");
+        // And re-emitting produces the same string (markers preserved).
+        assert_eq!(parsed.to_markdown(), md1);
+    }
 
     #[test]
     fn writes_metadata_section() {
