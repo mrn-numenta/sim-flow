@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "model": "claude-sonnet-4-6",
+  "prompt_version": "2026-05-19",
+  "source_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "discovered_at": "2026-05-18T12:00:00Z",
+  "section_roles": [
+    {
+      "heading": "Instruction Fetch (IF)",
+      "page": 11,
+      "line": 5,
+      "font_size": 14.7,
+      "font_weight": "bold",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "block",
+        "block_name": "Instruction Fetch (IF)"
+      },
+      "layer": "micro",
+      "rationale": "matches pipeline-stage acronym pattern; appears under 'Execution Pipeline' parent"
+    }
+  ],
+  "tables": [
+    {
+      "id": "tbl_023",
+      "page": 12,
+      "first_line": 17,
+      "row_count": 9,
+      "col_count": 4,
+      "kind": "signal_table",
+      "spec_md_target": {
+        "kind": "block_signals",
+        "block_name": "Instruction Fetch (IF)"
+      },
+      "column_map": [
+        { "source": "Signal", "canonical": "name" },
+        { "source": "Direction", "canonical": "direction" },
+        { "source": "To/From", "canonical": "peer" },
+        { "source": "Description", "canonical": "description" }
+      ],
+      "wrap_strategy": "merge_continuation_rows",
+      "rationale": "column headers match signal-table convention; sits under IF block section"
+    }
+  ],
+  "figures": [
+    {
+      "id": "fig_005",
+      "page": 13,
+      "kind": "block_diagram",
+      "rasterized_to": "figures/page-013.png",
+      "spec_md_target": {
+        "kind": "block_diagram",
+        "block_name": "Instruction Fetch (IF)"
+      },
+      "referenced_acronyms": ["IF", "PD", "ID"],
+      "rationale": "vector-path page with stage labels; first figure under IF section"
+    }
+  ],
+  "glossary": [
+    {
+      "acronym": "IF",
+      "expansion": "Instruction Fetch",
+      "first_page": 11,
+      "scope": "spec",
+      "used_in_blocks": ["Instruction Fetch (IF)"],
+      "source": "parenthesised_first_mention"
+    }
+  ],
+  "chrome": [
+    {
+      "regex": "^RV12 RISC-V.*\\d+/\\d+/\\d+.*$",
+      "kind": "running_header",
+      "y_band_pt": [766.0, 774.0],
+      "match_count": 95
+    }
+  ],
+  "validation": {
+    "section_roles_assigned": 1,
+    "tables_classified": {
+      "signal_table": 1
+    },
+    "tables_unknown": 0,
+    "glossary_entries": 1,
+    "chrome_lines_stripped": 95,
+    "warnings": []
+  }
+}
