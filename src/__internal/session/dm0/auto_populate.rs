@@ -468,11 +468,12 @@ pub fn populate_fsms(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
 
 /// Emit one `Block` per `<corpus>/tables/signals/NNN-<stage>.toml`.
 /// Heuristic / no-format mode: each block's `name` is the table's
-/// `stage`, the parent is the top-level sentinel `(none --
-/// top-level)` (the agent refines later after reading enough
-/// source-spec context to infer hierarchy), and `signals[]`
-/// populates from the shard's `[[rows]]`. The shard's source page
-/// range becomes a single `primary:p<N>` anchor on the block.
+/// `stage`, the parent is left empty for the agent to fill once
+/// hierarchy is known (the writer omits the `**Parent:**` line
+/// entirely when the field is empty), and `signals[]` populates
+/// from the shard's `[[rows]]`. The shard's source page range
+/// becomes a chunk-form anchor when `source_chunk_ordinal` is
+/// recorded, else a `primary:p<N>` anchor.
 ///
 /// Idempotent on `(name, source_anchor)`.
 pub fn populate_blocks(corpus_root: &Path, spec: &mut SpecMd) -> Result<usize> {
@@ -567,7 +568,14 @@ pub fn populate_blocks_with_format(
         spec.blocks.push(Block {
             name: block_name,
             role: String::new(),
-            parent: "(none -- top-level)".into(),
+            // Parent is left empty so the agent fills it from the
+            // source-spec hierarchy. The previous hardcoded
+            // "(none -- top-level)" produced flat block lists that
+            // every DM0 critique flagged: every block claimed to be
+            // top-level, breaking the hierarchical composition DM2
+            // relies on. Empty here means "needs agent input" rather
+            // than a wrong default.
+            parent: String::new(),
             clock_domain: String::new(),
             power_domain: String::new(),
             reset_domain: String::new(),
@@ -2409,7 +2417,11 @@ mod tests {
         assert_eq!(n, 6);
         assert_eq!(spec.blocks.len(), 6);
         for b in &spec.blocks {
-            assert_eq!(b.parent, "(none -- top-level)");
+            // Parent is empty by design — the auto-populate step no
+            // longer hardcodes a top-level sentinel. The agent (or a
+            // later schema migration) fills the field once hierarchy
+            // is known. See the comment in `populate_blocks_with_format`.
+            assert_eq!(b.parent, "");
             assert_eq!(b.signals.len(), 1);
             assert_eq!(b.source_anchors.len(), 1);
         }
