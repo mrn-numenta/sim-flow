@@ -498,6 +498,66 @@ mod tests {
     }
 
     #[test]
+    fn args_schema_advertises_role_and_layer_filters() {
+        // Phase 9 milestone 9.13: the agent-facing schema must
+        // surface the two new optional filter arguments so the
+        // LLM can use them. Smoke-check the JSON properties.
+        let (tmp, service) = make_service_no_index();
+        let _ = tmp;
+        let tool = SpecSemanticSearchTool::new(service);
+        let schema = tool.args_schema();
+        let props = &schema["properties"];
+        assert!(
+            props.get("filter_spec_md_role").is_some(),
+            "schema missing filter_spec_md_role property: {schema}"
+        );
+        assert!(
+            props.get("filter_layer").is_some(),
+            "schema missing filter_layer property: {schema}"
+        );
+        let layer_enum = props["filter_layer"]["enum"]
+            .as_array()
+            .expect("filter_layer enum");
+        let values: Vec<String> = layer_enum
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
+        assert_eq!(
+            values,
+            vec![
+                "architectural".to_string(),
+                "micro".to_string(),
+                "mixed".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_filter_args_collapse_to_no_op() {
+        // Whitespace-only filter args must not short-circuit the
+        // tool (an agent might pass "" / "   " when it has nothing
+        // to add). The tool returns the no-source-spec note when
+        // there's no index on disk -- proving it reached the same
+        // code path as the no-filter case.
+        let (tmp, service) = make_service_no_index();
+        let tool = SpecSemanticSearchTool::new(service);
+        let ctx = ToolContext::new(tmp.path(), None, None, None);
+        let r = tool
+            .invoke(
+                &ctx,
+                &json!({
+                    "query": "anything",
+                    "filter_spec_md_role": "  ",
+                    "filter_layer": "",
+                }),
+            )
+            .expect("invoke");
+        assert!(r.ok, "display = {}", r.display);
+        let v: Value = serde_json::from_str(&r.display).expect("json");
+        assert_eq!(v["note"], "no source spec registered");
+    }
+
+    #[test]
     fn load_chunk_frontmatter_picks_up_chunk_id() {
         let tmp = tempfile::tempdir().unwrap();
         let chunks = tmp

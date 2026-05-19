@@ -434,6 +434,259 @@ fn signal_table_query_via_filter() {
     assert_eq!(rows[0].direction, "out");
 }
 
+/// Lay down a synthetic spec-ingest corpus with two chunks carrying
+/// distinct `spec_md_role` / `layer` / `acronyms_referenced` /
+/// domain front-matter (Phase 9 milestone 9.13). Used by the
+/// role-filter tests below.
+fn make_role_tagged_project(project: &Path) {
+    let ingest = project.join(".sim-flow").join("spec-ingest");
+    std::fs::create_dir_all(ingest.join("primary").join("chunks")).unwrap();
+
+    std::fs::write(
+        ingest.join("manifest.toml"),
+        "schema_version = 1\nsource_kind = \"markdown\"\nsource_sha256 = \"abcdef0123456789\"\n",
+    )
+    .unwrap();
+
+    // Chunk A: tagged as a Block role under the micro layer with
+    // acronyms + domain refs.
+    std::fs::write(
+        ingest
+            .join("primary")
+            .join("chunks")
+            .join("000-if-block.md"),
+        "---\n\
+         chunk_id: \"chunk-if-block\"\n\
+         breadcrumb:\n- \"Execution Pipeline\"\n- \"Instruction Fetch (IF)\"\n\
+         section_heading: \"Instruction Fetch (IF)\"\n\
+         kind: prose\n\
+         source_page_start: 11\n\
+         source_page_end: 14\n\
+         spec_md_role: \"block:Instruction Fetch (IF)\"\n\
+         layer: \"micro\"\n\
+         acronyms_referenced: [\"IF\", \"PC\"]\n\
+         clock_domain: \"core_clk\"\n\
+         power_domain: \"core_pd\"\n\
+         reset_domain: \"core_rst\"\n\
+         ---\n\
+         The IF block fetches instructions.\n",
+    )
+    .unwrap();
+
+    // Chunk B: untagged / default. Missing role and layer should
+    // collapse to "unknown"; missing domain keys → null.
+    std::fs::write(
+        ingest.join("primary").join("chunks").join("001-intro.md"),
+        "---\n\
+         chunk_id: \"chunk-intro\"\n\
+         breadcrumb:\n- \"Introduction\"\n\
+         section_heading: \"Introduction\"\n\
+         kind: prose\n\
+         source_page_start: 1\n\
+         source_page_end: 2\n\
+         ---\n\
+         Introduction body.\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn spec_chunks_round_trip_role_and_layer_columns() {
+    // Build a spec index against a fixture that carries the Phase 9.13
+    // chunk-level role / layer / acronym / domain tags. Read the lance
+    // table back and assert each row carries the expected column
+    // values (including "unknown" defaults for the untagged chunk).
+    use arrow_array::{Array, ListArray, StringArray};
+    use futures::TryStreamExt;
+    use lancedb::query::{ExecutableQuery, QueryBase};
+    use sim_flow::__internal::session::lance_index::connection::LanceConnection;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path();
+    make_role_tagged_project(project);
+
+    let embedder: Arc<dyn EmbeddingClient> = Arc::new(MockEmbedder { dimension: 8 });
+    let outcome = build_spec_index(
+        &SpecBuildOpts {
+            project_root: project.to_path_buf(),
+            force: false,
+        },
+        &embedder,
+    )
+    .expect("build spec index");
+    assert_eq!(outcome.spec_chunks_rows, 2);
+
+    let index_root = project.join(".sim-flow").join("lance-index");
+
+    // Confirm the per-project manifest carries the bumped
+    // schema_version = 2.
+    let manifest_body = std::fs::read_to_string(&outcome.manifest_path).unwrap();
+    assert!(
+        manifest_body.contains("schema_version = 2"),
+        "manifest must record schema_version 2: {manifest_body}"
+    );
+
+    /// Captured per-row view of the lance columns this test cares
+    /// about. Defined locally so the surrounding test doesn't trip
+    /// `clippy::type_complexity`.
+    struct CapturedRow {
+        layer: String,
+        acronyms: Vec<String>,
+        clock_domain: Option<String>,
+    }
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let rows_by_role: std::collections::BTreeMap<String, CapturedRow> = rt.block_on(async {
+        let conn = LanceConnection::open_spec(&index_root, None)
+            .await
+            .expect("open spec");
+        let table = conn.conn.open_table("spec_chunks").execute().await.unwrap();
+        let batches = table
+            .query()
+            .limit(10)
+            .execute()
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        let mut out = std::collections::BTreeMap::new();
+        for batch in &batches {
+            let role_col = batch
+                .column_by_name("spec_md_role")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .clone();
+            let layer_col = batch
+                .column_by_name("layer")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .clone();
+            let acronyms_col = batch
+                .column_by_name("acronyms_referenced")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .unwrap()
+                .clone();
+            let clock_col = batch
+                .column_by_name("clock_domain")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .clone();
+            for i in 0..batch.num_rows() {
+                let items = acronyms_col.value(i);
+                let s = items.as_any().downcast_ref::<StringArray>().unwrap();
+                let acronyms: Vec<String> = (0..s.len()).map(|j| s.value(j).to_string()).collect();
+                let clock_domain = if clock_col.is_null(i) {
+                    None
+                } else {
+                    Some(clock_col.value(i).to_string())
+                };
+                out.insert(
+                    role_col.value(i).to_string(),
+                    CapturedRow {
+                        layer: layer_col.value(i).to_string(),
+                        acronyms,
+                        clock_domain,
+                    },
+                );
+            }
+        }
+        out
+    });
+
+    let block = rows_by_role
+        .get("block:Instruction Fetch (IF)")
+        .expect("block chunk persisted");
+    assert_eq!(block.layer, "micro");
+    assert_eq!(block.acronyms, vec!["IF".to_string(), "PC".to_string()]);
+    assert_eq!(block.clock_domain.as_deref(), Some("core_clk"));
+
+    let unknown = rows_by_role
+        .get("unknown")
+        .expect("untagged chunk defaults to unknown");
+    assert_eq!(unknown.layer, "unknown");
+    assert!(unknown.acronyms.is_empty(), "expected empty acronym list");
+    assert!(
+        unknown.clock_domain.is_none(),
+        "missing clock_domain must be null"
+    );
+}
+
+#[test]
+fn spec_semantic_search_filters_by_role_and_layer() {
+    // Build the role-tagged fixture, then run semantic_search_spec
+    // with each filter and assert exactly one hit comes back (the
+    // chunk matching the role / layer tag).
+    use sim_flow::__internal::session::lance_index::connection::LanceConnection;
+    use sim_flow::__internal::session::lance_index::query::semantic_search_spec;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path();
+    make_role_tagged_project(project);
+
+    let embedder: Arc<dyn EmbeddingClient> = Arc::new(MockEmbedder { dimension: 8 });
+    build_spec_index(
+        &SpecBuildOpts {
+            project_root: project.to_path_buf(),
+            force: false,
+        },
+        &embedder,
+    )
+    .expect("build spec index");
+
+    let index_root = project.join(".sim-flow").join("lance-index");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let (by_role, by_layer, no_filter) = rt.block_on(async {
+        let conn = LanceConnection::open_spec(&index_root, None)
+            .await
+            .expect("open spec");
+        let vec = embedder.embed(&["instruction fetch"]).await.unwrap();
+
+        let by_role = semantic_search_spec(
+            &conn,
+            &vec[0],
+            5,
+            None,
+            None,
+            Some("block:Instruction Fetch (IF)"),
+            None,
+        )
+        .await
+        .expect("by_role");
+        let by_layer = semantic_search_spec(&conn, &vec[0], 5, None, None, None, Some("micro"))
+            .await
+            .expect("by_layer");
+        let no_filter = semantic_search_spec(&conn, &vec[0], 5, None, None, None, None)
+            .await
+            .expect("no_filter");
+        (by_role, by_layer, no_filter)
+    });
+
+    assert_eq!(no_filter.len(), 2, "both chunks should be returned");
+
+    assert_eq!(by_role.len(), 1, "role filter narrows to one chunk");
+    assert_eq!(by_role[0].id, "chunk-if-block");
+
+    assert_eq!(by_layer.len(), 1, "layer filter narrows to one chunk");
+    assert_eq!(by_layer[0].id, "chunk-if-block");
+}
+
 /// Suppress dead-code warnings in fixtures unused by every test.
 #[allow(dead_code)]
 fn _suppress_unused_warning(_p: PathBuf) {}

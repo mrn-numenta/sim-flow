@@ -1096,4 +1096,84 @@ mod tests {
         let parsed = serde_yaml_compat_parse(fm).expect("parse");
         assert_eq!(parsed.breadcrumb, vec!["X", "Y"]);
     }
+
+    #[test]
+    fn yaml_compat_handles_role_and_layer_keys() {
+        // Phase 9 milestone 9.13: the parser must pick up the new
+        // chunk front-matter keys emit.rs writes.
+        let fm = "\
+            chunk_id: \"abc\"\n\
+            spec_md_role: \"block:Instruction Fetch (IF)\"\n\
+            layer: \"micro\"\n\
+            acronyms_referenced: [\"IF\", \"PC\"]\n\
+            clock_domain: \"core_clk\"\n\
+            power_domain: \"core_pd\"\n\
+            reset_domain: \"core_rst\"\n";
+        let parsed = serde_yaml_compat_parse(fm).expect("parse");
+        assert_eq!(parsed.spec_md_role, "block:Instruction Fetch (IF)");
+        assert_eq!(parsed.layer, "micro");
+        assert_eq!(parsed.acronyms_referenced, vec!["IF", "PC"]);
+        assert_eq!(parsed.clock_domain, "core_clk");
+        assert_eq!(parsed.power_domain, "core_pd");
+        assert_eq!(parsed.reset_domain, "core_rst");
+    }
+
+    #[test]
+    fn yaml_compat_handles_block_list_for_acronyms() {
+        // Bullet-style lists are the canonical emit form too.
+        let fm = "\
+            chunk_id: \"abc\"\n\
+            acronyms_referenced:\n- \"IF\"\n- \"PC\"\n- \"PD\"\n";
+        let parsed = serde_yaml_compat_parse(fm).expect("parse");
+        assert_eq!(parsed.acronyms_referenced, vec!["IF", "PC", "PD"]);
+    }
+
+    #[test]
+    fn read_chunk_md_defaults_role_and_domains() {
+        // A chunk file without the new keys must populate the
+        // PendingSpecChunk with the documented defaults
+        // ("unknown" role + layer, empty acronyms, no domains).
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("000-intro.md");
+        std::fs::write(
+            &path,
+            "---\nchunk_id: \"abc\"\nbreadcrumb: [\"A\"]\nkind: prose\n---\nbody text\n",
+        )
+        .unwrap();
+        let chunk = read_chunk_md(&path, "primary")
+            .expect("read")
+            .expect("front matter present");
+        assert_eq!(chunk.spec_md_role, "unknown");
+        assert_eq!(chunk.layer, "unknown");
+        assert!(chunk.acronyms_referenced.is_empty());
+        assert!(chunk.clock_domain.is_none());
+        assert!(chunk.power_domain.is_none());
+        assert!(chunk.reset_domain.is_none());
+    }
+
+    #[test]
+    fn read_chunk_md_surfaces_role_and_domain_keys() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("000-block.md");
+        std::fs::write(
+            &path,
+            "---\n\
+             chunk_id: \"abc\"\n\
+             spec_md_role: \"block:IF\"\n\
+             layer: \"micro\"\n\
+             acronyms_referenced: [\"IF\", \"PC\"]\n\
+             clock_domain: \"core_clk\"\n\
+             ---\n\
+             body\n",
+        )
+        .unwrap();
+        let chunk = read_chunk_md(&path, "primary").expect("read").expect("fm");
+        assert_eq!(chunk.spec_md_role, "block:IF");
+        assert_eq!(chunk.layer, "micro");
+        assert_eq!(chunk.acronyms_referenced, vec!["IF", "PC"]);
+        assert_eq!(chunk.clock_domain.as_deref(), Some("core_clk"));
+        // Unset domains remain None even when role + layer are set.
+        assert!(chunk.power_domain.is_none());
+        assert!(chunk.reset_domain.is_none());
+    }
 }
