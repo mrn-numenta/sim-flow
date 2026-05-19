@@ -151,6 +151,19 @@ struct PendingSpecChunk {
     text_sha256: String,
     contained_signal_tables: Vec<String>,
     contained_figures: Vec<String>,
+    /// Phase 9 milestone 9.13: semantic role from `format.json`.
+    /// `"unknown"` when the chunk's front-matter has no
+    /// `spec_md_role` key or it's empty.
+    spec_md_role: String,
+    /// `"architectural" | "micro" | "mixed" | "unknown"`.
+    layer: String,
+    /// Possibly-empty list of acronym strings.
+    acronyms_referenced: Vec<String>,
+    /// Optional domain refs. `None` when absent or empty in
+    /// front matter so the column can stay nullable.
+    clock_domain: Option<String>,
+    power_domain: Option<String>,
+    reset_domain: Option<String>,
 }
 
 /// On-disk shape of a chunk-md file's YAML front matter. Mirrors the
@@ -174,6 +187,19 @@ struct ChunkFrontMatter {
     contained_signal_tables: Vec<String>,
     #[serde(default)]
     contained_figures: Vec<String>,
+    /// Phase 9 milestone 9.13: role-tag front matter (Chapter 7 §7.8).
+    #[serde(default)]
+    spec_md_role: String,
+    #[serde(default)]
+    layer: String,
+    #[serde(default)]
+    acronyms_referenced: Vec<String>,
+    #[serde(default)]
+    clock_domain: String,
+    #[serde(default)]
+    power_domain: String,
+    #[serde(default)]
+    reset_domain: String,
 }
 
 /// Full spec-index build: chunks + signals + refs, all under a
@@ -211,8 +237,13 @@ pub fn build_spec_index(
     counts.insert("signal_table_rows".into(), signal_table_rows);
     counts.insert("cross_spec_refs".into(), cross_spec_refs_rows);
 
+    // schema_version is bumped to 2 in Phase 9 milestone 9.13 because
+    // the `spec_chunks` Arrow schema gained six new columns
+    // (`spec_md_role`, `layer`, `acronyms_referenced`, `clock_domain`,
+    // `power_domain`, `reset_domain`). Indices built against the
+    // version-1 schema are missing these columns and must be rebuilt.
     let manifest = SpecIndexManifest {
-        schema_version: 1,
+        schema_version: 2,
         indexed_at: Utc::now().to_rfc3339(),
         spec_ingest_manifest: spec_ingest_manifest_path.to_string_lossy().to_string(),
         spec_ingest_source_sha256,
@@ -489,6 +520,27 @@ fn read_chunk_md(path: &Path, source_id: &str) -> Result<Option<PendingSpecChunk
     } else {
         fm.chunk_id.clone()
     };
+    // Phase 9 milestone 9.13: surface the role / domain tags emit.rs
+    // writes (Chapter 7 §7.8). Defaults match the schema:
+    //   - `spec_md_role`: `"unknown"` when missing or empty.
+    //   - `layer`: `"unknown"` when missing or empty.
+    //   - `acronyms_referenced`: empty list when absent.
+    //   - `*_domain`: `None` (null in lance) when missing or empty.
+    let spec_md_role = if fm.spec_md_role.trim().is_empty() {
+        "unknown".to_string()
+    } else {
+        fm.spec_md_role
+    };
+    let layer = if fm.layer.trim().is_empty() {
+        "unknown".to_string()
+    } else {
+        fm.layer
+    };
+    let acronyms_referenced = fm.acronyms_referenced;
+    let clock_domain = nonempty_string(&fm.clock_domain);
+    let power_domain = nonempty_string(&fm.power_domain);
+    let reset_domain = nonempty_string(&fm.reset_domain);
+
     Ok(Some(PendingSpecChunk {
         id,
         source_id: source_id.to_string(),
@@ -505,7 +557,24 @@ fn read_chunk_md(path: &Path, source_id: &str) -> Result<Option<PendingSpecChunk
         text_sha256,
         contained_signal_tables: fm.contained_signal_tables,
         contained_figures: fm.contained_figures,
+        spec_md_role,
+        layer,
+        acronyms_referenced,
+        clock_domain,
+        power_domain,
+        reset_domain,
     }))
+}
+
+/// Promote an empty or whitespace-only string to `None`; otherwise
+/// return `Some` with the trimmed contents.
+fn nonempty_string(s: &str) -> Option<String> {
+    let t = s.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
 }
 
 /// Lightweight YAML-ish parser used for chunk front matter. The
@@ -527,6 +596,7 @@ fn serde_yaml_compat_parse(input: &str) -> Result<ChunkFrontMatter, String> {
                     "breadcrumb" => out.breadcrumb.push(item),
                     "contained_signal_tables" => out.contained_signal_tables.push(item),
                     "contained_figures" => out.contained_figures.push(item),
+                    "acronyms_referenced" => out.acronyms_referenced.push(item),
                     _ => {}
                 }
                 continue;
@@ -569,6 +639,19 @@ fn serde_yaml_compat_parse(input: &str) -> Result<ChunkFrontMatter, String> {
                     current_list = None;
                 }
             }
+            // Phase 9 milestone 9.13: role / domain front-matter.
+            "spec_md_role" => out.spec_md_role = strip_quotes(value).to_string(),
+            "layer" => out.layer = strip_quotes(value).to_string(),
+            "acronyms_referenced" => {
+                current_list = Some("acronyms_referenced".into());
+                if !value.is_empty() {
+                    out.acronyms_referenced = split_inline_array(value);
+                    current_list = None;
+                }
+            }
+            "clock_domain" => out.clock_domain = strip_quotes(value).to_string(),
+            "power_domain" => out.power_domain = strip_quotes(value).to_string(),
+            "reset_domain" => out.reset_domain = strip_quotes(value).to_string(),
             _ => {} // tolerate unknown fields
         }
     }
@@ -797,6 +880,15 @@ fn build_spec_chunks_batch(
         build_list_array(rows.iter().map(|r| r.contained_signal_tables.as_slice()))?;
     let figures = build_list_array(rows.iter().map(|r| r.contained_figures.as_slice()))?;
 
+    // Phase 9 milestone 9.13: role / domain columns.
+    let spec_md_roles = StringArray::from_iter_values(rows.iter().map(|r| r.spec_md_role.as_str()));
+    let layers = StringArray::from_iter_values(rows.iter().map(|r| r.layer.as_str()));
+    let acronyms = build_list_array(rows.iter().map(|r| r.acronyms_referenced.as_slice()))?;
+    // Nullable strings: an `Option<String>::None` becomes a SQL NULL.
+    let clock_domains = StringArray::from_iter(rows.iter().map(|r| r.clock_domain.clone()));
+    let power_domains = StringArray::from_iter(rows.iter().map(|r| r.power_domain.clone()));
+    let reset_domains = StringArray::from_iter(rows.iter().map(|r| r.reset_domain.clone()));
+
     RecordBatch::try_new(
         schema,
         vec![
@@ -812,6 +904,12 @@ fn build_spec_chunks_batch(
             Arc::new(vector_array),
             Arc::new(signal_tables),
             Arc::new(figures),
+            Arc::new(spec_md_roles),
+            Arc::new(layers),
+            Arc::new(acronyms),
+            Arc::new(clock_domains),
+            Arc::new(power_domains),
+            Arc::new(reset_domains),
         ],
     )
 }

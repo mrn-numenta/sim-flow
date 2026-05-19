@@ -33,6 +33,14 @@ pub fn framework_chunks_schema(dimension: usize) -> Arc<Schema> {
 }
 
 /// Build the `spec_chunks` Arrow schema. See Chapter 3 §3.5.
+///
+/// Phase 9 milestone 9.13 adds six chunk-level role / domain
+/// columns sourced from the front matter Phase 9.11 writes:
+/// `spec_md_role`, `layer`, `acronyms_referenced`,
+/// `clock_domain`, `power_domain`, `reset_domain`. The three
+/// `*_domain` columns are nullable Utf8; `spec_md_role` / `layer`
+/// always carry a string ("unknown" by default), and
+/// `acronyms_referenced` is a possibly-empty `List<Utf8>`.
 pub fn spec_chunks_schema(dimension: usize) -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
@@ -66,6 +74,19 @@ pub fn spec_chunks_schema(dimension: usize) -> Arc<Schema> {
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
             false,
         ),
+        // Phase 9 milestone 9.13: semantic-role + layer tagging.
+        Field::new("spec_md_role", DataType::Utf8, false),
+        Field::new("layer", DataType::Utf8, false),
+        Field::new(
+            "acronyms_referenced",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        // Phase 9 milestone 9.13: optional domain refs. Nullable
+        // because not every chunk's section maps to a domain.
+        Field::new("clock_domain", DataType::Utf8, true),
+        Field::new("power_domain", DataType::Utf8, true),
+        Field::new("reset_domain", DataType::Utf8, true),
     ]))
 }
 
@@ -131,7 +152,8 @@ mod tests {
     #[test]
     fn spec_chunks_schema_shape() {
         let schema = spec_chunks_schema(384);
-        assert_eq!(schema.fields().len(), 12);
+        // 12 pre-9.13 columns + 6 new role/domain columns (9.13).
+        assert_eq!(schema.fields().len(), 18);
         let breadcrumb = schema.field_with_name("breadcrumb").unwrap();
         assert!(matches!(breadcrumb.data_type(), DataType::List(_)));
         let figures = schema.field_with_name("contained_figures").unwrap();
@@ -140,6 +162,21 @@ mod tests {
         match vector.data_type() {
             DataType::FixedSizeList(_, n) => assert_eq!(*n, 384),
             other => panic!("expected FixedSizeList, got {other:?}"),
+        }
+        // Phase 9 milestone 9.13: role + layer + acronyms +
+        // optional domain refs.
+        let role = schema.field_with_name("spec_md_role").unwrap();
+        assert_eq!(role.data_type(), &DataType::Utf8);
+        assert!(!role.is_nullable());
+        let layer = schema.field_with_name("layer").unwrap();
+        assert_eq!(layer.data_type(), &DataType::Utf8);
+        assert!(!layer.is_nullable());
+        let acronyms = schema.field_with_name("acronyms_referenced").unwrap();
+        assert!(matches!(acronyms.data_type(), DataType::List(_)));
+        for name in ["clock_domain", "power_domain", "reset_domain"] {
+            let f = schema.field_with_name(name).unwrap();
+            assert_eq!(f.data_type(), &DataType::Utf8, "{name}");
+            assert!(f.is_nullable(), "{name} should be nullable");
         }
     }
 
