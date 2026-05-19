@@ -42,7 +42,7 @@ use sim_flow::session::agent::{
 use sim_flow::session::protocol::StepMode;
 use sim_flow::session::{
     AutoOptions, CapturePresenter, EventTap, JsonlCapture, TappedPresenter, WatchRegistration,
-    ingest_spec_file, run_auto,
+    run_auto,
 };
 
 fn main() {
@@ -409,23 +409,21 @@ fn run(args: &Args) -> std::result::Result<(), String> {
     }
     println!();
 
-    // Spec ingestion: chunk the source spec into `.sim-flow/spec-pages/`
-    // and emit `source-spec-toc.md` so the orchestrator's system stack
-    // (`build_spec_toc_message` / `build_session_inputs`) sees pages to
-    // reference. `sim-flow auto --spec ...` does this via
-    // `ensure_source_spec_ingested`; we run the underlying helper
-    // directly since this binary bypasses the CLI's auto subcommand.
+    // The legacy `--spec` flag used to invoke `ingest_spec_file` here,
+    // populating `.sim-flow/source-spec*` + `.sim-flow/spec-pages/`.
+    // That tree is retired in favor of `.sim-flow/spec-ingest/`
+    // produced by `sim-flow ingest`. We keep the `--spec` arg
+    // accepted (with a deprecation notice) so existing scripts don't
+    // hard-fail; users should run `sim-flow ingest ... --source <path>`
+    // separately before invoking `e2e_auto`.
     if let Some(spec) = &args.spec {
-        match ingest_spec_file(spec, &args.project_dir) {
-            Ok(summary) => {
-                println!(
-                    "e2e_auto: ingested spec `{}` -> {} page(s)",
-                    spec.display(),
-                    summary.page_count,
-                );
-            }
-            Err(err) => return Err(format!("ingest_spec_file({}): {err}", spec.display())),
-        }
+        println!(
+            "e2e_auto: --spec is no longer ingested in-process. Run \
+             `sim-flow ingest --project {} --source {} ...` first to \
+             build the `.sim-flow/spec-ingest/` corpus.",
+            args.project_dir.display(),
+            spec.display(),
+        );
     }
 
     // Healthcheck the LLM server BEFORE launching the auto run.

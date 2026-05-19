@@ -2995,21 +2995,25 @@ fn run_manual_reset<P: Presenter + ?Sized>(
 }
 
 /// Handle a `HostEvent::SetSpec`: the chat panel's "Upload Spec" flow
-/// just resolved a file path (md / txt / PDF). Run the same ingest
-/// pipeline the CLI's `--spec` flag uses (`ingest_spec_file`) so the
-/// agent's DM0 system prompt -- which assumes
-/// `.sim-flow/source-spec*` + `.sim-flow/spec-pages/<NNN>.md` already
-/// exist -- can succeed. Persist the path under
-/// `config.toml::spec_path` so a future relaunch finds it without the
-/// user having to re-upload. Surface the outcome via Diagnostic so
-/// the chat panel can show progress / errors.
+/// just resolved a file path (md / txt / PDF). Persist the path under
+/// `config.toml::spec_path` so a future `sim-flow ingest` invocation
+/// can pick it up, then emit a Diagnostic instructing the user to run
+/// the new ingest pipeline. We no longer run any ingest here: the
+/// legacy `ingest_spec_file` path (which populated
+/// `.sim-flow/source-spec*` + `.sim-flow/spec-pages/<NNN>.md`) is
+/// retired in favor of `sim-flow ingest`, which writes
+/// `.sim-flow/spec-ingest/`. Running the new pipeline from inside
+/// `run_auto` would require threading the LLM-config from the
+/// orchestrator (the new pipeline does a critique pass against an LLM
+/// to discover the spec's format), which crosses a clean separation
+/// the chat panel doesn't carry. Surfacing the prompt is enough for
+/// v1.
 fn run_manual_set_spec<P: Presenter + ?Sized>(
     opts: &AutoOptions,
     path: &str,
     auto_host: &mut AutoPresenter<P>,
 ) -> Result<()> {
     use crate::__internal::config::{CONFIG_FILE, Config};
-    use crate::session::spec_ingest::ingest_spec_file;
 
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -3027,17 +3031,16 @@ fn run_manual_set_spec<P: Presenter + ?Sized>(
         })?;
         return Ok(());
     }
-    // Persist spec_path under .sim-flow/config.toml first so a relaunch
-    // finds it even if the ingest step below fails (the next launch's
-    // `ensure_source_spec_ingested` will retry).
+    // Persist spec_path under .sim-flow/config.toml so a subsequent
+    // `sim-flow ingest` invocation can pick it up without the user
+    // having to re-type it.
     let dot = opts.project_dir.join(".sim-flow");
     if !dot.join(CONFIG_FILE).exists() {
-        // No config yet -- the project may have been initialized
-        // without one. Skip persistence; the ingest still runs.
         auto_host.send(&Event::Diagnostic {
             level: DiagnosticLevel::Info,
             message: format!(
-                "SetSpec: no `.sim-flow/{CONFIG_FILE}` to update; ingesting without persisting path",
+                "SetSpec: no `.sim-flow/{CONFIG_FILE}` to update; recording path \
+                 for next ingest invocation",
             ),
         })?;
     } else {
@@ -3059,30 +3062,17 @@ fn run_manual_set_spec<P: Presenter + ?Sized>(
             }
         }
     }
-    // Ingest. Heavy lifting (PDF page splitting, image extraction)
-    // happens inside ingest_spec_file; we just surface the outcome.
-    match ingest_spec_file(&spec_path, &opts.project_dir) {
-        Ok(summary) => {
-            auto_host.send(&Event::Diagnostic {
-                level: DiagnosticLevel::Info,
-                message: format!(
-                    "SetSpec: ingested `{}` -> {} page(s) under `{}`",
-                    spec_path.display(),
-                    summary.page_count,
-                    summary.pages_dir.display(),
-                ),
-            })?;
-        }
-        Err(err) => {
-            auto_host.send(&Event::Diagnostic {
-                level: DiagnosticLevel::Error,
-                message: format!(
-                    "SetSpec: ingest failed for `{}`: {err}",
-                    spec_path.display(),
-                ),
-            })?;
-        }
-    }
+    auto_host.send(&Event::Diagnostic {
+        level: DiagnosticLevel::Info,
+        message: format!(
+            "SetSpec: recorded `{}`. Run `sim-flow ingest --project {} \
+             --source {} --llm-backend <backend> ...` to build the \
+             `.sim-flow/spec-ingest/` corpus before starting DM0.",
+            spec_path.display(),
+            opts.project_dir.display(),
+            spec_path.display(),
+        ),
+    })?;
     Ok(())
 }
 

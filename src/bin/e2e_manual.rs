@@ -36,7 +36,6 @@ use std::time::Instant;
 use serde_json::Value;
 use sim_flow::session::JsonlCapture;
 use sim_flow::session::agent::{ClaudeAgent, CliAgent, OllamaAgent, OpenAiCompatAgent};
-use sim_flow::session::ingest_spec_file;
 use sim_flow::session::protocol::{
     DiagnosticLevel, Event, HostEvent, HostInfo, LlmMessage, PROTOCOL_VERSION, SessionKindOut,
     StepMode,
@@ -281,15 +280,23 @@ fn run(args: &Args) -> std::result::Result<(), String> {
     }
     println!();
 
-    // Pre-ingest the spec so the orchestrator's first session has the
-    // chunked spec + TOC available. `sim-flow auto --spec ...` runs
-    // this hook itself, and we pass `--spec` through too, but doing
-    // it here gives an obvious early failure if the spec path is bad.
+    // The legacy `--spec` pre-ingest hook used to call
+    // `ingest_spec_file` here, populating
+    // `.sim-flow/source-spec*` + `.sim-flow/spec-pages/`. That tree
+    // is retired in favor of `.sim-flow/spec-ingest/` produced by
+    // `sim-flow ingest`. We keep `--spec` accepted (with a notice)
+    // so existing scripts don't hard-fail; users should run
+    // `sim-flow ingest ... --source <path>` separately before
+    // invoking `e2e_manual`. We still pass `--spec` through to the
+    // child orchestrator below, where it now prints its own
+    // deprecation hint.
     if let Some(spec) = &args.spec {
-        match ingest_spec_file(spec, &args.project_dir) {
-            Ok(s) => println!("e2e_manual: ingested spec -> {} page(s)", s.page_count),
-            Err(err) => return Err(format!("ingest_spec_file({}): {err}", spec.display())),
-        }
+        println!(
+            "e2e_manual: --spec is no longer ingested in-process. Run \
+             `sim-flow ingest --project {} --source {} ...` first.",
+            args.project_dir.display(),
+            spec.display(),
+        );
     }
 
     // Spawn the orchestrator as a child process speaking JSONL over

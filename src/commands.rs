@@ -1360,17 +1360,20 @@ fn auto_cmd(
     // turns. We deliberately do NOT auto-install -- platform-specific
     // package managers vary and the user should pick.
     probe_verilator_and_warn();
-    // Pre-DM0 ingestion hook: ensures `.sim-flow/source-spec*` is up
-    // to date before the first session's system stack is built. The
-    // helper resolves a spec from (1) the CLI `--spec` arg, or (2)
-    // `.sim-flow/config.toml::spec_path` when the CLI arg is absent,
-    // and skips re-ingestion when the source on disk hasn't changed
-    // (mtime comparison). Doing this here means every dashboard
-    // launch path -- manual Play, red Play, chat-participant -- gets
-    // the same idempotent ingest, regardless of whether the user
-    // typed the spec into the dashboard's Spec field or set it via
-    // `sim-flow ... --spec ...`.
-    ensure_source_spec_ingested(spec, project)?;
+    // Pre-DM0 ingestion hook used to live here, populating the
+    // legacy `.sim-flow/source-spec.<ext>` + `.sim-flow/spec-pages/`
+    // tree via `ingest_spec_file`. Removed once the format-discovery
+    // pipeline at `.sim-flow/spec-ingest/` became the sole source-spec
+    // representation. Users now run `sim-flow ingest` explicitly to
+    // build the corpus before invoking `sim-flow auto`; the DM0
+    // prelude reads from `.sim-flow/spec-ingest/` directly.
+    if spec.is_some() {
+        eprintln!(
+            "sim-flow auto: --spec is no longer honored. Run `sim-flow ingest \
+             --project <project> --source <spec>` first to build the \
+             `.sim-flow/spec-ingest/` corpus, then invoke `sim-flow auto`."
+        );
+    }
 
     // Interactive PTY path: when the user has chosen a CLI-agent
     // backend (currently only `claude`), spawn the agent on a PTY
@@ -1532,22 +1535,6 @@ fn auto_cmd(
     }
 }
 
-/// Resolve the source-spec to ingest and run `ingest_spec_file` if
-/// needed. Resolution order:
-///
-/// 1. The explicit `--spec` CLI argument when present (overrides
-///    everything; treats the on-disk source as authoritative).
-/// 2. `.sim-flow/config.toml::spec_path` -- the dashboard's Spec
-///    field writes here, so the orchestrator finds the user's
-///    chosen spec regardless of which launch path is used.
-///
-/// When neither is set, the function emits a stderr line and
-/// returns Ok(()) -- DM0 will then prompt the user (manual mode)
-/// or auto-decide (automated mode) per the prompt instructions.
-///
-/// Idempotency: when the resolved spec already has a corresponding
-/// `.sim-flow/source-spec.<ext>` whose mtime is at least the source's,
-/// ingestion is skipped to avoid re-paginating large source specs.
 /// Probe `verilator --version` and emit a copy-pasteable install
 /// hint when missing. Used by the SV-Convert flow's SV3 step.
 /// Pure probe -- no auto-install -- because verilator package
@@ -1620,70 +1607,6 @@ fn ensure_llvm_cov_available() {
             );
         }
     }
-}
-
-fn ensure_source_spec_ingested(cli_spec: Option<&Path>, project: &Path) -> sim_flow::Result<()> {
-    use sim_flow::__internal::session::ingest_spec_file;
-
-    let resolved: Option<PathBuf> = if let Some(p) = cli_spec {
-        Some(p.to_path_buf())
-    } else {
-        let dot = project.join(DOT_SIM_FLOW);
-        let cfg = Config::load(&dot)?;
-        cfg.spec_path
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .map(PathBuf::from)
-    };
-    let Some(spec_path) = resolved else {
-        eprintln!("sim-flow: no source spec configured; DM0 will prompt for one.",);
-        return Ok(());
-    };
-    if !spec_path.exists() {
-        eprintln!(
-            "sim-flow: configured spec `{}` does not exist; DM0 will prompt for one.",
-            spec_path.display(),
-        );
-        return Ok(());
-    }
-    if source_spec_up_to_date(&spec_path, project) {
-        eprintln!(
-            "sim-flow: source spec `{}` already ingested; skipping.",
-            spec_path.display(),
-        );
-        return Ok(());
-    }
-    let summary = ingest_spec_file(&spec_path, project)?;
-    eprintln!(
-        "sim-flow: ingested spec `{}` -> {} page(s) under `{}`",
-        spec_path.display(),
-        summary.page_count,
-        summary.pages_dir.display(),
-    );
-    Ok(())
-}
-
-/// True iff `.sim-flow/source-spec.<ext>` exists for the given
-/// source path and its mtime is at least as recent as the source.
-/// Conservative: any I/O error reading mtimes returns `false` so
-/// the caller falls through to a re-ingest.
-fn source_spec_up_to_date(spec_path: &Path, project: &Path) -> bool {
-    let dot = project.join(DOT_SIM_FLOW);
-    let ext = spec_path
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("md");
-    let dest = dot.join(format!("source-spec.{ext}"));
-    let Ok(dest_meta) = std::fs::metadata(&dest) else {
-        return false;
-    };
-    let Ok(src_meta) = std::fs::metadata(spec_path) else {
-        return false;
-    };
-    let (Ok(d), Ok(s)) = (dest_meta.modified(), src_meta.modified()) else {
-        return false;
-    };
-    d >= s
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1991,30 +1914,6 @@ mod tests {
         // seconds-since-epoch, not literal ISO 8601 -- the name is
         // legacy).
         assert!(s.chars().all(|c| c.is_ascii_digit()));
-    }
-
-    #[test]
-    fn source_spec_up_to_date_is_false_when_dest_missing() {
-        let tmp = tempfile::tempdir().unwrap();
-        let spec = tmp.path().join("spec.md");
-        std::fs::write(&spec, "spec body\n").unwrap();
-        // .sim-flow/source-spec.md not on disk yet.
-        assert!(!source_spec_up_to_date(&spec, tmp.path()));
-    }
-
-    #[test]
-    fn source_spec_up_to_date_is_true_when_dest_newer_than_src() {
-        let tmp = tempfile::tempdir().unwrap();
-        let spec = tmp.path().join("spec.md");
-        std::fs::write(&spec, "spec body\n").unwrap();
-        let dot = tmp.path().join(".sim-flow");
-        std::fs::create_dir_all(&dot).unwrap();
-        // Sleep a moment so the dest's mtime is strictly after
-        // the source's. Without this the comparison sees equal
-        // timestamps and is FS/clock-resolution dependent.
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        std::fs::write(dot.join("source-spec.md"), "ingested copy\n").unwrap();
-        assert!(source_spec_up_to_date(&spec, tmp.path()));
     }
 
     #[test]

@@ -478,16 +478,17 @@ pub fn build_initial_messages(
     // that changes between dispatches (current milestone, prior
     // critique body) goes LAST so the long stable head stays cached
     // across milestone advances and critique retries within a step.
-    if let Some(toc) = build_spec_toc_message(&opts.project_dir) {
-        messages.push(LlmMessage {
-            role: LlmRole::System,
-            content: toc,
-            attachments: Vec::new(),
-            tool_call_id: None,
-            tool_calls: Vec::new(),
-            reasoning: None,
-        });
-    }
+    // The legacy `build_spec_toc_message` system message used to land
+    // here, inlining `.sim-flow/source-spec-toc.md` and telling the
+    // agent to `read_file` per-page chunks under
+    // `.sim-flow/spec-pages/<NNN>.md`. With the format-discovery
+    // pipeline owning source-spec retrieval (via the
+    // `spec_semantic_search` tool over `.sim-flow/spec-ingest/`), no
+    // analogous system message is needed: the per-step prompts
+    // describe the corpus + retrieval tool, and the agent fetches
+    // chunks lazily. Inlining a TOC here would (a) duplicate the
+    // prompt guidance and (b) reintroduce the spec-pages reading
+    // habit we just retired.
     if let Some(root) = framework_docs_root.as_deref()
         && let Some(toc) = build_framework_api_toc_message(root)
     {
@@ -631,22 +632,6 @@ fn initial_user_prompt(
         out.push_str("\nUse those exact paths - do NOT invent new filenames.");
     }
     out
-}
-
-/// If a spec was ingested into this project (`.sim-flow/source-spec-toc.md`
-/// exists), return its TOC inlined as a system message. The agent
-/// uses the TOC to decide which `spec-pages/<NNN>.md` files to fetch
-/// via `read_file` / `search`. Per Phase 4 design we never inline
-/// the full spec body -- specs can be hundreds of pages.
-fn build_spec_toc_message(project_dir: &Path) -> Option<String> {
-    let toc_path = project_dir.join(".sim-flow/source-spec-toc.md");
-    let body = std::fs::read_to_string(&toc_path).ok()?;
-    Some(format!(
-        "Source spec is available. Use `read_file` / `search` against \
-         `.sim-flow/spec-pages/<NNN>.md` to read individual pages on demand. \
-         Do NOT request the full spec at once; consult the TOC below and \
-         fetch only what you need.\n\n{body}"
-    ))
 }
 
 /// If normalized framework API docs are available, return the bundled

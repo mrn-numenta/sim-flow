@@ -412,11 +412,16 @@ pub(crate) enum Command {
         /// to build). Subsequent sessions still run in auto mode.
         #[arg(long)]
         dm0_interactive: bool,
-        /// Optional source-spec path (.md / .markdown / .txt). The
-        /// spec is copied into the project, chunked into per-page
-        /// markdown under `.sim-flow/spec-pages/`, and a TOC is
-        /// inlined into every session's system prompt. PDF support
-        /// is Phase 5 and currently errors with a clear message.
+        /// Deprecated. The legacy `--spec` flag ran
+        /// `ingest_spec_file` to populate
+        /// `.sim-flow/source-spec.<ext>` and per-page chunks under
+        /// `.sim-flow/spec-pages/`. That pipeline is retired in
+        /// favor of the format-discovery corpus written by
+        /// `sim-flow ingest` to `.sim-flow/spec-ingest/`. The flag
+        /// is still accepted for backward compatibility but no
+        /// longer triggers an ingest; users should run
+        /// `sim-flow ingest --project <project> --source <path>`
+        /// first.
         #[arg(long)]
         spec: Option<PathBuf>,
         /// Speak the session protocol over a reconnectable Unix

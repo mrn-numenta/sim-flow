@@ -270,15 +270,21 @@ fn push_step_artifact(project_dir: &Path, step_id: &str, rel: &str, out: &mut Ve
 }
 
 fn push_source_spec(project_dir: &Path, out: &mut Vec<DocumentEntry>) {
+    // After the legacy ingest path was retired in favor of
+    // `.sim-flow/spec-ingest/` (written by `sim-flow ingest`), the
+    // dashboard's source-spec catalogue points at the new corpus's
+    // manifest. The manifest summarises chunk / table / figure
+    // counts and is the canonical entry point for inspecting what
+    // was ingested.
     let dot_dir = project_dir.join(".sim-flow");
     if !dot_dir.exists() {
         return;
     }
-    let toc_abs = dot_dir.join("source-spec-toc.md");
-    if let Some(stats) = stat_file(&toc_abs) {
+    let manifest_abs = dot_dir.join("spec-ingest").join("manifest.toml");
+    if let Some(stats) = stat_file(&manifest_abs) {
         out.push(DocumentEntry {
-            abs_path: toc_abs.to_string_lossy().into_owned(),
-            rel_path: ".sim-flow/source-spec-toc.md".to_string(),
+            abs_path: manifest_abs.to_string_lossy().into_owned(),
+            rel_path: ".sim-flow/spec-ingest/manifest.toml".to_string(),
             category: DocumentCategory::SourceSpec,
             step: None,
             bytes: Some(stats.size),
@@ -287,22 +293,6 @@ fn push_source_spec(project_dir: &Path, out: &mut Vec<DocumentEntry>) {
             previews: None,
             line_count: None,
         });
-    }
-    for ext in ["pdf", "md", "markdown", "txt"] {
-        let abs = dot_dir.join(format!("source-spec.{ext}"));
-        if let Some(stats) = stat_file(&abs) {
-            out.push(DocumentEntry {
-                abs_path: abs.to_string_lossy().into_owned(),
-                rel_path: format!(".sim-flow/source-spec.{ext}"),
-                category: DocumentCategory::SourceSpec,
-                step: None,
-                bytes: Some(stats.size),
-                modified_at: Some(stats.modified),
-                exists: true,
-                previews: None,
-                line_count: None,
-            });
-        }
     }
 }
 
@@ -694,7 +684,26 @@ mod tests {
     }
 
     #[test]
-    fn source_spec_files_surfaced_when_present() {
+    fn spec_ingest_manifest_surfaced_as_source_spec() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            &tmp.path().join(".sim-flow/spec-ingest/manifest.toml"),
+            "schema_version = 1\nsource_kind = \"pdf\"\n",
+        );
+        let docs = enumerate_project_documents(tmp.path(), "direct-modeling");
+        assert!(
+            docs.iter()
+                .any(|d| d.rel_path == ".sim-flow/spec-ingest/manifest.toml"
+                    && d.category == DocumentCategory::SourceSpec),
+            "manifest not surfaced as SourceSpec: {docs:?}"
+        );
+    }
+
+    #[test]
+    fn legacy_source_spec_files_no_longer_surfaced() {
+        // Belt-and-braces: even if a project still has the legacy
+        // tree on disk from a pre-deprecation run, the documents
+        // catalogue points at the new manifest instead.
         let tmp = tempfile::tempdir().unwrap();
         write(&tmp.path().join(".sim-flow/source-spec-toc.md"), "# TOC\n");
         write(
@@ -703,12 +712,10 @@ mod tests {
         );
         let docs = enumerate_project_documents(tmp.path(), "direct-modeling");
         assert!(
-            docs.iter()
-                .any(|d| d.rel_path == ".sim-flow/source-spec-toc.md")
-        );
-        assert!(
-            docs.iter()
-                .any(|d| d.rel_path == ".sim-flow/source-spec.md")
+            !docs
+                .iter()
+                .any(|d| d.rel_path.starts_with(".sim-flow/source-spec")),
+            "legacy source-spec files still surfaced: {docs:?}"
         );
     }
 
