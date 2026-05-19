@@ -22,11 +22,13 @@ round-trips.
 - NEVER write, edit, delete, or move anything under `.sim-flow/`.
   That directory is the orchestrator's private state tree
   (`state.toml`, `config.toml`, prompt overrides, control sockets,
-  experiments DB, debug logs). Touching it -- including "fixing"
-  `state.toml` to mark a step passed -- corrupts the flow. You may
-  READ from `.sim-flow/spec-pages/` and `.sim-flow/source-spec.md`
-  when the orchestrator inlined pointers to them; everything else
-  under `.sim-flow/` is off-limits. Generated documents go under
-  `docs/` (e.g. critiques live at
+  experiments DB, debug logs, ingest corpus). Touching it -- including
+  "fixing" `state.toml` to mark a step passed -- corrupts the flow.
+  The ONLY sanctioned access to the ingested source spec is via the
+  `spec_semantic_search` tool (which returns chunk paths under
+  `.sim-flow/spec-ingest/primary/chunks/`); `read_file` a returned
+  `chunk_path` when its snippet is insufficient. Do NOT list, glob,
+  or guess paths anywhere under `.sim-flow/`. Generated documents
+  go under `docs/` (e.g. critiques live at
   `docs/critiques/<step>-critique.md`); project source under `src/`;
   analysis artifacts under `analysis/`.

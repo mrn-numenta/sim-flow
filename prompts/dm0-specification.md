@@ -21,22 +21,18 @@ and the gate engine) reads `docs/spec.md` as authoritative truth.
 ### Source-spec access discipline (read this first)
 
 The source spec is accessed via retrieval tools, not by browsing the
-filesystem. Follow these rules strictly:
+filesystem:
 
-- **Do NOT `read_file` anything under `.sim-flow/spec-pages/`.** That
-  tree is a LEGACY artifact from the retired `ingest_spec_file` flow
-  and is being deprecated. Treat it as forbidden. If you see it on
-  disk, ignore it.
-- **Do NOT `read_file` chunks under `.sim-flow/spec-ingest/primary/chunks/`
-  (or any peer `chunks/` directory) by guessing paths or listing the
-  directory.** The only legitimate way to obtain a `chunk_path` is as a
-  hit from `spec_semantic_search` (or via `signal_table_query` results
-  that reference a chunk). Once you have a returned `chunk_path`, you
-  MAY `read_file` it to fetch the full chunk body.
 - **All source-spec lookups go through `spec_semantic_search` or
   `signal_table_query`.** These tools own retrieval over the ingest
-  corpus; bypassing them is wasted turns and will not find the
-  content you need.
+  corpus under `.sim-flow/spec-ingest/`. They return relevant
+  `chunk_path` values with `breadcrumb`, page range, and a snippet.
+  When the snippet is insufficient, `read_file` the returned
+  `chunk_path` for the full body -- that is the ONLY context in which
+  you should `read_file` anything inside `.sim-flow/`.
+- **Do NOT enumerate, glob, or guess paths under `.sim-flow/`.** The
+  orchestrator's tree is not browsable by the agent; the search tools
+  are the contract.
 - The auto-populate step has ALREADY filled the deterministic parts of
   `docs/spec.md` from the ingest corpus before this session started
   (see "What you arrive to" below). Your first move should be to read
@@ -240,9 +236,8 @@ in which you should `read_file` anything inside
 `.sim-flow/spec-ingest/`.
 
 Do not list `.sim-flow/spec-ingest/primary/chunks/` or fabricate
-chunk paths; do not fall back to `.sim-flow/spec-pages/` (legacy,
-retired). If `spec_semantic_search` returns no useful hits, refine
-the query rather than browsing the tree.
+chunk paths. If `spec_semantic_search` returns no useful hits,
+refine the query rather than browsing the tree.
 
 Each hit also returns `contained_signal_tables` and
 `contained_figures` so you can pivot to the structured artifact
@@ -313,12 +308,10 @@ in manual mode.
 1. Read `docs/spec.md` and skim every auto-populated section so you
    know the shape of the structured skeleton. This is your starting
    point -- the auto-populate step has already pulled the
-   deterministic content out of the source spec for you. Do NOT
-   begin by reading source-spec pages or chunks.
+   deterministic content out of the source spec for you.
 2. Read `.sim-flow/spec-ingest/manifest.toml` (if present) to learn
-   the source-spec inventory. Do NOT `read_file` chunks directly from
-   `.sim-flow/spec-ingest/primary/chunks/`, and do NOT `read_file`
-   anything under `.sim-flow/spec-pages/` (legacy, retired).
+   the source-spec inventory. All chunk content is fetched via
+   `spec_semantic_search`; do not read corpus files directly.
 3. For each empty prose subsection you own, run a focused
    `spec_semantic_search` for the relevant material, `read_file` the
    `chunk_path`(s) returned by that search when the snippet is too

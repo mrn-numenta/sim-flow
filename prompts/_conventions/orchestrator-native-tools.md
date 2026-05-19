@@ -53,14 +53,16 @@ followed by a relative path, STOP and call `write_file` instead.
 - NEVER write, edit, delete, or move anything under `.sim-flow/`.
   That directory is the orchestrator's private state tree
   (`state.toml`, `config.toml`, prompt overrides, control sockets,
-  experiments DB, debug logs). Touching it -- including "fixing"
-  `state.toml` to mark a step passed -- corrupts the flow. You may
-  READ from `.sim-flow/spec-pages/` and `.sim-flow/source-spec.md`
-  when the orchestrator inlined pointers to them; everything else
-  under `.sim-flow/` is off-limits. Generated documents go under
-  `docs/` (e.g. critiques live at
-  `docs/critiques/<step>-critique.json` -- emit them by calling
-  `write_file` with that path); project source under `src/`;
+  experiments DB, debug logs, ingest corpus). Touching it -- including
+  "fixing" `state.toml` to mark a step passed -- corrupts the flow.
+  The ONLY sanctioned access to the ingested source spec is via the
+  `spec_semantic_search` tool (which returns chunk paths under
+  `.sim-flow/spec-ingest/primary/chunks/`); call
+  `read_file({"path": "<returned chunk_path>"})` when the snippet
+  isn't enough. Do NOT list, glob, or guess paths anywhere under
+  `.sim-flow/`. Generated documents go under `docs/` (e.g. critiques
+  live at `docs/critiques/<step>-critique.json` -- emit them by
+  calling `write_file` with that path); project source under `src/`;
   analysis artifacts under `analysis/`.
 
 ## Overriding step-prompt phrasing

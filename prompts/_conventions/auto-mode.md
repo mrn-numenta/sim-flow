@@ -7,14 +7,14 @@ using:
 
 - prior-step artifacts under `docs/` (fetch via `read_file`),
 - the modeling guide (under `lib:`),
-- the **user-supplied source spec** when ingestion produced one --
-  available at `.sim-flow/source-spec.md` (or `.sim-flow/source-spec.<ext>`
-  for paginated PDF / TXT inputs) and per-page at
-  `.sim-flow/spec-pages/<NNN>.md`. The orchestrator may have inlined a
-  TOC into this system stack; if it didn't, read
-  `.sim-flow/source-spec-toc.md` first and fetch only the pages you
-  need (don't request the whole spec at once). For DM0 specifically,
-  the source spec is the authoritative input you derive `docs/spec.md`
+- the **user-supplied source spec** when ingestion produced one. The
+  source spec is accessed via the `spec_semantic_search` tool, which
+  searches the ingested corpus under `.sim-flow/spec-ingest/` and
+  returns relevant chunks with `chunk_path`, `breadcrumb`, page
+  range, and a snippet; `read_file` a returned `chunk_path` only
+  when the snippet is insufficient. Do NOT enumerate the corpus
+  directory yourself or guess chunk paths. For DM0 specifically, the
+  source spec is the authoritative input you derive `docs/spec.md`
   from; for later steps it is reference material when `docs/spec.md`
   is ambiguous.
 
