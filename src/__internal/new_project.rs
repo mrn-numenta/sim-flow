@@ -46,18 +46,25 @@ pub fn new_model(options: &NewModelOptions) -> Result<NewModelOutcome> {
         )));
     }
 
-    let values = template::default_placeholders(
+    ensure_cargo_generate_installed()?;
+
+    let placeholders = template::default_placeholders(
         &options.project_name,
         &options.foundation_root,
         &options.library_path,
     );
-    template::expand_into(&template_dir, &project_dir, &values)?;
+    run_cargo_generate(
+        &template_dir,
+        &options.destination,
+        &options.project_name,
+        &placeholders,
+    )?;
 
     if !options.skip_cargo_check {
         cargo_check(&project_dir)?;
     }
 
-    let crate_name = values
+    let crate_name = placeholders
         .get("crate_name")
         .cloned()
         .unwrap_or_else(|| template::crate_name(&options.project_name));
@@ -66,6 +73,117 @@ pub fn new_model(options: &NewModelOptions) -> Result<NewModelOutcome> {
         crate_name,
         next_step: "DM0".to_string(),
     })
+}
+
+/// Verify `cargo generate` is available; install it if missing.
+///
+/// Detection: shell out to `cargo generate --version`. If the
+/// invocation succeeds the subcommand is on PATH and we're done.
+/// Otherwise run `cargo install cargo-generate` and re-probe. The
+/// install is a one-time cost (cargo caches the binary under
+/// `$CARGO_HOME/bin`) but takes minutes on first run; surface a
+/// clear diagnostic so the caller knows that's the expected
+/// behavior.
+fn ensure_cargo_generate_installed() -> Result<()> {
+    if cargo_generate_available() {
+        return Ok(());
+    }
+    eprintln!(
+        "[sim-flow new model] cargo-generate not found; installing via `cargo install cargo-generate` \
+         (one-time, may take a few minutes)..."
+    );
+    let status = Command::new("cargo")
+        .arg("install")
+        .arg("cargo-generate")
+        .arg("--locked")
+        .status()
+        .map_err(|source| Error::Io {
+            path: PathBuf::from("cargo"),
+            source,
+        })?;
+    if !status.success() {
+        return Err(Error::State(format!(
+            "failed to install cargo-generate: exit {:?}. \
+             Install it manually with `cargo install cargo-generate` and retry.",
+            status.code()
+        )));
+    }
+    if !cargo_generate_available() {
+        return Err(Error::State(
+            "cargo-generate install reported success but `cargo generate --version` still fails. \
+             Check $CARGO_HOME/bin is on PATH and retry."
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+fn cargo_generate_available() -> bool {
+    Command::new("cargo")
+        .arg("generate")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Invoke `cargo generate --path <template> --name <name> --destination <dest>
+/// --silent --vcs none --define KEY=VALUE...`.
+///
+/// `--silent` requires every placeholder declared in the template's
+/// `cargo-generate.toml` to have a value (either a default or a
+/// `--define` override); we pass `--define` for each custom
+/// placeholder so the run is fully deterministic.
+///
+/// `--vcs none` skips git init -- sim-flow projects are typically
+/// committed under a parent repo (sim-models) and the auto-init would
+/// produce nested `.git` dirs.
+fn run_cargo_generate(
+    template_dir: &Path,
+    destination: &Path,
+    project_name: &str,
+    placeholders: &BTreeMap<String, String>,
+) -> Result<()> {
+    std::fs::create_dir_all(destination).map_err(|source| Error::Io {
+        path: destination.to_path_buf(),
+        source,
+    })?;
+    let mut cmd = Command::new("cargo");
+    cmd.arg("generate")
+        .arg("--path")
+        .arg(template_dir)
+        .arg("--name")
+        .arg(project_name)
+        .arg("--destination")
+        .arg(destination)
+        .arg("--silent")
+        .arg("--vcs")
+        .arg("none");
+    // Pass custom placeholders explicitly. The built-ins
+    // (`project-name`, `crate_name`) are derived by cargo-generate
+    // from `--name`, so we skip those here even though they appear
+    // in the placeholder map.
+    for (key, value) in placeholders {
+        if key == "project-name" || key == "crate_name" {
+            continue;
+        }
+        cmd.arg("--define").arg(format!("{key}={value}"));
+    }
+    let output = cmd.output().map_err(|source| Error::Io {
+        path: PathBuf::from("cargo generate"),
+        source,
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(Error::State(format!(
+            "cargo generate failed (exit {:?}):\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+            output.status.code()
+        )));
+    }
+    Ok(())
 }
 
 fn validate_project_name(name: &str) -> Result<()> {

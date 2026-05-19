@@ -1,0 +1,31 @@
+# cargo-generate manifest for the sim-flow `new model` template.
+#
+# Built-in placeholders provided by cargo-generate:
+#   {{project-name}}   kebab-case project name (--name)
+#   {{crate_name}}     snake_case rust identifier derived from project-name
+#
+# Custom placeholders defined below; the sim-flow CLI passes runtime
+# values via `--define` so the displayed defaults are placeholders only.
+# When invoked directly with `cargo generate`, the prompts pick these
+# defaults up.
+
+[template]
+cargo_generate_version = ">=0.18.0"
+
+[placeholders.foundation_path]
+type = "string"
+prompt = "Absolute path to the sim-foundation repo root"
+default = "/path/to/sim-foundation"
+regex = ".+"
+
+[placeholders.library_path]
+type = "string"
+prompt = "Relative path from the generated project to sim-models/library"
+default = "../../library"
+regex = ".+"
+
+[placeholders.timestamp]
+type = "string"
+prompt = "ISO-8601 UTC generation timestamp (e.g. 2026-05-19T16:00:00Z)"
+default = "1970-01-01T00:00:00Z"
+regex = ".+"
