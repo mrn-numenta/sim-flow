@@ -35,7 +35,7 @@ use crate::session::spec_ingest::pipeline::IngestWarning;
 /// field after a successful critique pass. Bump alongside any
 /// material change to [`CRITIQUE_PROMPT`] so the
 /// `(source_sha256, model, prompt_version)` cache key invalidates.
-pub const CRITIQUE_PROMPT_VERSION: &str = "critique-v1";
+pub const CRITIQUE_PROMPT_VERSION: &str = "critique-v2";
 
 /// Stage tag used in [`IngestWarning::stage`] for warnings this
 /// module surfaces. The format-discovery LLM pass is the third
@@ -51,6 +51,89 @@ const DISCOVER_STAGE: u8 = 3;
 /// patch, and per-call inputs (the first-cut descriptor JSON and
 /// the rendered skeleton) appended at call time.
 const CRITIQUE_PROMPT: &str = r#"You are reviewing a deterministic first-cut classification of a hardware-spec PDF's structure. Your job is to confirm or correct the first cut. You do NOT re-classify from scratch. You emit an adjustments patch — a JSON array of per-entry overrides — that the caller applies on top of the first cut to produce the final descriptor.
+
+# Closed enumerations (DO NOT invent new values)
+
+Every classification field has a fixed list of legal values. Adjustments whose `new_value` falls outside these lists will be silently mapped to the `Unknown` variant, losing your intent. Stay inside the lists.
+
+## `spec_md_role.kind` (use one of these exact strings)
+
+  metadata, assumptions, external_interfaces, block, parameters,
+  csrs, csr_fields, register_files, memory_map, state_machines,
+  encodings, connectivity, errors, functional_behavior,
+  timing_and_throughput, pipeline_and_hierarchy,
+  reset_init_flush_drain, worked_examples, glossary,
+  clock_domains, power_domains, reset_domains,
+  security_boundaries, numerical_conventions,
+  performance_counters, prose, unknown
+
+For narrative sections that don't fit a specific kind (table of contents, introduction, features list, product overview, acknowledgements, revision history, change log), use `prose`. Do NOT invent `toc`, `intro`, `features`, `register_map`, `resources`, etc. — they will be dropped.
+
+Some variants REQUIRE an extra field:
+  - `block` requires `block_name`:
+      {"kind": "block", "block_name": "Instruction Fetch (IF)"}
+  - `csr_fields` requires `csr_name`:
+      {"kind": "csr_fields", "csr_name": "mstatus"}
+
+All other kinds are written as `{"kind": "<kind>"}` with no extra fields.
+
+## `table.kind` (use one of these exact strings)
+
+  signal_table, external_signal_table, parameter_table,
+  csr_table, csr_field_table, register_file_table,
+  memory_map_table, encoding_table, error_table,
+  fsm_state_table, fsm_transition_table, latency_table,
+  connectivity_table, pmu_event_table, unknown
+
+## `table.spec_md_target.kind` (use one of these exact strings)
+
+  block_signals, external_signals, parameters, csrs, csr_fields,
+  memory_map, state_machine_states, state_machine_transitions,
+  encoding, errors, connectivity_nodes, connectivity_edges,
+  timing_latency, pmu_events, unknown
+
+Variants that require an extra field:
+  - `block_signals` requires `block_name`:
+      {"kind": "block_signals", "block_name": "Instruction Fetch (IF)"}
+  - `csr_fields` requires `csr_name`:
+      {"kind": "csr_fields", "csr_name": "mstatus"}
+  - `state_machine_states` requires `fsm_name`:
+      {"kind": "state_machine_states", "fsm_name": "fetch_fsm"}
+  - `state_machine_transitions` requires `fsm_name`.
+  - `encoding` requires `encoding_name`:
+      {"kind": "encoding", "encoding_name": "privilege_level"}
+
+All other targets are `{"kind": "<kind>"}`.
+
+## `figure.kind` (use one of these exact strings)
+
+  block_diagram, state_diagram, timing_diagram,
+  memory_map_diagram, connectivity_topology, pipeline_diagram,
+  generic
+
+## `figure.spec_md_target.kind` (use one of these exact strings)
+
+  block_diagram, state_diagram, timing_diagram,
+  memory_map_diagram, connectivity_topology, pipeline_diagram,
+  generic
+
+Variants that require an extra field:
+  - `block_diagram` requires `block_name`:
+      {"kind": "block_diagram", "block_name": "Instruction Fetch (IF)"}
+  - `state_diagram` requires `fsm_name`.
+
+## `layer` (use one of these exact strings)
+
+  architectural, micro, mixed, unknown
+
+## `table.wrap_strategy` (use one of these exact strings)
+
+  single_row, merge_continuation_rows, join_on_blank_first_col
+
+## `chrome.kind` (use one of these exact strings)
+
+  running_header, running_footer, page_number, footer_link,
+  watermark
 
 # Adjustments-patch schema
 
@@ -83,7 +166,50 @@ Emit a JSON array of adjustment objects. Each adjustment has this shape:
 
 You MAY NOT change pdf_oxide-derived facts: table `page` / `first_line` / `row_count` / `col_count` / `bbox`, figure `page`, section_role `page` / `line` / `font_size` / `font_weight`, glossary `acronym` / `first_page`. Adjustments touching those fields will be rejected.
 
-`old_value` must match the current field value verbatim (it's a sanity check; mismatches are skipped with a drift warning).
+`old_value` must match the current field value verbatim (it's a sanity check; mismatches are skipped with a drift warning). If you can't reproduce it exactly, set `old_value` to `null` to bypass the check.
+
+# Worked examples
+
+Example 1 — reclassify a misidentified section as a block:
+
+  {
+    "target": {"kind": "section_role", "id": "8:230"},
+    "field": "spec_md_role",
+    "old_value": {"kind": "unknown"},
+    "new_value": {"kind": "block", "block_name": "Branch Prediction Unit"},
+    "rationale": "BPU is an architecturally-named pipeline block"
+  }
+
+Example 2 — promote an unknown table to a signal table with a block target:
+
+  [
+    {
+      "target": {"kind": "table", "id": "T14"},
+      "field": "kind",
+      "old_value": "unknown",
+      "new_value": "signal_table",
+      "rationale": "columns are Signal/Direction/Peer/Description"
+    },
+    {
+      "target": {"kind": "table", "id": "T14"},
+      "field": "spec_md_target",
+      "old_value": {"kind": "unknown"},
+      "new_value": {"kind": "block_signals", "block_name": "Branch Prediction Unit"},
+      "rationale": "table sits under the BPU section heading"
+    }
+  ]
+
+Example 3 — tag a narrative section as prose (NOT toc / intro / features):
+
+  {
+    "target": {"kind": "section_role", "id": "1:42"},
+    "field": "spec_md_role",
+    "old_value": {"kind": "unknown"},
+    "new_value": {"kind": "prose"},
+    "rationale": "table of contents — narrative front matter, not a typed section"
+  }
+
+# Output format
 
 Wrap the JSON array in `<patch>` and `</patch>` tags so the parser can locate it unambiguously. If you have no corrections, emit `<patch>[]</patch>`. Do not emit anything outside the patch tags except optional brief commentary.
 
@@ -977,7 +1103,7 @@ mod tests {
         let refined = discover(&skel, &first_cut, llm.as_mut(), &mut warnings).expect("discover");
 
         assert_eq!(refined.model, "mock");
-        assert_eq!(refined.prompt_version, "critique-v1");
+        assert_eq!(refined.prompt_version, "critique-v2");
         assert!(refined.discovered_at > first_cut.discovered_at);
 
         assert_eq!(
@@ -1027,9 +1153,9 @@ mod tests {
         assert_eq!(refined.glossary, first_cut.glossary);
         assert_eq!(refined.chrome, first_cut.chrome);
         // Metadata WAS stamped (model = "mock", prompt_version =
-        // "critique-v1", discovered_at advanced past epoch zero).
+        // "critique-v2", discovered_at advanced past epoch zero).
         assert_eq!(refined.model, "mock");
-        assert_eq!(refined.prompt_version, "critique-v1");
+        assert_eq!(refined.prompt_version, "critique-v2");
         assert!(refined.discovered_at > first_cut.discovered_at);
     }
 
@@ -1124,7 +1250,7 @@ mod tests {
         assert_eq!(refined.chrome, first_cut.chrome);
         // Metadata updated.
         assert_eq!(refined.model, "mock");
-        assert_eq!(refined.prompt_version, "critique-v1");
+        assert_eq!(refined.prompt_version, "critique-v2");
         assert!(refined.discovered_at > first_cut.discovered_at);
     }
 
