@@ -17,7 +17,13 @@ plan and tests; DM4 will measure against the targets.
 
 1. Read the spec. It lands in one of two layouts (the gate accepts
    either):
-   - Single file: `read_file("docs/spec.md")`.
+   - Single file: prefer
+     `read_markdown({"path": "docs/spec.md"})` to learn the
+     outline, then pull only the sections you need
+     (`Functional Behavior`, `Timing, Latency, and Throughput`,
+     etc.). The spec is 30-60 KB on real designs; bulk-loading
+     it wastes context. Fall back to `read_file` only when you
+     need a non-section slice.
    - Paginated: section files under `docs/spec/` (e.g.
      `docs/spec/01-overview.md`, ...). The system stack's TOC
      block lists every section; `list_dir("docs/spec/")` if you

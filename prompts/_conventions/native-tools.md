@@ -14,6 +14,17 @@ round-trips.
 
 - Use Write to create new files; Edit for targeted updates; paths
   are relative to the project root.
+- For sectioned markdown (any file with `##` headings --
+  `docs/spec.md`, `docs/targets.md`, `docs/testbench.md`,
+  `docs/analysis/decomposition.md`,
+  `docs/analysis/data-movement.md`,
+  `docs/analysis/pipeline-mapping.md`, `docs/impl-plan/plan.md`,
+  the milestone files, etc.) prefer the `read_markdown` tool for
+  the outline and per-section reads. It's MUCH cheaper than
+  paginating with byte-offset Reads or hunting headings with
+  `search`. Outline once to learn the structure, then pull the 1-3
+  sections you actually need. Fall back to Read only for
+  non-section slices.
 - The path must be EXACTLY what the step instruction specifies.
 - Do not describe a file in prose instead of writing it via a tool
   call.

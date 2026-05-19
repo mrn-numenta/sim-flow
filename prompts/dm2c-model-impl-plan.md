@@ -40,7 +40,12 @@ That belongs in DM2d when the agent writes code.
 
 ## Procedure
 
-1. Read each input above.
+1. Read each input above. Use `read_markdown` -- outline first
+   (`read_markdown({"path": "docs/analysis/decomposition.md"})`)
+   then pull only the sections you need. These analysis files
+   are 30-60 KB; bulk-loading or `read_file` byte-offset paging
+   wastes context. `search` is for code symbols, not section
+   navigation.
 2. Decide the milestone breakdown. A milestone is a coherent
    slice of work that lands a self-contained capability. Typical
    shapes for the model implementation:

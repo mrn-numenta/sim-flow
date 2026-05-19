@@ -39,15 +39,21 @@ impl Tool for ReadMarkdownTool {
     }
 
     fn description(&self) -> &'static str {
-        "Navigate a markdown file by heading. With no `section` arg, returns a \
-         hierarchical outline (heading tree only) down to `max_depth` (default 3). \
-         With `section` set, returns that section's heading + body up to the next \
-         heading at the same-or-shallower level. Match is case-insensitive on \
-         heading text after stripping `#` markers and backticks; pass a `>`-separated \
-         breadcrumb path (e.g. `Blocks > Block: Instruction Fetch (IF)`) to \
-         disambiguate when the same heading text appears multiple times. Saves the \
-         turns the agent would otherwise spend paginating `read_file` to find the \
-         right offset."
+        "Navigate any sectioned markdown file by heading. PREFERRED over `read_file` \
+         + byte offsets or `search` for `^##` patterns when you need to inspect \
+         large markdown (`docs/spec.md`, `docs/targets.md`, `docs/testbench.md`, \
+         `docs/analysis/decomposition.md`, `docs/analysis/data-movement.md`, \
+         `docs/analysis/pipeline-mapping.md`, `docs/impl-plan/plan.md`, the \
+         milestone files, etc.). With no `section` arg, returns a hierarchical \
+         outline (heading tree only) down to `max_depth` (default 3) -- a cheap way \
+         to learn the file's structure without pulling the body. With `section` set, \
+         returns that section's heading + body up to the next heading at the same-\
+         or-shallower level. Match is case-insensitive on heading text after \
+         stripping `#` markers and backticks; pass a `>`-separated breadcrumb path \
+         (e.g. `Blocks > Block: Instruction Fetch (IF)`) to disambiguate when the \
+         same heading text appears multiple times. Typical flow: outline once, then \
+         pull the 1-3 sections you actually need. Saves the turns the agent would \
+         otherwise spend paginating `read_file` to find the right offset."
     }
 
     fn args_schema(&self) -> serde_json::Value {

@@ -10,6 +10,13 @@ evaluate them and write the critique file.
 - `docs/targets.md`
 - `docs/testbench.md`
 
+Use `read_markdown` for outline + per-section reads on each
+input. These files are sectioned by purpose (targets by metric,
+testbench by component) and the spec is large -- outline first,
+then pull the sections you actually need. Don't page through
+with `read_file` byte offsets and don't use `search` to find
+headings.
+
 ## Evaluation
 
 {{ critique_kinds }}

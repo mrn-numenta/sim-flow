@@ -21,6 +21,11 @@ write the critique file.
 - `docs/analysis/pipeline-mapping.md`
 - `docs/analysis/data-movement.md`
 
+Use `read_markdown` per-section on each input. Outline first,
+then pull the sections referenced in the milestone Trace blocks
+you're checking. The analysis files are 30-60 KB and the plan
+files are sectioned by milestone -- bulk-loading wastes context.
+
 ## Evaluation
 
 {{ critique_kinds }}

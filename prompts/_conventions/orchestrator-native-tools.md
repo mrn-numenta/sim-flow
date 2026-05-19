@@ -40,8 +40,27 @@ followed by a relative path, STOP and call `write_file` instead.
     surface the scope question.
 - Use `read_file({"path": "..."})` to inspect a file before
   editing.
+- For sectioned markdown (any file with `##` headings --
+  `docs/spec.md`, `docs/targets.md`, `docs/testbench.md`,
+  `docs/analysis/decomposition.md`,
+  `docs/analysis/data-movement.md`,
+  `docs/analysis/pipeline-mapping.md`, `docs/impl-plan/plan.md`,
+  the milestone files, etc.) prefer
+  `read_markdown({"path": "<path>"})` for the outline and
+  `read_markdown({"path": "<path>", "section": "<heading>"})`
+  for one section's body. It's MUCH cheaper than paginating with
+  `read_file` byte offsets or hunting headings with `search`.
+  Typical flow: outline once to learn the structure, then pull
+  the 1-3 sections you actually need. Disambiguate duplicate
+  headings with a `>`-separated breadcrumb path (e.g.
+  `Blocks > Block: Instruction Fetch`). Fall back to `read_file`
+  only when you need a non-section slice (e.g. table rows by
+  byte offset) or the section exceeds the 64 KB per-call cap.
 - Use `list_dir({"path": "..."})` and `search({"pattern": "...",
-  "path": "..."})` to explore.
+  "path": "..."})` to explore. `search` is for code symbols and
+  literal strings -- it is NOT a section navigator. If you find
+  yourself running `search` for `^##` / `^###` / `^### Edge:` /
+  `^## Block:` patterns, switch to `read_markdown` instead.
 - Use `run_cargo({"subcommand": "...", "args": [...]})` for build /
   test / check steps where that tool is in scope.
 - The `path` argument must be EXACTLY what the step instruction

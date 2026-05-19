@@ -11,6 +11,11 @@ critique file.
 - `docs/analysis/data-movement.md`
 - `docs/analysis/pipeline-mapping.md`
 
+Use `read_markdown` for outline + per-section reads on each
+input. These files run 30-60 KB on real designs; bulk-loading or
+paging with `read_file` byte offsets wastes context. Don't use
+`search` to find headings -- the outline is what you want.
+
 ## Evaluation
 
 {{ critique_kinds }}

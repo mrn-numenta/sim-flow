@@ -20,17 +20,18 @@ Do NOT chain milestones.
 
 - `docs/plan-management.md` -- plan-file conventions
   (task states, ordering, the 10-task cap).
-- `docs/test-plan/test-plan.md` -- index. Read first to orient
-  on testbench architecture and the TOC of milestone files.
+- `docs/test-plan/test-plan.md` -- index. Read first (use
+  `read_markdown` for the outline) to orient on testbench
+  architecture and the TOC of milestone files.
 - `docs/test-plan/test-milestone-NN-<name>.md` -- per-milestone
   task lists. The first file with at least one `- [ ]` row is
-  your current milestone.
+  your current milestone. Use `read_markdown` per section.
 - `docs/test-plan/coverage.md` -- coverage strategy (threshold,
   exclusions, run command, report path). Consumed by the
-  coverage milestone.
+  coverage milestone. Use `read_markdown` per section.
 - `docs/testbench.md` -- testbench architecture; useful when a
   test failure raises questions about what a Monitor should
-  observe.
+  observe. Use `read_markdown` per section -- don't bulk-load.
 - `tests/` -- the testbench scaffolding DM3b produced. You add
   test bodies but do NOT modify the scaffolding (Sequencers,
   Drivers, Monitors, Scoreboards, `SimEnvBuilder` helper). If

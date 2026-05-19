@@ -9,6 +9,14 @@ critique file.
 - `docs/analysis/decomposition.md`
 - `docs/analysis/data-movement.md`
 
+Use `read_markdown` for the outline + per-section reads on each
+input (these files are large -- 30-60 KB on real designs; loading
+them whole wastes context). Sweep `^### Edge:` /
+`^## Operation:` headings via the outline, then fetch the
+section you need. `read_file` is fine for short tables or when
+you already know the byte offset, but do NOT page through these
+files with 800-byte offset reads or hunt headings with `search`.
+
 ## Evaluation
 
 {{ critique_kinds }}

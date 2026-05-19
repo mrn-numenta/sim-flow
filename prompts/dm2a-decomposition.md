@@ -15,7 +15,14 @@ is realistic for later pipeline mapping.
 
 ## Procedure
 
-1. Read `docs/spec.md` and `docs/targets.md`.
+1. Read `docs/spec.md` and `docs/targets.md`. Prefer
+   `read_markdown` per-section over loading the whole files:
+   start with `read_markdown({"path": "docs/spec.md"})` to learn
+   the outline, then pull the sections you actually need (e.g.
+   `Blocks`, `Functional Behavior`, `Timing, Latency, and
+   Throughput`, `Pipeline and Hierarchy`). Same for
+   `docs/targets.md`. Use `spec_semantic_search` for source-spec
+   detail beyond what spec.md inlines.
 2. Identify the gate-budget-per-cycle target or estimate in
    `docs/targets.md`.
    - Treat it as a hard input to decomposition granularity.

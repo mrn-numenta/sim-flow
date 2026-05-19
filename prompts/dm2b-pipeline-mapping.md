@@ -14,7 +14,13 @@ Foundation modules.
 
 1. Read `docs/spec.md`, `docs/targets.md`,
    `docs/analysis/decomposition.md`, and
-   `docs/analysis/data-movement.md`.
+   `docs/analysis/data-movement.md`. Use `read_markdown`
+   per-section -- outline each file first, then pull the
+   sections you actually need. For data-movement, that's
+   typically the edge summary table and the specific
+   `### Edge:` subsections that touch the operations you're
+   mapping; for decomposition, the `## Operation:` sections.
+   Don't bulk-load these files.
 2. Identify the gate-budget-per-cycle target or estimate in
    `docs/targets.md`.
    - Treat it as the canonical budget for this step.
