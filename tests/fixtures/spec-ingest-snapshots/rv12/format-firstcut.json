@@ -1,0 +1,5158 @@
+{
+  "schema_version": 1,
+  "model": "first-cut-builtin",
+  "prompt_version": "first-cut-v1",
+  "source_sha256": "af487088fe5bc42610b40cea36860e3567e7d4295b587e2038999bcb9935c8bd",
+  "discovered_at": "1970-01-01T00:00:00Z",
+  "section_roles": [
+    {
+      "heading": "Contents",
+      "page": 1,
+      "line": 217,
+      "font_size": 19.199999,
+      "font_weight": "normal",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Product Brief",
+      "page": 2,
+      "line": 611,
+      "font_size": 19.2,
+      "font_weight": "normal",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Introduction",
+      "page": 2,
+      "line": 559,
+      "font_size": 14.399999,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Features",
+      "page": 3,
+      "line": 436,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Introduction to the RV12",
+      "page": 4,
+      "line": 197,
+      "font_size": 19.2,
+      "font_weight": "normal",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Privilege Levels",
+      "page": 5,
+      "line": 515,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "security_boundaries"
+      },
+      "layer": "architectural",
+      "rationale": "first-cut heuristic: matched \"privilege\""
+    },
+    {
+      "heading": "Level Encoding Name",
+      "page": 5,
+      "line": 370,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "encodings"
+      },
+      "layer": "architectural",
+      "rationale": "first-cut heuristic: matched \"encoding\""
+    },
+    {
+      "heading": "Abbreviation",
+      "page": 5,
+      "line": 370,
+      "font_size": 14.399999,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Execution Pipeline",
+      "page": 6,
+      "line": 605,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "pipeline_and_hierarchy"
+      },
+      "layer": "micro",
+      "rationale": "first-cut heuristic: matched \"pipeline\""
+    },
+    {
+      "heading": "Branch Prediction Unit",
+      "page": 8,
+      "line": 193,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Debug Unit",
+      "page": 10,
+      "line": 608,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Data Cache",
+      "page": 10,
+      "line": 481,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Instruction Cache",
+      "page": 10,
+      "line": 203,
+      "font_size": 14.4,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Integer Pipeline",
+      "page": 11,
+      "line": 603,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "pipeline_and_hierarchy"
+      },
+      "layer": "micro",
+      "rationale": "first-cut heuristic: matched \"pipeline\""
+    },
+    {
+      "heading": "Register File",
+      "page": 11,
+      "line": 476,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "RV12 Execution Pipeline",
+      "page": 11,
+      "line": 366,
+      "font_size": 19.2,
+      "font_weight": "normal",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "pipeline_and_hierarchy"
+      },
+      "layer": "micro",
+      "rationale": "first-cut heuristic: matched \"pipeline\""
+    },
+    {
+      "heading": "Instruction Fetch (IF)",
+      "page": 12,
+      "line": 315,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "block",
+        "block_name": "Instruction Fetch (IF)"
+      },
+      "layer": "micro",
+      "rationale": "first-cut heuristic: matched \"(<ACR>) suffix: IF\""
+    },
+    {
+      "heading": "Signal Direction To/From Description",
+      "page": 13,
+      "line": 282,
+      "font_size": 14.400001,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "if_nxt_pc",
+      "page": 13,
+      "line": 242,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "parcel_pc",
+      "page": 13,
+      "line": 179,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Flush",
+      "page": 14,
+      "line": 631,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Stall",
+      "page": 14,
+      "line": 589,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "if_pc",
+      "page": 14,
+      "line": 485,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "if_instr",
+      "page": 14,
+      "line": 443,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "if_bubble",
+      "page": 14,
+      "line": 402,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Pre-Decode (PD)",
+      "page": 14,
+      "line": 299,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "block",
+        "block_name": "Pre-Decode (PD)"
+      },
+      "layer": "micro",
+      "rationale": "first-cut heuristic: matched \"(<ACR>) suffix: PD\""
+    },
+    {
+      "heading": "Signal Direction To/From Description",
+      "page": 15,
+      "line": 282,
+      "font_size": 14.400001,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "if_pc",
+      "page": 15,
+      "line": 242,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "if_instr",
+      "page": 15,
+      "line": 200,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "if_bubble",
+      "page": 15,
+      "line": 159,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "pd_predict",
+      "page": 16,
+      "line": 617,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "pd_pc",
+      "page": 16,
+      "line": 575,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "pd_instr",
+      "page": 16,
+      "line": 534,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "pd_bubble",
+      "page": 16,
+      "line": 492,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Instruction Decode (ID)",
+      "page": 16,
+      "line": 390,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "block",
+        "block_name": "Instruction Decode (ID)"
+      },
+      "layer": "micro",
+      "rationale": "first-cut heuristic: matched \"(<ACR>) suffix: ID\""
+    },
+    {
+      "heading": "Signal",
+      "page": 17,
+      "line": 251,
+      "font_size": 14.400001,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Direction To/From Description",
+      "page": 17,
+      "line": 251,
+      "font_size": 14.400001,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "pd_pc",
+      "page": 17,
+      "line": 211,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "pd_instr",
+      "page": 17,
+      "line": 170,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "pd_bubble",
+      "page": 17,
+      "line": 128,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "src1",
+      "page": 18,
+      "line": 691,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "src2",
+      "page": 18,
+      "line": 649,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "id_bypassA",
+      "page": 18,
+      "line": 567,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "id_bypassB",
+      "page": 18,
+      "line": 526,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "id_opA",
+      "page": 18,
+      "line": 484,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "id_opB",
+      "page": 18,
+      "line": 443,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "id_pc",
+      "page": 18,
+      "line": 401,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "id_instr",
+      "page": 18,
+      "line": 359,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "id_bubble",
+      "page": 18,
+      "line": 318,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "id_exception",
+      "page": 18,
+      "line": 276,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Execute (EX)",
+      "page": 18,
+      "line": 215,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "block",
+        "block_name": "Execute (EX)"
+      },
+      "layer": "micro",
+      "rationale": "first-cut heuristic: matched \"(<ACR>) suffix: EX\""
+    },
+    {
+      "heading": "Signal",
+      "page": 20,
+      "line": 74,
+      "font_size": 14.400001,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Direction To/From Description",
+      "page": 20,
+      "line": 74,
+      "font_size": 14.400001,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "id_pc",
+      "page": 21,
+      "line": 719,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "id_instr",
+      "page": 21,
+      "line": 678,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "id_bubble",
+      "page": 21,
+      "line": 636,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "opA",
+      "page": 21,
+      "line": 513,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "opB",
+      "page": 21,
+      "line": 471,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "id_bypassA",
+      "page": 21,
+      "line": 390,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "id_bypassB",
+      "page": 21,
+      "line": 348,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "id_opA",
+      "page": 21,
+      "line": 307,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "id_opB",
+      "page": 21,
+      "line": 265,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "ex_stall",
+      "page": 21,
+      "line": 223,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "ex_flush",
+      "page": 21,
+      "line": 182,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "ex_r",
+      "page": 21,
+      "line": 140,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "ex_pc",
+      "page": 21,
+      "line": 99,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "ex_bubble",
+      "page": 22,
+      "line": 691,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "ex_exception",
+      "page": 22,
+      "line": 650,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Memory-Access (MEM)",
+      "page": 22,
+      "line": 589,
+      "font_size": 14.4,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "block",
+        "block_name": "Memory-Access (MEM)"
+      },
+      "layer": "micro",
+      "rationale": "first-cut heuristic: matched \"(<ACR>) suffix: MEM\""
+    },
+    {
+      "heading": "ex_r",
+      "page": 23,
+      "line": 692,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "ex_pc",
+      "page": 23,
+      "line": 651,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "ex_instr",
+      "page": 23,
+      "line": 609,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "ex_bubble",
+      "page": 23,
+      "line": 567,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "ex_exception",
+      "page": 23,
+      "line": 526,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "mem_r",
+      "page": 23,
+      "line": 444,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "mem_instr",
+      "page": 23,
+      "line": 403,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "mem_bubble",
+      "page": 23,
+      "line": 361,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "mem_exception",
+      "page": 23,
+      "line": 319,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Write-Back (WB)",
+      "page": 23,
+      "line": 259,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "block",
+        "block_name": "Write-Back (WB)"
+      },
+      "layer": "micro",
+      "rationale": "first-cut heuristic: matched \"(<ACR>) suffix: WB\""
+    },
+    {
+      "heading": "Signal",
+      "page": 24,
+      "line": 299,
+      "font_size": 14.400001,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Direction To/From Description",
+      "page": 24,
+      "line": 299,
+      "font_size": 14.400001,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "mem_r",
+      "page": 24,
+      "line": 259,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "mem_pc",
+      "page": 24,
+      "line": 217,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "mem_instr",
+      "page": 24,
+      "line": 175,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "mem_bubble",
+      "page": 24,
+      "line": 92,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "dmem_ack",
+      "page": 25,
+      "line": 691,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "wb_r",
+      "page": 25,
+      "line": 610,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "wb_dst",
+      "page": 25,
+      "line": 568,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "wb_we",
+      "page": 25,
+      "line": 527,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "wb_pc",
+      "page": 25,
+      "line": 485,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "wb_instr",
+      "page": 25,
+      "line": 443,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "wb_bubble",
+      "page": 25,
+      "line": 402,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "wb_exception",
+      "page": 25,
+      "line": 360,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Con\ufb01gurations",
+      "page": 25,
+      "line": 294,
+      "font_size": 19.199999,
+      "font_weight": "normal",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Introduction",
+      "page": 25,
+      "line": 241,
+      "font_size": 14.399999,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Core Parameters",
+      "page": 25,
+      "line": 136,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "parameters"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: matched \"parameters\""
+    },
+    {
+      "heading": "Parameter",
+      "page": 25,
+      "line": 92,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Type Default Description",
+      "page": 25,
+      "line": 92,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "XLEN",
+      "page": 26,
+      "line": 650,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "PLEN",
+      "page": 26,
+      "line": 608,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "PMP_CNT",
+      "page": 26,
+      "line": 567,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "PMA_CNT",
+      "page": 26,
+      "line": 504,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "HAS_USER",
+      "page": 26,
+      "line": 442,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "HAS_SUPER",
+      "page": 26,
+      "line": 400,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "HAS_HYPER",
+      "page": 26,
+      "line": 359,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "HAS_RVM",
+      "page": 26,
+      "line": 317,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "HAS_RVA",
+      "page": 26,
+      "line": 275,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "HAS_RVC",
+      "page": 26,
+      "line": 234,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "HAS_BPU",
+      "page": 26,
+      "line": 192,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "IS_RV32E",
+      "page": 26,
+      "line": 130,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "ICACHE_SIZE",
+      "page": 27,
+      "line": 671,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "ICACHE_WAYS",
+      "page": 27,
+      "line": 567,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "DCACHE_SIZE",
+      "page": 27,
+      "line": 463,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "DCACHE_WAYS",
+      "page": 27,
+      "line": 379,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "HARTID",
+      "page": 27,
+      "line": 275,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "PC_INIT",
+      "page": 27,
+      "line": 234,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "reset_init_flush_drain"
+      },
+      "layer": "micro",
+      "rationale": "first-cut heuristic: matched \"init\""
+    },
+    {
+      "heading": "MNMIVEC_DEFAULT",
+      "page": 27,
+      "line": 192,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "MTVEC_DEFAULT",
+      "page": 27,
+      "line": 127,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "STVEC_DEFAULT",
+      "page": 28,
+      "line": 667,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "UTVEC_DEFAULT",
+      "page": 28,
+      "line": 602,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "\u2018h100",
+      "page": 28,
+      "line": 578,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "BP_LOCAL_BITS",
+      "page": 28,
+      "line": 536,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "BP_GLOBAL_BITS",
+      "page": 28,
+      "line": 495,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "BREAKPOINTS",
+      "page": 28,
+      "line": 453,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "TECHNOLOGY",
+      "page": 28,
+      "line": 411,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "7F 7F 7F 7F 7F 7F 7F 7F 7F 6E",
+      "page": 28,
+      "line": 259,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Parameter Value Description",
+      "page": 35,
+      "line": 727,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "GENERIC",
+      "page": 35,
+      "line": 687,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "N3X",
+      "page": 35,
+      "line": 645,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "N3XS",
+      "page": 35,
+      "line": 603,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "MNMIVEC_DEFAULT = PC_INIT - \u2019h004",
+      "page": 35,
+      "line": 393,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "reset_init_flush_drain"
+      },
+      "layer": "micro",
+      "rationale": "first-cut heuristic: matched \"init\""
+    },
+    {
+      "heading": "MTVEC_DEFAULT = PC_INIT - \u2019h040",
+      "page": 35,
+      "line": 227,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "reset_init_flush_drain"
+      },
+      "layer": "micro",
+      "rationale": "first-cut heuristic: matched \"init\""
+    },
+    {
+      "heading": "STVEC_DEFAULT = PC_INIT - \u2019h0C0",
+      "page": 36,
+      "line": 567,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "reset_init_flush_drain"
+      },
+      "layer": "micro",
+      "rationale": "first-cut heuristic: matched \"init\""
+    },
+    {
+      "heading": "UTVEC_DEFAULT = PC_INIT - \u2019h100",
+      "page": 36,
+      "line": 402,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "reset_init_flush_drain"
+      },
+      "layer": "micro",
+      "rationale": "first-cut heuristic: matched \"init\""
+    },
+    {
+      "heading": "Control and Status Registers",
+      "page": 36,
+      "line": 346,
+      "font_size": 19.2,
+      "font_weight": "normal",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "csrs"
+      },
+      "layer": "architectural",
+      "rationale": "first-cut heuristic: matched \"control and status\""
+    },
+    {
+      "heading": "Introduction",
+      "page": 36,
+      "line": 293,
+      "font_size": 14.399999,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Accessing the CSRs",
+      "page": 36,
+      "line": 143,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "csrs"
+      },
+      "layer": "architectural",
+      "rationale": "first-cut heuristic: matched \"csr\""
+    },
+    {
+      "heading": "Illegal CSR accesses",
+      "page": 37,
+      "line": 278,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "csrs"
+      },
+      "layer": "architectural",
+      "rationale": "first-cut heuristic: matched \"csr\""
+    },
+    {
+      "heading": "Timers and Counters",
+      "page": 37,
+      "line": 128,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "CSR Listing",
+      "page": 38,
+      "line": 121,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "csrs"
+      },
+      "layer": "architectural",
+      "rationale": "first-cut heuristic: matched \"csr\""
+    },
+    {
+      "heading": "Address Privilege Name",
+      "page": 39,
+      "line": 586,
+      "font_size": 14.400001,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "security_boundaries"
+      },
+      "layer": "architectural",
+      "rationale": "first-cut heuristic: matched \"privilege\""
+    },
+    {
+      "heading": "Description",
+      "page": 39,
+      "line": 586,
+      "font_size": 14.4,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Address Privilege Name Description",
+      "page": 41,
+      "line": 325,
+      "font_size": 14.400001,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "security_boundaries"
+      },
+      "layer": "architectural",
+      "rationale": "first-cut heuristic: matched \"privilege\""
+    },
+    {
+      "heading": "Address Privilege Name",
+      "page": 42,
+      "line": 497,
+      "font_size": 14.400001,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "security_boundaries"
+      },
+      "layer": "architectural",
+      "rationale": "first-cut heuristic: matched \"privilege\""
+    },
+    {
+      "heading": "Description",
+      "page": 42,
+      "line": 497,
+      "font_size": 14.4,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Address Privilege Name Description",
+      "page": 43,
+      "line": 215,
+      "font_size": 14.400001,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "security_boundaries"
+      },
+      "layer": "architectural",
+      "rationale": "first-cut heuristic: matched \"privilege\""
+    },
+    {
+      "heading": "Machine Level CSRs",
+      "page": 44,
+      "line": 445,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "csrs"
+      },
+      "layer": "architectural",
+      "rationale": "first-cut heuristic: matched \"csr\""
+    },
+    {
+      "heading": "7F 7F 7F 7F 7F 7F 7F 7F 7F 6E",
+      "page": 45,
+      "line": 465,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "mimpid User Spec. Privilege Spec. A-Ext. C-Ext. M-Ext.",
+      "page": 46,
+      "line": 375,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "security_boundaries"
+      },
+      "layer": "architectural",
+      "rationale": "first-cut heuristic: matched \"privilege\""
+    },
+    {
+      "heading": "Value Name Description",
+      "page": 49,
+      "line": 303,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Supervisor Mode CSRs",
+      "page": 55,
+      "line": 523,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "csrs"
+      },
+      "layer": "architectural",
+      "rationale": "first-cut heuristic: matched \"csr\""
+    },
+    {
+      "heading": "Value Name Description",
+      "page": 58,
+      "line": 111,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Interrupt Exception Code Description",
+      "page": 60,
+      "line": 688,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "User Mode CSRs",
+      "page": 62,
+      "line": 308,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "csrs"
+      },
+      "layer": "architectural",
+      "rationale": "first-cut heuristic: matched \"csr\""
+    },
+    {
+      "heading": "ustatus",
+      "page": 62,
+      "line": 144,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "uie & uip",
+      "page": 62,
+      "line": 108,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "utvec",
+      "page": 62,
+      "line": 72,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "uepc",
+      "page": 63,
+      "line": 697,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "ucause",
+      "page": 63,
+      "line": 661,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "utval",
+      "page": 63,
+      "line": 625,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Physical Memory Protection CSRs",
+      "page": 64,
+      "line": 420,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "csrs"
+      },
+      "layer": "architectural",
+      "rationale": "first-cut heuristic: matched \"csr\""
+    },
+    {
+      "heading": "A Name Description",
+      "page": 65,
+      "line": 450,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "pmpaddr",
+      "page": 65,
+      "line": 178,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "pmpcfg .A Match type and size",
+      "page": 65,
+      "line": 178,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "aaaa...aaaa",
+      "page": 65,
+      "line": 136,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "aaaa...aaa0",
+      "page": 65,
+      "line": 95,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "aaaa...a011",
+      "page": 66,
+      "line": 691,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "aa01...1111",
+      "page": 66,
+      "line": 610,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "a011...1111",
+      "page": 66,
+      "line": 568,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "0111...1111",
+      "page": 66,
+      "line": 527,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "External Interfaces",
+      "page": 67,
+      "line": 215,
+      "font_size": 19.199999,
+      "font_weight": "normal",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "external_interfaces"
+      },
+      "layer": "architectural",
+      "rationale": "first-cut heuristic: matched \"external interface\""
+    },
+    {
+      "heading": "AMBA3 AHB-Lite",
+      "page": 67,
+      "line": 110,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "HCLK",
+      "page": 68,
+      "line": 651,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "IHSEL",
+      "page": 68,
+      "line": 570,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "IHSIZE",
+      "page": 68,
+      "line": 383,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "IHPROT",
+      "page": 68,
+      "line": 299,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "IHRESP",
+      "page": 68,
+      "line": 133,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "DHSIZE",
+      "page": 69,
+      "line": 504,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "DHPROT",
+      "page": 69,
+      "line": 421,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "DHRESP",
+      "page": 69,
+      "line": 255,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "IHSIZE Type Description",
+      "page": 70,
+      "line": 135,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "1--",
+      "page": 71,
+      "line": 691,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "IHBURST Type",
+      "page": 71,
+      "line": 531,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Description",
+      "page": 71,
+      "line": 531,
+      "font_size": 14.4,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Bit# Value Description",
+      "page": 72,
+      "line": 724,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "IHTRANS Type Description",
+      "page": 72,
+      "line": 306,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "DHSIZE Type Description",
+      "page": 74,
+      "line": 506,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "1--",
+      "page": 74,
+      "line": 299,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "DHBURST Type Description",
+      "page": 74,
+      "line": 139,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Bit# Value Description",
+      "page": 75,
+      "line": 334,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "DHTRANS",
+      "page": 76,
+      "line": 595,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Type Description",
+      "page": 76,
+      "line": 595,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Interrupts",
+      "page": 77,
+      "line": 684,
+      "font_size": 14.4,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Port",
+      "page": 77,
+      "line": 482,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Size Direction Description",
+      "page": 77,
+      "line": 482,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Interrupt",
+      "page": 78,
+      "line": 209,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Priority Mode Supported",
+      "page": 78,
+      "line": 209,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "EXT_INT[3]",
+      "page": 78,
+      "line": 169,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "EXT_INT[2]",
+      "page": 78,
+      "line": 127,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "EXT_INT[1]",
+      "page": 78,
+      "line": 86,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "EXT_INT[0]",
+      "page": 79,
+      "line": 730,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Physical Memory Protection",
+      "page": 79,
+      "line": 373,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Port",
+      "page": 79,
+      "line": 145,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Size Direction Description",
+      "page": 79,
+      "line": 145,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Bits Name Description",
+      "page": 80,
+      "line": 571,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Debug Unit",
+      "page": 82,
+      "line": 531,
+      "font_size": 19.2,
+      "font_weight": "normal",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Introduction",
+      "page": 82,
+      "line": 478,
+      "font_size": 14.399999,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Debug Controller Interface",
+      "page": 82,
+      "line": 227,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "dbg_stall",
+      "page": 83,
+      "line": 692,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "dbg_strb",
+      "page": 83,
+      "line": 651,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "dbg_we",
+      "page": 83,
+      "line": 609,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "dbg_addr",
+      "page": 83,
+      "line": 567,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "dbg_dati",
+      "page": 83,
+      "line": 526,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "XLEN",
+      "page": 83,
+      "line": 526,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "dbg_dato",
+      "page": 83,
+      "line": 484,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "XLEN",
+      "page": 83,
+      "line": 484,
+      "font_size": 9.6,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "dbg_ack",
+      "page": 83,
+      "line": 443,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "dbg_bp",
+      "page": 83,
+      "line": 401,
+      "font_size": 9.599999,
+      "font_weight": "normal",
+      "level": 5,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Register Map",
+      "page": 84,
+      "line": 164,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "addr[12:0] Register Description",
+      "page": 85,
+      "line": 687,
+      "font_size": 14.400001,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Internal Register Map",
+      "page": 87,
+      "line": 506,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "sste Description",
+      "page": 87,
+      "line": 217,
+      "font_size": 14.400001,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "bte Description",
+      "page": 88,
+      "line": 686,
+      "font_size": 14.400001,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Bit# Description",
+      "page": 88,
+      "line": 137,
+      "font_size": 14.400001,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "DBG_CAUSE Description",
+      "page": 90,
+      "line": 368,
+      "font_size": 14.400001,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "GDB Sigval",
+      "page": 90,
+      "line": 368,
+      "font_size": 14.400001,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "impl Description",
+      "page": 92,
+      "line": 642,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "ena Description",
+      "page": 92,
+      "line": 381,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "cc",
+      "page": 92,
+      "line": 189,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Description",
+      "page": 92,
+      "line": 189,
+      "font_size": 14.4,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Resources",
+      "page": 94,
+      "line": 677,
+      "font_size": 19.199999,
+      "font_weight": "normal",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Platform DFF Logic Cells Memory Performance (MHz)",
+      "page": 94,
+      "line": 553,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Acknowledgements",
+      "page": 94,
+      "line": 328,
+      "font_size": 19.2,
+      "font_weight": "normal",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Revision History",
+      "page": 94,
+      "line": 81,
+      "font_size": 19.199999,
+      "font_weight": "normal",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Date",
+      "page": 95,
+      "line": 723,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "Rev. Comments",
+      "page": 95,
+      "line": 723,
+      "font_size": 14.400001,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    }
+  ],
+  "tables": [
+    {
+      "id": "T01",
+      "page": 5,
+      "first_line": 187,
+      "row_count": 5,
+      "col_count": 4,
+      "kind": "encoding_table",
+      "spec_md_target": {
+        "kind": "encoding",
+        "encoding_name": "Level Encoding Name"
+      },
+      "column_map": [
+        {
+          "source": "Level",
+          "canonical": "value"
+        },
+        {
+          "source": "Encoding",
+          "canonical": "name"
+        },
+        {
+          "source": "Name",
+          "canonical": "name"
+        },
+        {
+          "source": "Abbreviation",
+          "canonical": "description"
+        }
+      ],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: column headers matched EncodingTable"
+    },
+    {
+      "id": "T02",
+      "page": 13,
+      "first_line": 79,
+      "row_count": 7,
+      "col_count": 4,
+      "kind": "signal_table",
+      "spec_md_target": {
+        "kind": "block_signals",
+        "block_name": "Instruction Fetch (IF)"
+      },
+      "column_map": [
+        {
+          "source": "Signal",
+          "canonical": "name"
+        },
+        {
+          "source": "Direction",
+          "canonical": "direction"
+        },
+        {
+          "source": "To/From",
+          "canonical": "peer"
+        },
+        {
+          "source": "Description",
+          "canonical": "description"
+        }
+      ],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: column headers matched SignalTable"
+    },
+    {
+      "id": "T03",
+      "page": 14,
+      "first_line": 342,
+      "row_count": 8,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T04",
+      "page": 14,
+      "first_line": 695,
+      "row_count": 2,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T05",
+      "page": 15,
+      "first_line": 63,
+      "row_count": 6,
+      "col_count": 4,
+      "kind": "signal_table",
+      "spec_md_target": {
+        "kind": "block_signals",
+        "block_name": "Pre-Decode (PD)"
+      },
+      "column_map": [
+        {
+          "source": "Signal",
+          "canonical": "name"
+        },
+        {
+          "source": "Direction",
+          "canonical": "direction"
+        },
+        {
+          "source": "To/From",
+          "canonical": "peer"
+        },
+        {
+          "source": "Description",
+          "canonical": "description"
+        }
+      ],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: column headers matched SignalTable"
+    },
+    {
+      "id": "T06",
+      "page": 16,
+      "first_line": 433,
+      "row_count": 7,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T07",
+      "page": 17,
+      "first_line": 69,
+      "row_count": 5,
+      "col_count": 4,
+      "kind": "signal_table",
+      "spec_md_target": {
+        "kind": "block_signals",
+        "block_name": "Instruction Decode (ID)"
+      },
+      "column_map": [
+        {
+          "source": "Signal",
+          "canonical": "name"
+        },
+        {
+          "source": "Direction",
+          "canonical": "direction"
+        },
+        {
+          "source": "To/From",
+          "canonical": "peer"
+        },
+        {
+          "source": "Description",
+          "canonical": "description"
+        }
+      ],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: column headers matched SignalTable"
+    },
+    {
+      "id": "T08",
+      "page": 18,
+      "first_line": 258,
+      "row_count": 8,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T09",
+      "page": 18,
+      "first_line": 631,
+      "row_count": 2,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T10",
+      "page": 20,
+      "first_line": 63,
+      "row_count": 1,
+      "col_count": 4,
+      "kind": "signal_table",
+      "spec_md_target": {
+        "kind": "block_signals",
+        "block_name": "Execute (EX)"
+      },
+      "column_map": [
+        {
+          "source": "Signal",
+          "canonical": "name"
+        },
+        {
+          "source": "Direction",
+          "canonical": "direction"
+        },
+        {
+          "source": "To/From",
+          "canonical": "peer"
+        },
+        {
+          "source": "Description",
+          "canonical": "description"
+        }
+      ],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: column headers matched SignalTable"
+    },
+    {
+      "id": "T11",
+      "page": 21,
+      "first_line": 81,
+      "row_count": 8,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T12",
+      "page": 21,
+      "first_line": 454,
+      "row_count": 2,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T13",
+      "page": 21,
+      "first_line": 577,
+      "row_count": 4,
+      "col_count": 4,
+      "kind": "pmu_event_table",
+      "spec_md_target": {
+        "kind": "pmu_events"
+      },
+      "column_map": [
+        {
+          "source": "id_pc",
+          "canonical": "id"
+        },
+        {
+          "source": "ID",
+          "canonical": "id"
+        },
+        {
+          "source": "Instruction Decode program counter",
+          "canonical": "name"
+        }
+      ],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: column headers matched PmuEventTable"
+    },
+    {
+      "id": "T14",
+      "page": 22,
+      "first_line": 632,
+      "row_count": 3,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T15",
+      "page": 23,
+      "first_line": 301,
+      "row_count": 4,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T16",
+      "page": 23,
+      "first_line": 508,
+      "row_count": 7,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T17",
+      "page": 24,
+      "first_line": 75,
+      "row_count": 6,
+      "col_count": 4,
+      "kind": "signal_table",
+      "spec_md_target": {
+        "kind": "block_signals",
+        "block_name": "Write-Back (WB)"
+      },
+      "column_map": [
+        {
+          "source": "Signal",
+          "canonical": "name"
+        },
+        {
+          "source": "Direction",
+          "canonical": "direction"
+        },
+        {
+          "source": "To/From",
+          "canonical": "peer"
+        },
+        {
+          "source": "Description",
+          "canonical": "description"
+        }
+      ],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: column headers matched SignalTable"
+    },
+    {
+      "id": "T18",
+      "page": 25,
+      "first_line": 76,
+      "row_count": 1,
+      "col_count": 4,
+      "kind": "parameter_table",
+      "spec_md_target": {
+        "kind": "parameters"
+      },
+      "column_map": [
+        {
+          "source": "Parameter",
+          "canonical": "name"
+        },
+        {
+          "source": "Type",
+          "canonical": "type"
+        },
+        {
+          "source": "Default",
+          "canonical": "default"
+        },
+        {
+          "source": "Description",
+          "canonical": "description"
+        }
+      ],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: column headers matched ParameterTable (4-col)"
+    },
+    {
+      "id": "T19",
+      "page": 25,
+      "first_line": 342,
+      "row_count": 7,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T20",
+      "page": 25,
+      "first_line": 674,
+      "row_count": 2,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T21",
+      "page": 26,
+      "first_line": 91,
+      "row_count": 18,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T22",
+      "page": 27,
+      "first_line": 85,
+      "row_count": 22,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T23",
+      "page": 28,
+      "first_line": 393,
+      "row_count": 13,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T24",
+      "page": 35,
+      "first_line": 585,
+      "row_count": 4,
+      "col_count": 2,
+      "kind": "parameter_table",
+      "spec_md_target": {
+        "kind": "parameters"
+      },
+      "column_map": [
+        {
+          "source": "Parameter Value",
+          "canonical": "name"
+        },
+        {
+          "source": "Description",
+          "canonical": "description"
+        }
+      ],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: column headers matched ParameterTable (3-col)"
+    },
+    {
+      "id": "T25",
+      "page": 39,
+      "first_line": 71,
+      "row_count": 13,
+      "col_count": 4,
+      "kind": "csr_table",
+      "spec_md_target": {
+        "kind": "csrs"
+      },
+      "column_map": [
+        {
+          "source": "Address",
+          "canonical": "address"
+        },
+        {
+          "source": "Name",
+          "canonical": "name"
+        },
+        {
+          "source": "Description",
+          "canonical": "description"
+        }
+      ],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: column headers matched CsrTable (address/name/description)"
+    },
+    {
+      "id": "T26",
+      "page": 40,
+      "first_line": 71,
+      "row_count": 6,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T27",
+      "page": 40,
+      "first_line": 319,
+      "row_count": 12,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T28",
+      "page": 41,
+      "first_line": 309,
+      "row_count": 1,
+      "col_count": 4,
+      "kind": "csr_table",
+      "spec_md_target": {
+        "kind": "csrs"
+      },
+      "column_map": [
+        {
+          "source": "Address",
+          "canonical": "address"
+        },
+        {
+          "source": "Name",
+          "canonical": "name"
+        },
+        {
+          "source": "Description",
+          "canonical": "description"
+        }
+      ],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: column headers matched CsrTable (address/name/description)"
+    },
+    {
+      "id": "T29",
+      "page": 41,
+      "first_line": 61,
+      "row_count": 8,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T30",
+      "page": 41,
+      "first_line": 631,
+      "row_count": 1,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T31",
+      "page": 41,
+      "first_line": 568,
+      "row_count": 2,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T32",
+      "page": 41,
+      "first_line": 467,
+      "row_count": 3,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T33",
+      "page": 41,
+      "first_line": 695,
+      "row_count": 2,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T34",
+      "page": 43,
+      "first_line": 336,
+      "row_count": 6,
+      "col_count": 7,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T35",
+      "page": 43,
+      "first_line": 626,
+      "row_count": 3,
+      "col_count": 7,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T36",
+      "page": 44,
+      "first_line": 488,
+      "row_count": 1,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T37",
+      "page": 44,
+      "first_line": 570,
+      "row_count": 6,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T38",
+      "page": 45,
+      "first_line": 634,
+      "row_count": 3,
+      "col_count": 2,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T39",
+      "page": 46,
+      "first_line": 237,
+      "row_count": 4,
+      "col_count": 6,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T40",
+      "page": 49,
+      "first_line": 164,
+      "row_count": 4,
+      "col_count": 3,
+      "kind": "encoding_table",
+      "spec_md_target": {
+        "kind": "encoding",
+        "encoding_name": "Value Name Description"
+      },
+      "column_map": [
+        {
+          "source": "Value",
+          "canonical": "value"
+        },
+        {
+          "source": "Name",
+          "canonical": "name"
+        },
+        {
+          "source": "Description",
+          "canonical": "description"
+        }
+      ],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: column headers matched EncodingTable"
+    },
+    {
+      "id": "T41",
+      "page": 59,
+      "first_line": 633,
+      "row_count": 4,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T42",
+      "page": 60,
+      "first_line": 72,
+      "row_count": 16,
+      "col_count": 3,
+      "kind": "error_table",
+      "spec_md_target": {
+        "kind": "errors"
+      },
+      "column_map": [
+        {
+          "source": "Interrupt",
+          "canonical": "name"
+        },
+        {
+          "source": "Exception Code",
+          "canonical": "name"
+        },
+        {
+          "source": "Description",
+          "canonical": "description"
+        }
+      ],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: column headers matched ErrorTable"
+    },
+    {
+      "id": "T43",
+      "page": 61,
+      "first_line": 397,
+      "row_count": 9,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T44",
+      "page": 65,
+      "first_line": 77,
+      "row_count": 9,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T45",
+      "page": 66,
+      "first_line": 509,
+      "row_count": 6,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T46",
+      "page": 68,
+      "first_line": 115,
+      "row_count": 12,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T47",
+      "page": 68,
+      "first_line": 634,
+      "row_count": 4,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T48",
+      "page": 69,
+      "first_line": 237,
+      "row_count": 13,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T49",
+      "page": 70,
+      "first_line": 77,
+      "row_count": 2,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T50",
+      "page": 71,
+      "first_line": 181,
+      "row_count": 9,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T51",
+      "page": 71,
+      "first_line": 651,
+      "row_count": 3,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T52",
+      "page": 72,
+      "first_line": 123,
+      "row_count": 5,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T53",
+      "page": 72,
+      "first_line": 428,
+      "row_count": 8,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T54",
+      "page": 74,
+      "first_line": 83,
+      "row_count": 2,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T55",
+      "page": 74,
+      "first_line": 259,
+      "row_count": 7,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T56",
+      "page": 75,
+      "first_line": 78,
+      "row_count": 7,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T57",
+      "page": 75,
+      "first_line": 477,
+      "row_count": 7,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T58",
+      "page": 76,
+      "first_line": 418,
+      "row_count": 5,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T59",
+      "page": 77,
+      "first_line": 305,
+      "row_count": 5,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T60",
+      "page": 78,
+      "first_line": 68,
+      "row_count": 4,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T61",
+      "page": 79,
+      "first_line": 87,
+      "row_count": 2,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T62",
+      "page": 80,
+      "first_line": 115,
+      "row_count": 5,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T63",
+      "page": 80,
+      "first_line": 355,
+      "row_count": 6,
+      "col_count": 3,
+      "kind": "csr_field_table",
+      "spec_md_target": {
+        "kind": "csr_fields",
+        "csr_name": "Physical Memory Protection CSRs"
+      },
+      "column_map": [
+        {
+          "source": "Bits",
+          "canonical": "bits"
+        },
+        {
+          "source": "Name",
+          "canonical": "name"
+        },
+        {
+          "source": "Description",
+          "canonical": "description"
+        }
+      ],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: column headers matched CsrFieldTable"
+    },
+    {
+      "id": "T64",
+      "page": 80,
+      "first_line": 715,
+      "row_count": 2,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T65",
+      "page": 81,
+      "first_line": 157,
+      "row_count": 5,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T66",
+      "page": 81,
+      "first_line": 397,
+      "row_count": 9,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T67",
+      "page": 83,
+      "first_line": 383,
+      "row_count": 9,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T68",
+      "page": 85,
+      "first_line": 68,
+      "row_count": 16,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T69",
+      "page": 86,
+      "first_line": 85,
+      "row_count": 19,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T70",
+      "page": 87,
+      "first_line": 121,
+      "row_count": 3,
+      "col_count": 2,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T71",
+      "page": 87,
+      "first_line": 549,
+      "row_count": 7,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T72",
+      "page": 88,
+      "first_line": 81,
+      "row_count": 2,
+      "col_count": 2,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T73",
+      "page": 88,
+      "first_line": 589,
+      "row_count": 3,
+      "col_count": 2,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T74",
+      "page": 89,
+      "first_line": 197,
+      "row_count": 14,
+      "col_count": 2,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T75",
+      "page": 90,
+      "first_line": 72,
+      "row_count": 8,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T76",
+      "page": 91,
+      "first_line": 477,
+      "row_count": 7,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T77",
+      "page": 92,
+      "first_line": 93,
+      "row_count": 3,
+      "col_count": 2,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T78",
+      "page": 92,
+      "first_line": 285,
+      "row_count": 3,
+      "col_count": 2,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T79",
+      "page": 92,
+      "first_line": 545,
+      "row_count": 3,
+      "col_count": 2,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T80",
+      "page": 93,
+      "first_line": 637,
+      "row_count": 4,
+      "col_count": 2,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T81",
+      "page": 94,
+      "first_line": 497,
+      "row_count": 2,
+      "col_count": 5,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T82",
+      "page": 95,
+      "first_line": 546,
+      "row_count": 5,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    }
+  ],
+  "figures": [
+    {
+      "id": "F01",
+      "page": 1,
+      "kind": "generic",
+      "rasterized_to": "figures/page-001.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F02",
+      "page": 2,
+      "kind": "generic",
+      "rasterized_to": "figures/page-002.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F03",
+      "page": 5,
+      "kind": "generic",
+      "rasterized_to": "figures/page-005.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F04",
+      "page": 6,
+      "kind": "pipeline_diagram",
+      "rasterized_to": "figures/page-006.png",
+      "spec_md_target": {
+        "kind": "pipeline_diagram"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F05",
+      "page": 7,
+      "kind": "pipeline_diagram",
+      "rasterized_to": "figures/page-007.png",
+      "spec_md_target": {
+        "kind": "pipeline_diagram"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F06",
+      "page": 12,
+      "kind": "block_diagram",
+      "rasterized_to": "figures/page-012.png",
+      "spec_md_target": {
+        "kind": "block_diagram",
+        "block_name": "Instruction Fetch (IF)"
+      },
+      "referenced_acronyms": [
+        "IF"
+      ],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F07",
+      "page": 13,
+      "kind": "generic",
+      "rasterized_to": "figures/page-013.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F08",
+      "page": 14,
+      "kind": "generic",
+      "rasterized_to": "figures/page-014.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F09",
+      "page": 15,
+      "kind": "generic",
+      "rasterized_to": "figures/page-015.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F10",
+      "page": 16,
+      "kind": "generic",
+      "rasterized_to": "figures/page-016.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F11",
+      "page": 17,
+      "kind": "generic",
+      "rasterized_to": "figures/page-017.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F12",
+      "page": 18,
+      "kind": "generic",
+      "rasterized_to": "figures/page-018.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F13",
+      "page": 20,
+      "kind": "generic",
+      "rasterized_to": "figures/page-020.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F14",
+      "page": 21,
+      "kind": "generic",
+      "rasterized_to": "figures/page-021.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F15",
+      "page": 22,
+      "kind": "generic",
+      "rasterized_to": "figures/page-022.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F16",
+      "page": 23,
+      "kind": "generic",
+      "rasterized_to": "figures/page-023.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F17",
+      "page": 24,
+      "kind": "generic",
+      "rasterized_to": "figures/page-024.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F18",
+      "page": 25,
+      "kind": "generic",
+      "rasterized_to": "figures/page-025.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F19",
+      "page": 26,
+      "kind": "generic",
+      "rasterized_to": "figures/page-026.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F20",
+      "page": 27,
+      "kind": "generic",
+      "rasterized_to": "figures/page-027.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F21",
+      "page": 28,
+      "kind": "generic",
+      "rasterized_to": "figures/page-028.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F22",
+      "page": 39,
+      "kind": "generic",
+      "rasterized_to": "figures/page-039.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F23",
+      "page": 40,
+      "kind": "generic",
+      "rasterized_to": "figures/page-040.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F24",
+      "page": 41,
+      "kind": "generic",
+      "rasterized_to": "figures/page-041.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F25",
+      "page": 42,
+      "kind": "generic",
+      "rasterized_to": "figures/page-042.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F26",
+      "page": 43,
+      "kind": "generic",
+      "rasterized_to": "figures/page-043.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F27",
+      "page": 44,
+      "kind": "generic",
+      "rasterized_to": "figures/page-044.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F28",
+      "page": 46,
+      "kind": "generic",
+      "rasterized_to": "figures/page-046.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F29",
+      "page": 60,
+      "kind": "generic",
+      "rasterized_to": "figures/page-060.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F30",
+      "page": 61,
+      "kind": "generic",
+      "rasterized_to": "figures/page-061.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F31",
+      "page": 65,
+      "kind": "generic",
+      "rasterized_to": "figures/page-065.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F32",
+      "page": 66,
+      "kind": "generic",
+      "rasterized_to": "figures/page-066.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F33",
+      "page": 68,
+      "kind": "generic",
+      "rasterized_to": "figures/page-068.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F34",
+      "page": 69,
+      "kind": "generic",
+      "rasterized_to": "figures/page-069.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F35",
+      "page": 71,
+      "kind": "generic",
+      "rasterized_to": "figures/page-071.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F36",
+      "page": 72,
+      "kind": "generic",
+      "rasterized_to": "figures/page-072.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F37",
+      "page": 74,
+      "kind": "generic",
+      "rasterized_to": "figures/page-074.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F38",
+      "page": 75,
+      "kind": "generic",
+      "rasterized_to": "figures/page-075.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F39",
+      "page": 76,
+      "kind": "generic",
+      "rasterized_to": "figures/page-076.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F40",
+      "page": 77,
+      "kind": "generic",
+      "rasterized_to": "figures/page-077.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F41",
+      "page": 78,
+      "kind": "generic",
+      "rasterized_to": "figures/page-078.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F42",
+      "page": 79,
+      "kind": "generic",
+      "rasterized_to": "figures/page-079.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [
+        "EX"
+      ],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F43",
+      "page": 80,
+      "kind": "generic",
+      "rasterized_to": "figures/page-080.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F44",
+      "page": 81,
+      "kind": "generic",
+      "rasterized_to": "figures/page-081.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F45",
+      "page": 83,
+      "kind": "generic",
+      "rasterized_to": "figures/page-083.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F46",
+      "page": 85,
+      "kind": "generic",
+      "rasterized_to": "figures/page-085.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F47",
+      "page": 86,
+      "kind": "generic",
+      "rasterized_to": "figures/page-086.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F48",
+      "page": 87,
+      "kind": "generic",
+      "rasterized_to": "figures/page-087.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F49",
+      "page": 88,
+      "kind": "generic",
+      "rasterized_to": "figures/page-088.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F50",
+      "page": 89,
+      "kind": "generic",
+      "rasterized_to": "figures/page-089.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F51",
+      "page": 90,
+      "kind": "generic",
+      "rasterized_to": "figures/page-090.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F52",
+      "page": 91,
+      "kind": "generic",
+      "rasterized_to": "figures/page-091.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F53",
+      "page": 92,
+      "kind": "generic",
+      "rasterized_to": "figures/page-092.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F54",
+      "page": 94,
+      "kind": "generic",
+      "rasterized_to": "figures/page-094.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F55",
+      "page": 95,
+      "kind": "generic",
+      "rasterized_to": "figures/page-095.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    }
+  ],
+  "glossary": [
+    {
+      "acronym": "BPU",
+      "expansion": "Branch Prediction Unit",
+      "first_page": 9,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "CPU",
+      "expansion": "Central Processing Unit",
+      "first_page": 5,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "EX",
+      "expansion": "Execute",
+      "first_page": 8,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "ID",
+      "expansion": "Instruction Decode",
+      "first_page": 8,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "IF",
+      "expansion": "Instruction Fetch",
+      "first_page": 7,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "MEM",
+      "expansion": "Memory",
+      "first_page": 8,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "PC",
+      "expansion": "Program Counter",
+      "first_page": 12,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "PD",
+      "expansion": "Pre-Decode",
+      "first_page": 14,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "PLIC",
+      "expansion": "Platform Level Interrupt Controller",
+      "first_page": 77,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "PMA",
+      "expansion": "Physical Memory Attribute",
+      "first_page": 29,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    },
+    {
+      "acronym": "WB",
+      "expansion": "Write Back",
+      "first_page": 7,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    }
+  ],
+  "chrome": [],
+  "validation": {
+    "section_roles_assigned": 0,
+    "tables_classified": {},
+    "tables_unknown": 0,
+    "glossary_entries": 0,
+    "chrome_lines_stripped": 0,
+    "warnings": []
+  }
+}

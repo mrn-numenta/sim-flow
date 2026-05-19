@@ -1,0 +1,65 @@
+schema_version = 1
+ingest_pipeline_version = "0.1.0"
+ingested_at = "1970-01-01T00:00:00Z"
+source_kind = "pdf"
+source_path = "/Users/mneilly/nta/sim-models/users/mneilly/rv12/docs/RV12 RISC-V CPU Core.pdf"
+source_sha256 = "af487088fe5bc42610b40cea36860e3567e7d4295b587e2038999bcb9935c8bd"
+primary_chunk_count = 52
+primary_figure_count = 55
+primary_signal_table_count = 2
+primary_parameter_table_count = 0
+primary_error_table_count = 0
+primary_encoding_table_count = 0
+primary_fsm_table_count = 0
+primary_stub_count = 0
+primary_tbd_count = 0
+primary_csr_count = 13
+primary_csr_field_count = 5
+primary_memory_region_count = 0
+primary_pmu_event_count = 3
+primary_latency_row_count = 0
+primary_glossary_count = 11
+
+[chrome_stripping]
+repeated_lines = ["/26, 11 : 15 PM", "RV12 RISC-V -bit CPU Core | RV12 RISC-V CPU Core", "https://roalogic.github.io/RV12/DATASHEET.html"]
+total_lines_stripped = 594
+
+[embedder_expected]
+provider = "openai-compat"
+model = ""
+dimension = 0
+
+[[warnings]]
+stage = 4
+code = "classify_unknown_canonical"
+message = "table T01 maps source `Abbreviation` to unknown canonical `description`"
+
+[[warnings]]
+stage = 4
+code = "classify_unknown_canonical"
+message = "table T18 maps source `Description` to unknown canonical `description`"
+
+[[warnings]]
+stage = 4
+code = "classify_unknown_canonical"
+message = "table T24 maps source `Description` to unknown canonical `description`"
+
+[[warnings]]
+stage = 4
+code = "classify_unknown_canonical"
+message = "table T40 maps source `Description` to unknown canonical `description`"
+
+[[warnings]]
+stage = 4
+code = "classify_unknown_canonical"
+message = "table T42 maps source `Interrupt` to unknown canonical `name`"
+
+[[warnings]]
+stage = 4
+code = "classify_unknown_canonical"
+message = "table T42 maps source `Exception Code` to unknown canonical `name`"
+
+[[warnings]]
+stage = 4
+code = "classify_unknown_canonical"
+message = "table T42 maps source `Description` to unknown canonical `description`"
