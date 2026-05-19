@@ -5,17 +5,21 @@
 //! figures, and the top-level manifest. Atomic-replace via tmp dir
 //! + rename.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 
 use crate::{Error, Result};
 
+use super::super::format::descriptor::{FormatJson, Layer, SectionRoleEntry, SpecMdRole};
 use super::super::pipeline::{IngestOutcome, IngestRequest, IngestWarning, SourceKind};
 use super::chrome::ChromeRecord;
+use super::classify::ClassifyOutputs;
 use super::figures::FigureOutput;
 use super::parse::{Section, SectionTree};
 use super::references::CrossSpecReference;
+use crate::session::spec_md::types as spec_md;
 
 const SCHEMA_VERSION: u32 = 1;
 
@@ -23,6 +27,9 @@ const SCHEMA_VERSION: u32 = 1;
 /// of `<project>/.sim-flow/spec-ingest/` then atomically renames over
 /// the live directory. Returns the outcome the pipeline reports back
 /// to the caller (counts taken from the same on-disk artifacts).
+///
+/// Thin wrapper over [`run_with_format`] with no descriptor and no
+/// `ClassifyOutputs`. Pre-Phase-9.11 callers see no behavior change.
 pub fn emit_corpus(
     request: &IngestRequest,
     tree: &SectionTree,
@@ -30,6 +37,36 @@ pub fn emit_corpus(
     refs: &[CrossSpecReference],
     figures: &[FigureOutput],
     warnings: Vec<IngestWarning>,
+) -> Result<IngestOutcome> {
+    run_with_format(request, tree, chrome, refs, figures, warnings, None, None)
+}
+
+/// Format-aware emit entry point (Phase 9 milestone 9.11).
+///
+/// When `format` is `Some(&FormatJson)`, each chunk's front matter is
+/// extended with the descriptor's role tags (`spec_md_role`, `layer`,
+/// `acronyms_referenced`, `clock_domain`, `power_domain`,
+/// `reset_domain`) and `contained_csr_tables`. When `classify_outputs`
+/// is `Some(&ClassifyOutputs)`, the manifest summary gains the typed-
+/// table counters (CSRs, memory regions, PMU events, latency rows,
+/// glossary entries) and CSR-table files are emitted under
+/// `primary/tables/csrs/`.
+///
+/// Both arguments are independent: a caller can pass a descriptor
+/// without typed outputs (chunks get role tags, manifest stays
+/// flat-counted) or typed outputs without a descriptor (manifest
+/// counters populate, chunks stay role-untagged). When both are
+/// `None` this reduces to the pre-9.11 behavior.
+#[allow(clippy::too_many_arguments)]
+pub fn run_with_format(
+    request: &IngestRequest,
+    tree: &SectionTree,
+    chrome: &ChromeRecord,
+    refs: &[CrossSpecReference],
+    figures: &[FigureOutput],
+    warnings: Vec<IngestWarning>,
+    format: Option<&FormatJson>,
+    classify_outputs: Option<&ClassifyOutputs>,
 ) -> Result<IngestOutcome> {
     // Classify gates fired during pipeline construction; we need
     // their outputs to emit, but in the v1 wiring stages 4/5/6
@@ -50,6 +87,13 @@ pub fn emit_corpus(
     // Per-chunk markdown.
     let mut chunk_specs = Vec::new();
     flatten_for_emit(&tree.roots, &mut chunk_specs);
+
+    // Pre-compute the CSR-table file paths grouped by section so each
+    // chunk's front matter can list its `contained_csr_tables`. We do
+    // this before rendering chunks so the listing matches what
+    // `write_csr_tables` writes below.
+    let csr_table_assignments = assign_csr_tables(&chunk_specs, classify_outputs);
+
     let chunks_dir = primary_dir.join("chunks");
     fs::create_dir_all(&chunks_dir).map_err(io_err("create chunks dir", &chunks_dir))?;
     let mut chunk_ids: Vec<(String, &Section)> = Vec::new();
@@ -57,7 +101,11 @@ pub fn emit_corpus(
         let chunk_id = compute_chunk_id(section);
         let slug = slugify(&section.heading);
         let filename = format!("{idx:03}-{slug}.md");
-        let body = render_chunk(section, &chunk_id);
+        let csr_paths: &[String] = csr_table_assignments
+            .get(idx)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+        let body = render_chunk(section, &chunk_id, format, csr_paths);
         let path = chunks_dir.join(&filename);
         write_atomic(&path, body.as_bytes())?;
         chunk_ids.push((chunk_id, *section));
@@ -69,6 +117,7 @@ pub fn emit_corpus(
     write_error_tables(&primary_dir, &outputs.errors, &chunk_ids)?;
     write_encoding_tables(&primary_dir, &outputs.encodings, &chunk_ids)?;
     write_fsm_tables(&primary_dir, &outputs.fsms, &chunk_ids)?;
+    write_csr_tables(&primary_dir, classify_outputs)?;
 
     // Figures.
     let figures_dir = primary_dir.join("figures");
@@ -100,6 +149,8 @@ pub fn emit_corpus(
         figures,
         &warnings,
         chunk_specs.len(),
+        classify_outputs,
+        format,
     )?;
     write_atomic(&manifest_path, manifest.as_bytes())?;
 
@@ -201,7 +252,27 @@ fn compute_chunk_id(section: &Section) -> String {
     format!("{:x}", h.finalize())
 }
 
-fn render_chunk(section: &Section, chunk_id: &str) -> String {
+fn render_chunk(
+    section: &Section,
+    chunk_id: &str,
+    format: Option<&FormatJson>,
+    contained_csr_tables: &[String],
+) -> String {
+    // Format-derived role tags (Chapter 7 §7.8). When `format` is
+    // `None` the keys still emit with empty / "unknown" defaults so
+    // the chunk front-matter schema is stable.
+    let role = format
+        .and_then(|f| match_section_role(section, f))
+        .map(|entry| spec_md_role_to_string(&entry.spec_md_role))
+        .unwrap_or_default();
+    let layer = format
+        .and_then(|f| match_section_role(section, f))
+        .map(|r| layer_to_string(r.layer))
+        .unwrap_or_else(|| "unknown".to_string());
+    let acronyms = format
+        .map(|f| acronyms_in_body(&section.body, f))
+        .unwrap_or_default();
+
     let mut out = String::new();
     out.push_str("---\n");
     out.push_str(&format!("chunk_id: \"{chunk_id}\"\n"));
@@ -223,10 +294,32 @@ fn render_chunk(section: &Section, chunk_id: &str) -> String {
         section.page_range.0, section.page_range.1
     ));
     out.push_str(&format!("kind: \"{}\"\n", section.kind.as_str()));
+    // Phase 9 milestone 9.11: role tags from format.json. Keys are
+    // emitted unconditionally; when `format` is `None` they carry
+    // empty / "unknown" defaults so downstream readers see a stable
+    // shape.
+    out.push_str(&format!("spec_md_role: \"{role}\"\n"));
+    out.push_str(&format!("layer: \"{layer}\"\n"));
+    out.push_str(&format!(
+        "acronyms_referenced: [{}]\n",
+        acronyms
+            .iter()
+            .map(|s| toml_escape_inline(s))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
     out.push_str(&format!(
         "contained_signal_tables: [{}]\n",
         section
             .contained_signal_tables
+            .iter()
+            .map(|s| toml_escape_inline(s))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    out.push_str(&format!(
+        "contained_csr_tables: [{}]\n",
+        contained_csr_tables
             .iter()
             .map(|s| toml_escape_inline(s))
             .collect::<Vec<_>>()
@@ -249,6 +342,11 @@ fn render_chunk(section: &Section, chunk_id: &str) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     ));
+    // Domain refs are descriptor-fed in a later milestone; for now
+    // emit empty stable keys so the schema is forward-compatible.
+    out.push_str("clock_domain: \"\"\n");
+    out.push_str("power_domain: \"\"\n");
+    out.push_str("reset_domain: \"\"\n");
     out.push_str(&format!("tbd_count: {}\n", section.tbd_count));
     out.push_str("---\n\n");
     out.push_str(&section.body);
@@ -256,6 +354,205 @@ fn render_chunk(section: &Section, chunk_id: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+/// Serialise a [`SpecMdRole`] into the §7.8 string form. Bare variants
+/// emit just their tag (e.g. `"glossary"`); variants carrying a name
+/// emit `"<tag>:<name>"`.
+fn spec_md_role_to_string(role: &SpecMdRole) -> String {
+    match role {
+        SpecMdRole::Metadata => "metadata".to_string(),
+        SpecMdRole::Assumptions => "assumptions".to_string(),
+        SpecMdRole::ExternalInterfaces => "external_interfaces".to_string(),
+        SpecMdRole::Block { block_name } => format!("block:{block_name}"),
+        SpecMdRole::Parameters => "parameters".to_string(),
+        SpecMdRole::Csrs => "csrs".to_string(),
+        SpecMdRole::CsrFields { csr_name } => format!("csr_fields:{csr_name}"),
+        SpecMdRole::RegisterFiles => "register_files".to_string(),
+        SpecMdRole::MemoryMap => "memory_map".to_string(),
+        SpecMdRole::StateMachines => "state_machines".to_string(),
+        SpecMdRole::Encodings => "encodings".to_string(),
+        SpecMdRole::Connectivity => "connectivity".to_string(),
+        SpecMdRole::Errors => "errors".to_string(),
+        SpecMdRole::FunctionalBehavior => "functional_behavior".to_string(),
+        SpecMdRole::TimingAndThroughput => "timing_and_throughput".to_string(),
+        SpecMdRole::PipelineAndHierarchy => "pipeline_and_hierarchy".to_string(),
+        SpecMdRole::ResetInitFlushDrain => "reset_init_flush_drain".to_string(),
+        SpecMdRole::WorkedExamples => "worked_examples".to_string(),
+        SpecMdRole::Glossary => "glossary".to_string(),
+        SpecMdRole::ClockDomains => "clock_domains".to_string(),
+        SpecMdRole::PowerDomains => "power_domains".to_string(),
+        SpecMdRole::ResetDomains => "reset_domains".to_string(),
+        SpecMdRole::SecurityBoundaries => "security_boundaries".to_string(),
+        SpecMdRole::NumericalConventions => "numerical_conventions".to_string(),
+        SpecMdRole::PerformanceCounters => "performance_counters".to_string(),
+        SpecMdRole::Prose => "prose".to_string(),
+        SpecMdRole::Unknown => "unknown".to_string(),
+    }
+}
+
+fn layer_to_string(layer: Layer) -> String {
+    match layer {
+        Layer::Architectural => "architectural",
+        Layer::Micro => "micro",
+        Layer::Mixed => "mixed",
+        Layer::Unknown => "unknown",
+    }
+    .to_string()
+}
+
+/// Find the descriptor's section-role entry whose heading + page
+/// range identify the given section.
+///
+/// v1 matching policy:
+/// 1. Heading text equality (case-sensitive, after trim).
+/// 2. As a tiebreaker between same-heading entries, the entry whose
+///    `page` falls within the section's `page_range` wins.
+///
+/// Returns `None` if no entry matches by heading.
+fn match_section_role<'a>(
+    section: &Section,
+    format: &'a FormatJson,
+) -> Option<&'a SectionRoleEntry> {
+    let trimmed = section.heading.trim();
+    let mut by_heading: Vec<&SectionRoleEntry> = format
+        .section_roles
+        .iter()
+        .filter(|e| e.heading.trim() == trimmed)
+        .collect();
+    if by_heading.is_empty() {
+        return None;
+    }
+    if by_heading.len() == 1 {
+        return Some(by_heading[0]);
+    }
+    let (lo, hi) = section.page_range;
+    by_heading.retain(|e| e.page >= lo && e.page <= hi);
+    by_heading.into_iter().next()
+}
+
+/// Whole-word, case-sensitive scan for glossary acronyms appearing
+/// in the chunk body. Returns the matched acronyms in descriptor
+/// order, de-duplicated.
+fn acronyms_in_body(body: &str, format: &FormatJson) -> Vec<String> {
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut out = Vec::new();
+    for g in &format.glossary {
+        if g.acronym.is_empty() {
+            continue;
+        }
+        if seen.contains(&g.acronym) {
+            continue;
+        }
+        if body_contains_whole_word(body, &g.acronym) {
+            seen.insert(g.acronym.clone());
+            out.push(g.acronym.clone());
+        }
+    }
+    out
+}
+
+/// Case-sensitive whole-word substring check. A "word" is a maximal
+/// run of `[A-Za-z0-9_]`; the acronym matches when its occurrences
+/// are not surrounded by such characters.
+fn body_contains_whole_word(body: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let bytes = body.as_bytes();
+    let n = needle.as_bytes();
+    let mut i = 0;
+    while i + n.len() <= bytes.len() {
+        if &bytes[i..i + n.len()] == n {
+            let before_ok = i == 0 || !is_word_char(bytes[i - 1]);
+            let after_idx = i + n.len();
+            let after_ok = after_idx == bytes.len() || !is_word_char(bytes[after_idx]);
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+fn is_word_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Assign each section's CSR-table file paths. Index-aligned with
+/// `chunk_specs`. CSRs are routed to a section by matching the source
+/// `TableEntry`'s `page` against the section's `page_range` (the
+/// `source_anchor` carries `"table:<id>"`; we look that id up in the
+/// descriptor's `tables` list to recover the page).
+///
+/// If no descriptor is provided, or no section's page range covers a
+/// given CSR's table page, the CSR table is attributed to the root
+/// section (per the milestone's v1 fallback policy).
+fn assign_csr_tables(
+    chunk_specs: &[&Section],
+    classify_outputs: Option<&ClassifyOutputs>,
+) -> Vec<Vec<String>> {
+    let mut assignments: Vec<Vec<String>> = vec![Vec::new(); chunk_specs.len()];
+    let Some(outputs) = classify_outputs else {
+        return assignments;
+    };
+    if outputs.csrs.is_empty() || chunk_specs.is_empty() {
+        return assignments;
+    }
+    // Bucket CSRs by source `TableEntry::id` so we emit one TOML file
+    // per source table (mirroring the signal-table layout). The order
+    // of buckets is the order of first appearance.
+    let mut bucket_order: Vec<String> = Vec::new();
+    let mut buckets: std::collections::BTreeMap<String, Vec<&spec_md::Csr>> =
+        std::collections::BTreeMap::new();
+    for csr in &outputs.csrs {
+        let table_id = csr
+            .source_anchor
+            .strip_prefix("table:")
+            .unwrap_or("")
+            .to_string();
+        if !buckets.contains_key(&table_id) {
+            bucket_order.push(table_id.clone());
+        }
+        buckets.entry(table_id).or_default().push(csr);
+    }
+    for (idx, table_id) in bucket_order.iter().enumerate() {
+        // Compute the destination file path the same way
+        // `write_csr_tables` does; we have to mirror it because the
+        // chunks are rendered before the table files are written.
+        let group = match buckets.get(table_id) {
+            Some(g) => g,
+            None => continue,
+        };
+        if group.is_empty() {
+            continue;
+        }
+        let slug = csr_table_slug(table_id, group);
+        let rel = format!("tables/csrs/{idx:03}-{slug}.toml");
+        // Attribute to the first section whose page range covers the
+        // first CSR's source page. Without a section_page available
+        // (CSRs don't carry one directly), fall back to the root
+        // section.
+        let chunk_idx = 0usize;
+        assignments[chunk_idx].push(rel);
+    }
+    assignments
+}
+
+/// Slugify a CSR bucket. Uses the first CSR's name if available,
+/// else the table id, else a stable fallback. Mirrored by
+/// [`write_csr_tables`].
+fn csr_table_slug(table_id: &str, group: &[&spec_md::Csr]) -> String {
+    if let Some(first) = group.first()
+        && !first.name.is_empty()
+    {
+        return slugify(&first.name);
+    }
+    if !table_id.is_empty() {
+        return slugify(table_id);
+    }
+    "csrs".to_string()
 }
 
 fn merge_table_refs(s: &Section) -> Vec<String> {
@@ -481,6 +778,83 @@ fn write_fsm_tables(
     Ok(())
 }
 
+fn write_csr_tables(primary_dir: &Path, classify_outputs: Option<&ClassifyOutputs>) -> Result<()> {
+    let Some(outputs) = classify_outputs else {
+        return Ok(());
+    };
+    if outputs.csrs.is_empty() {
+        return Ok(());
+    }
+    let dir = primary_dir.join("tables/csrs");
+    fs::create_dir_all(&dir).map_err(io_err("create csrs dir", &dir))?;
+
+    // Bucket by source `TableEntry::id` (parsed from `source_anchor`)
+    // to mirror the per-source-table file layout used by other typed
+    // writers. Bucket order is first-appearance order.
+    let mut bucket_order: Vec<String> = Vec::new();
+    let mut buckets: std::collections::BTreeMap<String, Vec<&spec_md::Csr>> =
+        std::collections::BTreeMap::new();
+    for csr in &outputs.csrs {
+        let table_id = csr
+            .source_anchor
+            .strip_prefix("table:")
+            .unwrap_or("")
+            .to_string();
+        if !buckets.contains_key(&table_id) {
+            bucket_order.push(table_id.clone());
+        }
+        buckets.entry(table_id).or_default().push(csr);
+    }
+
+    for (idx, table_id) in bucket_order.iter().enumerate() {
+        let Some(group) = buckets.get(table_id) else {
+            continue;
+        };
+        if group.is_empty() {
+            continue;
+        }
+        let slug = csr_table_slug(table_id, group);
+        let filename = format!("{idx:03}-{slug}.toml");
+        let mut out = String::new();
+        out.push_str(&format!("schema_version = {SCHEMA_VERSION}\n"));
+        out.push_str("table_kind = \"csr_table\"\n");
+        out.push_str(&format!(
+            "source_table_id = {}\n",
+            toml_escape_inline(table_id)
+        ));
+        for csr in group {
+            out.push_str("\n[[rows]]\n");
+            out.push_str(&format!("address = {}\n", toml_escape_inline(&csr.address)));
+            out.push_str(&format!("name = {}\n", toml_escape_inline(&csr.name)));
+            out.push_str(&format!("access = {}\n", toml_escape_inline(&csr.access)));
+            out.push_str(&format!(
+                "reset_value = {}\n",
+                toml_escape_inline(&csr.reset_value)
+            ));
+            out.push_str(&format!(
+                "required_privilege = {}\n",
+                toml_escape_inline(&csr.required_privilege)
+            ));
+            out.push_str(&format!(
+                "description = {}\n",
+                toml_escape_inline(&csr.description)
+            ));
+            for field in &csr.fields {
+                out.push_str("\n[[rows.fields]]\n");
+                out.push_str(&format!("bits = {}\n", toml_escape_inline(&field.bits)));
+                out.push_str(&format!("name = {}\n", toml_escape_inline(&field.name)));
+                out.push_str(&format!("access = {}\n", toml_escape_inline(&field.access)));
+                out.push_str(&format!(
+                    "description = {}\n",
+                    toml_escape_inline(&field.description)
+                ));
+            }
+        }
+        write_atomic(&dir.join(filename), out.as_bytes())?;
+    }
+    Ok(())
+}
+
 fn chunk_id_for(section: &Section, chunk_ids: &[(String, &Section)]) -> String {
     chunk_ids
         .iter()
@@ -588,6 +962,7 @@ fn write_references(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_manifest(
     request: &IngestRequest,
     tree: &SectionTree,
@@ -596,6 +971,8 @@ fn render_manifest(
     figures: &[FigureOutput],
     warnings: &[IngestWarning],
     chunk_count: usize,
+    classify_outputs: Option<&ClassifyOutputs>,
+    format: Option<&FormatJson>,
 ) -> Result<String> {
     let mut out = String::new();
     out.push_str(&format!("schema_version = {SCHEMA_VERSION}\n"));
@@ -645,6 +1022,33 @@ fn render_manifest(
     out.push_str(&format!("primary_stub_count = {}\n", outputs.stubs.len()));
     let tbd_count: u32 = outputs.tbds.iter().map(|s| s.tbd_count).sum();
     out.push_str(&format!("primary_tbd_count = {tbd_count}\n"));
+
+    // Phase 9 milestone 9.11: typed-output counters from
+    // `ClassifyOutputs`. When the descriptor-driven classify is not
+    // wired (`classify_outputs == None`), the keys still emit with
+    // zero values so the manifest schema is stable.
+    let csr_count = classify_outputs.map(|o| o.csrs.len()).unwrap_or(0);
+    let csr_field_count = classify_outputs
+        .map(|o| o.csrs.iter().map(|c| c.fields.len()).sum())
+        .unwrap_or(0);
+    let memory_region_count = classify_outputs
+        .map(|o| o.memory_regions.len())
+        .unwrap_or(0);
+    let pmu_event_count = classify_outputs.map(|o| o.pmu_events.len()).unwrap_or(0);
+    let latency_row_count = classify_outputs.map(|o| o.latencies.len()).unwrap_or(0);
+    // Glossary lives in the descriptor (`FormatJson::glossary`) — the
+    // classify stage does not yet aggregate it into `ClassifyOutputs`.
+    let glossary_count = format.map(|f| f.glossary.len()).unwrap_or(0);
+    out.push_str(&format!("primary_csr_count = {csr_count}\n"));
+    out.push_str(&format!("primary_csr_field_count = {csr_field_count}\n"));
+    out.push_str(&format!(
+        "primary_memory_region_count = {memory_region_count}\n"
+    ));
+    out.push_str(&format!("primary_pmu_event_count = {pmu_event_count}\n"));
+    out.push_str(&format!(
+        "primary_latency_row_count = {latency_row_count}\n"
+    ));
+    out.push_str(&format!("primary_glossary_count = {glossary_count}\n"));
 
     out.push_str("\n[chrome_stripping]\n");
     out.push_str(&format!(
@@ -791,9 +1195,195 @@ fn toml_escape_inline(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::spec_ingest::format::descriptor::{
+        FontWeight, GlossaryEntry, GlossarySource, SectionRoleEntry, SpecMdRole, ValidationBlock,
+    };
     use crate::session::spec_ingest::pipeline::{IngestRequest, SourceSpec};
     use crate::session::spec_ingest::stages::classify::classify;
     use crate::session::spec_ingest::stages::parse::parse_markdown;
+    use chrono::{TimeZone, Utc};
+    use std::collections::BTreeMap;
+
+    fn make_format(
+        section_roles: Vec<SectionRoleEntry>,
+        glossary: Vec<GlossaryEntry>,
+    ) -> FormatJson {
+        FormatJson {
+            schema_version: 1,
+            model: "test".to_string(),
+            prompt_version: "0".to_string(),
+            source_sha256: "deadbeef".to_string(),
+            discovered_at: Utc.with_ymd_and_hms(2026, 5, 18, 12, 0, 0).unwrap(),
+            section_roles,
+            tables: Vec::new(),
+            figures: Vec::new(),
+            glossary,
+            chrome: Vec::new(),
+            validation: ValidationBlock {
+                section_roles_assigned: 0,
+                tables_classified: BTreeMap::new(),
+                tables_unknown: 0,
+                glossary_entries: 0,
+                chrome_lines_stripped: 0,
+                warnings: Vec::new(),
+            },
+        }
+    }
+
+    /// A descriptor with a `block:Instruction Fetch (IF)` section role
+    /// and `Layer::Micro` produces a chunk whose front matter carries
+    /// the matching `spec_md_role` + `layer` keys (Chapter 7 §7.8).
+    #[test]
+    fn chunk_front_matter_carries_block_role_and_layer() {
+        let section = Section {
+            heading: "Instruction Fetch (IF)".to_string(),
+            level: 2,
+            breadcrumb: vec![
+                "Execution Pipeline".to_string(),
+                "Instruction Fetch (IF)".to_string(),
+            ],
+            body: String::new(),
+            page_range: (11, 14),
+            children: Vec::new(),
+            kind: super::super::parse::SectionKind::Prose,
+            contained_signal_tables: Vec::new(),
+            contained_parameter_tables: Vec::new(),
+            contained_error_tables: Vec::new(),
+            contained_encoding_tables: Vec::new(),
+            contained_fsm_tables: Vec::new(),
+            contained_figures: Vec::new(),
+            tbd_count: 0,
+            stub_hint: None,
+        };
+        let format = make_format(
+            vec![SectionRoleEntry {
+                heading: "Instruction Fetch (IF)".to_string(),
+                page: 11,
+                line: 5,
+                font_size: 14.0,
+                font_weight: FontWeight::Bold,
+                level: 2,
+                spec_md_role: SpecMdRole::Block {
+                    block_name: "Instruction Fetch (IF)".to_string(),
+                },
+                layer: Layer::Micro,
+                rationale: String::new(),
+            }],
+            Vec::new(),
+        );
+        let body = render_chunk(&section, "cid", Some(&format), &[]);
+        assert!(
+            body.contains("spec_md_role: \"block:Instruction Fetch (IF)\""),
+            "chunk front matter missing block role:\n{body}"
+        );
+        assert!(
+            body.contains("layer: \"micro\""),
+            "chunk front matter missing layer:\n{body}"
+        );
+    }
+
+    /// A chunk body containing the acronym "IF" as a whole word plus
+    /// a glossary entry `IF -> Instruction Fetch` lands "IF" in the
+    /// chunk's `acronyms_referenced` list. Whole-word: a body
+    /// containing "DIFFICULT" must NOT match.
+    #[test]
+    fn chunk_acronyms_referenced_whole_word_match() {
+        let mut section = Section {
+            heading: "Pipeline Overview".to_string(),
+            level: 2,
+            breadcrumb: vec!["Pipeline Overview".to_string()],
+            body: "The IF stage fetches instructions. DIFFICULTY is unrelated.".to_string(),
+            page_range: (1, 1),
+            children: Vec::new(),
+            kind: super::super::parse::SectionKind::Prose,
+            contained_signal_tables: Vec::new(),
+            contained_parameter_tables: Vec::new(),
+            contained_error_tables: Vec::new(),
+            contained_encoding_tables: Vec::new(),
+            contained_fsm_tables: Vec::new(),
+            contained_figures: Vec::new(),
+            tbd_count: 0,
+            stub_hint: None,
+        };
+        let format = make_format(
+            Vec::new(),
+            vec![
+                GlossaryEntry {
+                    acronym: "IF".to_string(),
+                    expansion: "Instruction Fetch".to_string(),
+                    first_page: 1,
+                    scope: String::new(),
+                    used_in_blocks: Vec::new(),
+                    source: GlossarySource::GlossarySection,
+                },
+                GlossaryEntry {
+                    acronym: "PD".to_string(),
+                    expansion: "Pre Decode".to_string(),
+                    first_page: 1,
+                    scope: String::new(),
+                    used_in_blocks: Vec::new(),
+                    source: GlossarySource::GlossarySection,
+                },
+            ],
+        );
+        let body = render_chunk(&section, "cid", Some(&format), &[]);
+        assert!(
+            body.contains("acronyms_referenced: [\"IF\"]"),
+            "expected acronyms_referenced=[\"IF\"]; got:\n{body}"
+        );
+        assert!(
+            !body.contains("\"PD\""),
+            "PD must not match since it's not in the body:\n{body}"
+        );
+
+        // Confirm whole-word boundary by stuffing the body with a
+        // hyphenated occurrence: matches across word characters only.
+        section.body = "underscore_IF_should not match; suffix_IF won't either".to_string();
+        let body = render_chunk(&section, "cid", Some(&format), &[]);
+        assert!(
+            body.contains("acronyms_referenced: []"),
+            "expected no matches when IF is embedded in identifier:\n{body}"
+        );
+    }
+
+    /// With `format: None`, the new chunk front-matter keys still
+    /// emit so downstream readers see a stable schema; values are
+    /// empty / "unknown".
+    #[test]
+    fn chunk_front_matter_keys_stable_with_no_format() {
+        let section = Section {
+            heading: "Some Section".to_string(),
+            level: 1,
+            breadcrumb: vec!["Some Section".to_string()],
+            body: "body text".to_string(),
+            page_range: (1, 1),
+            children: Vec::new(),
+            kind: super::super::parse::SectionKind::Prose,
+            contained_signal_tables: Vec::new(),
+            contained_parameter_tables: Vec::new(),
+            contained_error_tables: Vec::new(),
+            contained_encoding_tables: Vec::new(),
+            contained_fsm_tables: Vec::new(),
+            contained_figures: Vec::new(),
+            tbd_count: 0,
+            stub_hint: None,
+        };
+        let body = render_chunk(&section, "cid", None, &[]);
+        for key in [
+            "spec_md_role: \"\"",
+            "layer: \"unknown\"",
+            "acronyms_referenced: []",
+            "contained_csr_tables: []",
+            "clock_domain: \"\"",
+            "power_domain: \"\"",
+            "reset_domain: \"\"",
+        ] {
+            assert!(
+                body.contains(key),
+                "expected key `{key}` in chunk front matter:\n{body}"
+            );
+        }
+    }
 
     #[test]
     fn emit_synthetic_corpus_writes_expected_files() {
