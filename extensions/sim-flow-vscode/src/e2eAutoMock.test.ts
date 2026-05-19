@@ -313,35 +313,53 @@ function pickResponseForStep(
 }
 
 // Minimum-viable spec.md that passes DM0's structural gate. The
-// gate requires "clock frequency" matching `\d+\s*(MHz|GHz)` and
-// "gates per cycle" matching `[Gg]ates\s+per\s+cycle.*\d+`. Other
-// content is free-form.
-const SPEC_MD_FIXTURE = `# Design Specification (mock)
+// gate parses spec.md via the Phase-1 SpecMd parser; an empty
+// SpecMd with two Quantitative rows (Clock frequency, Gate budget
+// per cycle) round-trips cleanly. Generated from the Rust side
+// via `SpecMd { assumptions: ... }.to_markdown()`; if the writer's
+// section order changes, regenerate via:
+//
+//   cargo run --bin _dump_min_spec  (recreate the throwaway bin
+//   that mirrors gate.rs::tests::minimal_valid_body)
+//
+// Other sections are emitted as empty H2 stubs so the parser's
+// section-order dispatch sees what it expects.
+const SPEC_MD_FIXTURE = `## Metadata
 
-## Metadata
-- Design name: Mock Smoke Pipeline
-- Spec status: draft
-- Clock frequency: 1 GHz
-- Technology node: 7 nm
 
-## Assumptions And Constraints
-Gates per cycle: 25
+## Purpose
 
-## External interfaces
-- in_valid / in_ready / in_data[31:0]: ready/valid input handshake.
-- out_valid / out_ready / out_data[31:0]: ready/valid output handshake.
+## Scope
 
-## Functional behavior
-A trivial 1-stage datapath: out = in + 1 each accepted cycle.
+## Non-goals
 
-## Timing
-End-to-end latency: 1 cycle.
+## Assumptions and Constraints
 
-## Reset
-Active-low synchronous reset clears all registers.
+### Quantitative
+
+| Constraint | Value | Source-anchor |
+| --- | --- | --- |
+| Clock frequency | 1 GHz | primary:p1 |
+| Gate budget per cycle | 50 | primary:p1 |
+
+## Blocks
+
+## Functional Behavior
+
+## Timing, Latency, and Throughput
+
+## Pipeline and Hierarchy
+
+## Reset, Initialization, Flush, Drain
+
+## Worked Examples
+
+## Source-Spec Anchors
+
+## Open Questions
 
 ## Auto-decisions
-- decided to use a minimal 1-stage pipeline; rationale: smallest viable design that exercises the DM flow gates.
+
 `;
 
 // Critique with zero blockers so the auto driver advances cleanly.
@@ -415,6 +433,26 @@ describe("e2e auto smoke (mock LLM)", () => {
       );
     }
     projectDir = path.join(tmpRoot, projectName);
+    // DM0's gate runs `check_dm0_gate`, which expects either a real
+    // ingest manifest at `.sim-flow/spec-ingest/manifest.toml` (so
+    // it can resolve source-anchors) or its absence (no-source-spec
+    // project, anchor resolution skipped). The test never runs
+    // `sim-flow ingest` -- the mock LLM just writes a spec.md
+    // directly -- so write a minimal manifest declaring `primary`
+    // as a source. SPEC_MD_FIXTURE's `primary:p1` anchors then
+    // resolve cleanly. Keeping the manifest valid TOML is enough;
+    // the gate only reads `source_path` + `peers[].id`.
+    const specIngestDir = path.join(projectDir, ".sim-flow", "spec-ingest");
+    fs.mkdirSync(specIngestDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specIngestDir, "manifest.toml"),
+      `schema_version = 1
+source_kind = "none"
+source_path = "mock-spec.md"
+ingested_at = "2026-01-01T00:00:00Z"
+`,
+      "utf8",
+    );
   });
 
   afterEach(async () => {
