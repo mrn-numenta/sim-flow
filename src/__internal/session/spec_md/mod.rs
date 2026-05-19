@@ -152,6 +152,57 @@ pub enum SpecMdWriteError {
 }
 
 impl SpecMdWriteError {
+    /// Flatten the error into a sequence of `(section, title, body)`
+    /// triples suitable for emitting as Phase 1 critique findings.
+    /// Each entry is a BLOCKER-class issue (the LLM critique would
+    /// have to address it before advancement either way; making it
+    /// a BLOCKER lets the deterministic phase short-circuit the
+    /// auto-loop's "retry until clean" path with a clear signal).
+    ///
+    /// The fields are deliberately chosen to round-trip cleanly
+    /// into `crate::critique::CritiqueFinding`:
+    ///
+    /// - `section` is a human-readable label so the rendered
+    ///   markdown view groups related findings together.
+    /// - `title` is the one-line summary the markdown row leads
+    ///   with.
+    /// - `body` carries the remediation hint + the original
+    ///   location detail so the agent has everything it needs in
+    ///   one place.
+    pub fn to_phase1_findings(&self) -> Vec<(String, String, String)> {
+        match self {
+            SpecMdWriteError::Parse(err) => vec![(
+                "Structural parse".into(),
+                "docs/spec.md fails the structured parser".into(),
+                format!(
+                    "Parser error: {err}.\n\nThe structured schema in DM0's prompt is mandatory: every required H2 must be present in order, tables must have the documented columns, and headings must match the canonical strings exactly. Fix the parse error and re-write the file."
+                ),
+            )],
+            SpecMdWriteError::MissingRequiredSections(missing) => missing
+                .iter()
+                .map(|name| {
+                    (
+                        "Required H2 missing".into(),
+                        format!("`## {name}` is missing"),
+                        format!(
+                            "Add a `## {name}` heading as its OWN H2 (no merging like `## Purpose And Scope`, no case changes). The schema requires every section in `REQUIRED_H2_SECTIONS` to be present."
+                        ),
+                    )
+                })
+                .collect(),
+            SpecMdWriteError::Validate(issues) => issues
+                .iter()
+                .map(|issue| {
+                    (
+                        "Validation".into(),
+                        issue.location.clone(),
+                        issue.message.clone(),
+                    )
+                })
+                .collect(),
+        }
+    }
+
     /// Render the error into a user-facing message suitable for
     /// returning to the agent as a `ToolResult::err` body. Format
     /// is "spec.md validation failed (N issue(s)):" + a bulleted

@@ -587,17 +587,37 @@ where
             // Cargo.toml.
             run_orchestrator_cargo_checks(opts, step_id);
 
-            // Critique session.
-            run_subsession(
-                opts,
-                step_id,
-                crate::client::SessionKind::Critique,
-                /*auto=*/ true,
-                auto_host,
-                /*consume_end=*/ true,
-                /*synth_hello=*/ true,
-                llm,
-            )?;
+            // Phase 1 deterministic critique for DM0. Runs
+            // `validate_proposed_spec_md` against the current
+            // `docs/spec.md` and, if there are findings, writes
+            // them straight to `docs/critiques/DM0-critique.json`
+            // as BLOCKER-class entries and SKIPS the LLM critique
+            // sub-session entirely. Saves an LLM round-trip per
+            // retry when the issue is structural (parse failure,
+            // missing required H2, cross-ref break) — the agent
+            // gets exhaustive feedback immediately and a clean
+            // pass falls through to phase 2 (the LLM critique).
+            //
+            // Returns `true` when phase 1 wrote findings and the
+            // LLM dispatch should be skipped.
+            let dm0_phase1_blocked = run_dm0_phase1_critique(opts, step_id, auto_host)?;
+
+            if !dm0_phase1_blocked {
+                // Phase 2: LLM critique. The existing prompt /
+                // dispatch path; only fires when phase 1 found
+                // nothing wrong (or step_id != "DM0", in which
+                // case phase 1 was a no-op).
+                run_subsession(
+                    opts,
+                    step_id,
+                    crate::client::SessionKind::Critique,
+                    /*auto=*/ true,
+                    auto_host,
+                    /*consume_end=*/ true,
+                    /*synth_hello=*/ true,
+                    llm,
+                )?;
+            }
             if let Some(o) = check_post_subsession(
                 auto_host,
                 step_id,
@@ -1105,6 +1125,134 @@ fn run_dm0_auto_populate_prelude<P: Presenter + ?Sized>(
         ),
     })?;
     Ok(())
+}
+
+/// Phase 1 of DM0's two-phase critique. Runs the structured
+/// validator over `docs/spec.md` directly; if there are findings,
+/// writes `docs/critiques/DM0-critique.json` with one BLOCKER
+/// entry per validation issue and skips the Phase 2 LLM dispatch.
+///
+/// Returns `true` when phase 1 wrote findings (caller skips
+/// `run_subsession(SessionKind::Critique, ...)`). Returns `false`
+/// when the step is not DM0, or when spec.md is missing, or when
+/// validation passes cleanly (caller proceeds to the LLM
+/// critique).
+///
+/// Read the rationale at the call site in `run_auto_loop`. The
+/// commentary at the top of the inserted block summarises why
+/// we don't just rely on the on-write guard: a malformed spec.md
+/// from a pre-guard run (or from a hand-edit outside the tools)
+/// still has to be evaluated, and the deterministic feedback
+/// arrives faster than waiting for the LLM critique to surface
+/// the same finding through prose.
+fn run_dm0_phase1_critique<P: Presenter + ?Sized>(
+    opts: &AutoOptions,
+    step_id: &str,
+    auto_host: &mut AutoPresenter<P>,
+) -> Result<bool> {
+    use crate::__internal::critique::{CritiqueFinding, CritiqueJson, FindingKind};
+    use crate::__internal::session::spec_md;
+
+    if step_id != "DM0" {
+        return Ok(false);
+    }
+    let spec_path = opts.project_dir.join("docs").join("spec.md");
+    let content = match std::fs::read_to_string(&spec_path) {
+        Ok(s) => s,
+        Err(_) => {
+            // No spec.md on disk yet. Phase 2 will surface that
+            // as its own gate failure; phase 1 has nothing to
+            // check against and falls through.
+            return Ok(false);
+        }
+    };
+    let spec_err = match spec_md::validate_proposed_spec_md(&content) {
+        Ok(()) => return Ok(false), // clean → fall through to LLM critique
+        Err(e) => e,
+    };
+
+    // Build a deterministic critique JSON. One finding per issue;
+    // every finding is `Blocker`-class so the auto-loop's
+    // gate-blockers count reflects the structural debt.
+    let triples = spec_err.to_phase1_findings();
+    let n = triples.len();
+    let findings: Vec<CritiqueFinding> = triples
+        .into_iter()
+        .map(|(section, title, body)| CritiqueFinding {
+            kind: FindingKind::Blocker,
+            section,
+            title,
+            body,
+        })
+        .collect();
+    let critique = CritiqueJson {
+        step: step_id.to_string(),
+        summary: format!(
+            "Phase 1 (deterministic) lint found {n} structural issue(s) in \
+             `docs/spec.md`. Phase 2 (LLM) is skipped until phase 1 is clean. \
+             Address every issue below and re-run the work session."
+        ),
+        findings,
+        notes: String::new(),
+    };
+    let json_path = opts.project_dir.join("docs/critiques/DM0-critique.json");
+    if let Some(parent) = json_path.parent()
+        && let Err(err) = std::fs::create_dir_all(parent)
+    {
+        auto_host.send(&Event::Diagnostic {
+            level: DiagnosticLevel::Warning,
+            message: format!(
+                "phase1 critique: mkdir failed: {err}; falling through to LLM critique"
+            ),
+        })?;
+        return Ok(false);
+    }
+    let body = match serde_json::to_string_pretty(&critique) {
+        Ok(s) => s,
+        Err(err) => {
+            auto_host.send(&Event::Diagnostic {
+                level: DiagnosticLevel::Warning,
+                message: format!(
+                    "phase1 critique: JSON serialise failed: {err}; falling through to LLM critique"
+                ),
+            })?;
+            return Ok(false);
+        }
+    };
+    if let Err(err) = std::fs::write(&json_path, body) {
+        auto_host.send(&Event::Diagnostic {
+            level: DiagnosticLevel::Warning,
+            message: format!(
+                "phase1 critique: write `{}` failed: {err}; falling through to LLM critique",
+                json_path.display()
+            ),
+        })?;
+        return Ok(false);
+    }
+    if let Err(err) = crate::__internal::critique::render_critique_markdown_to_disk(
+        &opts.project_dir,
+        "docs/critiques/DM0-critique.json",
+    ) {
+        auto_host.send(&Event::Diagnostic {
+            level: DiagnosticLevel::Warning,
+            message: format!(
+                "phase1 critique: markdown render failed for `{}`: {err}",
+                json_path.display()
+            ),
+        })?;
+        // The JSON is still on disk; the auto-loop will see the
+        // findings even without the .md render. Still skip the
+        // LLM critique.
+    }
+    auto_host.send(&Event::Diagnostic {
+        level: DiagnosticLevel::Info,
+        message: format!(
+            "DM0 phase 1 critique: {n} structural issue(s) found; skipping LLM critique. \
+             See `docs/critiques/DM0-critique.json` for the finding list. The work \
+             session will re-fire when the auto-loop retries."
+        ),
+    })?;
+    Ok(true)
 }
 
 fn emit_cap_exceeded_diagnostic<P: Presenter + ?Sized>(
@@ -4406,6 +4554,113 @@ not a finding
         run_dm0_auto_populate_prelude(&opts, &mut auto_host).unwrap();
         assert!(!project.join("docs/spec.md").exists());
         assert!(host.written.is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // Phase-1 DM0 critique
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn phase1_no_op_for_non_dm0_step() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut opts = options_with_llm("mock", None, None);
+        opts.project_dir = tmp.path().to_path_buf();
+        let mut host = TestHost::new();
+        let mode = Arc::new(AtomicU8::new(STEP_MODE_AUTO));
+        let mut auto_host = AutoPresenter::new(&mut host, mode);
+        let blocked = run_dm0_phase1_critique(&opts, "DM1", &mut auto_host).unwrap();
+        assert!(!blocked, "non-DM0 step must fall through to LLM critique");
+    }
+
+    #[test]
+    fn phase1_no_op_when_spec_md_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut opts = options_with_llm("mock", None, None);
+        opts.project_dir = tmp.path().to_path_buf();
+        let mut host = TestHost::new();
+        let mode = Arc::new(AtomicU8::new(STEP_MODE_AUTO));
+        let mut auto_host = AutoPresenter::new(&mut host, mode);
+        let blocked = run_dm0_phase1_critique(&opts, "DM0", &mut auto_host).unwrap();
+        assert!(
+            !blocked,
+            "missing spec.md must fall through to LLM critique"
+        );
+        assert!(
+            !opts
+                .project_dir
+                .join("docs/critiques/DM0-critique.json")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn phase1_writes_critique_on_invalid_spec_md() {
+        // Agent's spec.md merges Purpose/Scope/Non-goals into one
+        // section — the freeform pattern from the rv12 run. Phase 1
+        // must catch it deterministically and emit a critique JSON
+        // listing every missing section.
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().to_path_buf();
+        std::fs::create_dir_all(project.join("docs")).unwrap();
+        let invalid =
+            "# Bad spec\n\n## Metadata\n\n- Design name: X\n\n## Purpose And Scope\n\nprose\n";
+        std::fs::write(project.join("docs/spec.md"), invalid).unwrap();
+
+        let mut opts = options_with_llm("mock", None, None);
+        opts.project_dir = project.clone();
+        let mut host = TestHost::new();
+        let mode = Arc::new(AtomicU8::new(STEP_MODE_AUTO));
+        let mut auto_host = AutoPresenter::new(&mut host, mode);
+
+        let blocked = run_dm0_phase1_critique(&opts, "DM0", &mut auto_host).unwrap();
+        assert!(blocked, "invalid spec.md must block LLM critique");
+
+        // Critique JSON is on disk.
+        let json_path = project.join("docs/critiques/DM0-critique.json");
+        assert!(json_path.exists());
+        let body = std::fs::read_to_string(&json_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["step"], "DM0");
+        let findings = parsed["findings"].as_array().expect("findings array");
+        assert!(
+            !findings.is_empty(),
+            "expected at least one finding, got: {body}"
+        );
+        // Every finding is a BLOCKER.
+        for f in findings {
+            assert_eq!(f["kind"], "blocker", "finding not blocker: {f}");
+        }
+        // Markdown sibling exists.
+        assert!(project.join("docs/critiques/DM0-critique.md").exists());
+        // Info Diagnostic announces the skip.
+        let saw_info = host.written.iter().any(|e| matches!(
+            e,
+            Event::Diagnostic { level: DiagnosticLevel::Info, message }
+                if message.contains("DM0 phase 1 critique") && message.contains("skipping LLM critique")
+        ));
+        assert!(saw_info, "no info diagnostic emitted: {:?}", host.written);
+    }
+
+    #[test]
+    fn phase1_falls_through_when_spec_md_is_valid() {
+        // Minimal valid body from the writer. Phase 1 must NOT
+        // write a critique; the auto-loop falls through to the
+        // LLM dispatch.
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().to_path_buf();
+        std::fs::create_dir_all(project.join("docs")).unwrap();
+        let valid = "## Metadata\n\n\n## Purpose\n\n## Scope\n\n## Non-goals\n\n## Assumptions and Constraints\n\n### Quantitative\n\n| Constraint | Value | Source-anchor |\n| --- | --- | --- |\n| Clock frequency | 1 GHz | primary:p1 |\n| Gate budget per cycle | 50 | primary:p1 |\n\n## Blocks\n\n## Functional Behavior\n\n## Timing, Latency, and Throughput\n\n## Pipeline and Hierarchy\n\n## Reset, Initialization, Flush, Drain\n\n## Worked Examples\n\n## Source-Spec Anchors\n\n## Open Questions\n\n## Auto-decisions\n\n";
+        std::fs::write(project.join("docs/spec.md"), valid).unwrap();
+
+        let mut opts = options_with_llm("mock", None, None);
+        opts.project_dir = project.clone();
+        let mut host = TestHost::new();
+        let mode = Arc::new(AtomicU8::new(STEP_MODE_AUTO));
+        let mut auto_host = AutoPresenter::new(&mut host, mode);
+
+        let blocked = run_dm0_phase1_critique(&opts, "DM0", &mut auto_host).unwrap();
+        assert!(!blocked, "valid spec.md must NOT block; got blocked=true");
+        assert!(!project.join("docs/critiques/DM0-critique.json").exists());
     }
 
     // -----------------------------------------------------------------
