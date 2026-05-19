@@ -120,14 +120,48 @@ pub fn run_dm0_work(
 
     match mode {
         Dm0Mode::SourceDriven => {
-            let report = auto_populate::run(project_dir, &mut spec)?;
+            // Phase 9 milestone 9.12: load format.json if available
+            // and thread it into auto_populate so format-driven
+            // populates (blocks, glossary today; more in subsequent
+            // milestones) consume the descriptor instead of falling
+            // back to filename heuristics.
+            let format_path = project_dir
+                .join(".sim-flow")
+                .join("spec-ingest")
+                .join("format.json");
+            let format = if format_path.is_file() {
+                match crate::__internal::session::spec_ingest::format::FormatJson::load(
+                    &format_path,
+                ) {
+                    Ok(f) => Some(f),
+                    Err(e) => {
+                        eprintln!(
+                            "dm0::run_dm0_work: failed to load {}: {} — proceeding without format.json",
+                            format_path.display(),
+                            e
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let report = auto_populate::run_with_format(project_dir, &mut spec, format.as_ref())?;
             outcome.fields_filled = report.blocks
                 + report.parameters
                 + report.encodings
                 + report.errors
                 + report.fsms
                 + report.figures
-                + report.anchors;
+                + report.anchors
+                + report.csrs
+                + report.glossary
+                + report.clock_domains
+                + report.power_domains
+                + report.reset_domains
+                + report.security_boundaries
+                + report.numerical_conventions
+                + report.performance_counters;
             outcome.tbds_recorded = report.open_questions;
         }
         Dm0Mode::NoSource => {
