@@ -7,9 +7,45 @@ use serde_json::json;
 
 use super::{Tool, ToolContext, ToolResult, resolve_safe_path};
 use crate::Result;
-use crate::steps::is_path_allowed_for_writes;
+use crate::steps::{ReadOnlyReason, classify_read_only, is_path_allowed_for_writes};
 
 pub struct WriteFileTool;
+
+/// Render a structured rejection message for a read-only path. Used
+/// by `write_file` and `edit_file` to explain to the agent why their
+/// write was refused and what to do instead.
+pub fn read_only_message(tool: &str, path: &str, reason: &ReadOnlyReason) -> String {
+    match reason {
+        ReadOnlyReason::ConventionDoc => format!(
+            "{tool}: `{path}` is a read-only convention document and cannot be \
+             written by an agent. Convention docs encode cross-flow contracts \
+             (plan-file shape, architecture-doc shape) and must NOT be mutated \
+             mid-run. If the file looks wrong or missing, that is a project-bootstrap \
+             problem, not a content problem -- stop and surface the gap instead of \
+             rewriting the convention."
+        ),
+        ReadOnlyReason::ProtectedExtension(ext) => match *ext {
+            "pdf" => format!(
+                "{tool}: `{path}` has a `.pdf` extension. PDFs are input source-spec \
+                 documents and must be preserved verbatim (cited from, never \
+                 rewritten). Extract what you need via `spec_semantic_search` / \
+                 `read_file` on the ingest chunks under \
+                 `.sim-flow/spec-ingest/primary/chunks/`."
+            ),
+            "tmpl" => format!(
+                "{tool}: `{path}` has a `.tmpl` extension. Template files are the \
+                 project-bootstrap contract -- modifying them silently forks the \
+                 shape downstream steps expect. Generate the non-template artifact \
+                 (drop the `.tmpl` suffix) instead, copying from the template if \
+                 needed; never edit the template itself."
+            ),
+            other => format!(
+                "{tool}: `{path}` has a `.{other}` extension which is read-only by \
+                 policy."
+            ),
+        },
+    }
+}
 
 /// If `requested` doesn't appear in the milestone body but a SIBLING
 /// path with the same filename does (under a different parent dir
@@ -130,6 +166,13 @@ impl Tool for WriteFileTool {
                 "[write_file] auto-redirected `{path}` -> `{canonical}` to match the active milestone's task list. Update your subsequent reads / writes to use the canonical path."
             ));
             path = canonical;
+        }
+        if let Some(reason) = classify_read_only(&path) {
+            return Ok(ToolResult::err(read_only_message(
+                "write_file",
+                &path,
+                &reason,
+            )));
         }
         if !is_path_allowed_for_writes(ctx.write_paths, &path) {
             return Ok(ToolResult::err(format!(
@@ -267,6 +310,72 @@ mod tests {
         let body = std::fs::read_to_string(tmp.path().join("out/a.txt")).unwrap();
         assert_eq!(body, "hello\n");
         assert_eq!(result.touched_paths, vec!["out/a.txt".to_string()]);
+    }
+
+    #[test]
+    fn plan_management_md_is_rejected_as_convention_doc() {
+        let tmp = tempfile::tempdir().unwrap();
+        let writes = vec!["docs/".to_string()];
+        std::fs::create_dir_all(tmp.path().join("docs")).unwrap();
+        let existing = "# Plan Management\n\nCanonical content.\n";
+        std::fs::write(tmp.path().join("docs/plan-management.md"), existing).unwrap();
+        let result = WriteFileTool
+            .invoke(
+                &ctx(tmp.path(), &writes),
+                &json!({"path": "docs/plan-management.md", "content": "agent stub"}),
+            )
+            .unwrap();
+        assert!(!result.ok, "expected rejection, got: {}", result.display);
+        assert!(
+            result.display.contains("read-only convention document"),
+            "missing convention-doc rejection hint: {}",
+            result.display
+        );
+        // File on disk is unchanged.
+        let on_disk = std::fs::read_to_string(tmp.path().join("docs/plan-management.md")).unwrap();
+        assert_eq!(on_disk, existing);
+    }
+
+    #[test]
+    fn pdf_extension_is_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let writes = vec!["docs/".to_string()];
+        let result = WriteFileTool
+            .invoke(
+                &ctx(tmp.path(), &writes),
+                &json!({"path": "docs/source-spec.pdf", "content": "not a pdf"}),
+            )
+            .unwrap();
+        assert!(!result.ok, "expected rejection, got: {}", result.display);
+        assert!(
+            result.display.contains("`.pdf` extension"),
+            "missing pdf rejection hint: {}",
+            result.display
+        );
+        assert!(!tmp.path().join("docs/source-spec.pdf").exists());
+    }
+
+    #[test]
+    fn tmpl_extension_is_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let writes = vec!["docs/".to_string()];
+        std::fs::create_dir_all(tmp.path().join("docs")).unwrap();
+        let existing = "# Spec template\n";
+        std::fs::write(tmp.path().join("docs/spec.md.tmpl"), existing).unwrap();
+        let result = WriteFileTool
+            .invoke(
+                &ctx(tmp.path(), &writes),
+                &json!({"path": "docs/spec.md.tmpl", "content": "agent rewrites template"}),
+            )
+            .unwrap();
+        assert!(!result.ok, "expected rejection, got: {}", result.display);
+        assert!(
+            result.display.contains("`.tmpl` extension"),
+            "missing tmpl rejection hint: {}",
+            result.display
+        );
+        let on_disk = std::fs::read_to_string(tmp.path().join("docs/spec.md.tmpl")).unwrap();
+        assert_eq!(on_disk, existing);
     }
 
     #[test]

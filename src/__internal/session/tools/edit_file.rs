@@ -21,9 +21,10 @@
 
 use serde_json::json;
 
+use super::write_file::read_only_message;
 use super::{Tool, ToolContext, ToolResult, preview_one_line, resolve_safe_path};
 use crate::Result;
-use crate::steps::is_path_allowed_for_writes;
+use crate::steps::{classify_read_only, is_path_allowed_for_writes};
 
 pub struct EditFileTool;
 
@@ -64,6 +65,13 @@ impl Tool for EditFileTool {
             return Ok(ToolResult::err(
                 "edit_file: `lib:` and `fw:` are read-only roots; cannot edit",
             ));
+        }
+        if let Some(reason) = classify_read_only(&path) {
+            return Ok(ToolResult::err(read_only_message(
+                "edit_file",
+                &path,
+                &reason,
+            )));
         }
         if !is_path_allowed_for_writes(ctx.write_paths, &path) {
             return Ok(ToolResult::err(format!(
@@ -210,6 +218,89 @@ mod tests {
             "n.md".to_string(),
             "a.txt".to_string(),
         ]
+    }
+
+    #[test]
+    fn plan_management_md_edit_is_rejected_as_convention_doc() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("docs")).unwrap();
+        let body = "# Plan Management\n\nCanonical content.\n";
+        std::fs::write(tmp.path().join("docs/plan-management.md"), body).unwrap();
+        let writes = vec!["docs/".to_string()];
+        let result = EditFileTool
+            .invoke(
+                &ctx(tmp.path(), &writes),
+                &json!({
+                    "path": "docs/plan-management.md",
+                    "old_string": "Canonical",
+                    "new_string": "Modified"
+                }),
+            )
+            .unwrap();
+        assert!(!result.ok, "expected rejection, got: {}", result.display);
+        assert!(
+            result.display.contains("read-only convention document"),
+            "missing convention-doc rejection hint: {}",
+            result.display
+        );
+        let on_disk = std::fs::read_to_string(tmp.path().join("docs/plan-management.md")).unwrap();
+        assert_eq!(on_disk, body);
+    }
+
+    #[test]
+    fn pdf_extension_edit_is_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("docs")).unwrap();
+        // edit_file requires old_string to exist; seed a file.
+        std::fs::write(tmp.path().join("docs/x.pdf"), "abc").unwrap();
+        let writes = vec!["docs/".to_string()];
+        let result = EditFileTool
+            .invoke(
+                &ctx(tmp.path(), &writes),
+                &json!({
+                    "path": "docs/x.pdf",
+                    "old_string": "a",
+                    "new_string": "z"
+                }),
+            )
+            .unwrap();
+        assert!(!result.ok, "expected rejection, got: {}", result.display);
+        assert!(
+            result.display.contains("`.pdf` extension"),
+            "missing pdf rejection hint: {}",
+            result.display
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("docs/x.pdf")).unwrap(),
+            "abc"
+        );
+    }
+
+    #[test]
+    fn tmpl_extension_edit_is_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("docs")).unwrap();
+        let body = "# Spec template\n";
+        std::fs::write(tmp.path().join("docs/spec.md.tmpl"), body).unwrap();
+        let writes = vec!["docs/".to_string()];
+        let result = EditFileTool
+            .invoke(
+                &ctx(tmp.path(), &writes),
+                &json!({
+                    "path": "docs/spec.md.tmpl",
+                    "old_string": "Spec",
+                    "new_string": "Modified"
+                }),
+            )
+            .unwrap();
+        assert!(!result.ok, "expected rejection, got: {}", result.display);
+        assert!(
+            result.display.contains("`.tmpl` extension"),
+            "missing tmpl rejection hint: {}",
+            result.display
+        );
+        let on_disk = std::fs::read_to_string(tmp.path().join("docs/spec.md.tmpl")).unwrap();
+        assert_eq!(on_disk, body);
     }
 
     #[test]

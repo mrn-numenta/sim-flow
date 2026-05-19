@@ -22,9 +22,10 @@
 
 use serde_json::json;
 
+use super::write_file::read_only_message;
 use super::{DELETE_SCOPE_VIOLATION_MARKER, Tool, ToolContext, ToolResult, resolve_safe_path};
 use crate::Result;
-use crate::steps::is_path_allowed_for_writes;
+use crate::steps::{classify_read_only, is_path_allowed_for_writes};
 
 pub struct DeleteFileTool;
 
@@ -59,6 +60,13 @@ impl Tool for DeleteFileTool {
             return Ok(ToolResult::err(
                 "delete_file: the library and framework roots are read-only; `lib:` / `fw:` paths cannot be deleted.",
             ));
+        }
+        if let Some(reason) = classify_read_only(&path) {
+            return Ok(ToolResult::err(read_only_message(
+                "delete_file",
+                &path,
+                &reason,
+            )));
         }
         // Two paths grant permission to delete:
         //   1. The path falls inside the step+kind write allowlist

@@ -16,7 +16,10 @@ pub use milestones::{
     enumerate_pending_milestones, find_current_milestone, find_milestone_by_name,
     milestone_is_resolved, tick_resolved_milestone_tasks,
 };
-pub use write_paths::{allowed_write_paths, is_path_allowed_for_writes};
+pub use write_paths::{
+    READ_ONLY_CONVENTION_PATHS, READ_ONLY_EXTENSIONS, ReadOnlyReason, allowed_write_paths,
+    classify_read_only, is_path_allowed_for_writes, is_read_only_convention_path,
+};
 
 use crate::gate::GateCheck;
 use crate::state::Flow;
