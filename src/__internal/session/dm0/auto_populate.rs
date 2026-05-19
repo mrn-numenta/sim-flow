@@ -2303,4 +2303,383 @@ mod tests {
             .unwrap();
         assert_eq!(row.source_anchor, "primary:p3-4");
     }
+
+    // ---------------------------------------------------------------
+    // Phase 9 milestone 9.12 tests
+    // ---------------------------------------------------------------
+
+    use crate::__internal::session::spec_ingest::format::{
+        ColumnMapping, FontWeight, FormatJson, GlossaryEntry as FmtGlossaryEntry, GlossarySource,
+        Layer as FmtLayer, SectionRoleEntry, SpecMdRole, TableEntry as FmtTableEntry, TableKind,
+        TableTarget, ValidationBlock, WrapStrategy,
+    };
+    use chrono::{TimeZone, Utc};
+
+    fn empty_format() -> FormatJson {
+        FormatJson {
+            schema_version: 1,
+            model: "test".into(),
+            prompt_version: "test".into(),
+            source_sha256: "".into(),
+            discovered_at: Utc.with_ymd_and_hms(2026, 5, 18, 0, 0, 0).unwrap(),
+            section_roles: Vec::new(),
+            tables: Vec::new(),
+            figures: Vec::new(),
+            glossary: Vec::new(),
+            chrome: Vec::new(),
+            validation: ValidationBlock::default(),
+        }
+    }
+
+    #[test]
+    fn populate_csrs_loads_csr_header_and_field_shards() {
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        write(
+            &corpus.join("tables").join("csrs").join("000-mstatus.toml"),
+            "schema_version = 1\n\
+             table_kind = \"csr_table\"\n\
+             source_chunk_id = \"c1\"\n\
+             source_page_range = [42, 42]\n\
+             \n\
+             [[rows]]\n\
+             address = \"0x300\"\n\
+             name = \"mstatus\"\n\
+             access = \"RW\"\n\
+             reset_value = \"0x0\"\n\
+             required_privilege = \"M\"\n\
+             description = \"Machine status register\"\n",
+        );
+        write(
+            &corpus
+                .join("tables")
+                .join("csr_fields")
+                .join("000-mstatus.toml"),
+            "schema_version = 1\n\
+             table_kind = \"csr_field_table\"\n\
+             source_chunk_id = \"c1\"\n\
+             source_page_range = [42, 42]\n\
+             csr_name = \"mstatus\"\n\
+             \n\
+             [[rows]]\n\
+             bits = \"3\"\n\
+             name = \"MIE\"\n\
+             access = \"RW\"\n\
+             description = \"Machine interrupt enable\"\n\
+             \n\
+             [[rows]]\n\
+             bits = \"7\"\n\
+             name = \"MPIE\"\n\
+             access = \"RW\"\n\
+             description = \"Previous machine interrupt enable\"\n",
+        );
+
+        let mut spec = SpecMd::default();
+        let n = populate_csrs(&corpus, &mut spec).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(spec.csrs.len(), 1);
+        let csr = &spec.csrs[0];
+        assert_eq!(csr.name, "mstatus");
+        assert_eq!(csr.address, "0x300");
+        assert_eq!(csr.access, "RW");
+        assert_eq!(csr.reset_value, "0x0");
+        assert_eq!(csr.required_privilege, "M");
+        assert_eq!(csr.source_anchor, "primary:p42");
+        assert_eq!(csr.fields.len(), 2);
+        assert_eq!(csr.fields[0].bits, "3");
+        assert_eq!(csr.fields[0].name, "MIE");
+        assert_eq!(csr.fields[1].name, "MPIE");
+
+        // Idempotent.
+        let n2 = populate_csrs(&corpus, &mut spec).unwrap();
+        assert_eq!(n2, 0);
+        assert_eq!(spec.csrs.len(), 1);
+        assert_eq!(spec.csrs[0].fields.len(), 2);
+    }
+
+    #[test]
+    fn populate_glossary_from_format_json() {
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        let mut fmt = empty_format();
+        fmt.glossary.push(FmtGlossaryEntry {
+            acronym: "IF".into(),
+            expansion: "Instruction Fetch".into(),
+            first_page: 11,
+            scope: "spec".into(),
+            used_in_blocks: vec!["Instruction Fetch (IF)".into()],
+            source: GlossarySource::ParenthesisedFirstMention,
+        });
+        fmt.glossary.push(FmtGlossaryEntry {
+            acronym: "PD".into(),
+            expansion: "Pre-Decode".into(),
+            first_page: 13,
+            scope: "spec".into(),
+            used_in_blocks: vec![],
+            source: GlossarySource::GlossarySection,
+        });
+
+        let mut spec = SpecMd::default();
+        let n = populate_glossary(&corpus, &mut spec, Some(&fmt)).unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(spec.glossary.len(), 2);
+        assert_eq!(spec.glossary[0].term, "IF");
+        assert_eq!(spec.glossary[0].expansion, "Instruction Fetch");
+        assert_eq!(spec.glossary[0].source_anchor, "primary:p11");
+        assert_eq!(
+            spec.glossary[0].used_in_blocks,
+            vec!["Instruction Fetch (IF)"]
+        );
+        assert_eq!(spec.glossary[1].term, "PD");
+        assert_eq!(spec.glossary[1].source_anchor, "primary:p13");
+
+        // Idempotent on `term`.
+        let n2 = populate_glossary(&corpus, &mut spec, Some(&fmt)).unwrap();
+        assert_eq!(n2, 0);
+        assert_eq!(spec.glossary.len(), 2);
+
+        // None-format path is a no-op when the on-disk shard is
+        // absent.
+        let mut spec2 = SpecMd::default();
+        let n3 = populate_glossary(&corpus, &mut spec2, None).unwrap();
+        assert_eq!(n3, 0);
+    }
+
+    #[test]
+    fn populate_clock_domains_reads_table_shards() {
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        write(
+            &corpus.join("tables").join("clock_domains").join("000.toml"),
+            "schema_version = 1\n\
+             source_page_range = [2, 2]\n\
+             \n\
+             [[rows]]\n\
+             name = \"core_clk\"\n\
+             frequency = \"1 GHz\"\n\
+             source = \"PLL0\"\n\
+             description = \"main CPU clock\"\n\
+             \n\
+             [[rows]]\n\
+             name = \"bus_clk\"\n\
+             frequency = \"500 MHz\"\n\
+             source = \"PLL1\"\n\
+             description = \"AHB / APB clock\"\n",
+        );
+        let mut spec = SpecMd::default();
+        let n = populate_clock_domains(&corpus, &mut spec).unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(spec.clock_domains.len(), 2);
+        assert_eq!(spec.clock_domains[0].name, "core_clk");
+        assert_eq!(spec.clock_domains[0].frequency, "1 GHz");
+        // Idempotent.
+        let n2 = populate_clock_domains(&corpus, &mut spec).unwrap();
+        assert_eq!(n2, 0);
+    }
+
+    #[test]
+    fn populate_performance_counters_reads_pmu_shards() {
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        write(
+            &corpus.join("tables").join("pmu").join("000.toml"),
+            "schema_version = 1\n\
+             source_page_range = [70, 70]\n\
+             \n\
+             [[rows]]\n\
+             id = \"cycles\"\n\
+             name = \"Cycle count\"\n\
+             description = \"total cycles\"\n\
+             csr_address = \"mcycle\"\n\
+             \n\
+             [[rows]]\n\
+             id = \"icache_miss\"\n\
+             name = \"I-cache miss\"\n\
+             description = \"\"\n\
+             csr_address = \"\"\n",
+        );
+        let mut spec = SpecMd::default();
+        let n = populate_performance_counters(&corpus, &mut spec).unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(spec.performance_counters[0].id, "cycles");
+        assert_eq!(spec.performance_counters[0].csr_address, "mcycle");
+        let n2 = populate_performance_counters(&corpus, &mut spec).unwrap();
+        assert_eq!(n2, 0);
+    }
+
+    #[test]
+    fn new_populate_dirs_absent_returns_zero() {
+        // None of the new directories exist — every populate returns
+        // 0 without error.
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        let mut spec = SpecMd::default();
+        assert_eq!(populate_csrs(&corpus, &mut spec).unwrap(), 0);
+        assert_eq!(populate_clock_domains(&corpus, &mut spec).unwrap(), 0);
+        assert_eq!(populate_power_domains(&corpus, &mut spec).unwrap(), 0);
+        assert_eq!(populate_reset_domains(&corpus, &mut spec).unwrap(), 0);
+        assert_eq!(populate_security_boundaries(&corpus, &mut spec).unwrap(), 0);
+        assert_eq!(
+            populate_numerical_conventions(&corpus, &mut spec).unwrap(),
+            0
+        );
+        assert_eq!(
+            populate_performance_counters(&corpus, &mut spec).unwrap(),
+            0
+        );
+        assert_eq!(populate_glossary(&corpus, &mut spec, None).unwrap(), 0);
+    }
+
+    #[test]
+    fn populate_blocks_format_driven_uses_descriptor_block_name() {
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        // Shard's `stage` is a short heading-derived label; the
+        // descriptor's `block_name` is the canonical long form.
+        write(
+            &corpus.join("tables").join("signals").join("000-if.toml"),
+            "schema_version = 1\n\
+             table_kind = \"signal_table\"\n\
+             source_chunk_id = \"c1\"\n\
+             source_page_range = [12, 13]\n\
+             stage = \"IF\"\n\
+             breadcrumb = [\"Pipeline\", \"IF\"]\n\
+             \n\
+             [[rows]]\n\
+             name = \"if_valid\"\n\
+             direction = \"out\"\n\
+             peer = \"PD\"\n\
+             description = \"valid flag\"\n\
+             \n\
+             [[rows]]\n\
+             name = \"if_pc\"\n\
+             direction = \"out\"\n\
+             peer = \"PD\"\n\
+             description = \"program counter\"\n",
+        );
+
+        let mut fmt = empty_format();
+        fmt.section_roles.push(SectionRoleEntry {
+            heading: "Instruction Fetch (IF)".into(),
+            page: 12,
+            line: 1,
+            font_size: 14.0,
+            font_weight: FontWeight::Bold,
+            level: 2,
+            spec_md_role: SpecMdRole::Block {
+                block_name: "Instruction Fetch (IF)".into(),
+            },
+            layer: FmtLayer::Micro,
+            rationale: String::new(),
+        });
+        fmt.tables.push(FmtTableEntry {
+            id: "tbl_001".into(),
+            page: 12,
+            first_line: 5,
+            row_count: 2,
+            col_count: 4,
+            kind: TableKind::SignalTable,
+            spec_md_target: TableTarget::BlockSignals {
+                block_name: "Instruction Fetch (IF)".into(),
+            },
+            column_map: vec![
+                ColumnMapping {
+                    source: "Signal".into(),
+                    canonical: "name".into(),
+                },
+                ColumnMapping {
+                    source: "Direction".into(),
+                    canonical: "direction".into(),
+                },
+            ],
+            wrap_strategy: WrapStrategy::SingleRow,
+            rationale: String::new(),
+        });
+
+        let mut spec = SpecMd::default();
+        let n = populate_blocks_with_format(&corpus, &mut spec, Some(&fmt)).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(spec.blocks.len(), 1);
+        let block = &spec.blocks[0];
+        // Block name is the descriptor's canonical form, not the
+        // shard's heading-derived `stage`.
+        assert_eq!(block.name, "Instruction Fetch (IF)");
+        assert_eq!(block.layer, SpecLayer::Micro);
+        // Signal-role suffix heuristic kicked in for `if_valid`.
+        let valid = block.signals.iter().find(|s| s.name == "if_valid").unwrap();
+        assert_eq!(valid.role, SignalRole::Control);
+        let pc = block.signals.iter().find(|s| s.name == "if_pc").unwrap();
+        assert_eq!(pc.role, SignalRole::Unknown);
+        // Idempotent under the format-driven path.
+        let n2 = populate_blocks_with_format(&corpus, &mut spec, Some(&fmt)).unwrap();
+        assert_eq!(n2, 0);
+    }
+
+    #[test]
+    fn populate_blocks_no_format_falls_back_to_stage_label() {
+        // Smoke test: when `format` is None, populate_blocks behaves
+        // exactly like Phase 6 (block name = shard `stage`, layer
+        // Unknown, role inferred from name suffix only).
+        let tmp = make_project();
+        let corpus = corpus_root(tmp.path());
+        write(
+            &corpus.join("tables").join("signals").join("000-fetch.toml"),
+            "schema_version = 1\n\
+             table_kind = \"signal_table\"\n\
+             source_chunk_id = \"c1\"\n\
+             source_page_range = [3, 3]\n\
+             stage = \"fetch\"\n\
+             \n\
+             [[rows]]\n\
+             name = \"pc\"\n\
+             direction = \"out\"\n\
+             peer = \"decode\"\n\
+             description = \"program counter\"\n",
+        );
+        let mut spec = SpecMd::default();
+        let n = populate_blocks_with_format(&corpus, &mut spec, None).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(spec.blocks[0].name, "fetch");
+        assert_eq!(spec.blocks[0].layer, SpecLayer::Unknown);
+    }
+
+    #[test]
+    fn run_with_format_none_matches_run_smoke() {
+        // Smoke test: run_with_format(None) reproduces run()'s
+        // behaviour on a minimal source-driven corpus.
+        let tmp = make_project();
+        let project = tmp.path();
+        write(
+            &manifest_path(project),
+            "schema_version = 1\n\
+             source_kind = \"pdf\"\n\
+             source_path = \"docs/main.pdf\"\n",
+        );
+        let corpus = corpus_root(project);
+        write(
+            &corpus.join("tables").join("signals").join("000-if.toml"),
+            "schema_version = 1\n\
+             table_kind = \"signal_table\"\n\
+             source_chunk_id = \"c\"\n\
+             source_page_range = [12, 12]\n\
+             stage = \"IF\"\n\
+             \n\
+             [[rows]]\n\
+             name = \"if_pc\"\n\
+             direction = \"out\"\n\
+             peer = \"PD\"\n\
+             description = \"pc\"\n",
+        );
+        let mut a = SpecMd::default();
+        let report_a = run(project, &mut a).unwrap();
+        let mut b = SpecMd::default();
+        let report_b = run_with_format(project, &mut b, None).unwrap();
+        assert_eq!(report_a.blocks, report_b.blocks);
+        assert_eq!(a.blocks.len(), b.blocks.len());
+        assert_eq!(a.blocks[0].name, b.blocks[0].name);
+        // None of the new sections populate without their dirs.
+        assert_eq!(report_b.csrs, 0);
+        assert_eq!(report_b.glossary, 0);
+        assert_eq!(report_b.clock_domains, 0);
+    }
 }
