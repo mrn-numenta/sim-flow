@@ -13,6 +13,7 @@
 //! layout so the orchestrator and `e2e_*` binaries keep compiling
 //! and behaving the way they did before this refactor.
 
+pub mod format;
 pub mod legacy;
 pub mod pipeline;
 pub mod stages;
