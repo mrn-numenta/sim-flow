@@ -626,6 +626,27 @@ pub(crate) enum Command {
         /// ingestion is performed.
         #[arg(long)]
         status: bool,
+        /// Force a fresh `format.json` discovery call, overwriting
+        /// any existing cache. Composes with `--no-format-discovery`
+        /// (in which case the cache is rebuilt from the first-cut
+        /// classifier alone). Mutually exclusive with `--format`.
+        #[arg(long)]
+        rediscover_format: bool,
+        /// Load the `format.json` descriptor from this path and skip
+        /// the discovery pipeline entirely. The supplied descriptor
+        /// is NOT copied into `.sim-flow/spec-ingest/format.json`;
+        /// the on-disk cache is left untouched. Overrides
+        /// `--rediscover-format` and `--no-format-discovery`.
+        #[arg(long)]
+        format: Option<PathBuf>,
+        /// Skip the LLM critique pass. The first-cut deterministic
+        /// classifier still runs; its output is cached as
+        /// `format.json` with `model = "first-cut-builtin"`. Useful
+        /// for CI / offline environments and for the markdown / text
+        /// source kinds where format discovery has no meaningful
+        /// signal.
+        #[arg(long)]
+        no_format_discovery: bool,
     },
     /// Discover running orchestrators that have a `--watch-socket`
     /// observer surface bound. Reads the registry directory each
