@@ -145,13 +145,21 @@ pub async fn semantic_search_framework(
 }
 
 /// Top-K vector search over `spec_chunks`. Optional scalar filters
-/// on `source_id` and `kind`.
+/// on `source_id`, `kind`, `spec_md_role`, and `layer`.
+///
+/// `spec_md_role` and `layer` were added in Phase 9 milestone 9.13;
+/// they accept the full role string including any `:<name>` suffix
+/// (e.g. `"block:Instruction Fetch (IF)"`) and one of
+/// `"architectural" | "micro" | "mixed"` respectively. Callers that
+/// don't want a filter pass `None`.
 pub async fn semantic_search_spec(
     conn: &LanceConnection,
     vector: &[f32],
     k: usize,
     source: Option<&str>,
     kind: Option<&str>,
+    spec_md_role: Option<&str>,
+    layer: Option<&str>,
 ) -> Result<Vec<SpecHit>, QueryError> {
     if conn.kind != TreeKind::Spec {
         return Err(QueryError::WrongTreeKind {
@@ -167,6 +175,12 @@ pub async fn semantic_search_spec(
     }
     if let Some(k) = kind {
         filters.push(format!("kind = '{}'", escape_sql_literal(k)));
+    }
+    if let Some(role) = spec_md_role {
+        filters.push(format!("spec_md_role = '{}'", escape_sql_literal(role)));
+    }
+    if let Some(layer) = layer {
+        filters.push(format!("layer = '{}'", escape_sql_literal(layer)));
     }
     if !filters.is_empty() {
         query = query.only_if(filters.join(" AND "));

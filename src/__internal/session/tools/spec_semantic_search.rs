@@ -38,7 +38,7 @@ impl Tool for SpecSemanticSearchTool {
     }
 
     fn description(&self) -> &'static str {
-        "Semantic retrieval over the project's source-spec corpus (ingested via `sim-flow ingest`). Use this when spec.md does not carry enough detail and you want the relevant section of the underlying material spec. Each hit returns `chunk_path` (a path the `read_file` tool can read) plus the `contained_signal_tables` / `contained_figures` lists from the chunk's frontmatter so you can pivot to structured artifacts without a second search."
+        "Semantic retrieval over the project's source-spec corpus (ingested via `sim-flow ingest`). Use this when spec.md does not carry enough detail and you want the relevant section of the underlying material spec. Each hit returns `chunk_path` (a path the `read_file` tool can read) plus the `contained_signal_tables` / `contained_figures` lists from the chunk's frontmatter so you can pivot to structured artifacts without a second search. Pass `filter_spec_md_role` (e.g. 'block:Instruction Fetch (IF)', 'csrs') or `filter_layer` ('architectural' | 'micro' | 'mixed') to narrow results by semantic role / layer rather than text similarity alone."
     }
 
     fn args_schema(&self) -> Value {
@@ -63,6 +63,15 @@ impl Tool for SpecSemanticSearchTool {
                 "kind": {
                     "type": "string",
                     "enum": ["prose", "table", "stub", "mixed"]
+                },
+                "filter_spec_md_role": {
+                    "type": "string",
+                    "description": "Optional filter on the chunk's semantic role from format.json (Chapter 7 §7.8). Accepts the full role string including the `:<name>` suffix (e.g. 'block:Instruction Fetch (IF)', 'csrs', 'glossary')."
+                },
+                "filter_layer": {
+                    "type": "string",
+                    "enum": ["architectural", "micro", "mixed"],
+                    "description": "Optional filter on the chunk's design layer."
                 }
             }
         })
@@ -91,6 +100,19 @@ impl Tool for SpecSemanticSearchTool {
             .get("kind")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        // Phase 9 milestone 9.13: role + layer filters (Chapter 7 §7.8).
+        // Empty strings collapse to `None` so callers can pass through
+        // an unset arg without short-circuiting the tool.
+        let filter_spec_md_role = args
+            .get("filter_spec_md_role")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let filter_layer = args
+            .get("filter_layer")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
 
         // The "no source spec registered" special case (Architecture
         // §4.3 failure modes): when the spec lance connection is
@@ -139,6 +161,8 @@ impl Tool for SpecSemanticSearchTool {
             k,
             source.as_deref(),
             kind.as_deref(),
+            filter_spec_md_role.as_deref(),
+            filter_layer.as_deref(),
         ) {
             Ok(h) => h,
             Err(RetrievalError::IndexMissing { which }) => {

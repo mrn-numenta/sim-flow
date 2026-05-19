@@ -381,7 +381,7 @@ fn semantic_search_round_trip_via_mock_embedder() {
             .await
             .expect("open spec");
         let vec = embedder.embed(&["introduction"]).await.unwrap();
-        semantic_search_spec(&conn, &vec[0], 5, None, None)
+        semantic_search_spec(&conn, &vec[0], 5, None, None, None, None)
             .await
             .expect("search")
     });

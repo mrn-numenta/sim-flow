@@ -290,21 +290,31 @@ impl RetrievalService {
         Ok(hits)
     }
 
-    /// Top-K vector search over `spec_chunks`.
+    /// Top-K vector search over `spec_chunks`. The two final args
+    /// (`spec_md_role`, `layer`) are Phase 9 milestone 9.13
+    /// additions; pass `None` for the original behavior.
     pub fn semantic_search_spec_sync(
         &self,
         vector: &[f32],
         k: usize,
         source: Option<&str>,
         kind: Option<&str>,
+        spec_md_role: Option<&str>,
+        layer: Option<&str>,
     ) -> Result<Vec<SpecHit>, RetrievalError> {
         let conn = self
             .spec
             .as_ref()
             .ok_or(RetrievalError::IndexMissing { which: "spec" })?;
-        let hits = self
-            .rt
-            .block_on(semantic_search_spec(conn, vector, k, source, kind))?;
+        let hits = self.rt.block_on(semantic_search_spec(
+            conn,
+            vector,
+            k,
+            source,
+            kind,
+            spec_md_role,
+            layer,
+        ))?;
         Ok(hits)
     }
 
@@ -439,7 +449,7 @@ mod tests {
         let service = RetrievalService::new(tmp.path(), embedder).expect("construct");
         let v = service.embed_one_sync("test").expect("embed");
         let err = service
-            .semantic_search_spec_sync(&v, 5, None, None)
+            .semantic_search_spec_sync(&v, 5, None, None, None, None)
             .expect_err("missing spec");
         assert!(matches!(
             err,
