@@ -21,10 +21,11 @@
 use std::fmt::Write;
 
 use super::types::{
-    AssumptionsAndConstraints, AutoDecision, Block, Connectivity, CycleAccurateScenario, Encoding,
-    ExternalInterface, FigureEntry, FunctionalBehavior, Metadata, OpenQuestion, Parameter,
-    PipelineAndHierarchy, QuantitativeRow, ResetInitFlushDrain, SourceDocumentRole, SpecMd,
-    StateMachine, TimingAndThroughput,
+    AssumptionsAndConstraints, AutoDecision, Block, ClockDomain, Connectivity, Csr,
+    CycleAccurateScenario, Encoding, ExternalInterface, FigureEntry, FunctionalBehavior,
+    GlossaryEntry, Layer, Metadata, NumericalConvention, OpenQuestion, Parameter,
+    PipelineAndHierarchy, PmuEvent, PowerDomain, PrivilegeLevel, QuantitativeRow, ResetDomain,
+    ResetInitFlushDrain, SignalRole, SourceDocumentRole, SpecMd, StateMachine, TimingAndThroughput,
 };
 
 impl SpecMd {
@@ -77,6 +78,31 @@ impl SpecMd {
         write_anchors_section(&mut s, &self.source_spec_anchors);
         write_open_questions(&mut s, &self.open_questions);
         write_auto_decisions(&mut s, &self.auto_decisions);
+        // ---- Phase 9 §7.7 extensions ----
+        if !self.csrs.is_empty() {
+            write_csrs(&mut s, &self.csrs);
+        }
+        if !self.glossary.is_empty() {
+            write_glossary(&mut s, &self.glossary);
+        }
+        if !self.clock_domains.is_empty() {
+            write_clock_domains(&mut s, &self.clock_domains);
+        }
+        if !self.power_domains.is_empty() {
+            write_power_domains(&mut s, &self.power_domains);
+        }
+        if !self.reset_domains.is_empty() {
+            write_reset_domains(&mut s, &self.reset_domains);
+        }
+        if !self.security_boundaries.is_empty() {
+            write_security_boundaries(&mut s, &self.security_boundaries);
+        }
+        if !self.numerical_conventions.is_empty() {
+            write_numerical_conventions(&mut s, &self.numerical_conventions);
+        }
+        if !self.performance_counters.is_empty() {
+            write_performance_counters(&mut s, &self.performance_counters);
+        }
         s
     }
 }
@@ -264,6 +290,13 @@ fn write_blocks(s: &mut String, blocks: &[Block]) {
         write_property(s, "Role", &block.role);
         write_property(s, "Parent", &block.parent);
         write_property(s, "Clock domain", &block.clock_domain);
+        write_property(s, "Power domain", &block.power_domain);
+        write_property(s, "Reset domain", &block.reset_domain);
+        // Layer is optional; only emit when it's not the default
+        // (`Unknown`).
+        if block.layer != Layer::Unknown {
+            write_property(s, "Layer", layer_to_str(block.layer));
+        }
         if !block.parameterized_by.is_empty() {
             let params = block
                 .parameterized_by
@@ -277,19 +310,45 @@ fn write_blocks(s: &mut String, blocks: &[Block]) {
         if !block.signals.is_empty() {
             writeln!(s, "#### I/O Signals").unwrap();
             writeln!(s).unwrap();
-            let rows: Vec<Vec<String>> = block
-                .signals
-                .iter()
-                .map(|r| {
-                    vec![
-                        format!("`{}`", r.name),
-                        r.direction.clone(),
-                        r.peer.clone(),
-                        r.description.clone(),
-                    ]
-                })
-                .collect();
-            write_table(s, &["Signal", "Direction", "Peer", "Description"], &rows);
+            // Emit the optional Role column only when at least one
+            // signal has a non-default role; otherwise stick with the
+            // historical four-column shape so legacy fixtures stay
+            // byte-stable at the structured level.
+            let any_role = block.signals.iter().any(|r| r.role != SignalRole::Unknown);
+            if any_role {
+                let rows: Vec<Vec<String>> = block
+                    .signals
+                    .iter()
+                    .map(|r| {
+                        vec![
+                            format!("`{}`", r.name),
+                            r.direction.clone(),
+                            r.peer.clone(),
+                            signal_role_to_str(r.role).to_string(),
+                            r.description.clone(),
+                        ]
+                    })
+                    .collect();
+                write_table(
+                    s,
+                    &["Signal", "Direction", "Peer", "Role", "Description"],
+                    &rows,
+                );
+            } else {
+                let rows: Vec<Vec<String>> = block
+                    .signals
+                    .iter()
+                    .map(|r| {
+                        vec![
+                            format!("`{}`", r.name),
+                            r.direction.clone(),
+                            r.peer.clone(),
+                            r.description.clone(),
+                        ]
+                    })
+                    .collect();
+                write_table(s, &["Signal", "Direction", "Peer", "Description"], &rows);
+            }
         }
         if !block.state.is_empty() {
             writeln!(s, "#### State").unwrap();
@@ -445,24 +504,57 @@ fn write_encodings(s: &mut String, encs: &[Encoding]) {
 
 fn write_memory_map(s: &mut String, regions: &[super::types::MemoryRegion]) {
     write_h2(s, "Memory Map");
-    let rows: Vec<Vec<String>> = regions
-        .iter()
-        .map(|m| {
-            vec![
-                format!("`{}`", m.start),
-                format!("`{}`", m.end),
-                m.name.clone(),
-                m.purpose.clone(),
-                m.access.clone(),
-                m.source_anchor.clone(),
-            ]
-        })
-        .collect();
-    write_table(
-        s,
-        &["Start", "End", "Name", "Purpose", "Access", "Source-anchor"],
-        &rows,
-    );
+    // Emit the optional Required-privilege column only when at
+    // least one region populates it.
+    let any_priv = regions.iter().any(|m| !m.required_privilege.is_empty());
+    if any_priv {
+        let rows: Vec<Vec<String>> = regions
+            .iter()
+            .map(|m| {
+                vec![
+                    format!("`{}`", m.start),
+                    format!("`{}`", m.end),
+                    m.name.clone(),
+                    m.purpose.clone(),
+                    m.access.clone(),
+                    m.required_privilege.clone(),
+                    m.source_anchor.clone(),
+                ]
+            })
+            .collect();
+        write_table(
+            s,
+            &[
+                "Start",
+                "End",
+                "Name",
+                "Purpose",
+                "Access",
+                "Required privilege",
+                "Source-anchor",
+            ],
+            &rows,
+        );
+    } else {
+        let rows: Vec<Vec<String>> = regions
+            .iter()
+            .map(|m| {
+                vec![
+                    format!("`{}`", m.start),
+                    format!("`{}`", m.end),
+                    m.name.clone(),
+                    m.purpose.clone(),
+                    m.access.clone(),
+                    m.source_anchor.clone(),
+                ]
+            })
+            .collect();
+        write_table(
+            s,
+            &["Start", "End", "Name", "Purpose", "Access", "Source-anchor"],
+            &rows,
+        );
+    }
 }
 
 fn write_connectivity(s: &mut String, c: &Connectivity) {
@@ -761,6 +853,200 @@ fn write_auto_decisions(s: &mut String, ds: &[AutoDecision]) {
     }
 }
 
+// ---- Phase 9 §7.7 writers ----
+
+fn layer_to_str(layer: Layer) -> &'static str {
+    match layer {
+        Layer::Architectural => "architectural",
+        Layer::Micro => "micro",
+        Layer::Mixed => "mixed",
+        Layer::Unknown => "unknown",
+    }
+}
+
+fn signal_role_to_str(role: SignalRole) -> &'static str {
+    match role {
+        SignalRole::Control => "control",
+        SignalRole::Data => "data",
+        SignalRole::Status => "status",
+        SignalRole::Unknown => "unknown",
+    }
+}
+
+fn write_csrs(s: &mut String, csrs: &[Csr]) {
+    write_h2(s, "CSRs");
+    for csr in csrs {
+        writeln!(s, "### CSR: {}", csr.name).unwrap();
+        writeln!(s).unwrap();
+        write_property(s, "Address", &csr.address);
+        write_property(s, "Access", &csr.access);
+        write_property(s, "Reset value", &csr.reset_value);
+        write_property(s, "Required privilege", &csr.required_privilege);
+        write_property(s, "Source-anchor", &csr.source_anchor);
+        writeln!(s).unwrap();
+        if !csr.description.is_empty() {
+            writeln!(s, "#### Description").unwrap();
+            writeln!(s).unwrap();
+            writeln!(s, "{}", csr.description).unwrap();
+            writeln!(s).unwrap();
+        }
+        if !csr.fields.is_empty() {
+            writeln!(s, "#### Fields").unwrap();
+            writeln!(s).unwrap();
+            let rows: Vec<Vec<String>> = csr
+                .fields
+                .iter()
+                .map(|f| {
+                    vec![
+                        f.bits.clone(),
+                        format!("`{}`", f.name),
+                        f.access.clone(),
+                        f.description.clone(),
+                    ]
+                })
+                .collect();
+            write_table(s, &["Bits", "Name", "Access", "Description"], &rows);
+        }
+    }
+}
+
+fn write_glossary(s: &mut String, entries: &[GlossaryEntry]) {
+    write_h2(s, "Glossary");
+    let rows: Vec<Vec<String>> = entries
+        .iter()
+        .map(|e| {
+            vec![
+                e.term.clone(),
+                e.expansion.clone(),
+                e.scope.clone(),
+                e.used_in_blocks.join(", "),
+                e.source_anchor.clone(),
+            ]
+        })
+        .collect();
+    write_table(
+        s,
+        &["Term", "Expansion", "Scope", "Used in", "Source-anchor"],
+        &rows,
+    );
+}
+
+fn write_clock_domains(s: &mut String, domains: &[ClockDomain]) {
+    write_h2(s, "Clock Domains");
+    let rows: Vec<Vec<String>> = domains
+        .iter()
+        .map(|d| {
+            vec![
+                d.name.clone(),
+                d.frequency.clone(),
+                d.source.clone(),
+                d.description.clone(),
+            ]
+        })
+        .collect();
+    write_table(s, &["Name", "Frequency", "Source", "Description"], &rows);
+}
+
+fn write_power_domains(s: &mut String, domains: &[PowerDomain]) {
+    write_h2(s, "Power Domains");
+    let rows: Vec<Vec<String>> = domains
+        .iter()
+        .map(|d| {
+            vec![
+                d.name.clone(),
+                d.voltage.clone(),
+                if d.always_on { "yes" } else { "no" }.to_string(),
+                d.description.clone(),
+            ]
+        })
+        .collect();
+    write_table(s, &["Name", "Voltage", "Always-on", "Description"], &rows);
+}
+
+fn write_reset_domains(s: &mut String, domains: &[ResetDomain]) {
+    write_h2(s, "Reset Domains");
+    let rows: Vec<Vec<String>> = domains
+        .iter()
+        .map(|d| {
+            vec![
+                d.name.clone(),
+                d.polarity.clone(),
+                if d.sync { "yes" } else { "no" }.to_string(),
+                d.source.clone(),
+                d.description.clone(),
+            ]
+        })
+        .collect();
+    write_table(
+        s,
+        &["Name", "Polarity", "Sync", "Source", "Description"],
+        &rows,
+    );
+}
+
+fn write_security_boundaries(s: &mut String, levels: &[PrivilegeLevel]) {
+    write_h2(s, "Security Boundaries");
+    for level in levels {
+        writeln!(s, "### Privilege: {}", level.name).unwrap();
+        writeln!(s).unwrap();
+        write_property(s, "Id", &level.id);
+        writeln!(s).unwrap();
+        if !level.description.is_empty() {
+            writeln!(s, "#### Description").unwrap();
+            writeln!(s).unwrap();
+            writeln!(s, "{}", level.description).unwrap();
+            writeln!(s).unwrap();
+        }
+        if !level.capabilities.is_empty() {
+            writeln!(s, "#### Capabilities").unwrap();
+            writeln!(s).unwrap();
+            for cap in &level.capabilities {
+                writeln!(s, "- {cap}").unwrap();
+            }
+            writeln!(s).unwrap();
+        }
+    }
+}
+
+fn write_numerical_conventions(s: &mut String, convs: &[NumericalConvention]) {
+    write_h2(s, "Numerical Conventions");
+    for conv in convs {
+        writeln!(s, "### Convention: {}", conv.name).unwrap();
+        writeln!(s).unwrap();
+        write_property(s, "Q-format default", &conv.q_format_default);
+        write_property(s, "Saturation policy", &conv.saturation_policy);
+        write_property(s, "Signed default", &conv.signed_default);
+        write_property(s, "Rounding mode", &conv.rounding_mode);
+        writeln!(s).unwrap();
+        if !conv.description.is_empty() {
+            writeln!(s, "#### Description").unwrap();
+            writeln!(s).unwrap();
+            writeln!(s, "{}", conv.description).unwrap();
+            writeln!(s).unwrap();
+        }
+    }
+}
+
+fn write_performance_counters(s: &mut String, events: &[PmuEvent]) {
+    write_h2(s, "Performance Counters");
+    let rows: Vec<Vec<String>> = events
+        .iter()
+        .map(|e| {
+            vec![
+                format!("`{}`", e.id),
+                e.name.clone(),
+                if e.csr_address.is_empty() {
+                    String::new()
+                } else {
+                    format!("`{}`", e.csr_address)
+                },
+                e.description.clone(),
+            ]
+        })
+        .collect();
+    write_table(s, &["Id", "Name", "CSR address", "Description"], &rows);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -850,5 +1136,74 @@ mod tests {
         });
         let s = spec.to_markdown();
         assert!(s.contains("- Decided XLEN = 32; rationale: default."));
+    }
+
+    #[test]
+    fn writes_phase9_csr_with_fields() {
+        let mut spec = SpecMd::default();
+        spec.csrs.push(Csr {
+            address: "0x300".into(),
+            name: "mstatus".into(),
+            access: "RW".into(),
+            reset_value: "0x0".into(),
+            required_privilege: "M".into(),
+            description: "Machine status register.".into(),
+            fields: vec![super::super::types::CsrField {
+                bits: "3".into(),
+                name: "MIE".into(),
+                access: "RW".into(),
+                description: "Machine interrupt enable".into(),
+            }],
+            source_anchor: "primary:p43".into(),
+        });
+        let s = spec.to_markdown();
+        assert!(s.contains("## CSRs"));
+        assert!(s.contains("### CSR: mstatus"));
+        assert!(s.contains("**Address:** 0x300"));
+        assert!(s.contains("**Required privilege:** M"));
+        assert!(s.contains("| Bits | Name | Access | Description |"));
+        assert!(s.contains("| 3 | `MIE` | RW | Machine interrupt enable |"));
+    }
+
+    #[test]
+    fn writes_phase9_glossary_and_domains() {
+        let mut spec = SpecMd::default();
+        spec.glossary.push(GlossaryEntry {
+            term: "IF".into(),
+            expansion: "Instruction Fetch".into(),
+            scope: "spec".into(),
+            used_in_blocks: vec!["IF".into(), "PD".into()],
+            source_anchor: "primary:p11".into(),
+        });
+        spec.clock_domains.push(ClockDomain {
+            name: "core_clk".into(),
+            frequency: "1 GHz".into(),
+            source: "PLL0".into(),
+            description: "core clock".into(),
+        });
+        let s = spec.to_markdown();
+        assert!(s.contains("## Glossary"));
+        assert!(s.contains("| IF | Instruction Fetch | spec | IF, PD | primary:p11 |"));
+        assert!(s.contains("## Clock Domains"));
+        assert!(s.contains("| core_clk | 1 GHz | PLL0 | core clock |"));
+    }
+
+    #[test]
+    fn block_emits_layer_and_power_reset_domains() {
+        let mut spec = SpecMd::default();
+        spec.blocks.push(Block {
+            name: "IF".into(),
+            role: "fetch".into(),
+            parent: "(none -- top-level)".into(),
+            clock_domain: "core_clk".into(),
+            power_domain: "core_pd".into(),
+            reset_domain: "nReset".into(),
+            layer: Layer::Micro,
+            ..Default::default()
+        });
+        let s = spec.to_markdown();
+        assert!(s.contains("**Power domain:** core_pd"));
+        assert!(s.contains("**Reset domain:** nReset"));
+        assert!(s.contains("**Layer:** micro"));
     }
 }
