@@ -15,6 +15,7 @@
 
 pub mod default;
 pub mod descriptor;
+pub mod first_cut;
 pub mod skeleton;
 
 pub use descriptor::{
@@ -22,3 +23,4 @@ pub use descriptor::{
     FontWeight, FormatJson, GlossaryEntry, GlossarySource, Layer, SectionRoleEntry, SpecMdRole,
     TableEntry, TableKind, TableTarget, ValidationBlock, ValidationWarning, WrapStrategy,
 };
+pub use first_cut::classify as first_cut_classify;
