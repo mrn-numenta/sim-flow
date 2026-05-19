@@ -1,0 +1,493 @@
+{
+  "schema_version": 1,
+  "model": "first-cut-builtin",
+  "prompt_version": "first-cut-v1",
+  "source_sha256": "8b4c6a074339bfd82f9e2dfcac495091aee96f64ec69383b40bd8f140d02f04c",
+  "discovered_at": "1970-01-01T00:00:00Z",
+  "section_roles": [
+    {
+      "heading": "1 SoC:",
+      "page": 1,
+      "line": 667,
+      "font_size": 20.0,
+      "font_weight": "normal",
+      "level": 1,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "In the Apical SoC, system elements are organized as a 5 \u00d7 5 2D mesh , as illustrated in the",
+      "page": 1,
+      "line": 637,
+      "font_size": 11.0,
+      "font_weight": "bold",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "figure. The mesh consists of compute engines (CE), memory engines (ME), PCIe engines, and",
+      "page": 1,
+      "line": 622,
+      "font_size": 11.0,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "IO engines (IO2, IO1, IO0). Memory engines are positioned along the east and west edges of",
+      "page": 1,
+      "line": 608,
+      "font_size": 11.0,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "the mesh. The top rows include PCIe and IO-Shire components, which host the master engine,",
+      "page": 1,
+      "line": 593,
+      "font_size": 11.0,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "IO/peripherals, and math coprocessor .",
+      "page": 1,
+      "line": 579,
+      "font_size": 11.0,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "under definition. Similarly , compute engines and memory engines may have independent",
+      "page": 1,
+      "line": 537,
+      "font_size": 11.0,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "reset_init_flush_drain"
+      },
+      "layer": "micro",
+      "rationale": "first-cut heuristic: matched \"init\""
+    },
+    {
+      "heading": "domains. In contrast, the NoC operates within a single, unified clock and power domain.",
+      "page": 1,
+      "line": 523,
+      "font_size": 11.0,
+      "font_weight": "normal",
+      "level": 3,
+      "spec_md_role": {
+        "kind": "power_domains"
+      },
+      "layer": "micro",
+      "rationale": "first-cut heuristic: matched \"power domain\""
+    },
+    {
+      "heading": "2 Physical Design of Apical NoC:",
+      "page": 1,
+      "line": 174,
+      "font_size": 20.0,
+      "font_weight": "normal",
+      "level": 1,
+      "spec_md_role": {
+        "kind": "connectivity"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: matched \"noc\""
+    },
+    {
+      "heading": "3 Noc Channels:",
+      "page": 3,
+      "line": 642,
+      "font_size": 20.0,
+      "font_weight": "normal",
+      "level": 1,
+      "spec_md_role": {
+        "kind": "connectivity"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: matched \"noc\""
+    },
+    {
+      "heading": "3.1 Remote channel:",
+      "page": 4,
+      "line": 626,
+      "font_size": 16.0,
+      "font_weight": "normal",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "3.2 Direct Channel:",
+      "page": 5,
+      "line": 705,
+      "font_size": 16.0,
+      "font_weight": "normal",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "3.3 Sys Channel:",
+      "page": 5,
+      "line": 192,
+      "font_size": 16.0,
+      "font_weight": "normal",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "4 Noc Interfaces:",
+      "page": 6,
+      "line": 282,
+      "font_size": 20.0,
+      "font_weight": "normal",
+      "level": 1,
+      "spec_md_role": {
+        "kind": "connectivity"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: matched \"noc\""
+    },
+    {
+      "heading": "4.1 Noc Interface:",
+      "page": 8,
+      "line": 520,
+      "font_size": 16.0,
+      "font_weight": "normal",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "connectivity"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: matched \"noc\""
+    },
+    {
+      "heading": "4.2 Engine interface:",
+      "page": 8,
+      "line": 346,
+      "font_size": 16.0,
+      "font_weight": "normal",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "unknown"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: no pattern matched"
+    },
+    {
+      "heading": "5 noc router",
+      "page": 10,
+      "line": 357,
+      "font_size": 20.0,
+      "font_weight": "normal",
+      "level": 1,
+      "spec_md_role": {
+        "kind": "connectivity"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: matched \"noc\""
+    },
+    {
+      "heading": "5.1 remote noc router",
+      "page": 10,
+      "line": 205,
+      "font_size": 16.0,
+      "font_weight": "normal",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "connectivity"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: matched \"noc\""
+    },
+    {
+      "heading": "5.2 sys noc router",
+      "page": 14,
+      "line": 626,
+      "font_size": 16.0,
+      "font_weight": "normal",
+      "level": 2,
+      "spec_md_role": {
+        "kind": "connectivity"
+      },
+      "layer": "unknown",
+      "rationale": "first-cut heuristic: matched \"noc\""
+    }
+  ],
+  "tables": [
+    {
+      "id": "T01",
+      "page": 2,
+      "first_line": 40,
+      "row_count": 15,
+      "col_count": 14,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T02",
+      "page": 3,
+      "first_line": 85,
+      "row_count": 29,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T03",
+      "page": 7,
+      "first_line": 94,
+      "row_count": 15,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T04",
+      "page": 8,
+      "first_line": 561,
+      "row_count": 7,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T05",
+      "page": 9,
+      "first_line": 389,
+      "row_count": 10,
+      "col_count": 4,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T06",
+      "page": 10,
+      "first_line": 40,
+      "row_count": 14,
+      "col_count": 12,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T07",
+      "page": 13,
+      "first_line": 90,
+      "row_count": 10,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T08",
+      "page": 14,
+      "first_line": 675,
+      "row_count": 2,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    },
+    {
+      "id": "T09",
+      "page": 16,
+      "first_line": 78,
+      "row_count": 11,
+      "col_count": 3,
+      "kind": "unknown",
+      "spec_md_target": {
+        "kind": "unknown"
+      },
+      "column_map": [],
+      "wrap_strategy": "single_row",
+      "rationale": "first-cut heuristic: no column-header pattern matched"
+    }
+  ],
+  "figures": [
+    {
+      "id": "F01",
+      "page": 1,
+      "kind": "generic",
+      "rasterized_to": "figures/page-001.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F02",
+      "page": 2,
+      "kind": "connectivity_topology",
+      "rasterized_to": "figures/page-002.png",
+      "spec_md_target": {
+        "kind": "connectivity_topology"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F03",
+      "page": 4,
+      "kind": "generic",
+      "rasterized_to": "figures/page-004.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F04",
+      "page": 5,
+      "kind": "generic",
+      "rasterized_to": "figures/page-005.png",
+      "spec_md_target": {
+        "kind": "generic"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F05",
+      "page": 6,
+      "kind": "connectivity_topology",
+      "rasterized_to": "figures/page-006.png",
+      "spec_md_target": {
+        "kind": "connectivity_topology"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F06",
+      "page": 10,
+      "kind": "connectivity_topology",
+      "rasterized_to": "figures/page-010.png",
+      "spec_md_target": {
+        "kind": "connectivity_topology"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F07",
+      "page": 13,
+      "kind": "connectivity_topology",
+      "rasterized_to": "figures/page-013.png",
+      "spec_md_target": {
+        "kind": "connectivity_topology"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    },
+    {
+      "id": "F08",
+      "page": 16,
+      "kind": "connectivity_topology",
+      "rasterized_to": "figures/page-016.png",
+      "spec_md_target": {
+        "kind": "connectivity_topology"
+      },
+      "referenced_acronyms": [],
+      "rationale": "first-cut heuristic: neighbouring heading role"
+    }
+  ],
+  "glossary": [
+    {
+      "acronym": "REQ",
+      "expansion": "Request",
+      "first_page": 8,
+      "scope": "spec",
+      "used_in_blocks": [],
+      "source": "parenthesised_first_mention"
+    }
+  ],
+  "chrome": [],
+  "validation": {
+    "section_roles_assigned": 0,
+    "tables_classified": {},
+    "tables_unknown": 0,
+    "glossary_entries": 0,
+    "chrome_lines_stripped": 0,
+    "warnings": []
+  }
+}
