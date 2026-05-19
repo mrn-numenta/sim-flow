@@ -14,6 +14,7 @@
 //! across later milestones.
 
 pub mod descriptor;
+pub mod skeleton;
 
 pub use descriptor::{
     ChromeEntry, ChromeKind, ColumnMapping, ContentKey, FigureEntry, FigureKind, FigureTarget,
