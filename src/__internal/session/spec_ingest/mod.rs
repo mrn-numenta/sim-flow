@@ -20,8 +20,8 @@ pub mod stages;
 
 pub use legacy::{INLINE_THRESHOLD, SpecIngestSummary, SpecKind, ingest_spec_file};
 pub use pipeline::{
-    IngestConfig, IngestOutcome, IngestRequest, IngestWarning, PeerSpec, Pipeline, SourceKind,
-    SourceSpec, run,
+    IngestConfig, IngestOutcome, IngestRequest, IngestWarning, PeerSpec, PhaseAOutput, Pipeline,
+    SourceKind, SourceSpec, run, run_phase_a, run_phase_b, run_with_format,
 };
 
 #[cfg(test)]

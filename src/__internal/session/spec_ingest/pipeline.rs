@@ -6,7 +6,11 @@ use std::path::{Path, PathBuf};
 
 use crate::Result;
 
+use super::format::FormatJson;
 use super::stages;
+use super::stages::chrome::ChromeRecord;
+use super::stages::loading::LoadedSource;
+use super::stages::parse::SectionTree;
 
 /// Kind of source the pipeline is invoked against. Tracked through
 /// every stage; later stages skip work that doesn't apply (e.g.
@@ -327,31 +331,111 @@ impl Pipeline {
     }
 
     pub fn run(self) -> Result<IngestOutcome> {
-        run_pipeline(self.request)
+        run_with_format(self.request, None)
     }
 }
 
-/// Programmatic API per chapter 1.9. Thin wrapper over `Pipeline`.
+/// Programmatic API per chapter 1.9. Thin wrapper over
+/// [`run_with_format`] with no descriptor — equivalent to today's
+/// heuristic-only ingest path.
 pub fn run(request: IngestRequest) -> Result<IngestOutcome> {
-    Pipeline::new(request).run()
+    run_with_format(request, None)
 }
 
-/// Concrete top-down driver. Each stage is a pure function over the
-/// previous stage's output; the orchestrator concatenates warnings
-/// into a single per-run vector that lands in the manifest.
-fn run_pipeline(request: IngestRequest) -> Result<IngestOutcome> {
-    let mut warnings: Vec<IngestWarning> = Vec::new();
+/// Output of phase A of the ingest pipeline (Phase 9 milestone 9.6).
+///
+/// Phase A runs the deterministic, format-agnostic prefix of the
+/// pipeline: source loading, chrome stripping, and section parsing.
+/// Its outputs feed both:
+///
+/// 1. The format-discovery pipeline (skeleton → first-cut → LLM
+///    critique → cache write) when the caller needs to build a
+///    `format.json` descriptor for this source.
+/// 2. Phase B (classify + references + figures + emit) which can
+///    then thread the resolved `FormatJson` through `classify` and
+///    `emit` per milestones 9.9 / 9.11.
+///
+/// Carrying `LoadedSource` out of phase A is the load-bearing piece:
+/// the format-discovery skeleton builder reads spans / lines / tables
+/// straight off the loaded layout, and phase B's `classify` needs the
+/// same handle to look tables up by `(page, first_line)`.
+pub struct PhaseAOutput {
+    pub loaded: LoadedSource,
+    pub chrome: ChromeRecord,
+    pub tree: SectionTree,
+}
 
-    let loaded = stages::loading::load_primary(&request, &mut warnings)?;
-    let (pages, chrome) = stages::chrome::strip_chrome(loaded, &request.config, &mut warnings);
-    let mut tree = stages::parse::parse_hierarchy(&pages, &mut warnings)?;
-    stages::classify::classify(&mut tree, &request.config, &mut warnings);
-    let refs = stages::references::parse_references(&tree, &mut warnings);
-    let figures = stages::figures::extract_figures(&pages, &request.config, &mut warnings)?;
-    let outcome =
-        stages::emit::emit_corpus(&request, &tree, &chrome, &refs, &figures, warnings.clone())?;
+/// Run phase A of the pipeline (loading + chrome + parse).
+///
+/// When `format` is `Some(_)` the chrome stripper composes the
+/// descriptor's regex filters with the positional and repeated-line
+/// filters per milestone 9.10. When `None`, only the positional and
+/// repeated-line filters fire — the legacy behavior.
+pub fn run_phase_a(
+    request: &IngestRequest,
+    format: Option<&FormatJson>,
+    warnings: &mut Vec<IngestWarning>,
+) -> Result<PhaseAOutput> {
+    let loaded = stages::loading::load_primary(request, warnings)?;
+    let (loaded, chrome, _report) =
+        stages::chrome::strip_chrome_with_format(loaded, &request.config, format, warnings);
+    let tree = stages::parse::parse_hierarchy(&loaded, warnings)?;
+    Ok(PhaseAOutput {
+        loaded,
+        chrome,
+        tree,
+    })
+}
+
+/// Run phase B of the pipeline (classify + references + figures +
+/// emit). When `format` is `Some(_)`, classify uses the descriptor's
+/// table classifications + column maps and emit tags chunk front
+/// matter + manifest with the descriptor's roles. When `None`, both
+/// stages fall back to the legacy heuristic path.
+pub fn run_phase_b(
+    request: &IngestRequest,
+    mut phase_a: PhaseAOutput,
+    format: Option<&FormatJson>,
+    mut warnings: Vec<IngestWarning>,
+) -> Result<IngestOutcome> {
+    let classify_outputs = stages::classify::classify_with_format(
+        Some(&phase_a.loaded),
+        &mut phase_a.tree,
+        &request.config,
+        format,
+        &mut warnings,
+    );
+    let refs = stages::references::parse_references(&phase_a.tree, &mut warnings);
+    let figures =
+        stages::figures::extract_figures(&phase_a.loaded, &request.config, &mut warnings)?;
+    let outcome = stages::emit::run_with_format(
+        request,
+        &phase_a.tree,
+        &phase_a.chrome,
+        &refs,
+        &figures,
+        warnings.clone(),
+        format,
+        Some(&classify_outputs),
+    )?;
     Ok(IngestOutcome {
         warnings,
         ..outcome
     })
+}
+
+/// Format-aware programmatic API (Phase 9 milestone 9.6).
+///
+/// Equivalent to running [`run_phase_a`] then [`run_phase_b`]
+/// back-to-back with the same `format` (which may be `None`). The
+/// CLI's `ingest_cmd` uses the split form so it can insert format
+/// discovery between the two phases; programmatic callers that
+/// already have a descriptor in hand can use this convenience.
+pub fn run_with_format(
+    request: IngestRequest,
+    format: Option<&FormatJson>,
+) -> Result<IngestOutcome> {
+    let mut warnings: Vec<IngestWarning> = Vec::new();
+    let phase_a = run_phase_a(&request, format, &mut warnings)?;
+    run_phase_b(&request, phase_a, format, warnings)
 }
