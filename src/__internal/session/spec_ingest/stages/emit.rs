@@ -111,12 +111,29 @@ pub fn run_with_format(
         chunk_ids.push((chunk_id, *section));
     }
 
-    // Tables.
-    write_signal_tables(&primary_dir, &outputs.signals, &chunk_ids)?;
-    write_parameter_tables(&primary_dir, &outputs.parameters, &chunk_ids)?;
-    write_error_tables(&primary_dir, &outputs.errors, &chunk_ids)?;
-    write_encoding_tables(&primary_dir, &outputs.encodings, &chunk_ids)?;
-    write_fsm_tables(&primary_dir, &outputs.fsms, &chunk_ids)?;
+    // Tables. When the format-driven path produced typed outputs
+    // (Phase 9 milestone 9.11+ classify_format_driven), prefer those
+    // over the legacy harvested ones — otherwise harvest_outputs'
+    // markdown-table heuristic re-scans section bodies and emits a
+    // duplicate (and often wrong) shard set. Per-kind: if
+    // `classify_outputs.X` is non-empty AND a format descriptor was
+    // passed, the format-driven writers own that kind's shards.
+    let format_driven = format.is_some() && classify_outputs.is_some();
+    if format_driven {
+        let co = classify_outputs.expect("format_driven implies classify_outputs is Some");
+        write_format_driven_signal_tables(&primary_dir, &co.block_signals)?;
+        write_format_driven_parameters(&primary_dir, &co.typed_parameters)?;
+        write_format_driven_encodings(&primary_dir, &co.typed_encodings)?;
+        write_format_driven_errors(&primary_dir, &co.typed_errors)?;
+        write_format_driven_fsms(&primary_dir, &co.fsm_transitions)?;
+        write_format_driven_pmu_events(&primary_dir, &co.pmu_events)?;
+    } else {
+        write_signal_tables(&primary_dir, &outputs.signals, &chunk_ids)?;
+        write_parameter_tables(&primary_dir, &outputs.parameters, &chunk_ids)?;
+        write_error_tables(&primary_dir, &outputs.errors, &chunk_ids)?;
+        write_encoding_tables(&primary_dir, &outputs.encodings, &chunk_ids)?;
+        write_fsm_tables(&primary_dir, &outputs.fsms, &chunk_ids)?;
+    }
     write_csr_tables(&primary_dir, classify_outputs)?;
     write_unknown_tables(&primary_dir, classify_outputs)?;
 
@@ -856,6 +873,326 @@ fn write_csr_tables(primary_dir: &Path, classify_outputs: Option<&ClassifyOutput
     Ok(())
 }
 
+/// Write format-driven block-signal shards under
+/// `primary/tables/signals/NNN-<slug>.toml` in the schema DM0's
+/// `populate_blocks_with_format` reads (`RawSignalTable`: stage +
+/// source_page_range + [[rows]] with name/direction/peer/description).
+///
+/// Groups `BlockSignalGroup`s by `block_name` so a block with rows
+/// spread across multiple source tables collapses to one shard with a
+/// merged page range. Without this, the format-driven typed outputs
+/// the classify stage produces in memory are dropped — the legacy
+/// `write_signal_tables` consumes the heuristic-only harvested list
+/// and silently emits a much smaller subset (the RV12 v2 run: 18
+/// format-driven groups → 2 legacy shards on disk).
+fn write_format_driven_signal_tables(
+    primary_dir: &Path,
+    groups: &[super::classify::BlockSignalGroup],
+) -> Result<()> {
+    if groups.is_empty() {
+        return Ok(());
+    }
+    let dir = primary_dir.join("tables/signals");
+    fs::create_dir_all(&dir).map_err(io_err("create signals dir", &dir))?;
+    // Bucket by block_name; preserve first-appearance order.
+    let mut bucket_order: Vec<String> = Vec::new();
+    let mut buckets: std::collections::BTreeMap<String, Vec<&super::classify::BlockSignalGroup>> =
+        std::collections::BTreeMap::new();
+    for g in groups {
+        if !buckets.contains_key(&g.block_name) {
+            bucket_order.push(g.block_name.clone());
+        }
+        buckets.entry(g.block_name.clone()).or_default().push(g);
+    }
+    for (idx, block_name) in bucket_order.iter().enumerate() {
+        let Some(group) = buckets.get(block_name) else {
+            continue;
+        };
+        if group.is_empty() {
+            continue;
+        }
+        let slug = slugify(block_name);
+        let filename = format!("{idx:03}-{slug}.toml");
+        let (min_page, max_page) = page_range(group.iter().map(|g| g.source_page));
+        let mut out = String::new();
+        out.push_str(&format!("schema_version = {SCHEMA_VERSION}\n"));
+        out.push_str("table_kind = \"signal_table\"\n");
+        out.push_str(&format!("stage = {}\n", toml_escape_inline(block_name)));
+        out.push_str(&format!("source_page_range = [{min_page}, {max_page}]\n"));
+        for g in group {
+            for row in &g.rows {
+                out.push_str("\n[[rows]]\n");
+                out.push_str(&format!("name = {}\n", toml_escape_inline(&row.name)));
+                out.push_str(&format!(
+                    "direction = {}\n",
+                    toml_escape_inline(&row.direction)
+                ));
+                out.push_str(&format!("peer = {}\n", toml_escape_inline(&row.peer)));
+                out.push_str(&format!(
+                    "description = {}\n",
+                    toml_escape_inline(&row.description)
+                ));
+            }
+        }
+        write_atomic(&dir.join(filename), out.as_bytes())?;
+    }
+    Ok(())
+}
+
+/// Write format-driven parameter rows under
+/// `primary/tables/parameters/NNN.toml`. Buckets by `source_anchor`
+/// (`table:T*`) to mirror the CSR pattern — each on-disk shard then
+/// corresponds to one source-spec table.
+fn write_format_driven_parameters(primary_dir: &Path, params: &[spec_md::Parameter]) -> Result<()> {
+    if params.is_empty() {
+        return Ok(());
+    }
+    let dir = primary_dir.join("tables/parameters");
+    fs::create_dir_all(&dir).map_err(io_err("create parameters dir", &dir))?;
+    let buckets = bucket_by_anchor(params, |p| &p.source_anchor);
+    for (idx, (table_id, rows)) in buckets.into_iter().enumerate() {
+        let slug = slugify(&table_id);
+        let filename = format!("{idx:03}-{slug}.toml");
+        let mut out = String::new();
+        out.push_str(&format!("schema_version = {SCHEMA_VERSION}\n"));
+        out.push_str("table_kind = \"parameter_table\"\n");
+        out.push_str(&format!(
+            "source_table_id = {}\n",
+            toml_escape_inline(&table_id)
+        ));
+        for p in &rows {
+            out.push_str("\n[[rows]]\n");
+            out.push_str(&format!("name = {}\n", toml_escape_inline(&p.name)));
+            if !p.ty.is_empty() {
+                out.push_str(&format!("kind = {}\n", toml_escape_inline(&p.ty)));
+            }
+            out.push_str(&format!("default = {}\n", toml_escape_inline(&p.default)));
+            out.push_str(&format!(
+                "comment = {}\n",
+                toml_escape_inline(&p.behavioral_impact)
+            ));
+        }
+        write_atomic(&dir.join(filename), out.as_bytes())?;
+    }
+    Ok(())
+}
+
+/// Write format-driven encoding shards under
+/// `primary/tables/encodings/NNN-<slug>.toml`. One shard per
+/// `EncodingGroup` (already grouped on `encoding_name` by the
+/// classify stage). Schema matches DM0's `RawEncodingTable`.
+fn write_format_driven_encodings(
+    primary_dir: &Path,
+    groups: &[super::classify::EncodingGroup],
+) -> Result<()> {
+    if groups.is_empty() {
+        return Ok(());
+    }
+    let dir = primary_dir.join("tables/encodings");
+    fs::create_dir_all(&dir).map_err(io_err("create encodings dir", &dir))?;
+    for (idx, g) in groups.iter().enumerate() {
+        let slug = slugify(&g.encoding_name);
+        let filename = format!("{idx:03}-{slug}.toml");
+        let mut out = String::new();
+        out.push_str(&format!("schema_version = {SCHEMA_VERSION}\n"));
+        out.push_str("table_kind = \"encoding_table\"\n");
+        out.push_str(&format!(
+            "field = {}\n",
+            toml_escape_inline(&g.encoding_name)
+        ));
+        out.push_str(&format!(
+            "source_page_range = [{}, {}]\n",
+            g.source_page, g.source_page
+        ));
+        for v in &g.values {
+            out.push_str("\n[[rows]]\n");
+            out.push_str(&format!("value = {}\n", toml_escape_inline(&v.value)));
+            out.push_str(&format!("name = {}\n", toml_escape_inline(&v.name)));
+            out.push_str(&format!(
+                "abbreviation = {}\n",
+                toml_escape_inline(&v.abbreviation)
+            ));
+        }
+        write_atomic(&dir.join(filename), out.as_bytes())?;
+    }
+    Ok(())
+}
+
+/// Write format-driven error rows under
+/// `primary/tables/errors/NNN.toml`. Buckets by `source_anchor` so
+/// each shard corresponds to one source-spec table.
+fn write_format_driven_errors(primary_dir: &Path, errors: &[spec_md::ErrorEntry]) -> Result<()> {
+    if errors.is_empty() {
+        return Ok(());
+    }
+    let dir = primary_dir.join("tables/errors");
+    fs::create_dir_all(&dir).map_err(io_err("create errors dir", &dir))?;
+    let buckets = bucket_by_anchor(errors, |e| &e.source_anchor);
+    for (idx, (table_id, rows)) in buckets.into_iter().enumerate() {
+        let filename = format!("{idx:03}-{}.toml", slugify(&table_id));
+        let mut out = String::new();
+        out.push_str(&format!("schema_version = {SCHEMA_VERSION}\n"));
+        out.push_str("table_kind = \"error_table\"\n");
+        out.push_str(&format!(
+            "source_table_id = {}\n",
+            toml_escape_inline(&table_id)
+        ));
+        for e in &rows {
+            out.push_str("\n[[rows]]\n");
+            out.push_str(&format!(
+                "error_type = {}\n",
+                toml_escape_inline(&e.error_type)
+            ));
+            out.push_str(&format!(
+                "detecting_component = {}\n",
+                toml_escape_inline(&e.detecting_component)
+            ));
+            // The on-disk schema's key is `detecting_behavior` (DM0's
+            // RawErrorRow). Map from spec_md::ErrorEntry which uses
+            // `detection_behavior` (with `i`); both names refer to
+            // the same row column. The synonym preserves DM0's read
+            // contract without a wider rename.
+            out.push_str(&format!(
+                "detecting_behavior = {}\n",
+                toml_escape_inline(&e.detection_behavior)
+            ));
+            out.push_str(&format!(
+                "bus_response = {}\n",
+                toml_escape_inline(&e.bus_response)
+            ));
+            out.push_str(&format!(
+                "master_behavior = {}\n",
+                toml_escape_inline(&e.master_behavior)
+            ));
+            out.push_str(&format!(
+                "software_response = {}\n",
+                toml_escape_inline(&e.software_response)
+            ));
+        }
+        write_atomic(&dir.join(filename), out.as_bytes())?;
+    }
+    Ok(())
+}
+
+/// Write format-driven FSM shards (transitions only — DM0's
+/// `populate_fsms` reads `RawFsmTable` which has a `transitions`
+/// list but no state list). One shard per FSM name.
+fn write_format_driven_fsms(
+    primary_dir: &Path,
+    transitions: &[super::classify::FsmTransitionGroup],
+) -> Result<()> {
+    if transitions.is_empty() {
+        return Ok(());
+    }
+    let dir = primary_dir.join("tables/fsms");
+    fs::create_dir_all(&dir).map_err(io_err("create fsms dir", &dir))?;
+    // Bucket by fsm_name; preserve first-appearance order.
+    let mut bucket_order: Vec<String> = Vec::new();
+    let mut buckets: std::collections::BTreeMap<String, Vec<&super::classify::FsmTransitionGroup>> =
+        std::collections::BTreeMap::new();
+    for t in transitions {
+        if !buckets.contains_key(&t.fsm_name) {
+            bucket_order.push(t.fsm_name.clone());
+        }
+        buckets.entry(t.fsm_name.clone()).or_default().push(t);
+    }
+    for (idx, name) in bucket_order.iter().enumerate() {
+        let Some(group) = buckets.get(name) else {
+            continue;
+        };
+        if group.is_empty() {
+            continue;
+        }
+        let filename = format!("{idx:03}-{}.toml", slugify(name));
+        let (min_page, max_page) = page_range(group.iter().map(|g| g.source_page));
+        let mut out = String::new();
+        out.push_str(&format!("schema_version = {SCHEMA_VERSION}\n"));
+        out.push_str("table_kind = \"fsm_transition_table\"\n");
+        out.push_str(&format!("name = {}\n", toml_escape_inline(name)));
+        out.push_str(&format!("source_page_range = [{min_page}, {max_page}]\n"));
+        for g in group {
+            for t in &g.transitions {
+                out.push_str("\n[[transitions]]\n");
+                out.push_str(&format!("from = {}\n", toml_escape_inline(&t.from)));
+                out.push_str(&format!("input = {}\n", toml_escape_inline(&t.input)));
+                out.push_str(&format!("to = {}\n", toml_escape_inline(&t.to)));
+                out.push_str(&format!("output = {}\n", toml_escape_inline(&t.output)));
+            }
+        }
+        write_atomic(&dir.join(filename), out.as_bytes())?;
+    }
+    Ok(())
+}
+
+/// Write format-driven PMU-event rows under `primary/tables/pmu/`
+/// (the directory DM0's `populate_performance_counters` reads).
+/// Single shard since the event list is flat.
+fn write_format_driven_pmu_events(primary_dir: &Path, events: &[spec_md::PmuEvent]) -> Result<()> {
+    if events.is_empty() {
+        return Ok(());
+    }
+    let dir = primary_dir.join("tables/pmu");
+    fs::create_dir_all(&dir).map_err(io_err("create pmu dir", &dir))?;
+    let mut out = String::new();
+    out.push_str(&format!("schema_version = {SCHEMA_VERSION}\n"));
+    out.push_str("table_kind = \"pmu_event_table\"\n");
+    for e in events {
+        out.push_str("\n[[rows]]\n");
+        out.push_str(&format!("id = {}\n", toml_escape_inline(&e.id)));
+        out.push_str(&format!("name = {}\n", toml_escape_inline(&e.name)));
+        out.push_str(&format!(
+            "description = {}\n",
+            toml_escape_inline(&e.description)
+        ));
+        out.push_str(&format!(
+            "csr_address = {}\n",
+            toml_escape_inline(&e.csr_address)
+        ));
+    }
+    write_atomic(&dir.join("000.toml"), out.as_bytes())?;
+    Ok(())
+}
+
+/// Bucket items by the `table:T*` prefix of their source anchor,
+/// preserving first-appearance order. Returns the buckets keyed by
+/// the parsed table_id (or the empty string if no `table:` prefix).
+fn bucket_by_anchor<T, F>(items: &[T], anchor_of: F) -> Vec<(String, Vec<&T>)>
+where
+    F: Fn(&T) -> &str,
+{
+    let mut order: Vec<String> = Vec::new();
+    let mut buckets: std::collections::BTreeMap<String, Vec<&T>> =
+        std::collections::BTreeMap::new();
+    for item in items {
+        let table_id = anchor_of(item)
+            .strip_prefix("table:")
+            .unwrap_or("")
+            .to_string();
+        if !buckets.contains_key(&table_id) {
+            order.push(table_id.clone());
+        }
+        buckets.entry(table_id).or_default().push(item);
+    }
+    order
+        .into_iter()
+        .filter_map(|k| buckets.remove(&k).map(|v| (k, v)))
+        .collect()
+}
+
+fn page_range<I: IntoIterator<Item = u32>>(iter: I) -> (u32, u32) {
+    let mut min = u32::MAX;
+    let mut max = 0u32;
+    for p in iter {
+        if p < min {
+            min = p;
+        }
+        if p > max {
+            max = p;
+        }
+    }
+    if min == u32::MAX { (0, 0) } else { (min, max) }
+}
+
 /// Persist tables the classifier couldn't route to a typed shard so
 /// DM0 can surface them as Open Questions. Without this, the raw rows
 /// classify collected into `ClassifyOutputs::unknown_tables` are
@@ -1521,6 +1858,383 @@ mod tests {
         assert!(body.contains("Mnemonic"));
         assert!(body.contains("ADD"));
         assert!(body.contains("SUB"));
+    }
+
+    #[test]
+    fn format_driven_signals_group_by_block_name() {
+        use super::super::classify::BlockSignalGroup;
+        use crate::session::spec_md::types::BlockSignalRow;
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary");
+        fs::create_dir_all(&primary).unwrap();
+        let groups = vec![
+            BlockSignalGroup {
+                table_id: "T02".into(),
+                block_name: "Instruction Fetch (IF)".into(),
+                source_page: 13,
+                rows: vec![BlockSignalRow {
+                    name: "pc_nxt".into(),
+                    direction: "out".into(),
+                    peer: "Cache".into(),
+                    description: "next pc".into(),
+                    role: Default::default(),
+                }],
+            },
+            BlockSignalGroup {
+                table_id: "T03".into(),
+                block_name: "Instruction Fetch (IF)".into(),
+                source_page: 14,
+                rows: vec![BlockSignalRow {
+                    name: "parcel_pc".into(),
+                    direction: "in".into(),
+                    peer: "Cache".into(),
+                    description: "fetched pc".into(),
+                    role: Default::default(),
+                }],
+            },
+            BlockSignalGroup {
+                table_id: "T05".into(),
+                block_name: "Pre-Decode (PD)".into(),
+                source_page: 15,
+                rows: vec![BlockSignalRow {
+                    name: "id_pc".into(),
+                    direction: "out".into(),
+                    peer: "ID".into(),
+                    description: "decode pc".into(),
+                    role: Default::default(),
+                }],
+            },
+        ];
+        write_format_driven_signal_tables(&primary, &groups).unwrap();
+        let if_path = primary.join("tables/signals/000-instruction-fetch-if.toml");
+        let pd_path = primary.join("tables/signals/001-pre-decode-pd.toml");
+        assert!(if_path.exists());
+        assert!(pd_path.exists());
+        let if_body = fs::read_to_string(&if_path).unwrap();
+        assert!(if_body.contains("stage = \"Instruction Fetch (IF)\""));
+        assert!(if_body.contains("source_page_range = [13, 14]"));
+        assert!(if_body.contains("pc_nxt"));
+        assert!(if_body.contains("parcel_pc"));
+        // Sanity: the legacy harvester's 2-shard count we saw on the
+        // RV12 v2 run would jump to (# unique block_names). With the
+        // fixture above: 2 shards.
+        let count = fs::read_dir(primary.join("tables/signals"))
+            .unwrap()
+            .count();
+        assert_eq!(count, 2);
+
+        // Idempotency check: writing again is safe.
+        write_format_driven_signal_tables(&primary, &groups).unwrap();
+        assert_eq!(
+            fs::read_dir(primary.join("tables/signals"))
+                .unwrap()
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn format_driven_signals_match_dm0_read_schema() {
+        // Smoke test: write a format-driven shard, parse it with
+        // DM0's RawSignalTable deserializer. This catches schema
+        // drift between writer and reader.
+        use super::super::classify::BlockSignalGroup;
+        use crate::session::spec_md::types::BlockSignalRow;
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary");
+        fs::create_dir_all(&primary).unwrap();
+        let groups = vec![BlockSignalGroup {
+            table_id: "T10".into(),
+            block_name: "Execute (EX)".into(),
+            source_page: 20,
+            rows: vec![BlockSignalRow {
+                name: "alu_out".into(),
+                direction: "out".into(),
+                peer: "WB".into(),
+                description: "alu result".into(),
+                role: Default::default(),
+            }],
+        }];
+        write_format_driven_signal_tables(&primary, &groups).unwrap();
+        let body = fs::read_to_string(primary.join("tables/signals/000-execute-ex.toml")).unwrap();
+        #[derive(serde::Deserialize)]
+        struct RawSignal {
+            stage: String,
+            #[serde(default)]
+            source_page_range: Vec<u32>,
+            #[serde(default)]
+            rows: Vec<Row>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Row {
+            name: String,
+            direction: String,
+            peer: String,
+            description: String,
+        }
+        let parsed: RawSignal = toml::from_str(&body).unwrap();
+        assert_eq!(parsed.stage, "Execute (EX)");
+        assert_eq!(parsed.source_page_range, vec![20, 20]);
+        assert_eq!(parsed.rows.len(), 1);
+        assert_eq!(parsed.rows[0].name, "alu_out");
+        assert_eq!(parsed.rows[0].direction, "out");
+        assert_eq!(parsed.rows[0].peer, "WB");
+        assert_eq!(parsed.rows[0].description, "alu result");
+    }
+
+    #[test]
+    fn format_driven_parameters_bucket_by_anchor() {
+        use crate::session::spec_md::types::Parameter;
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary");
+        fs::create_dir_all(&primary).unwrap();
+        let params = vec![
+            Parameter {
+                name: "XLEN".into(),
+                ty: "int".into(),
+                default: "32".into(),
+                valid_range: "".into(),
+                behavioral_impact: "register width".into(),
+                source_anchor: "table:T01".into(),
+            },
+            Parameter {
+                name: "HAS_FPU".into(),
+                ty: "bool".into(),
+                default: "false".into(),
+                valid_range: "".into(),
+                behavioral_impact: "".into(),
+                source_anchor: "table:T01".into(),
+            },
+            Parameter {
+                name: "ICACHE_SIZE".into(),
+                ty: "int".into(),
+                default: "4096".into(),
+                valid_range: "".into(),
+                behavioral_impact: "".into(),
+                source_anchor: "table:T05".into(),
+            },
+        ];
+        write_format_driven_parameters(&primary, &params).unwrap();
+        let entries: Vec<_> = fs::read_dir(primary.join("tables/parameters"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(entries.len(), 2, "expected 2 buckets, got {entries:?}");
+        // First bucket = T01 → 2 rows, second bucket = T05 → 1 row.
+        let t01_body = fs::read_to_string(primary.join("tables/parameters/000-t01.toml")).unwrap();
+        assert!(t01_body.contains("XLEN"));
+        assert!(t01_body.contains("HAS_FPU"));
+        let t05_body = fs::read_to_string(primary.join("tables/parameters/001-t05.toml")).unwrap();
+        assert!(t05_body.contains("ICACHE_SIZE"));
+    }
+
+    #[test]
+    fn format_driven_errors_bucket_by_anchor_and_uses_dm0_key() {
+        // DM0's RawErrorRow expects `detecting_behavior` (no 'i')
+        // while spec_md::ErrorEntry's field is `detection_behavior`.
+        // The writer must emit the on-disk key DM0 reads.
+        use crate::session::spec_md::types::ErrorEntry;
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary");
+        fs::create_dir_all(&primary).unwrap();
+        let errors = vec![ErrorEntry {
+            error_type: "bus_error".into(),
+            detecting_component: "DCache".into(),
+            detection_behavior: "checks ack signal".into(),
+            bus_response: "trap".into(),
+            master_behavior: "stall".into(),
+            software_response: "abort".into(),
+            source_anchor: "table:T30".into(),
+        }];
+        write_format_driven_errors(&primary, &errors).unwrap();
+        let body = fs::read_to_string(primary.join("tables/errors/000-t30.toml")).unwrap();
+        assert!(
+            body.contains("detecting_behavior = \"checks ack signal\""),
+            "got `{body}`"
+        );
+    }
+
+    #[test]
+    fn format_driven_encodings_one_shard_per_group() {
+        use super::super::classify::EncodingGroup;
+        use crate::session::spec_md::types::EncodingValue;
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary");
+        fs::create_dir_all(&primary).unwrap();
+        let groups = vec![EncodingGroup {
+            table_id: "T40".into(),
+            encoding_name: "opcode".into(),
+            source_page: 50,
+            values: vec![
+                EncodingValue {
+                    value: "0b0110011".into(),
+                    name: "OP".into(),
+                    abbreviation: "OP".into(),
+                },
+                EncodingValue {
+                    value: "0b0010011".into(),
+                    name: "OP_IMM".into(),
+                    abbreviation: "OPI".into(),
+                },
+            ],
+        }];
+        write_format_driven_encodings(&primary, &groups).unwrap();
+        let body = fs::read_to_string(primary.join("tables/encodings/000-opcode.toml")).unwrap();
+        assert!(body.contains("field = \"opcode\""));
+        assert!(body.contains("0b0110011"));
+        assert!(body.contains("OP_IMM"));
+    }
+
+    #[test]
+    fn format_driven_fsms_bucket_by_fsm_name() {
+        use super::super::classify::FsmTransitionGroup;
+        use crate::session::spec_md::types::FsmTransition;
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary");
+        fs::create_dir_all(&primary).unwrap();
+        let groups = vec![
+            FsmTransitionGroup {
+                table_id: "T50".into(),
+                fsm_name: "DCache".into(),
+                source_page: 60,
+                transitions: vec![FsmTransition {
+                    from: "Idle".into(),
+                    input: "req".into(),
+                    to: "Lookup".into(),
+                    output: "".into(),
+                }],
+            },
+            FsmTransitionGroup {
+                table_id: "T51".into(),
+                fsm_name: "DCache".into(),
+                source_page: 61,
+                transitions: vec![FsmTransition {
+                    from: "Lookup".into(),
+                    input: "miss".into(),
+                    to: "Refill".into(),
+                    output: "".into(),
+                }],
+            },
+        ];
+        write_format_driven_fsms(&primary, &groups).unwrap();
+        let body = fs::read_to_string(primary.join("tables/fsms/000-dcache.toml")).unwrap();
+        assert!(body.contains("name = \"DCache\""));
+        assert!(body.contains("source_page_range = [60, 61]"));
+        assert!(body.contains("from = \"Idle\""));
+        assert!(body.contains("from = \"Lookup\""));
+    }
+
+    #[test]
+    fn format_driven_pmu_events_single_shard() {
+        use crate::session::spec_md::types::PmuEvent;
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary");
+        fs::create_dir_all(&primary).unwrap();
+        let events = vec![PmuEvent {
+            id: "EVT_CYCLES".into(),
+            name: "cycles".into(),
+            description: "elapsed cycles".into(),
+            csr_address: "0xC00".into(),
+        }];
+        write_format_driven_pmu_events(&primary, &events).unwrap();
+        let body = fs::read_to_string(primary.join("tables/pmu/000.toml")).unwrap();
+        assert!(body.contains("id = \"EVT_CYCLES\""));
+        assert!(body.contains("csr_address = \"0xC00\""));
+    }
+
+    /// End-to-end: a synthetic ClassifyOutputs with format-driven
+    /// content lands on disk in the right directories with the right
+    /// schema. Mirrors the gating logic in `run_with_format` so a
+    /// regression there is caught.
+    #[test]
+    fn format_driven_writers_are_dispatched_when_format_is_some() {
+        use super::super::classify::BlockSignalGroup;
+        use crate::session::spec_md::types::BlockSignalRow;
+        let body = "# Top\n\nbody\n\n## Stage\n\n| Signal | Direction | To/From | Description |\n| --- | --- | --- | --- |\n| legacy_sig | out | Peer | from heuristic |\n";
+        let mut warnings = Vec::new();
+        let mut tree = parse_markdown(body, &mut warnings).unwrap();
+        let config = super::super::super::pipeline::IngestConfig::default();
+        let _ = classify(&mut tree, &config, &mut warnings);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().to_path_buf();
+        std::fs::write(project.join("src.md"), body).unwrap();
+        let request = IngestRequest {
+            primary: Some(SourceSpec::new(project.join("src.md"))),
+            peers: Vec::new(),
+            config: config.clone(),
+            project_root: project.clone(),
+        };
+
+        // Build a minimal FormatJson + ClassifyOutputs with one
+        // format-driven block-signal group. The legacy heuristic on
+        // the synthetic body would also emit a `legacy_sig` shard;
+        // when the format-driven path is engaged that legacy shard
+        // must NOT land.
+        use crate::__internal::session::spec_ingest::format::descriptor::{
+            FormatJson, ValidationBlock,
+        };
+        use chrono::TimeZone;
+        let format = FormatJson {
+            schema_version: 1,
+            model: "test".into(),
+            prompt_version: "test".into(),
+            source_sha256: "x".into(),
+            discovered_at: chrono::Utc.timestamp_opt(0, 0).single().unwrap(),
+            section_roles: Vec::new(),
+            tables: Vec::new(),
+            figures: Vec::new(),
+            glossary: Vec::new(),
+            chrome: Vec::new(),
+            validation: ValidationBlock::default(),
+        };
+        let co = ClassifyOutputs {
+            block_signals: vec![BlockSignalGroup {
+                table_id: "T01".into(),
+                block_name: "Format Block".into(),
+                source_page: 99,
+                rows: vec![BlockSignalRow {
+                    name: "fmt_sig".into(),
+                    direction: "in".into(),
+                    peer: "X".into(),
+                    description: "from format".into(),
+                    role: Default::default(),
+                }],
+            }],
+            ..ClassifyOutputs::default()
+        };
+
+        tree.source_kind = Some(SourceKind::Markdown);
+        let chrome = ChromeRecord::default();
+        let _outcome = run_with_format(
+            &request,
+            &tree,
+            &chrome,
+            &[],
+            &[],
+            warnings,
+            Some(&format),
+            Some(&co),
+        )
+        .unwrap();
+
+        let signals_dir = project.join(".sim-flow/spec-ingest/primary/tables/signals");
+        let entries: Vec<_> = fs::read_dir(&signals_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(entries.len(), 1, "expected 1 shard, got {entries:?}");
+        // The legacy `legacy_sig` shard must NOT land; only the
+        // format-driven `fmt_sig` should be present.
+        let body = fs::read_to_string(signals_dir.join(entries[0].as_str())).unwrap();
+        assert!(
+            body.contains("fmt_sig"),
+            "format-driven row missing: `{body}`"
+        );
+        assert!(
+            !body.contains("legacy_sig"),
+            "legacy row leaked into shard: `{body}`"
+        );
     }
 
     #[test]
