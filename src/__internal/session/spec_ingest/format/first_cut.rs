@@ -611,7 +611,7 @@ fn nearest_role_heading(
 /// the first cut never proposes a canonical that the classifier
 /// will reject. This eliminates the `classify_unknown_canonical`
 /// warning class for first-cut output.
-fn build_column_map(headers: &[String], kind: TableKind) -> Vec<ColumnMapping> {
+pub(super) fn build_column_map(headers: &[String], kind: TableKind) -> Vec<ColumnMapping> {
     let dict: &[(&[&str], &str)] = canonical_dict_for(kind);
     if dict.is_empty() {
         return Vec::new();
@@ -648,7 +648,7 @@ fn build_column_map(headers: &[String], kind: TableKind) -> Vec<ColumnMapping> {
 /// Mirrors `classify.rs::canonical_fields_for_kind` (which is
 /// private to that module). Kept in lockstep so the first-cut
 /// column map only proposes canonicals classify.rs will accept.
-fn valid_canonicals_for_kind(kind: TableKind) -> &'static [&'static str] {
+pub(super) fn valid_canonicals_for_kind(kind: TableKind) -> &'static [&'static str] {
     match kind {
         TableKind::SignalTable => &["name", "direction", "peer", "description", "role"],
         TableKind::ExternalSignalTable => &[

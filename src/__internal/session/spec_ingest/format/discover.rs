@@ -303,8 +303,50 @@ pub fn discover<A: LlmAdapter + ?Sized>(
     for adj in adjustments {
         apply_adjustment(&mut refined, &adj, warnings);
     }
+    reconcile_column_maps_after_patch(&mut refined, warnings);
 
     Ok(stamp_metadata(&refined, llm.name()))
+}
+
+/// Walk every table and, when its `column_map` contains canonicals
+/// that aren't legal for the current `kind`, rebuild the map from the
+/// preserved `source` strings against the new kind's synonym dict.
+/// This catches the common LLM-coordination failure mode where a
+/// `kind` patch lands without a matching `column_map` patch — leaving
+/// stale canonicals pointing at the previous kind's row schema (the
+/// `classify_unknown_canonical` warning class). Without this pass,
+/// classify would silently drop those columns on disk.
+fn reconcile_column_maps_after_patch(
+    descriptor: &mut FormatJson,
+    warnings: &mut Vec<IngestWarning>,
+) {
+    use super::first_cut::{build_column_map, valid_canonicals_for_kind};
+    for table in descriptor.tables.iter_mut() {
+        let valid = valid_canonicals_for_kind(table.kind);
+        let stale: Vec<String> = table
+            .column_map
+            .iter()
+            .filter(|m| !valid.contains(&m.canonical.as_str()))
+            .map(|m| m.canonical.clone())
+            .collect();
+        if stale.is_empty() {
+            continue;
+        }
+        let headers: Vec<String> = table.column_map.iter().map(|m| m.source.clone()).collect();
+        let rebuilt = build_column_map(&headers, table.kind);
+        let before = table.column_map.len();
+        table.column_map = rebuilt;
+        let after = table.column_map.len();
+        warnings.push(IngestWarning::new(
+            "discover_column_map_redived",
+            format!(
+                "table {}: kind={:?} but column_map carried stale canonicals {:?}; \
+                 rebuilt from `source` headers ({before} -> {after} mapping(s))",
+                table.id, table.kind, stale,
+            ),
+            DISCOVER_STAGE,
+        ));
+    }
 }
 
 /// Stamp `model` / `prompt_version` / `discovered_at` on a
@@ -1252,6 +1294,80 @@ mod tests {
         assert_eq!(refined.model, "mock");
         assert_eq!(refined.prompt_version, "critique-v2");
         assert!(refined.discovered_at > first_cut.discovered_at);
+    }
+
+    /// Reproduces the RV12 T13 bug: first-cut tagged a table as
+    /// `PmuEventTable` (with a column_map carrying `id` / `name`),
+    /// the LLM patched `kind → signal_table` but didn't touch
+    /// column_map. The reconciliation post-pass should rebuild the
+    /// column_map from `source` headers against signal_table's
+    /// canonicals and emit a `discover_column_map_redived` warning.
+    #[test]
+    fn column_map_rederived_when_kind_patch_invalidates_canonicals() {
+        let mut first_cut = sample_first_cut();
+        // Seed T01 as a fully-classified PmuEventTable with a
+        // populated column_map. `id` and `name` are valid
+        // canonicals for PmuEventTable; both will be invalid after
+        // the LLM patches `kind` to signal_table.
+        first_cut.tables[0].kind = TableKind::PmuEventTable;
+        first_cut.tables[0].column_map = vec![
+            ColumnMapping {
+                source: "id_pc".to_string(),
+                canonical: "id".to_string(),
+            },
+            ColumnMapping {
+                source: "ID".to_string(),
+                canonical: "id".to_string(),
+            },
+            ColumnMapping {
+                source: "Instruction Decode program counter".to_string(),
+                canonical: "name".to_string(),
+            },
+        ];
+        let skel = empty_skeleton();
+
+        let patch = r#"<patch>[
+            {
+              "target": { "kind": "table", "id": "T01" },
+              "field": "kind",
+              "old_value": "pmu_event_table",
+              "new_value": "signal_table",
+              "rationale": "Signals belong to EX block"
+            }
+        ]</patch>"#;
+
+        let agent = MockAgent::new();
+        agent.enqueue(patch);
+        let mut llm: Box<dyn LlmAdapter> = Box::new(agent);
+        let mut warnings: Vec<IngestWarning> = Vec::new();
+        let refined = discover(&skel, &first_cut, llm.as_mut(), &mut warnings).expect("discover");
+
+        // kind landed.
+        assert_eq!(refined.tables[0].kind, TableKind::SignalTable);
+        // column_map was rebuilt: `id` is not a SignalTable canonical
+        // so those two entries are gone. `Instruction Decode program
+        // counter` doesn't match any SignalTable synonym so it's
+        // dropped too.
+        let canonicals: Vec<&str> = refined.tables[0]
+            .column_map
+            .iter()
+            .map(|m| m.canonical.as_str())
+            .collect();
+        for cn in &canonicals {
+            assert!(
+                ["name", "direction", "peer", "description", "role"].contains(cn),
+                "unexpected canonical after rebuild: {cn}"
+            );
+        }
+        // Reconciliation warning emitted with stale list.
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.code == "discover_column_map_redived"
+                    && w.message.contains("T01")
+                    && w.message.contains("\"id\"")),
+            "warnings: {warnings:?}"
+        );
     }
 
     /// Patch extraction also handles fenced JSON when the model
