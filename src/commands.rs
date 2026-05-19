@@ -231,6 +231,11 @@ fn embedder_cmd(action: &EmbedderAction) -> sim_flow::Result<()> {
             rediscover_format,
             format,
             no_format_discovery,
+            llm_backend,
+            llm_model,
+            llm_model_family,
+            llm_runtime_profile,
+            llm_base_url,
         } => ingest_cmd(
             &project_dir,
             source.as_deref(),
@@ -242,6 +247,11 @@ fn embedder_cmd(action: &EmbedderAction) -> sim_flow::Result<()> {
             *rediscover_format,
             format.as_deref(),
             *no_format_discovery,
+            llm_backend.as_deref(),
+            llm_model.as_deref(),
+            llm_model_family.as_deref(),
+            llm_runtime_profile.as_deref(),
+            llm_base_url.as_deref(),
         ),
         Command::BuildFrameworkIndex {
             framework_root,
@@ -290,7 +300,23 @@ fn ingest_cmd(
     rediscover_format: bool,
     format_path: Option<&Path>,
     no_format_discovery: bool,
+    llm_backend: Option<&str>,
+    llm_model: Option<&str>,
+    llm_model_family: Option<&str>,
+    llm_runtime_profile: Option<&str>,
+    llm_base_url: Option<&str>,
 ) -> sim_flow::Result<()> {
+    // Build the LLM-config view once so call sites that resolve the
+    // format descriptor can hand it to `build_format_descriptor`.
+    // `None` means "no LLM endpoint requested" — the discovery
+    // pipeline falls back to the first-cut classifier.
+    let llm_config: Option<IngestLlmConfig<'_>> = llm_backend.map(|backend| IngestLlmConfig {
+        backend,
+        model: llm_model,
+        model_family: llm_model_family,
+        runtime_profile: llm_runtime_profile,
+        base_url: llm_base_url,
+    });
     use sim_flow::__internal::session::spec_ingest::{
         IngestConfig, IngestRequest, PeerSpec, SourceSpec,
     };
@@ -374,6 +400,7 @@ fn ingest_cmd(
         rediscover_format,
         format_path,
         no_format_discovery,
+        llm_config.as_ref(),
     )?;
     println!(
         "sim-flow ingest: wrote {} ({} chunks, {} figures, {} signal tables, {} stubs, {} TBDs)",
@@ -437,6 +464,7 @@ fn run_ingest_with_format_resolution(
     rediscover_format: bool,
     format_path: Option<&Path>,
     no_format_discovery: bool,
+    llm_config: Option<&IngestLlmConfig<'_>>,
 ) -> sim_flow::Result<sim_flow::__internal::session::spec_ingest::IngestOutcome> {
     use sim_flow::__internal::session::spec_ingest::format::FormatJson;
     use sim_flow::__internal::session::spec_ingest::pipeline::{run_phase_a, run_phase_b};
@@ -536,6 +564,7 @@ fn run_ingest_with_format_resolution(
         &request.config,
         &source_sha256,
         no_format_discovery,
+        llm_config,
         &mut warnings,
     );
 
@@ -587,22 +616,36 @@ fn run_format_aware(
     run_phase_b(&request, phase_a, format, warnings)
 }
 
+/// Resolved LLM-adapter configuration the ingest command builds from
+/// the `--llm-*` flags / `SIM_FLOW_INGEST_LLM_*` env vars. `None` for
+/// the whole struct (returned by `resolve_ingest_llm_config`) means
+/// "no LLM endpoint requested" — the format-discovery pipeline falls
+/// back to the first-cut classifier with a stderr hint.
+struct IngestLlmConfig<'a> {
+    backend: &'a str,
+    model: Option<&'a str>,
+    model_family: Option<&'a str>,
+    runtime_profile: Option<&'a str>,
+    base_url: Option<&'a str>,
+}
+
 /// Build a fresh `format.json` descriptor from the loaded source.
 /// Always runs the deterministic first-cut classifier. The LLM
-/// critique pass is gated by `no_format_discovery` AND the
-/// availability of an LLM adapter — milestone 9.6 wires the gate but
-/// the LLM-resolver-from-ingest-config plumbing lands in a follow-up
-/// milestone; absent that resolver we silently fall back to first-cut
-/// and surface the skipped-critique state in the descriptor's
-/// `model = "first-cut-builtin"` sentinel.
+/// critique pass fires only when `no_format_discovery == false` AND
+/// the caller resolved an `IngestLlmConfig` from the
+/// `--llm-backend` / env vars. Critique failures (network, malformed
+/// JSON, immutable-field violations) are non-fatal: the warnings
+/// surface in the returned descriptor's `validation.warnings` and the
+/// first-cut entries pass through unchanged.
 fn build_format_descriptor(
     loaded: &sim_flow::__internal::session::spec_ingest::stages::loading::LoadedSource,
     config: &sim_flow::__internal::session::spec_ingest::IngestConfig,
     source_sha256: &str,
     no_format_discovery: bool,
-    _warnings: &mut Vec<sim_flow::__internal::session::spec_ingest::IngestWarning>,
+    llm_config: Option<&IngestLlmConfig<'_>>,
+    warnings: &mut Vec<sim_flow::__internal::session::spec_ingest::IngestWarning>,
 ) -> sim_flow::__internal::session::spec_ingest::format::FormatJson {
-    use sim_flow::__internal::session::spec_ingest::format::{first_cut, skeleton};
+    use sim_flow::__internal::session::spec_ingest::format::{discover, first_cut, skeleton};
 
     let skeleton = skeleton::build_skeleton_with(loaded, config);
     let mut first_cut = first_cut::classify(&skeleton);
@@ -616,18 +659,61 @@ fn build_format_descriptor(
         return first_cut;
     }
 
-    // No LLM adapter is plumbed into ingest yet. Per the milestone's
-    // "no LLM configured → fall back to --no-format-discovery with a
-    // stderr warning" semantics, we emit a warning and return the
-    // first-cut descriptor unchanged. The follow-up milestone wires a
-    // real resolver against `.sim-flow/config.toml` + the `sim-flow
-    // ingest --llm-*` flags.
+    let Some(llm) = llm_config else {
+        eprintln!(
+            "sim-flow ingest: no --llm-backend configured; using first-cut classifier. \
+             Pass --llm-backend / --llm-base-url / --llm-model (or set \
+             SIM_FLOW_INGEST_LLM_BACKEND etc.) to enable the LLM critique pass. \
+             Use --no-format-discovery to suppress this warning."
+        );
+        return first_cut;
+    };
+
+    let agent_config = sim_flow::__internal::session::AgentConfig {
+        model: llm.model.map(String::from),
+        model_family_id: llm.model_family.map(String::from),
+        runtime_profile_id: llm.runtime_profile.map(String::from),
+        debug_adaptation: false,
+        base_url: llm.base_url.map(String::from),
+        ollama_base_url: None,
+        openai_base_url: None,
+        cancel_flag: None,
+    };
+    let mut agent = match sim_flow::__internal::session::build_cli_agent(llm.backend, agent_config)
+    {
+        Some(a) => a,
+        None => {
+            eprintln!(
+                "sim-flow ingest: unknown LLM backend `{}`. Available: {}. \
+                 Falling back to first-cut classifier.",
+                llm.backend,
+                sim_flow::__internal::session::KNOWN_AGENTS.join(", ")
+            );
+            return first_cut;
+        }
+    };
+
     eprintln!(
-        "sim-flow ingest: no LLM endpoint resolver configured for ingest; \
-         falling back to first-cut classifier (run with --no-format-discovery \
-         to suppress this warning)"
+        "sim-flow ingest: running LLM critique pass via backend={} model={} base_url={}",
+        llm.backend,
+        llm.model.unwrap_or("(default)"),
+        llm.base_url.unwrap_or("(default)"),
     );
-    first_cut
+
+    let first_cut_for_fallback = first_cut.clone();
+    match discover::discover(&skeleton, &first_cut, agent.as_mut(), warnings) {
+        Ok(mut refined) => {
+            refined.source_sha256 = source_sha256.to_string();
+            refined
+        }
+        Err(err) => {
+            eprintln!(
+                "sim-flow ingest: format-discovery LLM call failed ({err}); \
+                 falling back to first-cut classifier"
+            );
+            first_cut_for_fallback
+        }
+    }
 }
 
 /// Whether a primary source path is a candidate for format discovery.

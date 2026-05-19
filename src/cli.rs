@@ -647,6 +647,36 @@ pub(crate) enum Command {
         /// signal.
         #[arg(long)]
         no_format_discovery: bool,
+        /// LLM backend for the format-discovery critique pass.
+        /// Recognised values are the same as `sim-flow session` /
+        /// `sim-flow auto`: `vllm`, `openai-compat`, `ollama`,
+        /// `lmstudio`, `anthropic`, `claude`, `codex`,
+        /// `gh-copilot`. When unset, the discovery pipeline falls
+        /// back to the deterministic first-cut classifier (same as
+        /// `--no-format-discovery`) and prints a stderr hint.
+        #[arg(long, env = "SIM_FLOW_INGEST_LLM_BACKEND")]
+        llm_backend: Option<String>,
+        /// Model identifier for the format-discovery LLM. Required
+        /// for backends that take a `model` argument
+        /// (`vllm` / `openai-compat` / `ollama` / `lmstudio`).
+        #[arg(long, env = "SIM_FLOW_INGEST_LLM_MODEL")]
+        llm_model: Option<String>,
+        /// Optional explicit model-family override (e.g.
+        /// `claude-sonnet-4-6`, `qwen-3-coder`). When unset the
+        /// agent infers a family from the configured model id.
+        #[arg(long, env = "SIM_FLOW_INGEST_LLM_MODEL_FAMILY")]
+        llm_model_family: Option<String>,
+        /// Optional explicit runtime capability profile override.
+        #[arg(long, env = "SIM_FLOW_INGEST_LLM_RUNTIME_PROFILE")]
+        llm_runtime_profile: Option<String>,
+        /// Base URL for HTTP-based LLM backends. For local vLLM at
+        /// `localhost:8012` pass
+        /// `--llm-base-url http://localhost:8012/v1`. Same precedence
+        /// rules as `sim-flow session`'s `--llm-base-url` (generic
+        /// override wins over the per-backend
+        /// `--ollama-base-url` / `--openai-base-url` legacy flags).
+        #[arg(long, env = "SIM_FLOW_INGEST_LLM_BASE_URL")]
+        llm_base_url: Option<String>,
     },
     /// Discover running orchestrators that have a `--watch-socket`
     /// observer surface bound. Reads the registry directory each

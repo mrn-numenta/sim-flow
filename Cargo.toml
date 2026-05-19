@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 block-diagram = { path = "../../tools/block-diagram" }
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", features = ["derive", "env"] }
 # Used by the `tracking::diff` module to load `.obsv` stats and run
 # the framework's existing `compare_metric_samples` machinery over
 # two run-ids from experiments.db.

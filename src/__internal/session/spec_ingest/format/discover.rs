@@ -108,10 +108,10 @@ The first-cut descriptor (JSON):
 /// On success the returned descriptor's `model`, `prompt_version`,
 /// and `discovered_at` reflect the LLM call that produced it; all
 /// other fields are the first cut with adjustments applied.
-pub fn discover(
+pub fn discover<A: LlmAdapter + ?Sized>(
     skeleton: &Skeleton,
     first_cut: &FormatJson,
-    llm: &mut dyn LlmAdapter,
+    llm: &mut A,
     warnings: &mut Vec<IngestWarning>,
 ) -> Result<FormatJson> {
     let descriptor_json = serde_json::to_string_pretty(first_cut)
