@@ -13,6 +13,7 @@
 //! LLM critique, and the deterministic validation post-pass are split
 //! across later milestones.
 
+pub mod default;
 pub mod descriptor;
 pub mod skeleton;
 
