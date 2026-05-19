@@ -413,6 +413,72 @@ fn step_mode_from_u8(value: u8) -> StepMode {
 }
 
 // ---------------------------------------------------------------------
+// Convention-doc integrity guard.
+// ---------------------------------------------------------------------
+
+/// Project-relative paths of convention documents whose content
+/// MUST byte-equal the canonical template under
+/// `tools/sim-flow/templates/model-project/`. These files encode
+/// cross-flow contracts (plan-file shape, etc.) and are
+/// installed by `sim-flow new model`; agents are blocked from
+/// editing them via the read-only guard, so divergence means
+/// either a hand-edit or a template update without project
+/// regeneration.
+const CONVENTION_DOC_PATHS: &[&str] = &["docs/plan-management.md"];
+
+/// Verify every entry in [`CONVENTION_DOC_PATHS`] is present and
+/// byte-equal to its canonical template. Fails the auto loop with
+/// a structured `Err` when divergence is detected; success returns
+/// `Ok(())` and the caller proceeds.
+///
+/// Skips files the foundation tree doesn't ship (e.g. running
+/// against an older foundation checkout that pre-dates a new
+/// convention doc) so a stale template never blocks a real
+/// project.
+fn verify_convention_docs(opts: &AutoOptions) -> Result<()> {
+    let template_root = opts
+        .foundation_root
+        .join("tools/sim-flow/templates/model-project");
+    for rel in CONVENTION_DOC_PATHS {
+        let canonical = template_root.join(rel);
+        let actual = opts.project_dir.join(rel);
+        if !canonical.exists() {
+            continue;
+        }
+        if !actual.exists() {
+            return Err(crate::Error::State(format!(
+                "convention document `{rel}` is missing from the project. \
+                 This file is installed by `sim-flow new model` and must NOT \
+                 be deleted -- it encodes cross-flow contracts every plan-detail \
+                 step relies on. To repair, copy the canonical version from \
+                 `{}` back into the project.",
+                canonical.display()
+            )));
+        }
+        let canonical_bytes = std::fs::read(&canonical).map_err(|source| crate::Error::Io {
+            path: canonical.clone(),
+            source,
+        })?;
+        let actual_bytes = std::fs::read(&actual).map_err(|source| crate::Error::Io {
+            path: actual.clone(),
+            source,
+        })?;
+        if canonical_bytes != actual_bytes {
+            return Err(crate::Error::State(format!(
+                "convention document `{rel}` has been modified from its canonical \
+                 template. This file must NEVER be changed -- agents are blocked \
+                 from editing it via the read-only guard, so a divergence means \
+                 it was hand-edited or the foundation template was updated without \
+                 regenerating the project. To repair, replace the project's copy \
+                 with the canonical version from `{}`.",
+                canonical.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
 // Auto loop: walk remaining steps end-to-end.
 // ---------------------------------------------------------------------
 
@@ -426,6 +492,17 @@ where
     L: LlmAdapter + ?Sized,
 {
     let state = State::load(&opts.project_dir.join(".sim-flow"))?;
+    // Convention-doc integrity is a hard precondition for the
+    // auto loop -- plan-management.md drives every plan-detail
+    // walk's task-format expectations, and even a small drift
+    // (e.g. an agent fabricating a stub-replacement after a
+    // reset wiped the original) caused the rv12-dm0 parallel
+    // DM2cd to produce three milestones with wrong task formats.
+    // Fail fast and tell the operator how to repair rather than
+    // silently restoring -- a missing or modified convention doc
+    // means the project state is wrong and the human should
+    // know.
+    verify_convention_docs(opts)?;
     let registry = registry_for(state.flow);
     let order = registry.order_for(state.flow);
     let starting = state.current_step.clone();
@@ -4088,6 +4165,82 @@ mod tests {
             no_preamble: true,
             cancel_flag: None,
         }
+    }
+
+    fn options_with_dirs(foundation: &Path, project: &Path) -> AutoOptions {
+        let mut opts = options_with_llm("mock", None, None);
+        opts.foundation_root = foundation.to_path_buf();
+        opts.project_dir = project.to_path_buf();
+        opts
+    }
+
+    fn write_canonical_plan_management(foundation: &Path, body: &str) {
+        let dir = foundation.join("tools/sim-flow/templates/model-project/docs");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("plan-management.md"), body).unwrap();
+    }
+
+    #[test]
+    fn verify_convention_docs_passes_when_byte_equal() {
+        let foundation = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let body = "# Plan Management\n\nCanonical content.\n";
+        write_canonical_plan_management(foundation.path(), body);
+        std::fs::create_dir_all(project.path().join("docs")).unwrap();
+        std::fs::write(project.path().join("docs/plan-management.md"), body).unwrap();
+        let opts = options_with_dirs(foundation.path(), project.path());
+        verify_convention_docs(&opts).expect("byte-equal convention doc must pass");
+    }
+
+    #[test]
+    fn verify_convention_docs_errors_when_missing_in_project() {
+        let foundation = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        write_canonical_plan_management(foundation.path(), "# Plan Management\n");
+        // Project does NOT have docs/plan-management.md.
+        let opts = options_with_dirs(foundation.path(), project.path());
+        let err = verify_convention_docs(&opts).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("missing from the project"),
+            "expected 'missing' error, got: {msg}"
+        );
+        assert!(
+            msg.contains("docs/plan-management.md"),
+            "error should name the convention doc, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn verify_convention_docs_errors_when_modified() {
+        let foundation = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        write_canonical_plan_management(foundation.path(), "canonical body\n");
+        std::fs::create_dir_all(project.path().join("docs")).unwrap();
+        std::fs::write(
+            project.path().join("docs/plan-management.md"),
+            "modified body\n",
+        )
+        .unwrap();
+        let opts = options_with_dirs(foundation.path(), project.path());
+        let err = verify_convention_docs(&opts).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("modified from its canonical template"),
+            "expected 'modified' error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn verify_convention_docs_skips_when_foundation_lacks_canonical() {
+        // Older foundation checkout that doesn't ship the convention
+        // doc yet -- the verifier should silently skip rather than
+        // block the run on a missing template.
+        let foundation = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        // Note: no canonical written.
+        let opts = options_with_dirs(foundation.path(), project.path());
+        verify_convention_docs(&opts).expect("missing canonical must skip, not fail");
     }
 
     #[test]
