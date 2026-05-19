@@ -818,3 +818,294 @@ fn parse_page_line(id: &str) -> Option<(u32, u32)> {
     let line = l.trim().parse::<u32>().ok()?;
     Some((page, line))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::agent::MockAgent;
+    use crate::session::spec_ingest::format::descriptor::{
+        ChromeEntry, ChromeKind, FigureEntry, FigureKind, FigureTarget, FontWeight, GlossaryEntry,
+        GlossarySource, Layer, SectionRoleEntry, SpecMdRole, TableEntry, TableKind, TableTarget,
+        ValidationBlock, WrapStrategy,
+    };
+    use crate::session::spec_ingest::format::skeleton::{DocumentSummary, Skeleton};
+    use chrono::TimeZone;
+
+    /// Minimal skeleton for prompts. The discovery code only reads
+    /// it via `Skeleton::render`, so the contents only have to be
+    /// renderable (i.e. valid `Skeleton` shape).
+    fn empty_skeleton() -> Skeleton {
+        Skeleton {
+            document: DocumentSummary {
+                total_pages: 1,
+                font_clusters: Vec::new(),
+                source_kind: "pdf".to_string(),
+            },
+            headings: Vec::new(),
+            tables: Vec::new(),
+            figures: Vec::new(),
+            acronym_candidates: Vec::new(),
+            chrome_repeated_lines: Vec::new(),
+        }
+    }
+
+    /// First-cut descriptor with one entry of each kind so every
+    /// adjustment path has a target to land on.
+    fn sample_first_cut() -> FormatJson {
+        FormatJson {
+            schema_version: 1,
+            model: "first-cut-builtin".to_string(),
+            prompt_version: "first-cut-v1".to_string(),
+            source_sha256: "abc123".to_string(),
+            discovered_at: Utc.timestamp_opt(0, 0).single().unwrap(),
+            section_roles: vec![SectionRoleEntry {
+                heading: "Instruction Fetch (IF)".to_string(),
+                page: 11,
+                line: 700,
+                font_size: 14.7,
+                font_weight: FontWeight::Bold,
+                level: 2,
+                spec_md_role: SpecMdRole::Unknown,
+                layer: Layer::Unknown,
+                rationale: "first-cut heuristic: no pattern matched".to_string(),
+            }],
+            tables: vec![TableEntry {
+                id: "T01".to_string(),
+                page: 12,
+                first_line: 500,
+                row_count: 9,
+                col_count: 4,
+                kind: TableKind::Unknown,
+                spec_md_target: TableTarget::Unknown,
+                column_map: Vec::new(),
+                wrap_strategy: WrapStrategy::SingleRow,
+                rationale: "first-cut heuristic: no pattern matched".to_string(),
+            }],
+            figures: vec![FigureEntry {
+                id: "F01".to_string(),
+                page: 13,
+                kind: FigureKind::Generic,
+                rasterized_to: "figures/page-013.png".to_string(),
+                spec_md_target: FigureTarget::Generic,
+                referenced_acronyms: Vec::new(),
+                rationale: "first-cut heuristic: no neighbour".to_string(),
+            }],
+            glossary: vec![GlossaryEntry {
+                acronym: "IF".to_string(),
+                expansion: "Instruction Fetch".to_string(),
+                first_page: 11,
+                scope: "spec".to_string(),
+                used_in_blocks: Vec::new(),
+                source: GlossarySource::ParenthesisedFirstMention,
+            }],
+            chrome: vec![ChromeEntry {
+                regex: "^page\\ \\d+$".to_string(),
+                kind: ChromeKind::RunningHeader,
+                y_band_pt: None,
+                match_count: 0,
+            }],
+            validation: ValidationBlock::default(),
+        }
+    }
+
+    /// `discover` applies a known-good patch and stamps fresh
+    /// metadata.
+    #[test]
+    fn applies_patch_and_updates_metadata() {
+        let first_cut = sample_first_cut();
+        let skel = empty_skeleton();
+
+        // Patch: refine the section_role to Block, refine the
+        // table to SignalTable, and rename the chrome regex.
+        let patch = r#"<patch>[
+            {
+              "target": { "kind": "section_role", "id": "11:700" },
+              "field": "spec_md_role",
+              "old_value": { "kind": "unknown" },
+              "new_value": { "kind": "block", "block_name": "Instruction Fetch (IF)" },
+              "rationale": "matches (<ACR>) pattern"
+            },
+            {
+              "target": { "kind": "table", "id": "T01" },
+              "field": "kind",
+              "old_value": "unknown",
+              "new_value": "signal_table",
+              "rationale": "Signal/Direction/To-From/Description headers"
+            }
+        ]</patch>"#;
+
+        let agent = MockAgent::new();
+        agent.enqueue(patch);
+        let mut llm: Box<dyn LlmAdapter> = Box::new(agent);
+        let mut warnings: Vec<IngestWarning> = Vec::new();
+        let refined = discover(&skel, &first_cut, llm.as_mut(), &mut warnings).expect("discover");
+
+        assert_eq!(refined.model, "mock");
+        assert_eq!(refined.prompt_version, "critique-v1");
+        assert!(refined.discovered_at > first_cut.discovered_at);
+
+        assert_eq!(
+            refined.section_roles[0].spec_md_role,
+            SpecMdRole::Block {
+                block_name: "Instruction Fetch (IF)".to_string()
+            }
+        );
+        assert!(refined.section_roles[0].rationale.contains("LLM:"));
+        assert_eq!(refined.tables[0].kind, TableKind::SignalTable);
+        // The patch only touched section_role + table; figure /
+        // glossary / chrome are untouched.
+        assert_eq!(refined.figures[0].kind, FigureKind::Generic);
+        assert_eq!(refined.glossary[0].expansion, "Instruction Fetch");
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+    }
+
+    /// Two malformed responses → retry fires once, both warnings
+    /// land, returned descriptor equals first-cut (modulo
+    /// metadata).
+    #[test]
+    fn malformed_twice_retries_then_falls_back() {
+        let first_cut = sample_first_cut();
+        let skel = empty_skeleton();
+
+        let agent = MockAgent::new();
+        agent.enqueue("sorry, can't help with that"); // no <patch>
+        agent.enqueue("still no patch tags here"); // retry also fails
+        let mut llm: Box<dyn LlmAdapter> = Box::new(agent);
+        let mut warnings: Vec<IngestWarning> = Vec::new();
+        let refined = discover(&skel, &first_cut, llm.as_mut(), &mut warnings).expect("discover");
+
+        // Both warnings present.
+        assert!(
+            warnings.iter().any(|w| w.code == "discover_retry"),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.code == "discover_failed"),
+            "{warnings:?}"
+        );
+
+        // Descriptor body equals first_cut; only metadata is stamped.
+        assert_eq!(refined.section_roles, first_cut.section_roles);
+        assert_eq!(refined.tables, first_cut.tables);
+        assert_eq!(refined.figures, first_cut.figures);
+        assert_eq!(refined.glossary, first_cut.glossary);
+        assert_eq!(refined.chrome, first_cut.chrome);
+        // Metadata WAS stamped (model = "mock", prompt_version =
+        // "critique-v1", discovered_at advanced past epoch zero).
+        assert_eq!(refined.model, "mock");
+        assert_eq!(refined.prompt_version, "critique-v1");
+        assert!(refined.discovered_at > first_cut.discovered_at);
+    }
+
+    /// Adjustments targeting immutable fields are rejected; the
+    /// field is unchanged and an immutable-field warning lands.
+    #[test]
+    fn rejects_immutable_fields() {
+        let first_cut = sample_first_cut();
+        let skel = empty_skeleton();
+
+        // Try to change table page (immutable pdf_oxide fact).
+        let patch = r#"<patch>[
+            {
+              "target": { "kind": "table", "id": "T01" },
+              "field": "page",
+              "old_value": 12,
+              "new_value": 99,
+              "rationale": "I don't like 12"
+            }
+        ]</patch>"#;
+
+        let agent = MockAgent::new();
+        agent.enqueue(patch);
+        let mut llm: Box<dyn LlmAdapter> = Box::new(agent);
+        let mut warnings: Vec<IngestWarning> = Vec::new();
+        let refined = discover(&skel, &first_cut, llm.as_mut(), &mut warnings).expect("discover");
+
+        // The table's page is unchanged.
+        assert_eq!(refined.tables[0].page, first_cut.tables[0].page);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.code == "discover_immutable_field"),
+            "{warnings:?}"
+        );
+    }
+
+    /// `old_value` drift: the LLM thinks the current value is X
+    /// but the descriptor says Y. The adjustment is skipped and a
+    /// drift warning lands.
+    #[test]
+    fn detects_old_value_drift() {
+        let first_cut = sample_first_cut();
+        let skel = empty_skeleton();
+
+        // Claim the table's kind is currently "csr_table" (it's
+        // actually "unknown"); the adjustment must be skipped.
+        let patch = r#"<patch>[
+            {
+              "target": { "kind": "table", "id": "T01" },
+              "field": "kind",
+              "old_value": "csr_table",
+              "new_value": "signal_table",
+              "rationale": "my mistake"
+            }
+        ]</patch>"#;
+
+        let agent = MockAgent::new();
+        agent.enqueue(patch);
+        let mut llm: Box<dyn LlmAdapter> = Box::new(agent);
+        let mut warnings: Vec<IngestWarning> = Vec::new();
+        let refined = discover(&skel, &first_cut, llm.as_mut(), &mut warnings).expect("discover");
+
+        assert_eq!(refined.tables[0].kind, TableKind::Unknown);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.code == "discover_old_value_drift"),
+            "{warnings:?}"
+        );
+    }
+
+    /// Empty patch: descriptor body equals first-cut; metadata
+    /// alone is updated.
+    #[test]
+    fn empty_patch_only_updates_metadata() {
+        let first_cut = sample_first_cut();
+        let skel = empty_skeleton();
+
+        let agent = MockAgent::new();
+        agent.enqueue("<patch>[]</patch>");
+        let mut llm: Box<dyn LlmAdapter> = Box::new(agent);
+        let mut warnings: Vec<IngestWarning> = Vec::new();
+        let refined = discover(&skel, &first_cut, llm.as_mut(), &mut warnings).expect("discover");
+
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+        // Body unchanged.
+        assert_eq!(refined.section_roles, first_cut.section_roles);
+        assert_eq!(refined.tables, first_cut.tables);
+        assert_eq!(refined.figures, first_cut.figures);
+        assert_eq!(refined.glossary, first_cut.glossary);
+        assert_eq!(refined.chrome, first_cut.chrome);
+        // Metadata updated.
+        assert_eq!(refined.model, "mock");
+        assert_eq!(refined.prompt_version, "critique-v1");
+        assert!(refined.discovered_at > first_cut.discovered_at);
+    }
+
+    /// Patch extraction also handles fenced JSON when the model
+    /// forgets the `<patch>` tags but does wrap in ```json.
+    #[test]
+    fn extracts_fenced_json_array() {
+        let first_cut = sample_first_cut();
+        let skel = empty_skeleton();
+
+        let response = "```json\n[]\n```";
+        let agent = MockAgent::new();
+        agent.enqueue(response);
+        let mut llm: Box<dyn LlmAdapter> = Box::new(agent);
+        let mut warnings: Vec<IngestWarning> = Vec::new();
+        let refined = discover(&skel, &first_cut, llm.as_mut(), &mut warnings).expect("discover");
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+        assert_eq!(refined.tables, first_cut.tables);
+    }
+}
