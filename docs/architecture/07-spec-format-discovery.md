@@ -5,7 +5,8 @@ into a **semantic map** — `format.json` — driving downstream
 chunking, table classification, and DM0 auto-populate. It
 replaces the regex-anchored heuristic table extractors from
 Chapter 1 §1.5 with a layout-aware pipeline built on
-`pdf_oxide` and a small LLM classification call.
+`pdf_oxide`, a deterministic Rust first-cut classifier, and a
+small LLM critique pass that refines the first cut.
 
 ## 7.1 Purpose
 
@@ -30,8 +31,11 @@ problems with that approach:
 
 This chapter formalises the alternative: pdf_oxide handles
 heading detection (font-size clustering) and table detection
-(spatial projection) deterministically; an LLM classification
-pass labels each detected element with its spec_md role; the
+(spatial projection) deterministically; a Rust first-cut
+classifier labels each detected element with a provisional
+spec_md role using heuristics over column-header keywords +
+heading patterns; an LLM critique pass refines the first cut
+where heuristics returned `unknown` or got it wrong; the
 result is `format.json`, a content-addressed descriptor that
 the rest of the pipeline consumes.
 
@@ -67,11 +71,15 @@ emit           →  per-section chunks (Markdown for retrieval),
 ```
 
 The new `format` stage runs once per (source-SHA, model,
-prompt-version). On cache hit the file is reused unchanged. On
-cache miss the pipeline emits a single LLM request whose input
-is a **structural skeleton** of the document (heading list,
+prompt-version). Internally it runs in four phases (§7.4):
+pdf_oxide detection, Rust first-cut classifier, LLM critique,
+and a deterministic validation post-pass. On cache hit the
+file is reused unchanged. On cache miss the LLM critique pass
+emits a single request whose primary input is the first-cut
+descriptor draft, with a compact **structural skeleton** of
+the document supplied alongside for context (heading list,
 table-header strings, image references, glossary candidates) —
-not raw page samples. See §7.6 for the skeleton's shape.
+never raw page samples. See §7.6 for the skeleton's shape.
 
 ## 7.3 `format.json` schema
 
@@ -150,8 +158,9 @@ sections (Chapter 2):
 - `numerical_conventions`
 - `performance_counters`
 - `prose` — generic narrative not pinned to a typed section
-- `unknown` — the LLM declined to commit; classify.rs may
-  re-evaluate at chunk time
+- `unknown` — neither the first-cut classifier nor the LLM
+  critique committed to a role; DM0 surfaces this via
+  `ask_user` (§7.4 item 4)
 
 `layer` ∈ `{ "architectural", "micro", "mixed", "unknown" }`.
 Architectural sections describe software-visible behavior
@@ -165,8 +174,11 @@ implementation prose.
 
 One entry per detected table. The detection itself is
 deterministic from `pdf_oxide::PdfDocument::extract_tables(page)`;
-the LLM only assigns the kind, the spec_md target, and the
-column map.
+the first-cut classifier assigns `kind`, `spec_md_target`,
+`column_map`, and `wrap_strategy` from column-header
+heuristics where they fire; the LLM critique pass refines or
+overrides entries where the first cut returned `unknown` or
+got the classification wrong.
 
 ```json
 {
@@ -207,8 +219,8 @@ Recognised `kind` values:
 - `latency_table`
 - `connectivity_table`
 - `pmu_event_table`
-- `unknown` — LLM declined; falls through to ask_user at DM0
-  time
+- `unknown` — neither first-cut nor LLM critique committed;
+  falls through to ask_user at DM0 time
 
 `wrap_strategy` ∈
 `{ "single_row", "merge_continuation_rows", "join_on_blank_first_col" }`
@@ -283,18 +295,21 @@ section and the chunk tags (a chunk that mentions `IF` carries
 ```
 
 Chrome detection is hybrid: positional (running headers always
-live in a Y-band near the page top or bottom) and textual
-(repeated lines). The LLM emits regexes for repeated lines that
-don't fall in a stable Y-band; the deterministic chrome-strip
-stage applies both filters.
+live in a Y-band near the page top or bottom, derived from
+pdf_oxide span bboxes) and textual (repeated lines collected
+by the existing chrome-strip stage and refined by the first-cut
+classifier). The LLM critique pass adds or corrects regexes for
+repeated lines that the first cut missed; the deterministic
+chrome-strip stage applies both positional and regex filters.
 
 `kind` values: `running_header`, `running_footer`, `page_number`,
 `footer_link`, `watermark`.
 
 ### 7.3.7 `validation`
 
-Filled by the deterministic post-pass that runs every classified
-regex / column-map against the full document.
+Filled by the deterministic post-pass that runs every
+classification (column-map projection, chrome regex match,
+section-role uniqueness) against the full document.
 
 ```json
 {
@@ -396,9 +411,13 @@ sim-flow ingest --no-format-discovery <source>
   descriptor.
 - `--format <path>`: use a hand-authored descriptor; skip
   discovery entirely. Escape hatch for testing + offline cases.
-- `--no-format-discovery`: skip the LLM entirely; use a
-  built-in default descriptor (Markdown-friendly: numbered
-  headings, pipe tables, no chrome). CI runs default here.
+- `--no-format-discovery`: skip the LLM critique pass and
+  ship the first-cut descriptor as-is. The pipeline still
+  runs pdf_oxide detection and the Rust first-cut classifier
+  — they're deterministic and don't depend on an LLM
+  endpoint. Useful for CI, offline development, and specs
+  whose first cut already matches the heuristic library
+  cleanly.
 
 The format-discovery LLM model is configurable via
 `.sim-flow/config.toml`'s existing LLM-config block; default is
@@ -490,18 +509,23 @@ detected_chrome_repeated_lines: ["RV12 RISC-V 32/64-bit ...",
 
 For RV12 (95 pages, 205 sections after detection) the skeleton
 is ~5k tokens. For DDR5-scale 600+ page specs perhaps 20-30k.
-Both fit a single LLM call with room for system prompt + schema.
+Both fit a single LLM call with room for system prompt + the
+first-cut descriptor + the adjustments-patch schema.
 
-The LLM's task is then mechanical: assign `spec_md_role` to each
-heading, `kind` + `column_map` to each table, `kind` to each
-figure, and confirm/expand the acronym candidates. The prompt
-constrains output to the §7.3 schema; the deterministic
-post-pass validates the output before writing `format.json`.
+The LLM's task is **critique**, not classification: for each
+first-cut entry, either accept it (no patch entry) or override
+the tag with rationale. The model may also resolve entries the
+first cut marked `unknown` and flag inconsistencies (two
+sections both claiming the same `csrs` role, etc.). The output
+is an adjustments patch the post-pass applies to the first cut
+to produce the final descriptor. The prompt constrains the
+patch to the §7.3 schema; the deterministic post-pass validates
+the merged descriptor before writing `format.json`.
 
 ## 7.7 spec_md extensions
 
 The information categories driving cycle-accurate model
-authoring (see brainstorm §12) require these additions to spec_md
+authoring (see brainstorm §8) require these additions to spec_md
 (see Chapter 2):
 
 - **`csrs`** — `Csr { address, name, access, reset_value,
@@ -596,8 +620,10 @@ document and surfaces:
   rows don't parse against the column_map → warning; falls
   back to `kind: "unknown"` and surfaces via ask_user at DM0.
 - **Heading role collisions**: two sections both classified
-  as `csrs` when there should be one → warning; the LLM is
-  re-prompted with the conflict on `--rediscover-format`.
+  as `csrs` when there should be one → warning; the
+  descriptor is flagged for hand-edit or
+  `--rediscover-format` (which re-prompts the LLM with the
+  conflict surfaced in the first-cut input).
 - **Unresolved acronyms**: an acronym appears in a chunk but
   is not in glossary → warning; surfaces via ask_user.
 - **Chrome regex over-match**: a regex matches more than 80%

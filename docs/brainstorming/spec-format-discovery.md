@@ -1,416 +1,335 @@
-# Spec Format Discovery (LLM Pre-Pass) — Brainstorm
+# Spec Format Discovery — Brainstorm
 
-**Status:** brainstorm. Explores how sim-flow's spec-ingest pipeline
-should learn the structure of an arbitrary spec PDF instead of
-relying on hand-rolled regex heuristics. No architecture or
-implementation plan in this doc — those land separately once we
-settle on a direction.
-**Date:** 2026-05-18.
-**Settled redirects (2026-05-18):** Shape A (extractors consume the
-descriptor directly, §4). `format.json` committed for reproducibility
-(§6). Model is flexible (Sonnet-4-6 or local Qwen3, §9). Inputs to
-the LLM are a **structural skeleton of the entire document**, not
-sampled pages (§5).
+**Status:** brainstorm. Captures the design thinking behind
+sim-flow's per-spec format descriptor and the two-pass
+classifier. The architecture contract lives in Chapter 7
+([07-spec-format-discovery.md](../architecture/07-spec-format-discovery.md));
+the implementation plan in
+[09-phase-format-discovery.md](../plan/09-phase-format-discovery.md).
+**Date:** 2026-05-18; revised 2026-05-19.
 **Related:** [spec-ingest-figure-extraction.md](spec-ingest-figure-extraction.md),
-[spec-md-restructure.md](spec-md-restructure.md), [lancedb-rig-incorporation-plan.md](lancedb-rig-incorporation-plan.md),
+[spec-md-restructure.md](spec-md-restructure.md),
+[lancedb-rig-incorporation-plan.md](lancedb-rig-incorporation-plan.md),
 the four-spec evaluation thread from the pdf_oxide swap.
 
 ## 1. Why this matters
 
-The pdf_oxide swap (commit `d611b7f`) replaced pdfium's flat text
-dump with layout-aware extraction. Heading detection now anchors
-on font-size clustering instead of regex pattern-matching against
-numeric prefixes. On RV12 the quality jumped from 135 chunks /
-112 stubs (83% noise) to 205 chunks / 20 stubs (10% noise).
-Headings are real document headings, not fragments of table rows.
+The pdf_oxide swap (commit `d611b7f`) replaced pdfium's flat
+text dump with a Rust-native PDF backend that exposes:
 
-The immediate post-swap ingest also reported 0 signal tables / 0
-parameter tables / 0 error tables on RV12. That was alarming
-until we realised it was self-inflicted: the legacy
-`extract_signal_tables_pdf_text` and friends in `classify.rs`
-were still running against `pdf_oxide`'s `to_markdown()` output,
-which breaks column-major tables into separate H3 micro-sections
-(one per column — `Signal`, `Direction`, `To/From`,
-`Description`). The anchor regexes
-(`^Signal\s+Direction\s+...\s+Description$`) match nothing, so
-the extractors produced empty results.
+- `extract_spans(page)` / `extract_text_lines(page)` /
+  `extract_words(page)` — per-span text + bbox + font_size +
+  font_weight + is_italic + color.
+- `extract_tables(page)` — spatial-projection table detector
+  returning `Vec<Table>` with rows, columns, cells, bboxes,
+  header detection, and span metadata.
+- `extract_paths(page)` / `extract_images(page)` — vector ops
+  and embedded raster images.
+- `render_page(doc, page, opts)` — tiny-skia page rasteriser.
 
-What we actually have — confirmed by probing pdf_oxide's full
-Rust surface — is rich. `pdf_oxide::PdfDocument` exposes
-`extract_tables(page)`, which runs a spatial-projection table
-detector that returns `Vec<Table>` with rows, columns, cells,
-bboxes, header detection, and span metadata. On RV12 it
-recovers the privilege table (5×4, clean), per-stage signal
-tables (clean 4-column data), and on Apical NoC the parameter
-table (29×3 with wrapped comment cells). The extractor sees
-PDF layout primitives, not text patterns, so column-header
-phrasing doesn't matter.
+On RV12 the chunk quality jumped from 135 chunks / 112 stubs
+(83% noise) to 205 chunks / 20 stubs (10% noise) at the same
+DPI just from font-cluster-driven heading detection.
+`extract_tables` recovers the privilege table (5×4, clean),
+per-stage signal tables, and Apical NoC's 29×3 parameter
+table with wrapped comments — without any header-line regex.
 
-So the problem isn't "we lost tables." The problem is the larger
-one we were already heading toward: each spec uses different
-column wordings, different section conventions, and different
-chrome patterns, and we don't want to hand-roll Rust heuristics
-to recognise every variation. pdf_oxide handles **detection**
-deterministically; **classification** (is this a signal table, a
-CSR table, a memory map?) needs something adaptable per spec.
+So detection is solved deterministically. What's left is
+**classification**: is this detected table a signal table, a
+CSR table, a memory map, an FSM transition table? Is this
+section heading the Instruction Fetch block, the glossary, the
+memory-map section, or generic prose? Each spec phrases column
+headers and section names differently (`Signal Direction
+To/From Description` vs `Port Size Direction Description`;
+`Memory Map` vs `Address Map` vs `System Address Space`), and
+we don't want to hand-roll Rust heuristics to recognise every
+variation.
 
-The right shape: a deterministic first-cut classifier in Rust
-gets the easy cases, then an LLM critiques the first cut and
-fixes the ambiguous ones, emitting a per-spec **format
-descriptor** that names section roles, table kinds + column maps,
-figure kinds, glossary entries, and chrome regexes. The
-descriptor is cached on disk and reused unchanged across runs.
-We pay one LLM call per new spec; subsequent ingests reuse the
-descriptor.
+The shape: deterministic detection (pdf_oxide) + deterministic
+first-cut classification (Rust heuristics covering the easy
+cases) + an LLM critique pass that fixes ambiguous /
+heuristic-missed cases, emitting a per-spec **format
+descriptor**. The descriptor is cached on disk and reused
+unchanged across runs.
 
 ## 2. The core idea
 
-Insert a new stage between `loading` and `parse`:
+The pipeline gains a `format` stage between `loading` and
+`parse`. Internally everything operates on **structured
+per-page data** (spans, tables, paths, images) — no markdown
+intermediate, no `<!-- page=N -->` marker hack. Markdown is
+the OUTPUT shape for chunks emitted to disk; it is not the
+internal representation.
 
 ```text
-load_pdf → pdf_oxide text + per-page Markdown
-   ↓
-[NEW] discover_format → format.json (LLM, cached)
-   ↓
-parse → SectionTree (uses format.json)
-   ↓
-classify → tables (uses format.json)
-   ↓
-emit → chunks / tables / figures
+loading        → per-page { spans, tables, paths, images }
+                 via pdf_oxide structured API
+
+format         → format.json
+                   1. pdf_oxide detection (always)
+                   2. Rust first-cut classifier (always)
+                   3. LLM critique pass (one call per spec,
+                      cached)
+                   4. deterministic validation post-pass
+
+parse          → SectionTree from font-clustered spans;
+                 sections tagged with format.json roles;
+                 page_range native from per-page API
+
+classify       → typed tables (TOML) for each format.json
+                 table entry, projecting pdf_oxide cells
+                 through the descriptor's column_map
+
+chrome-strip   → bbox Y-banding + format.json chrome regexes
+
+emit           → per-section chunks (Markdown rendering for
+                 retrieval) + typed tables (TOML) + figure
+                 rasters (PNG) + manifest.toml
 ```
 
 `format.json` lives at
-`.sim-flow/spec-ingest/format.json` alongside the existing
-`manifest.toml`. It is generated by `sim-flow ingest
---discover-format` (or implicitly on first ingest), then **reused
-unchanged** until either the source PDF SHA changes or the user
-runs `sim-flow ingest --rediscover-format`.
+`<project>/.sim-flow/spec-ingest/format.json` alongside
+`manifest.toml`. Generated on first ingest, reused on
+subsequent runs unless the source PDF SHA or the LLM model /
+prompt version changes, OR the user runs `--rediscover-format`.
 
-Inside the LLM call we hand over ~5-10 representative pages
-(first N + middle samples + a table-rich sample) plus the
-chrome-strip stage's discovered repeated lines. We ask for a
-JSON descriptor matching a strict schema. We validate the
-descriptor before storing it (every regex compiles; every
-pattern matches at least one line in the full document; flag a
-warning if any pattern matches everything).
+## 3. The two-pass classifier
 
-## 3. Descriptor schema (proposed)
+The descriptor pipeline has four sources of truth, in order:
+
+1. **pdf_oxide detection.** Deterministic. Tables come from
+   `extract_tables(page)`; headings from font-clustering
+   spans; figures from `extract_images` + `extract_paths`;
+   span bboxes for chrome-band detection. No LLM, no user.
+   Always runs.
+
+2. **First-cut classifier (Rust heuristics).** Deterministic.
+   Assigns provisional `spec_md_role`, `kind`, `column_map`,
+   `layer`, etc. by matching against known patterns:
+   - **Column-header keyword sets** — `{"Signal", "Direction",
+     ("To/From"|"From/To"), "Description"}` (≥ 3-of-4 match) →
+     `signal_table`; `{"Parameter", "Type", "Default",
+     "Description"}` → `parameter_table`; `{"Bit"|"Bits"|"Field",
+     "Name", "Description"}` → `csr_field_table`; etc.
+   - **Section-heading patterns** — `"Glossary"` → `glossary`;
+     `"Memory Map" | "Address Map"` → `memory_map`;
+     `<Name> (<ACR>)` → `block:<Name>`;
+     `"Configurations" | "Parameters"` → `parameters`; etc.
+   - **Parenthesised first-mention regex** for glossary
+     candidates.
+   - **Repeated-line + Y-band** for chrome candidates.
+   - Heuristics that don't match anything mark the entry
+     `kind: "unknown"`.
+   Always runs. Unit-tested in isolation. Cheap, predictable.
+
+3. **LLM critique pass.** One call per spec. The model sees
+   the first-cut descriptor draft + a structural skeleton of
+   the document (headings list, table-header strings, image
+   references, glossary candidates — built from pdf_oxide
+   output). The model's job is to **critique and refine**,
+   not classify from scratch:
+   - Confirm correct first-cut tags (the cheap case).
+   - Override incorrect tags (with rationale).
+   - Resolve `kind: "unknown"` entries when context allows.
+   - Flag inconsistencies (two sections claiming the same
+     `csrs` role; column maps that don't align with the
+     table's actual content; etc.).
+   The model emits an **adjustments patch** — per-entry
+   `{ id, field, old_value, new_value, rationale }` — not a
+   full descriptor. Token cost scales with the number of
+   ambiguous cases, not the document size.
+
+4. **`ask_user` at DM0 time.** Anything that survives both
+   passes still marked `unknown` becomes a focused question
+   DM0 surfaces via the `ask_user` tool. The descriptor
+   records the location so the question is concrete
+   ("table at page 73 — is this an interrupt table or a
+   memory-fault table?"), not free-form.
+
+This shape has three practical wins:
+
+1. The first-cut classifier is plain Rust, unit-tested
+   against fixture column-header strings + section names.
+   It gives the same answer every time for the easy cases.
+2. The LLM's task is bounded: confirm or correct. A smaller
+   model can do critique reliably even when it might miss
+   patterns at full-doc classification.
+3. The first-cut classifier evolves over time. When the LLM
+   keeps correcting the same heuristic miss across specs,
+   we promote the correction to a first-cut rule. The LLM's
+   work shrinks as the heuristic library grows.
+
+## 4. The structural skeleton (LLM context)
+
+The LLM never sees raw page text. Its inputs are:
+
+- The **first-cut descriptor draft** (its primary subject).
+- A compact **structural skeleton** of the document, built
+  deterministically from pdf_oxide output:
+
+  ```text
+  # DOCUMENT
+  total_pages: 95
+  font_clusters: [{size: 34.7, freq: 12}, {size: 26.7, freq: 18},
+                  {size: 14.7, freq: 8412}, {size: 12.0, freq: 1843}]
+  source_kind: pdf
+  detected_chrome_repeated_lines: ["RV12 RISC-V 32/64-bit ...",
+                                   "https://roalogic.github.io/..."]
+
+  # HEADINGS (font-clustered)
+  [L1] p11  cluster=1  bold  "Execution Pipeline"
+  [L2] p11  cluster=2  bold  "Instruction Fetch (IF)"
+  [L2] p15  cluster=2  bold  "Instruction Pre-Decode (PD)"
+  [L1] p25  cluster=1  bold  "Configurations"
+  ...
+
+  # TABLES (from extract_tables)
+  [T01] p4   5x4   header_row="Level | Encoding | Name | Abbreviation"
+                   first_data_row="0 | 00 | User/Application | U"
+  [T02] p12  7x4   header_row="Signal | Direction | To/From | Description"
+                   first_data_row="if_nxt_pc | to | Bus Interface | Next address ..."
+  ...
+
+  # FIGURES (from extract_images + extract_paths)
+  [F01] p2   raster=figures/page-002.png  neighbouring_heading="Introduction"
+  [F02] p13  raster=figures/page-013.png  neighbouring_heading="Instruction Fetch (IF)"
+  ...
+
+  # ACRONYM CANDIDATES (parenthesised first-mentions)
+  "Instruction Fetch (IF)"          first@p11  used 47×
+  "Control and Status Register (CSR)" first@p43  used 156×
+  ...
+  ```
+
+The skeleton is **not** prose. Body paragraphs are dropped —
+they don't add structural signal and crowd the context window.
+Every line carries enough info for the model to confirm or
+override the first cut's tag for that element.
+
+For RV12 (95 pages, ~205 sections post-detection) the skeleton
+is ~5k tokens. For a 600-page DDR5 spec, ~20-30k. Both fit a
+single LLM call with room for the descriptor schema and a
+system prompt.
+
+## 5. Descriptor schema (high level)
+
+The formal schema is in Chapter 7 §7.3. Sketch:
 
 ```json
 {
-  "format_version": 1,
+  "schema_version": 1,
   "model": "claude-sonnet-4-6",
-  "source_sha256": "<the pdf's sha>",
-  "discovered_at": "2026-05-18T22:00:00Z",
-  "headings": [
+  "prompt_version": "2026-05-19",
+  "source_sha256": "<hex>",
+  "discovered_at": "<RFC3339>",
+
+  "section_roles": [
     {
-      "kind": "numbered",
-      "regex": "^\\s*(\\d+(?:\\.\\d+){1,5})\\s+(\\S.+?)\\s*$",
-      "level_from_dot_count": true
-    },
-    {
-      "kind": "plain_title",
-      "regex": "^[A-Z][A-Za-z\\- ]+\\([A-Z]{2,5}\\)$",
+      "heading": "Instruction Fetch (IF)",
+      "page": 11, "line": 5,
+      "font_size": 14.7, "font_weight": "bold",
       "level": 2,
-      "rationale": "pipeline-stage subsection labels (e.g. `Instruction Fetch (IF)`)"
+      "spec_md_role": { "kind": "block",
+                        "block_name": "Instruction Fetch (IF)" },
+      "layer": "micro",
+      "rationale": "pipeline-stage acronym pattern;
+                    under 'Execution Pipeline' parent"
     },
-    {
-      "kind": "plain_title",
-      "regex": "^[A-Z][A-Za-z &\\-]{2,40}$",
-      "level": 2,
-      "rejects": ["matches_column_header"]
-    }
+    ...
   ],
+
   "tables": [
     {
-      "kind": "signal",
-      "header_regex": "^Signal\\s+(?:Direction|Dir)\\s+(?:To/From|From/To)\\s+Description$",
-      "row_regex": "^([a-z_][a-z0-9_]*)\\s+(in|out|to|from)\\b(.*)$",
-      "row_columns": ["name", "direction", "peer_and_description"],
-      "locations": [
-        {"page": 12, "first_line": 17, "stage_label_hint": "Instruction Fetch (IF)"},
-        {"page": 15, "first_line": 20, "stage_label_hint": "Pre-Decode (PD)"}
-      ]
+      "id": "tbl_023",
+      "page": 12, "first_line": 17,
+      "row_count": 9, "col_count": 4,
+      "kind": "signal_table",
+      "spec_md_target": { "kind": "block_signals",
+                          "block_name": "Instruction Fetch (IF)" },
+      "column_map": [
+        { "source": "Signal",      "canonical": "name" },
+        { "source": "Direction",   "canonical": "direction" },
+        { "source": "To/From",     "canonical": "peer" },
+        { "source": "Description", "canonical": "description" }
+      ],
+      "wrap_strategy": "merge_continuation_rows",
+      "rationale": "column headers match signal-table convention;
+                    sits under IF block section"
     },
-    {
-      "kind": "parameter",
-      "header_regex": "^Parameter(?:\\s+Name)?\\s+Type\\s+Default\\s+Description$",
-      "row_regex": "^([A-Z_][A-Z0-9_]*)\\s+(\\S+)\\s+(\\S+)\\s+(.+)$",
-      "row_columns": ["name", "type", "default", "description"],
-      "locations": [{"page": 25, "first_line": 12}]
-    },
-    {
-      "kind": "encoding",
-      "header_regex": "^(?:Value|Code|Level)\\s+(?:Name|Encoding)\\s+(?:Description|Abbreviation)$",
-      "row_regex": "^([0-9A-Fx]+|\\d+)\\s+(\\S.+?)\\s{2,}(.+)$",
-      "locations": [{"page": 5, "first_line": 40}]
-    },
-    {
-      "kind": "error",
-      "header_regex": "^(?:Interrupt\\s+)?Exception\\s+Code\\s+Description$",
-      "row_regex": "^(\\d+)\\s+(.+)$",
-      "locations": [{"page": 73, "first_line": 8}]
-    }
+    ...
   ],
-  "chrome": [
-    {
-      "regex": "^RV12 RISC-V.*\\d+/\\d+/\\d+.*$",
-      "kind": "running_header"
-    },
-    {
-      "regex": "^https?://roalogic\\.github\\.io.*$",
-      "kind": "footer_link"
-    },
-    {
-      "regex": "^Page \\d+ of \\d+$",
-      "kind": "page_number"
-    }
-  ],
-  "section_conventions": {
-    "uses_plain_text_top_level": true,
-    "max_heading_word_count": 8,
-    "tables_appear_after_prose": true
-  },
+
+  "figures": [...],
+  "glossary": [...],
+  "chrome": [...],
   "validation": {
-    "headings_matched": 184,
-    "tables_matched": {"signal": 6, "parameter": 12, "encoding": 8, "error": 2},
+    "section_roles_assigned": 184,
+    "tables_classified": {"signal_table": 6, "csr_table": 31, ...},
+    "tables_unknown": 0,
+    "glossary_entries": 23,
     "chrome_lines_stripped": 312,
     "warnings": []
   }
 }
 ```
 
-The `validation` block is filled in by the deterministic
-post-pass that runs every regex against the full document and
-counts hits. Zero-hit patterns surface as warnings; the user can
-re-run with `--rediscover-format` or hand-edit.
+Key shape decisions:
 
-## 4. Pipeline integration
-
-Two integration shapes. Both are reasonable; we will pick one.
-
-**Shape A: parse-time consumer.** `parse.rs` reads `format.json`,
-walks every line, applies the heading patterns in priority order
-(numbered first, then plain_title, then prose). `classify.rs`
-reads `format.json` and uses the table signatures' `header_regex`
-+ `row_regex` to extract structured rows from each section body.
-No knowledge of pdf_oxide leaks into either; the descriptor is
-the only spec-specific input.
-
-**Shape B: rewrite-time consumer.** A new stage between `load_pdf`
-and `parse` rewrites the per-page Markdown using the format
-descriptor — re-joins column-split tables into pipe tables, drops
-chrome lines, normalizes heading levels. Then `parse.rs` operates
-on cleaned Markdown and produces the same `SectionTree` shape it
-does today; `classify.rs` runs against the normalized pipe tables
-via the existing `parse_markdown_tables` path.
-
-Shape B is more invasive but lets the existing markdown
-extractors continue to work unchanged. Shape A keeps the
-extractors honest about their PDF-text origin but means the
-extractors themselves need to consume the descriptor. I lean
-toward Shape B because it keeps the markdown invariant: every
-spec presents to the rest of sim-flow as clean Markdown,
-regardless of source format.
-
-## 5. LLM prompt design
-
-Single-shot prompt; one call per spec. The input is a **structural
-skeleton of the entire document**, not a sample of pages. Prose
-paragraphs are useless for structure discovery — they crowd the
-context window without adding signal.
-
-The skeleton is built deterministically from pdf_oxide's per-page
-Markdown by extracting only structurally-meaningful lines and
-dropping everything else:
-
-- Heading lines (`^#{1,6} `) with their level and source page.
-- Standalone bold lines (`^\*\*[^*]+\*\*$`) — pdf_oxide emits
-  these for column-header rows and minor headings.
-- Image references (`^!\[.*\]\(.*\)$`) — we feed the alt-text +
-  path so the LLM can spot figure captions / numbering schemes.
-- Page markers (`<!-- spec-ingest:page=N -->`).
-- "Table-shaped" line clusters: short lines (≤ 60 chars) that
-  appear in runs of 3+ at the same indentation, with the first
-  line bold or all-caps. We send the first 2 rows + an ellipsis
-  marker + row count so the LLM sees the shape but not full
-  contents.
-- The chrome-strip stage's discovered repeated-line list.
-- Pre-computed counters: page count, font-size cluster summary
-  from pdf_oxide, total `#`-heading count, etc.
-
-For RV12 (95 pages, 205 chunks today) the skeleton is maybe
-3-5k tokens. For a 600-page DDR5 spec maybe 20-30k. Both fit a
-single LLM call with room for a thorough system prompt and
-descriptor-schema preamble.
-
-The prompt asks the model to:
-
-1. Identify how this spec marks section boundaries (numbered
-   headings? plain titles? acronym-suffixed labels?).
-2. Cluster the table-shaped regions into kinds (signal /
-   parameter / encoding / error / fsm) and emit, for each
-   cluster, the column-header anchor + row-pattern + a list of
-   the table locations (page + line) that match.
-3. Identify chrome (page headers, footers, watermarks) — most
-   already in the chrome-strip's repeated-line list but the LLM
-   refines with regex.
-4. Note section-ordering conventions (does this spec put tables
-   before prose or after? does it nest pipeline-stage sections
-   under a "Pipeline" or "Architecture" parent? etc).
-
-Output: the descriptor JSON. Each pattern carries a `rationale`
-field naming the page + line it was inferred from, so the
-descriptor is inspectable and editable.
-
-Probable token budget: ~5-30k input (depending on spec size),
-~2k output. One Claude call, ~$0.05-0.30 depending on model.
+- Tables carry **locations** (page, first_line), not detection
+  regexes. Detection is pdf_oxide's job; the descriptor only
+  carries classification and the column-map.
+- Sections carry **spec_md_role** mapping straight to spec_md's
+  section types. The pipeline doesn't infer the role at every
+  consumer; it's fixed once at discovery time.
+- The `validation` block is filled in by the deterministic
+  post-pass. Zero-row classified tables, unresolved acronyms,
+  and over-matching chrome regexes surface as warnings — not
+  fatal errors; the descriptor stands and the user can
+  hand-edit or `--rediscover-format`.
 
 ## 6. Caching and reproducibility
 
-`format.json` is content-addressed by `(source_sha256, model_id,
-prompt_version)`. The pipeline reads `format.json` if it exists
-and the key matches; otherwise it runs discovery and writes the
-new descriptor. The `--rediscover-format` flag forces a fresh
-call. The `--format <path>` flag uses an externally-authored
-descriptor and skips discovery entirely (escape hatch for
-testing + offline cases + manual override).
+`format.json` is content-addressed by
+`(source_sha256, model_id, prompt_version)`. The pipeline reads
+the cached file if it exists and the key matches; otherwise it
+runs discovery and writes a fresh one. The
+`--rediscover-format` flag forces a re-discovery. The
+`--format <path>` flag uses an externally-authored descriptor
+(escape hatch for testing + offline + manual override).
 
 `format.json` is **committed** alongside `manifest.toml` for
-reproducibility. Re-running `sim-flow ingest` on the same
-machine, or on a different machine pointing at the same source
-PDF, produces the same `format.json` (cache hit) and therefore
-the same chunks, tables, and figures.
+reproducibility. Re-running `sim-flow ingest` on a different
+machine pointing at the same source PDF produces the same
+`format.json` (cache hit) → the same chunks, tables, and
+figures.
 
-When the user inevitably hand-edits the descriptor, the
-`source_sha256` and `model` fields stay valid; the validation
-block re-runs every regex on the current document and updates
-the hit counts so reviewers can see whether the edit broke
+Hand-edits are supported. The `source_sha256` and `model`
+fields stay valid; the deterministic post-pass re-runs every
+classification against the current document and updates the
+hit counts, so reviewers can see whether the edit broke
 anything.
 
 ## 7. Offline / no-LLM fallback
 
 The pipeline must still run when no LLM is available:
 
-- `sim-flow ingest --no-format-discovery` skips the LLM call and
-  uses a tiny built-in default descriptor matching the
-  markdown-friendly common case (numbered headings,
-  pipe-delimited tables, no chrome). This produces the same
-  results we got today on the markdown ingest path.
-- `sim-flow ingest --format <path>` uses a hand-authored descriptor.
-- If a `format.json` already exists at the target path, the
-  pipeline uses it and doesn't call the LLM — the no-LLM path is
-  also "second and subsequent runs of an already-discovered spec."
+- `--no-format-discovery` skips the LLM call and ships the
+  first-cut descriptor as-is. For specs that match the
+  heuristic library cleanly (markdown-friendly inputs,
+  well-conventioned PDFs), this is good enough to produce
+  the existing chunks/tables behaviour.
+- `--format <path>` uses a hand-authored descriptor.
+- A cached `format.json` is reused without any LLM call.
 
-The unit + integration tests stay deterministic by always
-passing `--format <fixture>` or running the markdown
-fast-path. CI does not require an LLM endpoint.
+The unit + integration tests always pass `--format <fixture>`
+or `--no-format-discovery` so CI is deterministic and does not
+require an LLM endpoint.
 
-## 8. Tradeoffs (honest)
-
-| Pro | Con |
-| --- | --- |
-| One adaptive entry point replaces N regex heuristics that grow forever | Adds an LLM dependency to a previously-deterministic pipeline |
-| Each spec gets a descriptor it can be hand-edited for free | Cache misses re-cost an LLM call (mitigated: only one per spec) |
-| Format descriptor is the contract; extractors stay simple and stable | Schema drift between LLM versions; need a `format_version` to migrate |
-| Empirical evidence (4-spec eval) says pdf_oxide markdown is rich enough for LLM analysis | LLM output may be wrong on edge cases; need validation that flags zero-match patterns |
-| Recovers table extraction without re-introducing per-spec Rust heuristics | The "what's a chrome line" rule is now in LLM-generated regex rather than chrome-strip's discovered-repeated-lines list — overlap to resolve |
-
-## 9. Open questions
-
-- **Which LLM is the default?** Sonnet-4-6 is the obvious choice
-  for quality/cost. Local vLLM (Qwen3) is fine if quality holds —
-  worth a shoot-out. The structural-skeleton approach (§5) makes
-  the input small enough that either fits.
-- **Do we let the LLM emit Rust-style regex or PCRE?** Rust
-  `regex` crate doesn't support lookbehind / backreferences.
-  Force the model to a subset the crate can compile, validate at
-  load time, fail fast on incompatible regex.
-- **What about peer specs?** Manifest supports multiple ingested
-  specs (primary + peers). One `format.json` per spec, or a
-  shared one when peers come from the same vendor? Probably
-  per-spec; the validation block makes drift obvious.
-- **Where do `signal_table` row formats land that need
-  post-processing (multi-line cells, wrapping)?** The descriptor
-  probably needs a `multi_line_cell_strategy` knob. Open.
-- **Telemetry.** Per-spec ingest, what does the orchestrator
-  surface in the chat panel? At minimum: "discovered format
-  from `{model}`, `{N}` signal tables / `{M}` params / `{K}` figures
-  extracted, validation hit counts: ..."
-- **What if the LLM emits a descriptor that gates correctly
-  populate spec.md (most real-world inputs) but quietly produces
-  a 0-row signal table on a specific weird format?** The
-  validation block flags zero-hit warnings; DM0's gate-check
-  asserts at least some signal tables exist when the source kind
-  is `pdf` and the spec describes hardware. We can wire that as
-  a Phase-6 gate addition.
-
-## 11. Update (2026-05-19): pdf_oxide does the heavy lifting
-
-Probing `pdf_oxide`'s structured API after this brainstorm settled
-shows the original framing overestimates how much the LLM has to
-do. Three load-bearing capabilities are already provided
-deterministically:
-
-- **`extract_tables(page)`** runs a spatial-projection table
-  detector that returns `Vec<Table>` with rows, columns, cells,
-  bboxes, header detection, and span metadata. On RV12 it
-  recovers the privilege table (5×4), per-stage signal tables
-  (clean 4-column data), and on Apical NoC the parameter table
-  (29×3 with wrapped comment cells). Header-line regex matching
-  is unnecessary — the detector finds tables from layout, not
-  text patterns.
-- **`extract_spans(page)`** / **`extract_text_lines(page)`** /
-  **`extract_words(page)`** return text with per-span `font_size`,
-  `font_weight`, `is_italic`, and `bbox`. Heading detection by
-  font-size clustering can run in our code with full control,
-  natively keyed by page number — no `<!-- spec-ingest:page=N -->`
-  marker hack, no markdown round-trip.
-- **`extract_paths(page)`** / **`extract_images(page)`** give us
-  vector / raster figure detection without writing our own page
-  walker.
-
-This makes the pipeline simpler than §4 of this doc proposed:
-
-```text
-loading       → per-page {spans, tables, paths, images}      (structured, lossless)
-parse         → SectionTree from font-clustered spans         (no markdown intermediate)
-classify      → use extract_tables output directly            (no anchor regex)
-chrome-strip  → use bboxes (running headers at top/bottom Y)  (positional, reliable)
-emit          → render section text as Markdown for chunks    (markdown is OUTPUT only)
-```
-
-The LLM's job shrinks dramatically. Instead of "discover the
-spec's heading patterns, table column headers, and chrome regexes
-from scratch," it does **semantic classification**:
-
-- Map each detected `Table` to a spec_md role
-  (signal_table / parameter_table / csr_table / memory_map_table /
-  fsm_table / encoding_table / error_table / latency_table).
-- Map each table's columns to canonical spec_md field names.
-- Map each section heading to a spec_md target
-  (`block:<name>`, `csrs`, `memory_map`, `glossary`,
-  `functional_behavior`, `reset_init_flush_drain`, etc.).
-- Label each section as architectural / micro-architectural / mixed.
-- Label each figure by kind (block_diagram / state_diagram /
-  timing / memory_map / topology / generic).
-- Extract glossary entries (acronym + expansion pairs) from
-  parenthesised first-mentions and any explicit glossary section.
-
-This is a much more focused use of an LLM — it's doing semantic
-classification on already-structured inputs, not pattern discovery
-from raw text. The descriptor still lives at
-`.sim-flow/spec-ingest/format.json` and is content-addressed by
-`(source_sha256, model_id, prompt_version)`. The validation block
-checks that every classified table populates non-empty rows and
-that section heading → spec_md target mappings don't double-claim
-a target.
-
-## 12. Information categories the cycle-accurate model needs
+## 8. Information categories the cycle-accurate model needs
 
 (Settled with user on 2026-05-19.) A cycle-accurate model
 authored from a spec needs the following information categories.
-This list is what format.json's section/table/figure tagging
+This list is what `format.json`'s section/table/figure tagging
 must cover, and what spec_md must be able to express:
 
 - External interfaces (`ExternalInterface` ✓)
@@ -422,8 +341,8 @@ must cover, and what spec_md must be able to express:
 - Functional decomposition (`Block[]` ✓)
 - Pipelining (`PipelineAndHierarchy` + `Block[]` ✓)
 - State machines (`StateMachine` ✓)
-- Control vs datapath classification per signal (**new tag** on `BlockSignalRow`)
-- Architectural vs micro-architectural per section/block (**new tag**)
+- Control vs datapath per signal (**new tag** on `BlockSignalRow`)
+- Architectural vs micro-arch per section/block (**new tag**)
 - Errors / exceptions (`ErrorEntry` ✓)
 - Connectivity (`Connectivity` ✓)
 - Timing / throughput (`LatencyRow` ✓)
@@ -440,41 +359,55 @@ Out of scope for cycle-accurate v1: debug / test infrastructure
 (JTAG, scan, ATPG, trace ports). We intentionally do not model
 these in spec_md.
 
-For each category, format.json says where the information lives
-in the source spec. The vector DB (Phase 3/4) indexes chunks
-tagged with the same spec_md roles so the agent can retrieve
-cross-references by category, not just text similarity.
+For each category, `format.json` records where the information
+lives in the source spec. The vector DB (Chapter 3 lance index)
+indexes chunks tagged with the same spec_md roles so the agent
+can retrieve cross-references by category, not just by text
+similarity.
 
-The "decide up-front vs defer to user/LLM/follow-up" policy is:
+## 9. Tradeoffs (honest)
 
-- **Decide up-front** when column headers match known patterns
-  (e.g., column header text matches `Signal Direction To/From
-  Description` or `Parameter Type Default Description` exactly).
-- **Defer to LLM at format-discovery time** when column headers
-  are present but novel (LLM classifies the table kind +
-  maps columns).
-- **Defer to user via `ask_user`** at DM0-time when ambiguity
-  remains after both the heuristic and the LLM passes (descriptor
-  marks the table with `kind: "uncertain"`, candidate kinds, and
-  the field DM0 surfaces).
-- **Defer to vector DB cross-reference** for the agent's
-  free-form queries during DM1+ work and critique.
+| Pro | Con |
+| --- | --- |
+| One adaptive entry point replaces N regex heuristics that grow forever | Adds an LLM dependency to a previously-deterministic pipeline (mitigated: cached; `--no-format-discovery` fallback for CI / offline) |
+| Each spec gets a descriptor that's hand-editable | LLM output may be wrong on edge cases; deterministic post-pass validates and warns |
+| Format descriptor is the contract; extractors stay simple and stable | Schema drift between LLM versions; `schema_version` + `prompt_version` in the file |
+| pdf_oxide does the structural heavy lifting; LLM only does semantic classification | The first-cut classifier needs ongoing maintenance as new specs surface novel column-header phrasings |
+| Recovers structured table extraction without re-introducing per-spec Rust heuristics | Chrome detection straddles positional (Y-band) + textual (LLM regex); two-mechanism overlap to resolve at integration time |
 
-## 10. Closure
+## 10. Open questions
 
-If we agree on the rough shape, next steps are:
+- **Which LLM is the default?** Sonnet-4-6 is the obvious
+  choice for quality/cost. Local vLLM (Qwen3) is plausible
+  because the critique-pass framing makes the task small.
+  Worth a shoot-out once §3-§5 are implemented.
+- **Do we let the LLM emit Rust-style regex or PCRE for
+  chrome rules?** Rust `regex` crate doesn't support
+  lookbehind / backreferences. Force the model to a subset
+  the crate can compile, validate at load time, fail fast.
+- **What about peer specs?** Manifest supports multiple
+  ingested specs (primary + peers). One `format.json` per
+  spec — peers from the same vendor may overlap heavily but
+  the validation block makes drift obvious.
+- **Telemetry.** Per-spec ingest, what does the orchestrator
+  surface in the chat panel? At minimum: "discovered format
+  from `{model}`, `{N}` signal tables / `{M}` params / `{K}`
+  figures extracted; validation hit counts: ..."; warnings
+  list.
+- **Format-validity gate.** Should DM0's gate-check assert
+  at least some classified tables exist when `source_kind =
+  "pdf"` and the spec describes hardware? Chapter 6's gate
+  is the right place for that check; wire as a follow-up.
 
-1. **Architecture doc** at `docs/architecture/00-spec-format-discovery.md`
-   (number subject to taste) covering: stage placement, schema
-   formal definition, validation rules, CLI surface, integration
-   with classify.rs.
-2. **Implementation plan** at `docs/plan/0X-phase-format-discovery.md`
-   with milestones. Probably ~6-10 milestones; LLM prompt design
-   + descriptor parser + validator + classify rewrite + tests on
-   all four reference specs.
-3. **Implementation** — likely one phase, possibly two streams
-   (descriptor + discover-cmd, then classify-rewrite).
+## 11. Closure
 
-I think the brainstorm is reasonable. Open to redirecting on
-shape A vs B, the descriptor schema, fallback policy, or the
-sampling strategy in §5.
+If we agree on the shape, the formal contract is Chapter 7
+([07-spec-format-discovery.md](../architecture/07-spec-format-discovery.md))
+and the implementation plan is Phase 9
+([09-phase-format-discovery.md](../plan/09-phase-format-discovery.md))
+with 16 milestones spanning spec_md extensions, descriptor
+types, first-cut classifier, LLM critique pass, validation,
+CLI integration, structured-spans loading / parse / classify,
+chrome, emit chunk tagging, DM0 auto-populate over
+`format.json`, lance index column additions, and integration
+tests on all four reference specs.
