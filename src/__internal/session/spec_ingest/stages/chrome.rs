@@ -6,7 +6,7 @@
 //! pass through untouched.
 
 use super::super::pipeline::{IngestConfig, IngestWarning, SourceKind};
-use super::loading::{LoadedSource, PageText};
+use super::loading::{LoadedSource, PageLayout};
 
 #[derive(Debug, Clone, Default)]
 pub struct ChromeRecord {
@@ -38,9 +38,9 @@ pub fn strip_chrome(
 }
 
 fn strip_chrome_pages(
-    pages: Vec<PageText>,
+    pages: Vec<PageLayout>,
     config: &IngestConfig,
-) -> (Vec<PageText>, ChromeRecord) {
+) -> (Vec<PageLayout>, ChromeRecord) {
     if !config.chrome_stripping.enabled || pages.is_empty() {
         return (pages, ChromeRecord::default());
     }
@@ -49,11 +49,15 @@ fn strip_chrome_pages(
     let total_pages = pages.len();
     let need = ((total_pages as f32 * threshold).ceil() as usize).max(2);
 
-    // Count normalized line frequencies across pages.
+    // Count normalized line frequencies across pages. Chrome
+    // stripping still operates on `flat_text`; the structured
+    // `spans` / `lines` fields are left untouched for now and will
+    // be filtered properly in milestone 9.10's hybrid positional +
+    // regex rewrite.
     let mut freq: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for page in &pages {
         let mut seen_on_page: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for line in page.text.lines() {
+        for line in page.flat_text.lines() {
             let norm = normalize_line(line);
             if norm.is_empty() {
                 continue;
@@ -77,8 +81,8 @@ fn strip_chrome_pages(
     let mut out_pages = Vec::with_capacity(total_pages);
     for page in pages {
         let mut count = 0u32;
-        let mut new_text = String::with_capacity(page.text.len());
-        for line in page.text.lines() {
+        let mut new_text = String::with_capacity(page.flat_text.len());
+        for line in page.flat_text.lines() {
             let norm = normalize_line(line);
             let is_page_num_pattern = is_page_number_chrome(line);
             if (!norm.is_empty() && repeated.contains(&norm)) || is_page_num_pattern {
@@ -89,9 +93,9 @@ fn strip_chrome_pages(
             new_text.push('\n');
         }
         per_page_stripped.push(count);
-        out_pages.push(PageText {
-            page_number: page.page_number,
-            text: new_text,
+        out_pages.push(PageLayout {
+            flat_text: new_text,
+            ..page
         });
     }
 
@@ -135,10 +139,15 @@ fn is_page_number_chrome(line: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn page(n: u32, text: &str) -> PageText {
-        PageText {
+    fn page(n: u32, text: &str) -> PageLayout {
+        PageLayout {
             page_number: n,
-            text: text.into(),
+            spans: Vec::new(),
+            lines: Vec::new(),
+            tables: Vec::new(),
+            path_count: 0,
+            image_count: 0,
+            flat_text: text.into(),
         }
     }
 
@@ -152,8 +161,12 @@ mod tests {
         let config = IngestConfig::default();
         let (out, rec) = strip_chrome_pages(pages, &config);
         for p in &out {
-            assert!(!p.text.contains("Numenta SoC"), "page text: {}", p.text);
-            assert!(!p.text.contains("Page "), "page text: {}", p.text);
+            assert!(
+                !p.flat_text.contains("Numenta SoC"),
+                "page text: {}",
+                p.flat_text
+            );
+            assert!(!p.flat_text.contains("Page "), "page text: {}", p.flat_text);
         }
         assert!(rec.repeated_lines.iter().any(|l| l == "Numenta SoC"));
         // Every page should have at least 2 lines stripped (banner +
@@ -174,11 +187,11 @@ mod tests {
         let (out, _rec) = strip_chrome_pages(pages, &config);
         for p in &out {
             assert!(
-                p.text
+                p.flat_text
                     .lines()
                     .all(|l| !l.trim().chars().all(|c| c.is_ascii_digit()) || l.trim().is_empty()),
                 "leftover page-number line: {}",
-                p.text
+                p.flat_text
             );
         }
     }
@@ -193,7 +206,7 @@ mod tests {
         let config = IngestConfig::default();
         let mut warnings = Vec::new();
         let (out, rec) = strip_chrome(loaded, &config, &mut warnings);
-        assert_eq!(out.pages[0].text, "# Title\n\nbody\n");
+        assert_eq!(out.pages[0].flat_text, "# Title\n\nbody\n");
         assert!(rec.repeated_lines.is_empty());
     }
 }

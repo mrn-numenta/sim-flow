@@ -12,7 +12,7 @@
 use crate::Result;
 
 use super::super::pipeline::{IngestWarning, SourceKind};
-use super::loading::{LoadedSource, PageText};
+use super::loading::{LoadedSource, PageLayout};
 
 /// One section node in the heading tree.
 #[derive(Debug, Clone)]
@@ -141,7 +141,11 @@ pub fn parse_hierarchy(
             total_pages: 0,
         }),
         SourceKind::Markdown | SourceKind::Text => {
-            let body = loaded.pages.first().map(|p| p.text.as_str()).unwrap_or("");
+            let body = loaded
+                .pages
+                .first()
+                .map(|p| p.flat_text.as_str())
+                .unwrap_or("");
             let tree = parse_markdown(body, warnings)?;
             Ok(SectionTree {
                 source_kind: Some(loaded.kind),
@@ -326,11 +330,11 @@ const PAGE_MARKER_SUFFIX: &str = " -->";
 /// belongs to (rather than in document preamble when the first
 /// page has no heading). The post-pass scans every section's body
 /// for these markers and pins section.page_range from them.
-pub(crate) fn join_pdf_pages_for_markdown(pages: &[PageText]) -> String {
+pub(crate) fn join_pdf_pages_for_markdown(pages: &[PageLayout]) -> String {
     let mut out = String::new();
     for p in pages {
-        out.push_str(&p.text);
-        if !p.text.ends_with('\n') {
+        out.push_str(&p.flat_text);
+        if !p.flat_text.ends_with('\n') {
             out.push('\n');
         }
         out.push_str(PAGE_MARKER_PREFIX);
@@ -408,6 +412,18 @@ mod tests {
         assert!(warnings.iter().any(|w| w.code == "no_headings_detected"));
     }
 
+    fn flat_page(n: u32, text: &str) -> PageLayout {
+        PageLayout {
+            page_number: n,
+            spans: Vec::new(),
+            lines: Vec::new(),
+            tables: Vec::new(),
+            path_count: 0,
+            image_count: 0,
+            flat_text: text.into(),
+        }
+    }
+
     #[test]
     fn pdf_pages_join_with_page_markers_then_recover_ranges() {
         // pdf_oxide produces markdown per page; the loader joins them
@@ -415,18 +431,9 @@ mod tests {
         // runs the markdown parser and the post-pass strips markers
         // while recovering per-section page ranges.
         let pages = vec![
-            PageText {
-                page_number: 1,
-                text: "# Introduction\n\nintro body\n".into(),
-            },
-            PageText {
-                page_number: 2,
-                text: "more intro body on page 2\n".into(),
-            },
-            PageText {
-                page_number: 3,
-                text: "## Background\n\nbackground body\n".into(),
-            },
+            flat_page(1, "# Introduction\n\nintro body\n"),
+            flat_page(2, "more intro body on page 2\n"),
+            flat_page(3, "## Background\n\nbackground body\n"),
         ];
         let joined = join_pdf_pages_for_markdown(&pages);
         let mut warnings = Vec::new();
@@ -448,10 +455,10 @@ mod tests {
 
     #[test]
     fn pdf_no_headings_emits_warning() {
-        let pages = vec![PageText {
-            page_number: 1,
-            text: "this is just prose\nwith no heading-like lines\n".into(),
-        }];
+        let pages = vec![flat_page(
+            1,
+            "this is just prose\nwith no heading-like lines\n",
+        )];
         let joined = join_pdf_pages_for_markdown(&pages);
         let mut warnings = Vec::new();
         let mut tree = parse_markdown(&joined, &mut warnings).unwrap();
