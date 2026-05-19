@@ -29,6 +29,7 @@ use crate::state::Flow;
 /// full set everywhere.
 pub const UNIVERSAL_TOOLS: &[&str] = &[
     "read_file",
+    "read_markdown",
     "list_dir",
     "write_file",
     "edit_file",

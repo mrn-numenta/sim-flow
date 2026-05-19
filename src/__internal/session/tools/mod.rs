@@ -35,6 +35,7 @@ mod edit_file;
 mod list_dir;
 mod log_bug;
 mod read_file;
+mod read_markdown;
 mod record_run;
 mod resolve_bug;
 mod run_cargo;
@@ -57,6 +58,7 @@ pub use edit_file::EditFileTool;
 pub use list_dir::ListDirTool;
 pub use log_bug::LogBugTool;
 pub use read_file::ReadFileTool;
+pub use read_markdown::ReadMarkdownTool;
 pub use record_run::RecordRunTool;
 pub use resolve_bug::ResolveBugTool;
 pub use run_cargo::RunCargoTool;
@@ -426,6 +428,7 @@ pub fn build_dispatcher_with_runtime(
     for name in names {
         match *name {
             "read_file" => out.push(Box::new(ReadFileTool)),
+            "read_markdown" => out.push(Box::new(ReadMarkdownTool)),
             "list_dir" => out.push(Box::new(ListDirTool)),
             "write_file" => out.push(Box::new(WriteFileTool)),
             "edit_file" => out.push(Box::new(EditFileTool)),
