@@ -107,30 +107,78 @@ jobs:
         with:
           workspaces: sim-flow
 
-      - name: Install cargo-tarpaulin
-        uses: taiki-e/install-action@cargo-tarpaulin
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Run tarpaulin
+      - name: Run cargo-llvm-cov
         working-directory: sim-flow
+        # Drop benches and any block-diagram bridge module from coverage
+        # accounting; benches aren't test code and block-diagram lives in
+        # the sibling sim-foundation tree.
         run: |
-          mkdir -p target/tarpaulin
-          cargo tarpaulin --engine llvm --out Json --out Html \
-            --output-dir target/tarpaulin
+          mkdir -p target/llvm-cov
+          cargo llvm-cov --no-report
+          cargo llvm-cov report --json \
+            --ignore-filename-regex 'benches/' \
+            --output-path target/llvm-cov/coverage.json
+          cargo llvm-cov report --html \
+            --ignore-filename-regex 'benches/' \
+            --output-dir target/llvm-cov
 
-      - name: Publish coverage summary
+      - name: Write coverage summary
         if: always()
         working-directory: sim-flow
         run: |
+          if [[ ! -f target/llvm-cov/coverage.json ]]; then
+            echo "coverage.json missing; nothing to summarize" >&2
+            exit 0
+          fi
+          jq -r '
+            def fmt_pct(p): ((p * 100 | floor) / 100 | tostring);
+            .data[0] as $d
+            | [
+                "Coverage Summary",
+                "Crate: \(fmt_pct($d.totals.lines.percent))% (\($d.totals.lines.covered)/\($d.totals.lines.count) lines)",
+                "",
+                "Files Under 80%:",
+                (([$d.files[]
+                  | select(.summary.lines.count > 0)
+                  | {filename, percent: .summary.lines.percent, covered: .summary.lines.covered, count: .summary.lines.count}]
+                  | map(select(.percent < 80))
+                  | sort_by(.percent, .filename)
+                  | if length == 0 then ["  none"] else map("  \(.filename): \(fmt_pct(.percent))% (\(.covered)/\(.count))") end
+                )[])
+              ] | .[]
+          ' target/llvm-cov/coverage.json > target/llvm-cov/coverage-summary.txt
           {
             echo "## Coverage"
             echo
-            if [[ -f target/tarpaulin/tarpaulin-report.json ]]; then
-              jq -r '"Workspace: \(.coverage)% (\(.covered)/\(.coverable) lines)"' \
-                target/tarpaulin/tarpaulin-report.json
-            else
-              echo "tarpaulin did not produce a report"
-            fi
+            head -40 target/llvm-cov/coverage-summary.txt
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce per-file 80% coverage minimum
+        working-directory: sim-flow
+        run: |
+          jq -e '
+            [
+              .data[0].files[]
+              | select(.summary.lines.count > 0)
+              | select(.summary.lines.percent < 80)
+              | {
+                  path: .filename,
+                  covered: .summary.lines.covered,
+                  count: .summary.lines.count,
+                  percent: .summary.lines.percent
+                }
+            ]
+            | if length == 0 then empty else . end
+          ' target/llvm-cov/coverage.json > /tmp/coverage-below-threshold.json || true
+
+          if [ -s /tmp/coverage-below-threshold.json ]; then
+            echo "Coverage gate failed. Files below 80%:" >&2
+            jq -r '.[] | "  \(.path): \(.percent)% (\(.covered)/\(.count))"' /tmp/coverage-below-threshold.json >&2
+            exit 1
+          fi
 
       - name: Upload coverage artifacts
         if: always()
@@ -138,8 +186,9 @@ jobs:
         with:
           name: sim-flow-coverage
           path: |
-            sim-flow/target/tarpaulin/tarpaulin-report.json
-            sim-flow/target/tarpaulin/tarpaulin-report.html
+            sim-flow/target/llvm-cov/coverage.json
+            sim-flow/target/llvm-cov/coverage-summary.txt
+            sim-flow/target/llvm-cov/html/index.html
 
   vscode-extension:
     name: VS Code Extension
