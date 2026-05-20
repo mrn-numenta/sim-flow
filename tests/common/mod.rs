@@ -21,17 +21,23 @@ pub fn init_project(tmp: &tempfile::TempDir) -> std::path::PathBuf {
     state.save(&project.join(".sim-flow")).unwrap();
     let config = sim_flow::config::Config::default();
     config.save(&project.join(".sim-flow")).unwrap();
+    copy_convention_docs(&project);
     project
+}
+
+#[allow(dead_code)]
+pub fn copy_convention_docs(project: &Path) {
+    let src = foundation_root().join("templates/model-project/docs/plan-management.md");
+    let dst = project.join("docs/plan-management.md");
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::copy(&src, &dst).unwrap();
 }
 
 #[allow(dead_code)]
 pub fn foundation_root() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf()
 }
 
 #[allow(dead_code)]

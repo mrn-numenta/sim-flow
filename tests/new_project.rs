@@ -6,17 +6,15 @@ use std::path::PathBuf;
 use sim_flow::new_project::{NewModelOptions, new_model, verify_client_file_equivalence};
 
 fn foundation_root() -> PathBuf {
-    // The integration test lives at
-    // `sim-foundation/tools/sim-flow/tests/new_project.rs`, so two parent
-    // hops from `CARGO_MANIFEST_DIR` reach the workspace root.
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest.parent().unwrap().parent().unwrap().to_path_buf()
+    // sim-flow is now its own repo; CARGO_MANIFEST_DIR is the crate root
+    // and `templates/` lives directly under it.
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
 #[test]
 fn template_client_files_are_equivalent() {
     let root = foundation_root();
-    let template = root.join("tools/sim-flow/templates").join("model-project");
+    let template = root.join("templates").join("model-project");
     verify_client_file_equivalence(&template).expect("CLAUDE.md and AGENTS.md must match");
 }
 

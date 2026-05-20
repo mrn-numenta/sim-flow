@@ -9,11 +9,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// Templates directory, relative to the foundation (workspace) root.
-/// Lives next to `prompts/` and `extensions/` under
-/// `tools/sim-flow/` to keep all sim-flow-specific assets in one
-/// tree.
-pub const TEMPLATES_DIR: &str = "tools/sim-flow/templates";
+/// Templates directory, relative to the sim-flow crate root. Lives
+/// next to `prompts/` and `extensions/` at the repo root; all
+/// sim-flow-specific assets sit in one tree.
+pub const TEMPLATES_DIR: &str = "templates";
 
 /// Convert a human-facing project name (e.g. "my-model") to a valid cargo
 /// crate identifier (snake_case, ASCII, leading digit stripped).
@@ -148,7 +147,7 @@ mod tests {
     #[test]
     fn template_path_joins_under_foundation_templates_dir() {
         let p = template_path(std::path::Path::new("/abs/foundation"), "model-project");
-        assert!(p.ends_with("tools/sim-flow/templates/model-project"));
+        assert!(p.ends_with("templates/model-project"));
     }
 
     #[test]

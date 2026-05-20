@@ -29,12 +29,11 @@ use minijinja::{Environment, UndefinedBehavior};
 use crate::client::SessionKind;
 use crate::{Error, Result};
 
-/// Default-scope prompts directory, relative to the foundation
-/// (workspace) root. Sim-flow's tooling assets live colocated with
-/// the crate at `tools/sim-flow/<asset>/`; the older top-level
-/// `instructions/` location was moved here so all sim-flow-specific
-/// trees (prompts, templates, extensions) sit under one umbrella.
-pub const PROMPTS_DIR: &str = "tools/sim-flow/prompts";
+/// Default-scope prompts directory, relative to the sim-flow crate
+/// root. The `foundation_root` parameter that loaders take is now
+/// the sim-flow crate root (sim-flow ships as its own repo); assets
+/// live at `<crate-root>/prompts/`, `<crate-root>/templates/`, etc.
+pub const PROMPTS_DIR: &str = "prompts";
 /// Subdirectory under `<project>/.sim-flow/` (project scope) and
 /// under the OS user-config dir (global scope) where prompt
 /// overrides live. Same name in both contexts.
@@ -436,13 +435,13 @@ mod tests {
     #[test]
     fn resolves_work_and_critique_paths() {
         let work = instruction_path(Path::new("/foo"), "dm0-specification", SessionKind::Work);
-        assert!(work.ends_with("tools/sim-flow/prompts/dm0-specification.md"));
+        assert!(work.ends_with("prompts/dm0-specification.md"));
         let crit = instruction_path(
             Path::new("/foo"),
             "dm0-specification",
             SessionKind::Critique,
         );
-        assert!(crit.ends_with("tools/sim-flow/prompts/dm0-specification-critique.md"));
+        assert!(crit.ends_with("prompts/dm0-specification-critique.md"));
     }
 
     #[test]

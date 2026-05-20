@@ -152,12 +152,7 @@ fn baseline_compare_json_includes_deltas() {
 #[test]
 fn new_model_json_describes_generated_project() {
     let tmp = tempfile::tempdir().unwrap();
-    let foundation_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
+    let foundation_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let dest = tmp.path().to_path_buf();
     let out = Command::new(bin())
         .arg("--foundation-root")
@@ -189,11 +184,6 @@ fn new_model_json_describes_generated_project() {
 
 fn foundation_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf()
 }
 
 fn run_with_foundation(project: &Path, args: &[&str]) -> Output {

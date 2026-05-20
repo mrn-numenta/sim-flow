@@ -66,7 +66,7 @@ fn is_sim_foundation_workspace(cargo_toml: &Path) -> Result<bool> {
         path: cargo_toml.to_path_buf(),
         source,
     })?;
-    Ok(text.contains("tools/sim-flow"))
+    Ok(text.contains("name = \"sim-flow\""))
 }
 
 #[cfg(test)]
@@ -105,7 +105,7 @@ mod tests {
         let root = tmp.path();
         std::fs::write(
             root.join("Cargo.toml"),
-            "[workspace]\nmembers = [\"tools/sim-flow\"]\n",
+            "[package]\nname = \"sim-flow\"\n",
         )
         .unwrap();
         let nested = root.join("a/b/c");
@@ -140,11 +140,7 @@ mod tests {
     fn is_sim_foundation_workspace_detects_marker() {
         let tmp = tempfile::tempdir().unwrap();
         let cargo = tmp.path().join("Cargo.toml");
-        std::fs::write(
-            &cargo,
-            "[workspace]\nmembers = [\"tools/sim-flow\", \"crates/framework\"]\n",
-        )
-        .unwrap();
+        std::fs::write(&cargo, "[package]\nname = \"sim-flow\"\nversion = \"0.1.0\"\n").unwrap();
         assert!(is_sim_foundation_workspace(&cargo).unwrap());
     }
 

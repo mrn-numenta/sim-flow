@@ -438,7 +438,7 @@ const CONVENTION_DOC_PATHS: &[&str] = &["docs/plan-management.md"];
 fn verify_convention_docs(opts: &AutoOptions) -> Result<()> {
     let template_root = opts
         .foundation_root
-        .join("tools/sim-flow/templates/model-project");
+        .join("templates/model-project");
     for rel in CONVENTION_DOC_PATHS {
         let canonical = template_root.join(rel);
         let actual = opts.project_dir.join(rel);
@@ -4262,7 +4262,7 @@ mod tests {
     }
 
     fn write_canonical_plan_management(foundation: &Path, body: &str) {
-        let dir = foundation.join("tools/sim-flow/templates/model-project/docs");
+        let dir = foundation.join("templates/model-project/docs");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("plan-management.md"), body).unwrap();
     }

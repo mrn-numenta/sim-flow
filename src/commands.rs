@@ -212,17 +212,6 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
         Command::Keys { action } => keys_cmd(action),
         Command::Watchers { action } => watchers_cmd(action),
         Command::Metrics { group_by, json } => metrics_cmd(&project_dir, *group_by, *json),
-        Command::Embedder { action } => embedder_cmd(action),
-    }
-}
-
-/// Dispatch for `sim-flow embedder <action>`. Currently only
-/// `check`; new actions land as additional match arms.
-fn embedder_cmd(action: &EmbedderAction) -> sim_flow::Result<()> {
-    match action {
-        EmbedderAction::Check { config, verbose } => {
-            crate::cli::embedder::check(config.as_deref(), *verbose)
-        }
         Command::Ingest {
             source,
             peers,
@@ -281,6 +270,17 @@ fn embedder_cmd(action: &EmbedderAction) -> sim_flow::Result<()> {
         ),
         Command::RefreshSpec { project } => {
             crate::cli::lance_index::refresh_spec_cmd(&project_dir, project.as_deref())
+        }
+        Command::Embedder { action } => embedder_cmd(action),
+    }
+}
+
+/// Dispatch for `sim-flow embedder <action>`. Currently only
+/// `check`; new actions land as additional match arms.
+fn embedder_cmd(action: &EmbedderAction) -> sim_flow::Result<()> {
+    match action {
+        EmbedderAction::Check { config, verbose } => {
+            crate::cli::embedder::check(config.as_deref(), *verbose)
         }
     }
 }

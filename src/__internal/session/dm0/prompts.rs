@@ -53,14 +53,9 @@ mod tests {
     use std::path::PathBuf;
 
     fn workspace_root() -> PathBuf {
-        // CARGO_MANIFEST_DIR points at tools/sim-flow; walk up two
-        // levels to reach the foundation root.
-        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        manifest
-            .ancestors()
-            .nth(2)
-            .expect("workspace root is two levels above tools/sim-flow")
-            .to_path_buf()
+        // sim-flow is now its own repo; CARGO_MANIFEST_DIR is the
+        // crate (and asset) root.
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     }
 
     #[test]
@@ -120,9 +115,8 @@ mod tests {
         // foundation-default scope ignores subdirectories, so the
         // legacy files never resolve into a live session.
         let foundation = workspace_root();
-        let work = foundation.join("tools/sim-flow/prompts/legacy/dm0-specification.md");
-        let critique =
-            foundation.join("tools/sim-flow/prompts/legacy/dm0-specification-critique.md");
+        let work = foundation.join("prompts/legacy/dm0-specification.md");
+        let critique = foundation.join("prompts/legacy/dm0-specification-critique.md");
         assert!(
             work.exists(),
             "legacy work prompt missing: {}",

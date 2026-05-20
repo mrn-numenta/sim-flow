@@ -90,11 +90,6 @@ impl LiveConfig {
 
 fn foundation_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf()
 }
 
 fn sim_flow_bin() -> PathBuf {
@@ -106,7 +101,7 @@ fn e2e_auto_bin() -> PathBuf {
 }
 
 fn smoke_spec_path() -> PathBuf {
-    foundation_root().join("tools/sim-flow/src/bin/dm_flow_smoke_spec.md")
+    foundation_root().join("src/bin/dm_flow_smoke_spec.md")
 }
 
 /// Create a fresh model project (via `sim-flow new model`) in a
