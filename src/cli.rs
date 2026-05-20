@@ -491,6 +491,18 @@ pub(crate) enum Command {
         /// model's reasoning (extra prose IS what you want then).
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         no_preamble: bool,
+        /// Wall-clock budget (seconds) the LLM transport has to
+        /// retry transient failures (connection refused, 503,
+        /// timeouts) before giving up. Useful when multiple
+        /// parallel runs share one vLLM server: the server briefly
+        /// 503s during model reload / under request pressure, and
+        /// without retries every blip aborts the run. `0` disables
+        /// retries entirely (first failure is fatal). Default is
+        /// 600s (10 minutes); the value is forwarded via the
+        /// `SIM_FLOW_RETRY_BUDGET_SECS` env var so every backend
+        /// invocation in this run picks it up consistently.
+        #[arg(long, default_value_t = 600)]
+        llm_retry_budget_secs: u32,
     },
     Session {
         /// Step id and kind, e.g. `DM0.work` or `DM2c.critique`.

@@ -283,10 +283,23 @@ mod tests {
         // sure the agent constructs cleanly. The dispatch call
         // itself would need a mock HTTP server which is out of
         // scope.
+        //
+        // Disable transient-failure retries: a connection-refused
+        // error is "retriable" by policy, but port 0 stays
+        // permanently unreachable so the dispatch would otherwise
+        // loop the full default retry budget (10 minutes) before
+        // giving up. SAFETY: env mutation in tests; see the
+        // matching ollama.rs comment for the safety reasoning.
+        unsafe {
+            std::env::set_var("SIM_FLOW_RETRY_BUDGET_SECS", "0");
+        }
         let agent = OpenAiCompatAgent::new(Some("http://127.0.0.1:0/v1".into()), None, None, None);
         // dispatch returns an error because port 0 isn't listening
         // -- the agent is configured but the network call fails.
         let result = agent.dispatch(&[]);
+        unsafe {
+            std::env::remove_var("SIM_FLOW_RETRY_BUDGET_SECS");
+        }
         assert!(
             result.is_err(),
             "expected network error against port 0; got {result:?}"

@@ -13,6 +13,7 @@
 mod dispatch;
 mod dispatch_streaming;
 mod request;
+mod retry;
 mod wire;
 
 #[cfg(test)]

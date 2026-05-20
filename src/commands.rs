@@ -160,6 +160,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             max_identical_responses,
             max_parallel_requests,
             no_preamble,
+            llm_retry_budget_secs,
         } => auto_cmd(
             cli,
             &project_dir,
@@ -192,6 +193,7 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             *max_identical_responses,
             *max_parallel_requests,
             *no_preamble,
+            *llm_retry_budget_secs,
         ),
         Command::Prompts { action } => prompts_cmd(cli, &project_dir, action),
         Command::Coverage { action } => coverage_cmd(&project_dir, action),
@@ -1371,7 +1373,25 @@ fn auto_cmd(
     max_identical_responses: u32,
     max_parallel_requests: Option<u32>,
     no_preamble: bool,
+    llm_retry_budget_secs: u32,
 ) -> sim_flow::Result<()> {
+    // The transport reads the retry budget from this env var at every
+    // OpenAiCompatibleRequest construction site. Forwarding the CLI
+    // flag here means a single `--llm-retry-budget-secs N` covers
+    // every backend invocation in the run (orchestrator, format
+    // discovery, ingest) without each call site having to plumb the
+    // value separately. SAFETY: set_var is unsafe in Rust 2024 because
+    // env mutation isn't thread-safe; we're at single-threaded
+    // process startup before any worker spawns. Running before the
+    // tokio runtime / cancel-channel listener / orchestrator threads
+    // start is the established pattern for env-var injection in this
+    // file (matched by the existing SIM_FLOW_NO_PREAMBLE path).
+    unsafe {
+        std::env::set_var(
+            "SIM_FLOW_RETRY_BUDGET_SECS",
+            llm_retry_budget_secs.to_string(),
+        );
+    }
     let foundation = foundation_root::resolve(cli.foundation_root.as_deref())?;
     // Tooling preflight: DM3c shells out to `cargo llvm-cov` from
     // inside the agent's work session. If the binary isn't on PATH,

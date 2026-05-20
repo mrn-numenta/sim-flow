@@ -104,6 +104,15 @@ pub struct OpenAiCompatibleRequest<'a> {
     /// conformant backend but avoids tripping minimal proxies that
     /// reject the field outright.
     pub tool_choice: Option<&'static str>,
+    /// Wall-clock budget (seconds) the dispatch loop has to retry
+    /// transient failures (connection refused, 408/429/502/503/504,
+    /// network timeouts) before giving up. `0` disables retries
+    /// entirely. Default is 600 seconds (10 minutes); override via
+    /// `SIM_FLOW_RETRY_BUDGET_SECS` env var. Motivated by parallel
+    /// runs sharing one vLLM server -- the server briefly refuses
+    /// connections during model reload and 503s under request
+    /// pressure; without retries every blip aborts the run.
+    pub retry_budget_secs: u32,
 }
 
 pub(super) fn truthy_env(name: &str) -> bool {
@@ -146,6 +155,10 @@ impl<'a> OpenAiCompatibleRequest<'a> {
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(512 * 1024);
+        let retry_budget_secs = std::env::var("SIM_FLOW_RETRY_BUDGET_SECS")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(600);
         Self {
             base_url,
             model,
@@ -165,6 +178,7 @@ impl<'a> OpenAiCompatibleRequest<'a> {
             repetition_penalty_override: float_env("SIM_FLOW_REPETITION_PENALTY"),
             tools: None,
             tool_choice: None,
+            retry_budget_secs,
         }
     }
 

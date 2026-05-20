@@ -150,6 +150,7 @@ pub fn dispatch_chat_with_tools(
     let url = format!("{}/chat/completions", trim_trailing_slash(req.base_url));
     let api_key_owned: Option<String> = req.api_key.map(|k| k.to_string());
     let max_response_bytes = req.max_response_bytes;
+    let retry_budget = std::time::Duration::from_secs(req.retry_budget_secs as u64);
     // Wrap the blocking ureq round-trip in `run_cancellable` so the
     // shared cancel flag can abort the dispatch via the control
     // socket while we're mid-call. The worker thread is abandoned on
@@ -158,29 +159,93 @@ pub fn dispatch_chat_with_tools(
     // cancel can interrupt either the network round-trip or the body
     // streaming read.
     let buf = run_cancellable(cancel_flag, move || -> Result<String> {
-        let mut request = ureq::post(&url)
-            .set("content-type", "application/json")
-            .set("accept", "application/json");
-        if let Some(ref key) = api_key_owned {
-            request = request.set("authorization", &format!("Bearer {key}"));
-        }
-        // ureq returns 4xx/5xx as `Error::Status(code, Response)`.
-        // Pull the body out of the status error explicitly so vLLM
-        // / LM Studio's actual complaint (e.g. "max_tokens exceeds
-        // max_model_len", "model not found") surfaces in the
-        // LlmError diagnostic instead of a bare "status code 400".
-        let response = match request.send_bytes(&body_bytes) {
-            Ok(resp) => resp,
-            Err(ureq::Error::Status(code, resp)) => {
-                let body = resp.into_string().unwrap_or_default();
-                return Err(Error::Client(format!(
-                    "openai-compat: server returned {code}: {}",
-                    tail(&body, 2048),
-                )));
+        // Retry loop. Transient failures (connection refused, IO
+        // timeout, 408/429/502/503/504) sleep with exponential
+        // backoff up to `retry_budget`; non-retriable failures
+        // (bad request, auth, model-not-found, ...) abort
+        // immediately so the operator's misconfiguration surfaces.
+        // When `retry_budget = 0` the loop runs exactly once.
+        let retry_started = std::time::Instant::now();
+        let mut attempt: u32 = 0;
+        let response = loop {
+            attempt += 1;
+            let mut request = ureq::post(&url)
+                .set("content-type", "application/json")
+                .set("accept", "application/json");
+            if let Some(ref key) = api_key_owned {
+                request = request.set("authorization", &format!("Bearer {key}"));
             }
-            Err(e) => {
-                return Err(Error::Client(format!("openai-compat: HTTP error: {e}")));
-            }
+            // ureq returns 4xx/5xx as `Error::Status(code, Response)`.
+            // Pull the body out of the status error explicitly so vLLM
+            // / LM Studio's actual complaint (e.g. "max_tokens exceeds
+            // max_model_len", "model not found") surfaces in the
+            // LlmError diagnostic instead of a bare "status code 400".
+            match request.send_bytes(&body_bytes) {
+                Ok(resp) => break resp,
+                Err(ureq::Error::Status(code, resp)) => {
+                    if super::retry::is_retriable_status(code) {
+                        match super::retry::decide(retry_budget, retry_started, attempt) {
+                            super::retry::RetryDecision::Retry(sleep) => {
+                                // Drop the response body; we don't
+                                // need it for a retry diagnostic.
+                                drop(resp);
+                                eprintln!(
+                                    "openai-compat: server returned {code}; retrying in {}s \
+                                     (attempt {attempt}, budget remaining: {}s)",
+                                    sleep.as_secs(),
+                                    retry_budget
+                                        .saturating_sub(retry_started.elapsed())
+                                        .as_secs(),
+                                );
+                                std::thread::sleep(sleep);
+                                continue;
+                            }
+                            super::retry::RetryDecision::Giveup => {
+                                let body = resp.into_string().unwrap_or_default();
+                                return Err(Error::Client(format!(
+                                    "openai-compat: server returned {code} after {} attempt(s) \
+                                     across {}s retry budget: {}",
+                                    attempt,
+                                    retry_budget.as_secs(),
+                                    tail(&body, 2048),
+                                )));
+                            }
+                        }
+                    }
+                    let body = resp.into_string().unwrap_or_default();
+                    return Err(Error::Client(format!(
+                        "openai-compat: server returned {code}: {}",
+                        tail(&body, 2048),
+                    )));
+                }
+                Err(ureq::Error::Transport(t)) => {
+                    if super::retry::is_retriable_transport_error(&t) {
+                        match super::retry::decide(retry_budget, retry_started, attempt) {
+                            super::retry::RetryDecision::Retry(sleep) => {
+                                eprintln!(
+                                    "openai-compat: transport error `{t}`; retrying in {}s \
+                                     (attempt {attempt}, budget remaining: {}s)",
+                                    sleep.as_secs(),
+                                    retry_budget
+                                        .saturating_sub(retry_started.elapsed())
+                                        .as_secs(),
+                                );
+                                std::thread::sleep(sleep);
+                                continue;
+                            }
+                            super::retry::RetryDecision::Giveup => {
+                                return Err(Error::Client(format!(
+                                    "openai-compat: transport error `{t}` persisted after {} \
+                                     attempt(s) across {}s retry budget",
+                                    attempt,
+                                    retry_budget.as_secs(),
+                                )));
+                            }
+                        }
+                    }
+                    return Err(Error::Client(format!("openai-compat: HTTP error: {t}")));
+                }
+            };
         };
         if !(200..300).contains(&response.status()) {
             let status = response.status();

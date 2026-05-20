@@ -179,8 +179,26 @@ mod tests {
         // Local URL with no listener: dispatch should return an
         // error rather than hanging. Exercises the routing into
         // dispatch_chat without depending on a real server.
+        //
+        // Disable transient-failure retries for this test
+        // explicitly: a connection-refused error is "retriable"
+        // by policy, but a permanently unreachable port loops the
+        // full retry budget (default 10 minutes) before giving
+        // up. Setting the budget to 0 keeps the negative-path
+        // assertion fast.
+        // SAFETY: env mutation in tests; the var is read by
+        // `OpenAiCompatibleRequest::new()` on the next line so a
+        // concurrent test wouldn't observe a transient value mid-
+        // construction. No other test in this module touches this
+        // env var.
+        unsafe {
+            std::env::set_var("SIM_FLOW_RETRY_BUDGET_SECS", "0");
+        }
         let agent = OllamaAgent::new(Some("http://127.0.0.1:0/v1".into()), None, None, None);
         let result = agent.dispatch(&[]);
         assert!(result.is_err());
+        unsafe {
+            std::env::remove_var("SIM_FLOW_RETRY_BUDGET_SECS");
+        }
     }
 }

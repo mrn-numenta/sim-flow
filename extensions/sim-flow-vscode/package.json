@@ -444,6 +444,12 @@
           "default": true,
           "description": "When ON (default), loads the response-shape convention into every session: tool calls first, prose last, no recap, no hedging. Cuts qwen3.6 / nemotron preamble that routinely consumes the full max_tokens budget. Turn OFF when debugging a model's reasoning -- the extra prose IS what you want then."
         },
+        "sim-flow.llm.retryBudgetSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 600,
+          "description": "Wall-clock budget (seconds) the LLM transport has to retry transient failures (connection refused, 408/429/502/503/504, network timeouts) before giving up. Useful when multiple parallel runs share one vLLM server: the server briefly 503s during model reload / under request pressure, and without retries every blip aborts the run. 0 disables retries entirely (first failure is fatal). Default is 600s (10 minutes); forwarded to `sim-flow auto --llm-retry-budget-secs`."
+        },
         "sim-flow.auto.healthcheck": {
           "type": "boolean",
           "default": true,

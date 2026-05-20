@@ -233,6 +233,8 @@ async function runAutoCommand(
   const maxLlmRequests = config.get<number>("auto.maxLlmRequests") ?? 500;
   const noPreamble = config.get<boolean>("auto.noPreamble") ?? true;
   const cargoTimeoutSecs = config.get<number>("auto.cargoTimeoutSeconds") ?? 300;
+  const llmRetryBudgetSecs =
+    config.get<number>("llm.retryBudgetSeconds") ?? 600;
   const { specPath } = extractSpecPath(prompt);
 
   const args = ["auto"];
@@ -255,6 +257,7 @@ async function runAutoCommand(
   );
   args.push("--max-llm-requests", String(maxLlmRequests));
   args.push("--no-preamble", String(noPreamble));
+  args.push("--llm-retry-budget-secs", String(llmRetryBudgetSecs));
   if (specPath) {
     args.push("--spec", specPath);
   } else {
@@ -275,7 +278,7 @@ async function runAutoCommand(
     : "_No spec provided; DM0.work runs interactively (the agent will ask you what to build), the rest of the flow runs unattended._";
   stream.markdown(
     [
-      `**Starting automated flow.** Settings: \`maxWorkIterations\`=${maxWorkIters}, \`maxCritiqueIterations\`=${maxCritiqueIters}, \`maxCritiqueNoProgressIterations\`=${maxCritiqueNoProgressIters}, \`maxLlmRequests\`=${maxLlmRequests}, \`noPreamble\`=${noPreamble}, \`cargoTimeoutSeconds\`=${cargoTimeoutSecs}. Backend: \`${llmConfig.source}\`.`,
+      `**Starting automated flow.** Settings: \`maxWorkIterations\`=${maxWorkIters}, \`maxCritiqueIterations\`=${maxCritiqueIters}, \`maxCritiqueNoProgressIterations\`=${maxCritiqueNoProgressIters}, \`maxLlmRequests\`=${maxLlmRequests}, \`noPreamble\`=${noPreamble}, \`cargoTimeoutSeconds\`=${cargoTimeoutSecs}, \`llmRetryBudgetSeconds\`=${llmRetryBudgetSecs}. Backend: \`${llmConfig.source}\`.`,
       "",
       specLine,
       "",

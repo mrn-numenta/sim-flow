@@ -121,31 +121,94 @@ pub fn dispatch_chat_with_tools_streaming(
         .map_err(|e| Error::Client(format!("openai-compat: serialize request: {e}")))?;
     let url = format!("{}/chat/completions", trim_trailing_slash(req.base_url));
     let api_key_owned: Option<String> = req.api_key.map(|k| k.to_string());
+    let retry_budget = std::time::Duration::from_secs(req.retry_budget_secs as u64);
 
     let (event_tx, event_rx) = std::sync::mpsc::channel::<Result<SsePayload>>();
     std::thread::spawn(move || {
-        let mut request = ureq::post(&url)
-            .set("content-type", "application/json")
-            .set("accept", "text/event-stream");
-        if let Some(ref key) = api_key_owned {
-            request = request.set("authorization", &format!("Bearer {key}"));
-        }
-        let resp = match request.send_bytes(&body_bytes) {
-            Ok(r) => r,
-            Err(ureq::Error::Status(code, resp)) => {
-                let body = resp.into_string().unwrap_or_default();
-                let _ = event_tx.send(Err(Error::Client(format!(
-                    "openai-compat: server returned {code}: {}",
-                    tail(&body, 2048),
-                ))));
-                return;
+        // Mirror dispatch.rs's retry loop. Connection-level failures
+        // (server reload, brief 503/429 spikes, transport timeouts)
+        // sleep with exponential backoff up to `retry_budget`. Once
+        // we've successfully opened the stream, retries stop --
+        // partial SSE deltas already delivered would be lost on a
+        // restart.
+        let retry_started = std::time::Instant::now();
+        let mut attempt: u32 = 0;
+        let resp = loop {
+            attempt += 1;
+            let mut request = ureq::post(&url)
+                .set("content-type", "application/json")
+                .set("accept", "text/event-stream");
+            if let Some(ref key) = api_key_owned {
+                request = request.set("authorization", &format!("Bearer {key}"));
             }
-            Err(e) => {
-                let _ = event_tx.send(Err(Error::Client(format!(
-                    "openai-compat: HTTP error: {e}"
-                ))));
-                return;
-            }
+            match request.send_bytes(&body_bytes) {
+                Ok(r) => break r,
+                Err(ureq::Error::Status(code, resp)) => {
+                    if super::retry::is_retriable_status(code) {
+                        match super::retry::decide(retry_budget, retry_started, attempt) {
+                            super::retry::RetryDecision::Retry(sleep) => {
+                                drop(resp);
+                                eprintln!(
+                                    "openai-compat (stream): server returned {code}; retrying in \
+                                     {}s (attempt {attempt}, budget remaining: {}s)",
+                                    sleep.as_secs(),
+                                    retry_budget
+                                        .saturating_sub(retry_started.elapsed())
+                                        .as_secs(),
+                                );
+                                std::thread::sleep(sleep);
+                                continue;
+                            }
+                            super::retry::RetryDecision::Giveup => {
+                                let body = resp.into_string().unwrap_or_default();
+                                let _ = event_tx.send(Err(Error::Client(format!(
+                                    "openai-compat: server returned {code} after {attempt} \
+                                     attempt(s) across {}s retry budget: {}",
+                                    retry_budget.as_secs(),
+                                    tail(&body, 2048),
+                                ))));
+                                return;
+                            }
+                        }
+                    }
+                    let body = resp.into_string().unwrap_or_default();
+                    let _ = event_tx.send(Err(Error::Client(format!(
+                        "openai-compat: server returned {code}: {}",
+                        tail(&body, 2048),
+                    ))));
+                    return;
+                }
+                Err(ureq::Error::Transport(t)) => {
+                    if super::retry::is_retriable_transport_error(&t) {
+                        match super::retry::decide(retry_budget, retry_started, attempt) {
+                            super::retry::RetryDecision::Retry(sleep) => {
+                                eprintln!(
+                                    "openai-compat (stream): transport error `{t}`; retrying in \
+                                     {}s (attempt {attempt}, budget remaining: {}s)",
+                                    sleep.as_secs(),
+                                    retry_budget
+                                        .saturating_sub(retry_started.elapsed())
+                                        .as_secs(),
+                                );
+                                std::thread::sleep(sleep);
+                                continue;
+                            }
+                            super::retry::RetryDecision::Giveup => {
+                                let _ = event_tx.send(Err(Error::Client(format!(
+                                    "openai-compat: transport error `{t}` persisted after \
+                                     {attempt} attempt(s) across {}s retry budget",
+                                    retry_budget.as_secs(),
+                                ))));
+                                return;
+                            }
+                        }
+                    }
+                    let _ = event_tx.send(Err(Error::Client(format!(
+                        "openai-compat: HTTP error: {t}"
+                    ))));
+                    return;
+                }
+            };
         };
         if !(200..300).contains(&resp.status()) {
             let status = resp.status();
