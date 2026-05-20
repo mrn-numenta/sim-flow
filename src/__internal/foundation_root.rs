@@ -103,11 +103,7 @@ mod tests {
         // walk start.
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        std::fs::write(
-            root.join("Cargo.toml"),
-            "[package]\nname = \"sim-flow\"\n",
-        )
-        .unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"sim-flow\"\n").unwrap();
         let nested = root.join("a/b/c");
         std::fs::create_dir_all(&nested).unwrap();
         let found = walk_up(&nested).expect("found workspace");
@@ -140,7 +136,11 @@ mod tests {
     fn is_sim_foundation_workspace_detects_marker() {
         let tmp = tempfile::tempdir().unwrap();
         let cargo = tmp.path().join("Cargo.toml");
-        std::fs::write(&cargo, "[package]\nname = \"sim-flow\"\nversion = \"0.1.0\"\n").unwrap();
+        std::fs::write(
+            &cargo,
+            "[package]\nname = \"sim-flow\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
         assert!(is_sim_foundation_workspace(&cargo).unwrap());
     }
 

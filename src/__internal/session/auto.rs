@@ -436,9 +436,7 @@ const CONVENTION_DOC_PATHS: &[&str] = &["docs/plan-management.md"];
 /// convention doc) so a stale template never blocks a real
 /// project.
 fn verify_convention_docs(opts: &AutoOptions) -> Result<()> {
-    let template_root = opts
-        .foundation_root
-        .join("templates/model-project");
+    let template_root = opts.foundation_root.join("templates/model-project");
     for rel in CONVENTION_DOC_PATHS {
         let canonical = template_root.join(rel);
         let actual = opts.project_dir.join(rel);

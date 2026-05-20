@@ -104,7 +104,10 @@ pub struct Outcome {
 /// Build sim-flow + the VS Code extension, optionally installing the
 /// VSIX in VS Code.
 pub fn install_extension(opts: Options) -> Result<Outcome> {
-    let ext_dir = opts.sim_flow_root.join("extensions").join("sim-flow-vscode");
+    let ext_dir = opts
+        .sim_flow_root
+        .join("extensions")
+        .join("sim-flow-vscode");
     if !ext_dir.is_dir() {
         return Err(Error::State(format!(
             "extension dir not found: {} (is `sim_flow_root` pointing at the sim-flow repo root?)",
@@ -112,7 +115,11 @@ pub fn install_extension(opts: Options) -> Result<Outcome> {
         )));
     }
 
-    let binary = resolve_binary(&opts.sim_flow_root, opts.profile, opts.prebuilt_binary.as_deref())?;
+    let binary = resolve_binary(
+        &opts.sim_flow_root,
+        opts.profile,
+        opts.prebuilt_binary.as_deref(),
+    )?;
 
     let mut npm = Command::new("npm");
     npm.arg("--prefix").arg(&ext_dir);
@@ -159,7 +166,10 @@ fn resolve_binary(
                 path.display()
             )));
         }
-        eprintln!("install-extension: using pre-built binary: {}", path.display());
+        eprintln!(
+            "install-extension: using pre-built binary: {}",
+            path.display()
+        );
         return Ok(path.to_path_buf());
     }
     let manifest = sim_flow_root.join("Cargo.toml");
@@ -183,7 +193,11 @@ fn resolve_binary(
         cmd.arg("--release");
     }
     run_status(sim_flow_root, &mut cmd, "cargo build")?;
-    let exe = if cfg!(windows) { "sim-flow.exe" } else { "sim-flow" };
+    let exe = if cfg!(windows) {
+        "sim-flow.exe"
+    } else {
+        "sim-flow"
+    };
     let bin = sim_flow_root
         .join("target")
         .join(profile.target_subdir())
@@ -203,9 +217,7 @@ fn run_status(cwd: &Path, cmd: &mut Command, label: &str) -> Result<()> {
         source,
     })?;
     if !status.success() {
-        return Err(Error::State(format!(
-            "{label} exited with status {status}"
-        )));
+        return Err(Error::State(format!("{label} exited with status {status}")));
     }
     Ok(())
 }
@@ -249,9 +261,8 @@ fn locate_latest_vsix(ext_dir: &Path) -> Result<PathBuf> {
 }
 
 fn default_vscode_bin() -> Option<&'static Path> {
-    const CANDIDATES: &[&str] = &[
-        "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
-    ];
+    const CANDIDATES: &[&str] =
+        &["/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"];
     for candidate in CANDIDATES {
         let path = Path::new(candidate);
         if path.is_file() {

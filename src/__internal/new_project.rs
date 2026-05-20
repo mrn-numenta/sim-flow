@@ -193,10 +193,7 @@ fn run_cargo_generate(
     let tmpl = project_dir.join("Cargo.toml.tmpl");
     let real = project_dir.join("Cargo.toml");
     if tmpl.is_file() {
-        std::fs::rename(&tmpl, &real).map_err(|source| Error::Io {
-            path: tmpl,
-            source,
-        })?;
+        std::fs::rename(&tmpl, &real).map_err(|source| Error::Io { path: tmpl, source })?;
     }
     Ok(())
 }
