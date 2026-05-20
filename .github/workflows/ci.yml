@@ -1,0 +1,211 @@
+name: CI
+
+# sim-flow depends on `block-diagram` and `foundation-framework` via path
+# deps that point at `../sim-foundation/...`. The quality + coverage jobs
+# below check sim-flow into `<workspace>/sim-flow/` and sim-foundation
+# into `<workspace>/sim-foundation/` so those path deps resolve as
+# siblings.
+#
+# Auth: sim-foundation is currently private. The sibling checkout uses
+# `secrets.FOUNDATION_REPO_TOKEN`, a PAT (or fine-grained token) with
+# `Contents: read` on the foundation repo. Add via:
+#   Settings -> Secrets and variables -> Actions -> New repository secret.
+#
+# Repo guard: the move from `mrn-numenta/sim-flow` to `NumentaCorp/sim-flow`
+# is a planned transfer. Both org paths are accepted so the workflow
+# survives the rename without an edit.
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Track-tip for sim-foundation. Bump to a SHA to pin reproducibly once
+  # foundation work lands on master.
+  FOUNDATION_REF: mneilly/ai-flow
+  FOUNDATION_REPO: NumentaCorp/sim-foundation
+
+jobs:
+  quality:
+    name: Fmt Clippy Test
+    if: github.repository == 'NumentaCorp/sim-flow' || github.repository == 'mrn-numenta/sim-flow'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out sim-flow
+        uses: actions/checkout@v4
+        with:
+          path: sim-flow
+
+      - name: Check out sim-foundation (sibling for path deps)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.FOUNDATION_REPO }}
+          ref: ${{ env.FOUNDATION_REF }}
+          path: sim-foundation
+          token: ${{ secrets.FOUNDATION_REPO_TOKEN }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sim-flow
+
+      - name: Check formatting
+        working-directory: sim-flow
+        run: cargo fmt --all --check
+
+      - name: Run clippy
+        working-directory: sim-flow
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run tests
+        working-directory: sim-flow
+        # `#[ignore]`-marked tests carry forward six pre-existing failures
+        # from `mneilly/ai-flow`; the rest must pass.
+        run: cargo test
+
+  coverage:
+    name: Coverage Gate
+    if: github.repository == 'NumentaCorp/sim-flow' || github.repository == 'mrn-numenta/sim-flow'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out sim-flow
+        uses: actions/checkout@v4
+        with:
+          path: sim-flow
+
+      - name: Check out sim-foundation (sibling for path deps)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.FOUNDATION_REPO }}
+          ref: ${{ env.FOUNDATION_REF }}
+          path: sim-foundation
+          token: ${{ secrets.FOUNDATION_REPO_TOKEN }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sim-flow
+
+      - name: Install cargo-tarpaulin
+        uses: taiki-e/install-action@cargo-tarpaulin
+
+      - name: Run tarpaulin
+        working-directory: sim-flow
+        run: |
+          mkdir -p target/tarpaulin
+          cargo tarpaulin --engine llvm --out Json --out Html \
+            --output-dir target/tarpaulin
+
+      - name: Publish coverage summary
+        if: always()
+        working-directory: sim-flow
+        run: |
+          {
+            echo "## Coverage"
+            echo
+            if [[ -f target/tarpaulin/tarpaulin-report.json ]]; then
+              jq -r '"Workspace: \(.coverage)% (\(.covered)/\(.coverable) lines)"' \
+                target/tarpaulin/tarpaulin-report.json
+            else
+              echo "tarpaulin did not produce a report"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-flow-coverage
+          path: |
+            sim-flow/target/tarpaulin/tarpaulin-report.json
+            sim-flow/target/tarpaulin/tarpaulin-report.html
+
+  vscode-extension:
+    name: VS Code Extension
+    if: github.repository == 'NumentaCorp/sim-flow' || github.repository == 'mrn-numenta/sim-flow'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extensions/sim-flow-vscode
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
+
+      - name: Compile
+        run: npm run compile
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Unit tests
+        run: npm run test
+
+  # Single aggregator job for branch-protection to gate on. When any
+  # subset is skipped (e.g. on a future fork without secrets), this
+  # job treats `skipped` as success and only fails on a real failure.
+  ci_result:
+    name: CI result
+    needs: [quality, coverage, vscode-extension]
+    if: always() && (github.repository == 'NumentaCorp/sim-flow' || github.repository == 'mrn-numenta/sim-flow')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check required job results
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          COVERAGE_RESULT: ${{ needs.coverage.result }}
+          VSCODE_RESULT: ${{ needs.vscode-extension.result }}
+        run: |
+          set -eu
+          failed=0
+          for entry in "quality=${QUALITY_RESULT}" "coverage=${COVERAGE_RESULT}" "vscode-extension=${VSCODE_RESULT}"; do
+            name="${entry%%=*}"
+            result="${entry#*=}"
+            case "${result}" in
+              success|skipped)
+                printf '  %s: %s\n' "${name}" "${result}"
+                ;;
+              *)
+                printf '  %s: %s (fail)\n' "${name}" "${result}" >&2
+                failed=1
+                ;;
+            esac
+          done
+          exit "${failed}"

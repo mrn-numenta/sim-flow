@@ -1,0 +1,273 @@
+name: Release
+
+# Tag-driven multi-platform release. The workflow:
+#   1. Builds the sim-flow CLI binary on each supported target
+#      (macOS arm64 + Linux x64) so the binaries match the runner's
+#      libc / linker.
+#   2. Packages a single VSIX whose bin/<platform-arch>/ tree contains
+#      every binary, so one VSIX installs on every supported platform.
+#   3. Creates a GitHub Release tagged `v*` and attaches the VSIX plus
+#      the raw binaries.
+#
+# Triggers:
+#   - `push` on `v*` tags (the canonical path: `git tag v0.1.0 &&
+#     git push --tags`).
+#   - `workflow_dispatch` for ad-hoc / branch builds (the Release step
+#     is skipped when there's no tag context; artifacts are still
+#     uploaded to the workflow run for inspection).
+#
+# sim-flow depends on `block-diagram` and `foundation-framework` via
+# path deps into `../sim-foundation/...`; each job checks out
+# sim-foundation as a sibling. Auth: `secrets.FOUNDATION_REPO_TOKEN`.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # required to create the Release on tag push
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  FOUNDATION_REF: mneilly/ai-flow
+  FOUNDATION_REPO: NumentaCorp/sim-foundation
+
+jobs:
+  # 1. Build sim-flow per target. Each job runs on a native runner so
+  #    we don't have to cross-compile + ship glibc issues.
+  build-binary:
+    name: Build sim-flow (${{ matrix.target }})
+    if: github.repository == 'NumentaCorp/sim-flow' || github.repository == 'mrn-numenta/sim-flow'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            runs-on: macos-14
+            exe: sim-flow
+          - target: linux-x64
+            runs-on: ubuntu-latest
+            exe: sim-flow
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - name: Check out sim-flow
+        uses: actions/checkout@v4
+        with:
+          path: sim-flow
+
+      - name: Check out sim-foundation (sibling for path deps)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.FOUNDATION_REPO }}
+          ref: ${{ env.FOUNDATION_REF }}
+          path: sim-foundation
+          token: ${{ secrets.FOUNDATION_REPO_TOKEN }}
+
+      - name: Cache Cargo registry + git
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            sim-flow/target
+          key: cargo-${{ matrix.target }}-${{ hashFiles('sim-flow/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ matrix.target }}-
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build sim-flow (release)
+        working-directory: sim-flow
+        run: cargo build --release --bin sim-flow
+
+      - name: Stage artifact
+        run: |
+          mkdir -p artifact/bin
+          cp sim-flow/target/release/${{ matrix.exe }} artifact/bin/${{ matrix.exe }}
+          chmod +x artifact/bin/${{ matrix.exe }}
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-flow-${{ matrix.target }}
+          path: artifact/
+          retention-days: 7
+
+  # 2. Pack the VSIX. Runs on Linux for cheapness; the extension's
+  #    bundle-bin script accepts per-target env overrides, so we can
+  #    stage both targets' binaries from this one runner.
+  build-vsix:
+    name: Package multi-platform VSIX
+    needs: build-binary
+    if: github.repository == 'NumentaCorp/sim-flow' || github.repository == 'mrn-numenta/sim-flow'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out sim-flow
+        uses: actions/checkout@v4
+        with:
+          path: sim-flow
+
+      - name: Check out sim-foundation (sibling for foundation rustdoc)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.FOUNDATION_REPO }}
+          ref: ${{ env.FOUNDATION_REF }}
+          path: sim-foundation
+          token: ${{ secrets.FOUNDATION_REPO_TOKEN }}
+
+      - name: Cache Cargo (for doc build)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            sim-flow/target
+          key: cargo-docs-${{ hashFiles('sim-flow/Cargo.lock') }}
+          restore-keys: |
+            cargo-docs-
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Download darwin-arm64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: sim-flow-darwin-arm64
+          path: dl/darwin-arm64
+
+      - name: Download linux-x64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: sim-flow-linux-x64
+          path: dl/linux-x64
+
+      - name: Install extension dependencies
+        working-directory: sim-flow/extensions/sim-flow-vscode
+        run: npm ci
+
+      # Build only the foundation rustdoc + normalize step. We skip
+      # `npm run compile:cargo` because that also runs a full
+      # `cargo build --release -p sim-flow` -- the matrix jobs already
+      # produced those binaries and we downloaded them above; the
+      # packager run would re-do that work for nothing.
+      - name: Build foundation rustdoc
+        working-directory: sim-foundation
+        run: |
+          cargo doc --no-deps \
+            --target-dir ../sim-flow-vscode-rustdoc \
+            -p foundation-framework -p foundation-macros
+
+      - name: Normalize rustdoc into VSIX-bundled API docs
+        working-directory: sim-flow/extensions/sim-flow-vscode
+        run: |
+          node scripts/render-rustdoc-api.mjs \
+            "${{ github.workspace }}/sim-flow-vscode-rustdoc/doc" \
+            "${{ github.workspace }}/sim-flow-vscode-api-docs"
+
+      - name: Compile extension TypeScript
+        working-directory: sim-flow/extensions/sim-flow-vscode
+        run: npm run compile
+
+      # Derive a clean release version from the tag (`v0.1.0` -> `0.1.0`).
+      # On manual `workflow_dispatch` runs there's no tag, so fall back
+      # to a dev-tagged version built from the extension's package.json
+      # base + `-dev.<sha>` suffix. Matches the local `package-dev.mjs`
+      # convention so dispatch builds and `npm run package` builds share
+      # the same shape. Semver constraint: vsce rejects `+<build>`
+      # metadata, so we stick to `<major>.<minor>.<patch>-<prerelease>`.
+      - name: Derive release version
+        id: version
+        working-directory: sim-flow
+        run: |
+          ref="${GITHUB_REF_NAME:-}"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${ref#v}"
+          else
+            short=$(git rev-parse --short HEAD)
+            base=$(node -p "require('./extensions/sim-flow-vscode/package.json').version" 2>/dev/null || echo "0.0.0")
+            base="${base%%-dev.*}"
+            version="${base}-dev.${short}"
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "Release version: $version"
+
+      - name: Stage + package VSIX
+        working-directory: sim-flow/extensions/sim-flow-vscode
+        env:
+          SIM_FLOW_RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          SIM_FLOW_BUNDLE_TARGETS: darwin-arm64,linux-x64
+          SIM_FLOW_BUNDLE_DARWIN_ARM64_BINARY: ${{ github.workspace }}/dl/darwin-arm64/bin/sim-flow
+          SIM_FLOW_BUNDLE_LINUX_X64_BINARY: ${{ github.workspace }}/dl/linux-x64/bin/sim-flow
+        run: node scripts/package-release.mjs
+
+      - name: Locate VSIX
+        id: locate
+        working-directory: sim-flow/extensions/sim-flow-vscode
+        run: |
+          vsix=$(ls -t build/*.vsix | head -1)
+          echo "path=$vsix" >>"$GITHUB_OUTPUT"
+          echo "name=$(basename "$vsix")" >>"$GITHUB_OUTPUT"
+          ls -la build/*.vsix
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: sim-flow/extensions/sim-flow-vscode/build/*.vsix
+          retention-days: 30
+
+  # 3. Attach to a GitHub Release. Only fires on tag push -- manual
+  #    workflow_dispatch runs stop after the artifact upload above.
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v') && (github.repository == 'NumentaCorp/sim-flow' || github.repository == 'mrn-numenta/sim-flow')
+    needs:
+      - build-binary
+      - build-vsix
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download VSIX
+        uses: actions/download-artifact@v4
+        with:
+          name: vsix
+          path: release/
+
+      - name: Download darwin-arm64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: sim-flow-darwin-arm64
+          path: release/darwin-arm64
+
+      - name: Download linux-x64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: sim-flow-linux-x64
+          path: release/linux-x64
+
+      - name: Rename platform binaries for release
+        run: |
+          mv release/darwin-arm64/bin/sim-flow release/sim-flow-darwin-arm64
+          mv release/linux-x64/bin/sim-flow release/sim-flow-linux-x64
+          chmod +x release/sim-flow-darwin-arm64 release/sim-flow-linux-x64
+          rm -rf release/darwin-arm64 release/linux-x64
+          ls -la release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release/*.vsix
+            release/sim-flow-darwin-arm64
+            release/sim-flow-linux-x64
