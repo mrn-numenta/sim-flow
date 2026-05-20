@@ -600,6 +600,33 @@ pub(crate) enum Command {
         #[arg(long)]
         netlist: Option<PathBuf>,
     },
+    /// Build sim-flow + the VS Code extension, optionally installing
+    /// the VSIX in VS Code. Replaces the legacy
+    /// `scripts/install-vscode-extension.sh`; the install logic lives
+    /// in `sim_flow::install` so consumers like sim-models can call
+    /// it from Rust with a pre-built binary.
+    InstallExtension {
+        /// Stop after packaging the VSIX (don't install). Prints the
+        /// VSIX path on stdout so the caller can copy it elsewhere.
+        #[arg(long, short = 'p')]
+        package_only: bool,
+        /// Cargo profile for the sim-flow build. `release` (the
+        /// default) is what production VSIX installs ship; `dev` is
+        /// faster to iterate on.
+        #[arg(long, default_value = "release")]
+        profile: String,
+        /// Pre-built sim-flow binary to bundle into the VSIX. When
+        /// supplied, the cargo build is skipped entirely. Useful for
+        /// CI and consumers that build sim-flow themselves against
+        /// their own Cargo.lock.
+        #[arg(long, value_name = "PATH")]
+        prebuilt_binary: Option<PathBuf>,
+        /// Path to the `code` CLI. Used by `npm run reload` to install
+        /// the VSIX. Defaults to a known macOS location when present,
+        /// otherwise whatever `code` is on `$PATH`.
+        #[arg(long, env = "VSCODE_BIN", value_name = "PATH")]
+        vscode_bin: Option<PathBuf>,
+    },
     /// Manage stored API keys for LLM backends. Resolution order at
     /// run time: provider env var (e.g. `ANTHROPIC_API_KEY`) →
     /// `<config>/sim-flow/credentials.toml` → (in the VS Code

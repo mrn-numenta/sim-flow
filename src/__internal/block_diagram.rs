@@ -40,8 +40,8 @@ pub struct RenderConfig<'a> {
 /// Render the block diagram and return the path the SVG was
 /// written to.
 pub fn render_for_project(cfg: RenderConfig<'_>) -> Result<PathBuf> {
-    use block_diagram::__internal::render::RenderOptions;
-    use block_diagram::__internal::sugiyama::{Direction, LayoutConfig};
+    use block_diagram::render::RenderOptions;
+    use block_diagram::sugiyama::{Direction, LayoutConfig};
 
     let dot = cfg.project_dir.join(".sim-flow");
     std::fs::create_dir_all(&dot).map_err(|err| Error::Io {
@@ -77,7 +77,7 @@ pub fn render_for_project(cfg: RenderConfig<'_>) -> Result<PathBuf> {
         direction,
         ..LayoutConfig::default()
     };
-    let svg = block_diagram::__internal::render_netlist_file(
+    let svg = block_diagram::render_netlist_file(
         netlist_path,
         layout,
         RenderOptions {

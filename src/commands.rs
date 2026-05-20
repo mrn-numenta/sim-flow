@@ -209,6 +209,17 @@ pub(crate) fn run(cli: &Cli) -> sim_flow::Result<()> {
             *show_types,
             netlist.as_deref(),
         ),
+        Command::InstallExtension {
+            package_only,
+            profile,
+            prebuilt_binary,
+            vscode_bin,
+        } => install_extension_cmd(
+            *package_only,
+            profile,
+            prebuilt_binary.as_deref(),
+            vscode_bin.as_deref(),
+        ),
         Command::Keys { action } => keys_cmd(action),
         Command::Watchers { action } => watchers_cmd(action),
         Command::Metrics { group_by, json } => metrics_cmd(&project_dir, *group_by, *json),
@@ -1337,6 +1348,33 @@ fn block_diagram_cmd(
         },
     )?;
     eprintln!("block-diagram: wrote {}", path.display());
+    Ok(())
+}
+
+fn install_extension_cmd(
+    package_only: bool,
+    profile: &str,
+    prebuilt_binary: Option<&Path>,
+    vscode_bin: Option<&Path>,
+) -> sim_flow::Result<()> {
+    let profile = match profile {
+        "release" => sim_flow::install::Profile::Release,
+        "dev" | "debug" => sim_flow::install::Profile::Dev,
+        other => {
+            return Err(sim_flow::Error::Config(format!(
+                "unknown --profile `{other}`; expected `release` or `dev`",
+            )));
+        }
+    };
+    let sim_flow_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let opts = sim_flow::install::Options {
+        sim_flow_root,
+        profile,
+        package_only,
+        prebuilt_binary: prebuilt_binary.map(Path::to_path_buf),
+        vscode_bin: vscode_bin.map(Path::to_path_buf),
+    };
+    sim_flow::install::install_extension(opts)?;
     Ok(())
 }
 
