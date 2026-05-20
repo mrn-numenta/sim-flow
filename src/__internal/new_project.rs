@@ -183,6 +183,21 @@ fn run_cargo_generate(
             output.status.code()
         )));
     }
+    // The template ships its `Cargo.toml` as `Cargo.toml.tmpl` so cargo's
+    // package-discovery walk (run by consumers like sim-models when this
+    // crate is a git dep) doesn't try to parse the file's `{{crate_name}}`
+    // placeholder. cargo-generate expands the placeholders on copy but
+    // preserves the filename, so we rename the expanded file back to its
+    // real name here.
+    let project_dir = destination.join(project_name);
+    let tmpl = project_dir.join("Cargo.toml.tmpl");
+    let real = project_dir.join("Cargo.toml");
+    if tmpl.is_file() {
+        std::fs::rename(&tmpl, &real).map_err(|source| Error::Io {
+            path: tmpl,
+            source,
+        })?;
+    }
     Ok(())
 }
 
