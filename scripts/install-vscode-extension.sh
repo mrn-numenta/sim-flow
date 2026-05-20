@@ -50,7 +50,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXT_DIR="${ROOT_DIR}/tools/sim-flow/extensions/sim-flow-vscode"
+EXT_DIR="${ROOT_DIR}/extensions/sim-flow-vscode"
 CARGO_PROFILE="${CARGO_PROFILE:-release}"
 
 log() { echo "install-vscode-extension: $*"; }
