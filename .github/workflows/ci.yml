@@ -91,6 +91,25 @@ jobs:
           fi
           echo "sim-foundation ${FOUNDATION_SHA}: present in baked mirror"
 
+      # Defense against drift to a feature-branch SHA. Consumers (sim-models)
+      # depend on sim-foundation directly AND transitively through sim-flow;
+      # if sim-flow pins a foundation SHA that's not on sim-foundation's
+      # master, Cargo's unification in the consumer can't pick it without
+      # also moving that consumer off master, which is rarely intended.
+      # `merge-base --is-ancestor` checks reachability from master regardless
+      # of how many commits have landed since the mirror was baked.
+      - name: Verify foundation SHA is on sim-foundation master
+        run: |
+          set -euo pipefail
+          FOUNDATION_SHA=$(grep -oE 'sim-foundation\.git#[a-f0-9]+' Cargo.lock | head -1 | cut -d'#' -f2)
+          if ! git --git-dir=/opt/sim-foundation.git merge-base --is-ancestor "${FOUNDATION_SHA}" refs/heads/master 2>/dev/null; then
+            echo "::error::sim-flow's Cargo.lock pins sim-foundation@${FOUNDATION_SHA}, which is not reachable from sim-foundation's master branch." >&2
+            echo "::error::Consumers (sim-models) cannot pull this SHA from master and the unified dep tree won't resolve cleanly." >&2
+            echo "::error::Either rebase the foundation change onto master, or run \`cargo update -p foundation-framework\` to pick up a master-reachable SHA." >&2
+            exit 1
+          fi
+          echo "sim-foundation ${FOUNDATION_SHA}: on master"
+
       - name: Verify Cargo.toml has no local foundation patch
         run: ./scripts/checks.sh no-local-patch
 
