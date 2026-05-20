@@ -478,6 +478,16 @@ export function filterPresentationEntries(
   );
 }
 
+export function capTranscriptForRender(
+  transcript: ChatTranscriptEntry[],
+  cap: number,
+): ChatTranscriptEntry[] {
+  if (!Number.isFinite(cap) || cap <= 0 || transcript.length <= cap) {
+    return transcript;
+  }
+  return transcript.slice(transcript.length - cap);
+}
+
 function entryId(id: number): string {
   return `entry-${id}`;
 }

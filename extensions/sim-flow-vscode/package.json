@@ -409,6 +409,12 @@
           "default": false,
           "description": "When enabled, the chat panel marks transcript turns that have been evicted from the orchestrator's prompt stack (via dedup, mutation invalidation, phase-boundary cleanup, or explicit summarization) with a red ✗ icon and an explanatory tooltip. The transcript itself always retains the full history regardless of this setting; this only controls whether the visual indicator is shown."
         },
+        "sim-flow.chatPanel.transcriptCap": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 500,
+          "description": "Maximum number of transcript entries the host sends to the chat webview per state update. Older entries are dropped from the snapshot so the webview never re-renders an unbounded history. The full conversation is still persisted on disk and in host memory; this is purely a render-cap. The default (500) easily fills any viewport even when every step group is collapsed to its summary line. Set to 0 to disable the cap (legacy behavior: send the entire transcript on every update)."
+        },
         "sim-flow.auto.maxWorkIterations": {
           "type": "integer",
           "minimum": 1,

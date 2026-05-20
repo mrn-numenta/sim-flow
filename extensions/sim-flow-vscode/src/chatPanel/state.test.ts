@@ -8,6 +8,7 @@ import {
   appendNote,
   appendOrchestratorUserEntry,
   appendUserPrompt,
+  capTranscriptForRender,
   clearConversationState,
   completeAssistantReasoning,
   completeAssistantTurn,
@@ -22,6 +23,8 @@ import {
   toLlmMessages,
   toStoredConversation,
 } from "./state";
+
+import type { ChatTranscriptEntry } from "./messages";
 
 describe("chatPanel/state", () => {
   it("appends a user turn and streams assistant chunks into the placeholder entry", () => {
@@ -482,5 +485,33 @@ describe("chatPanel/state", () => {
       streaming: false,
     });
     expect((t[1] as { body: string }).body).toContain("```tool:read_file");
+  });
+
+  it("capTranscriptForRender keeps the tail and returns the input when under cap", () => {
+    const make = (n: number): ChatTranscriptEntry[] =>
+      Array.from({ length: n }, (_, i) => ({
+        id: `entry-${i + 1}`,
+        kind: "user" as const,
+        title: "User",
+        body: `m${i + 1}`,
+      }));
+
+    const ten = make(10);
+    // Under cap: same array reference returned (no allocation).
+    expect(capTranscriptForRender(ten, 50)).toBe(ten);
+    // Equal to cap: same array reference returned.
+    expect(capTranscriptForRender(ten, 10)).toBe(ten);
+    // Cap = 0 means unlimited (legacy behavior).
+    expect(capTranscriptForRender(ten, 0)).toBe(ten);
+    // Negative or non-finite cap is treated as unlimited.
+    expect(capTranscriptForRender(ten, -1)).toBe(ten);
+    expect(capTranscriptForRender(ten, Number.NaN)).toBe(ten);
+
+    // Over cap: tail-N preserved, oldest dropped, order intact.
+    const fifty = make(50);
+    const tail = capTranscriptForRender(fifty, 10);
+    expect(tail).toHaveLength(10);
+    expect(tail[0].id).toBe("entry-41");
+    expect(tail[9].id).toBe("entry-50");
   });
 });

@@ -64,6 +64,7 @@ import {
   appendNote,
   appendOrchestratorUserEntry,
   appendUserPrompt,
+  capTranscriptForRender,
   clearConversationState,
   completeAssistantReasoning,
   completeAssistantTurn,
@@ -270,6 +271,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         ) {
           // Toggling the indicator should flip immediately, not at
           // the next file-watcher tick.
+          void this.refresh();
+        }
+        if (
+          event.affectsConfiguration("sim-flow.chatPanel.transcriptCap")
+        ) {
           void this.refresh();
         }
       }),
@@ -2201,7 +2207,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           : buildNotice(context, isStreaming),
       totalInputTokensEstimate: tokenTotals.input,
       totalOutputTokensEstimate: tokenTotals.output,
-      transcript: filterPresentationEntries(conversation.transcript),
+      transcript: capTranscriptForRender(
+        filterPresentationEntries(conversation.transcript),
+        vscode.workspace
+          .getConfiguration("sim-flow")
+          .get<number>("chatPanel.transcriptCap") ?? 500,
+      ),
       isStreaming,
       awaitingUserInput: awaitingPumpInput,
       currentPrompt:
