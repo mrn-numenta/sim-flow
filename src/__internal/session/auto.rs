@@ -1695,15 +1695,24 @@ where
     // sees "no critique yet" rather than a stale one.
     let critiques_dir = opts.project_dir.join("docs/critiques");
     let critique_json = critiques_dir.join(format!("{step_id}-critique.json", step_id = step.id));
-    if critique_json.exists() {
+    let shard_dir = critiques_dir.join(step.id);
+    let cleared_legacy = critique_json.exists();
+    let cleared_shards = shard_dir.is_dir();
+    if cleared_legacy {
         let _ = std::fs::remove_file(&critique_json);
         let critique_md = critiques_dir.join(format!("{step_id}-critique.md", step_id = step.id));
         let _ = std::fs::remove_file(&critique_md);
+    }
+    if cleared_shards {
+        let _ = std::fs::remove_dir_all(&shard_dir);
+    }
+    if cleared_legacy || cleared_shards {
         auto_host.send(&Event::Diagnostic {
             level: DiagnosticLevel::Info,
             message: format!(
                 "auto: {step_id} parallel plan-detail re-entry invalidated prior critique \
-                 JSON to avoid acting on stale findings from a previous run",
+                 collateral (legacy={cleared_legacy}, shard_dir={cleared_shards}) to avoid \
+                 acting on stale findings from a previous run",
                 step_id = step.id,
             ),
         })?;
@@ -1933,12 +1942,26 @@ where
     // the caller's `read_gate_findings` call would see an empty list and
     // advance the step incorrectly.
     //
-    // To keep the V1 "no auto-retry" contract while not losing findings:
-    // read the gate-findings file after each iteration, and break out of
-    // the loop on the first non-empty result. The blocking findings stay
-    // on disk for the caller's gate evaluation; the caller flips to
-    // manual on a dirty gate the same way it would for a single-critique
-    // path.
+    // Per-milestone shard sharding (V1 in-place variant). Each
+    // critique writes to the shared `docs/critiques/<step>-critique.{json,md}`
+    // path; we move the artifacts to per-milestone shard paths
+    // under `docs/critiques/<step>/` immediately after each
+    // sub-session finishes, so the next critique's writes don't
+    // clobber the previous one's findings. The gate's directory-
+    // mode `CritiqueClean` then sees every shard.
+    let shard_dir = opts.project_dir.join("docs/critiques").join(step_id_ref);
+    std::fs::create_dir_all(&shard_dir).map_err(|source| crate::Error::Io {
+        path: shard_dir.clone(),
+        source,
+    })?;
+    let legacy_json = opts
+        .project_dir
+        .join("docs/critiques")
+        .join(format!("{step_id_ref}-critique.json"));
+    let legacy_md = opts
+        .project_dir
+        .join("docs/critiques")
+        .join(format!("{step_id_ref}-critique.md"));
     for milestone_rel in &pending {
         let bare_name = std::path::Path::new(milestone_rel)
             .file_name()
@@ -1954,23 +1977,19 @@ where
             /*consume_end=*/ true,
             /*synth_hello=*/ true,
             llm,
-            Some(bare_name),
+            Some(bare_name.clone()),
         )?;
-        let findings = read_gate_findings(&opts.project_dir, step_id_ref);
-        if !findings.is_empty() {
-            // Halt: this critique's findings survive on disk so the
-            // caller sees them. Continuing would let a clean
-            // milestone-K critique overwrite the blockers.
-            auto_host.send(&Event::Diagnostic {
-                level: DiagnosticLevel::Info,
-                message: format!(
-                    "auto: {step_id_ref} parallel plan-detail Phase 2 halted on \
-                     milestone `{milestone_rel}` with {n} gate finding(s); \
-                     remaining milestones' critiques deferred to manual",
-                    n = findings.len(),
-                ),
-            })?;
-            break;
+        // Move the freshly-written legacy critique paths to per-
+        // milestone shards so the next iteration's writes don't
+        // overwrite this one's findings.
+        let shard_stem = bare_name.trim_end_matches(".md");
+        let shard_json = shard_dir.join(format!("{shard_stem}.json"));
+        let shard_md = shard_dir.join(format!("{shard_stem}.md"));
+        if legacy_json.exists() {
+            let _ = std::fs::rename(&legacy_json, &shard_json);
+        }
+        if legacy_md.exists() {
+            let _ = std::fs::rename(&legacy_md, &shard_md);
         }
     }
     Ok(true)
@@ -2179,11 +2198,19 @@ where
 
     let contribs_only: Vec<WorktreeContribution> =
         contribs_vec.iter().map(|(_, c)| c.clone()).collect();
-    let _aggregated = crate::__internal::worktree::merge_contributions(
+    let shards_written = crate::__internal::worktree::merge_contributions(
         &opts.project_dir,
         step.id,
         &contribs_only,
     )?;
+    auto_host.send(&Event::Diagnostic {
+        level: DiagnosticLevel::Info,
+        message: format!(
+            "auto: {step_id} parallel plan-detail merged {shards_written} critique \
+             shard(s) into `docs/critiques/{step_id}/` for the directory-mode gate",
+            step_id = step.id,
+        ),
+    })?;
     // `contribs_vec` drops here -- Worktree::Drop cleans each one
     // up via `git worktree remove --force`.
     drop(contribs_vec);
@@ -3826,6 +3853,13 @@ fn kind_label_for_manual(kind: crate::client::SessionKind) -> &'static str {
 /// that let DM3b advance past 5 heading-style `## BLOCKER:`
 /// findings the gate-side parser missed.
 fn read_gate_findings(project_dir: &Path, step_id: &str) -> Vec<String> {
+    // Try the sharded directory first -- plan-detail walks
+    // (DM2cd / DM3ad / DM4ad) land per-milestone shards there. Falls
+    // back to the legacy single-file path for non-sharded steps.
+    let shard_dir = project_dir.join("docs/critiques").join(step_id);
+    if shard_dir.is_dir() {
+        return read_gate_findings_from_shard_dir(&shard_dir);
+    }
     let path = project_dir
         .join("docs/critiques")
         .join(format!("{step_id}-critique.md"));
@@ -3842,6 +3876,59 @@ fn read_gate_findings(project_dir: &Path, step_id: &str) -> Vec<String> {
             crate::critique::Finding::Blocker(text) => format!("BLOCKER: {text}"),
         })
         .collect()
+}
+
+fn read_gate_findings_from_shard_dir(shard_dir: &Path) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let entries = match std::fs::read_dir(shard_dir) {
+        Ok(e) => e,
+        Err(_) => return out,
+    };
+    let mut shards: Vec<std::path::PathBuf> = Vec::new();
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if !p.is_file() {
+            continue;
+        }
+        if !p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.to_ascii_lowercase().ends_with(".json"))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        shards.push(p);
+    }
+    shards.sort();
+    for json in &shards {
+        let text = match std::fs::read_to_string(json) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let critique = match crate::critique::Critique::from_json(&text) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let shard = json
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("(unknown)");
+        for f in critique.blocking() {
+            match f {
+                crate::critique::Finding::Resolved(_) => {
+                    unreachable!("blocking() excludes resolved")
+                }
+                crate::critique::Finding::Unresolved(text) => {
+                    out.push(format!("[{shard}] UNRESOLVED: {text}"));
+                }
+                crate::critique::Finding::Blocker(text) => {
+                    out.push(format!("[{shard}] BLOCKER: {text}"));
+                }
+            }
+        }
+    }
+    out
 }
 
 fn current_iso8601() -> String {

@@ -260,32 +260,27 @@ pub struct WorktreeContribution {
 /// For each contribution:
 ///   - Copy the worker's milestone file to the main project tree at
 ///     the same project-relative path.
-///   - Read the worker's `docs/critiques/<step>-critique.json` (if
-///     present); collect its findings tagged with the worker's
-///     milestone name.
+///   - Copy the worker's `docs/critiques/<step>-critique.json` (if
+///     present) to a per-milestone shard at
+///     `docs/critiques/<step>/<milestone_name>.json` in main,
+///     and re-render the markdown sibling alongside.
 ///
-/// After all contributions are processed:
-///   - Write the aggregated critique JSON to the main project's
-///     `docs/critiques/<step>-critique.json`.
-///   - Re-render the human-readable `.md` view.
+/// No aggregation: each milestone's critique stays separate so the
+/// gate's directory-aware `CritiqueClean` evaluator can surface
+/// every blocker from every shard in one pass. The legacy
+/// `docs/critiques/<step>-critique.json` is left alone (the parallel
+/// walk's entry point already removes it on re-entry to avoid stale
+/// findings).
 ///
-/// Returns the aggregated `Critique` so the caller can decide
-/// whether the parallel walk's gate is clean. Fails loud on
-/// malformed worker JSONs (a worker that writes garbage shouldn't
-/// be silently treated as "no findings").
+/// Returns the number of shards written -- the caller logs this
+/// alongside the parallel-walk Diagnostic.
 pub fn merge_contributions(
     main_project_dir: &Path,
     step_id: &str,
     contributions: &[WorktreeContribution],
-) -> Result<crate::critique::Critique> {
-    use crate::critique::{CritiqueFinding, CritiqueJson};
-
-    let mut aggregated = CritiqueJson {
-        step: step_id.to_string(),
-        summary: String::new(),
-        findings: Vec::new(),
-        notes: String::new(),
-    };
+) -> Result<usize> {
+    let shard_dir = main_project_dir.join("docs/critiques").join(step_id);
+    let mut shards_written: usize = 0;
 
     for contrib in contributions {
         // Copy milestone file back to main.
@@ -304,95 +299,75 @@ pub fn merge_contributions(
             })?;
         }
 
-        // Read worker's critique JSON, if present. A worker that
-        // ended without writing one (e.g. crashed mid-Critique)
-        // contributes no findings -- the coordinator's gate
-        // re-evaluation will still see the milestone-resolved
-        // structural check pass or fail accordingly.
-        let json_path = contrib
+        // Copy worker's critique JSON to a per-milestone shard. A
+        // worker that ended without writing one (e.g. crashed
+        // mid-Critique) leaves no shard -- the directory-mode gate
+        // sees the empty slot and the run flips to manual the same
+        // way it would for any other missing critique.
+        let worker_json = contrib
             .worktree_path
             .join("docs/critiques")
             .join(format!("{step_id}-critique.json"));
-        if !json_path.exists() {
+        if !worker_json.exists() {
             continue;
         }
-        let body = std::fs::read_to_string(&json_path).map_err(|source| Error::Io {
-            path: json_path.clone(),
+        let body = std::fs::read_to_string(&worker_json).map_err(|source| Error::Io {
+            path: worker_json.clone(),
             source,
         })?;
-        let parsed: CritiqueJson = serde_json::from_str(&body).map_err(|err| {
+        // Parse just to validate -- a malformed worker JSON should
+        // surface as a hard error rather than silently writing
+        // garbage into the shard.
+        let _ = serde_json::from_str::<crate::critique::CritiqueJson>(&body).map_err(|err| {
             Error::State(format!(
                 "worker critique JSON malformed at {}: {err}",
-                json_path.display()
+                worker_json.display()
             ))
         })?;
-
-        // Aggregation. Tag each finding's `section` with the
-        // milestone name so the rendered markdown groups findings
-        // per-milestone. Concatenate notes; join summaries.
-        if !parsed.summary.trim().is_empty() {
-            if !aggregated.summary.is_empty() {
-                aggregated.summary.push_str("\n\n");
-            }
-            aggregated.summary.push_str(&format!(
-                "**{}**: {}",
-                contrib.milestone_name,
-                parsed.summary.trim()
-            ));
-        }
-        for f in parsed.findings {
-            aggregated.findings.push(CritiqueFinding {
-                kind: f.kind,
-                section: section_for(&contrib.milestone_name, &f.section),
-                title: f.title,
-                body: f.body,
-            });
-        }
-        if !parsed.notes.trim().is_empty() {
-            if !aggregated.notes.is_empty() {
-                aggregated.notes.push_str("\n\n");
-            }
-            aggregated.notes.push_str(&format!(
-                "**{}**: {}",
-                contrib.milestone_name,
-                parsed.notes.trim()
-            ));
-        }
-    }
-
-    // Write aggregated JSON to main + re-render markdown.
-    let json_rel = format!("docs/critiques/{step_id}-critique.json");
-    let json_abs = main_project_dir.join(&json_rel);
-    if let Some(parent) = json_abs.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| Error::Io {
-            path: parent.to_path_buf(),
+        std::fs::create_dir_all(&shard_dir).map_err(|source| Error::Io {
+            path: shard_dir.clone(),
             source,
         })?;
+        let shard_filename = sanitize_shard_filename(&contrib.milestone_name);
+        let shard_json = shard_dir.join(format!("{shard_filename}.json"));
+        std::fs::write(&shard_json, body).map_err(|source| Error::Io {
+            path: shard_json.clone(),
+            source,
+        })?;
+        // Re-render the markdown sibling. Path is computed
+        // relative to the main project dir for the renderer's
+        // `read_to_string` step.
+        let json_rel = format!("docs/critiques/{step_id}/{shard_filename}.json");
+        crate::critique::render_critique_markdown_to_disk(main_project_dir, &json_rel)?;
+        shards_written += 1;
     }
-    let body = serde_json::to_string_pretty(&aggregated).map_err(|err| {
-        Error::State(format!(
-            "merge_contributions: failed to serialize aggregated JSON: {err}"
-        ))
-    })?;
-    std::fs::write(&json_abs, body).map_err(|source| Error::Io {
-        path: json_abs.clone(),
-        source,
-    })?;
-    crate::critique::render_critique_markdown_to_disk(main_project_dir, &json_rel)?;
 
-    crate::critique::Critique::from_json(&serde_json::to_string(&aggregated).map_err(|err| {
-        Error::State(format!(
-            "merge_contributions: failed to re-serialize aggregated JSON: {err}"
-        ))
-    })?)
+    Ok(shards_written)
 }
 
-fn section_for(milestone_name: &str, original: &str) -> String {
-    if original.trim().is_empty() {
-        milestone_name.to_string()
-    } else {
-        format!("{milestone_name} · {original}")
+/// Strip path separators / leading dots / control chars from a
+/// milestone name so it can be safely used as a filename. The names
+/// we receive (e.g. `"milestone-03-decode.md"`) are already
+/// well-formed; this is defensive against accidental path-traversal
+/// content. Trailing `.md` is stripped since the shard adds `.json`
+/// itself.
+fn sanitize_shard_filename(name: &str) -> String {
+    let trimmed = name.trim_end_matches(".md");
+    let mut out = String::with_capacity(trimmed.len());
+    for ch in trimmed.chars() {
+        match ch {
+            '/' | '\\' | '\0' => out.push('_'),
+            c if c.is_control() => out.push('_'),
+            c => out.push(c),
+        }
     }
+    if out.starts_with('.') {
+        out.insert(0, '_');
+    }
+    if out.is_empty() {
+        out.push_str("unnamed");
+    }
+    out
 }
 
 fn propagate_sim_flow_state(main: &Path, worktree: &Path) -> Result<()> {
@@ -612,7 +587,8 @@ mod tests {
             },
         ];
 
-        let aggregated = merge_contributions(&main, "DM2cd", &contribs).unwrap();
+        let shards_written = merge_contributions(&main, "DM2cd", &contribs).unwrap();
+        assert_eq!(shards_written, 2);
 
         // Milestone files copied back to main.
         assert_eq!(
@@ -624,23 +600,29 @@ mod tests {
             "# 02 detailed\n"
         );
 
-        // Aggregated JSON has both summaries + the worker-B blocker.
-        let json_body =
-            std::fs::read_to_string(main.join("docs/critiques/DM2cd-critique.json")).unwrap();
-        assert!(json_body.contains("milestone-01 clean"));
-        assert!(json_body.contains("milestone-02 had issues"));
-        assert!(json_body.contains("missing trace"));
-
-        // Markdown was re-rendered.
-        assert!(main.join("docs/critiques/DM2cd-critique.md").exists());
-
-        // Aggregated Critique reports one blocking finding.
-        let blocking: Vec<_> = aggregated
-            .findings
-            .iter()
-            .filter(|f| f.is_blocking())
-            .collect();
-        assert_eq!(blocking.len(), 1, "expected exactly one blocker");
+        // Each worker's critique landed at its own shard path.
+        let shard_a = main.join("docs/critiques/DM2cd/milestone-01-foo.json");
+        let shard_b = main.join("docs/critiques/DM2cd/milestone-02-bar.json");
+        let body_a = std::fs::read_to_string(&shard_a).unwrap();
+        let body_b = std::fs::read_to_string(&shard_b).unwrap();
+        assert!(body_a.contains("milestone-01 clean"));
+        assert!(body_b.contains("milestone-02 had issues"));
+        assert!(body_b.contains("missing trace"));
+        // Markdown siblings rendered.
+        assert!(
+            main.join("docs/critiques/DM2cd/milestone-01-foo.md")
+                .exists()
+        );
+        assert!(
+            main.join("docs/critiques/DM2cd/milestone-02-bar.md")
+                .exists()
+        );
+        // No aggregated per-step JSON is written -- the gate's
+        // directory-mode scan walks the shard dir directly.
+        assert!(
+            !main.join("docs/critiques/DM2cd-critique.json").exists(),
+            "merge_contributions must not write the legacy aggregated JSON"
+        );
     }
 
     #[test]
@@ -659,8 +641,11 @@ mod tests {
             milestone_rel_path: "docs/impl-plan/milestone-01-foo.md".into(),
         }];
 
-        let aggregated = merge_contributions(&main, "DM2cd", &contribs).unwrap();
-        assert!(aggregated.findings.is_empty(), "no findings expected");
+        let shards_written = merge_contributions(&main, "DM2cd", &contribs).unwrap();
+        assert_eq!(
+            shards_written, 0,
+            "missing critique JSON means no shard was written"
+        );
         assert!(
             main.join("docs/impl-plan/milestone-01-foo.md").exists(),
             "milestone file still copied even when critique is missing"

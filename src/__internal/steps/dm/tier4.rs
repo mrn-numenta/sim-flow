@@ -80,7 +80,7 @@ pub(super) fn dm4ad() -> StepDescriptor {
                 "<!-- detail-pending",
                 "every docs/perf-plan/perf-milestone-NN-*.md stub has been detailed",
             ),
-            critique_clean("DM4ad"),
+            critique_dir_clean("DM4ad"),
         ],
         walk_gate_checks: vec![],
         work_artifacts: &["docs/perf-plan/"],

@@ -382,22 +382,105 @@ pub(super) fn evaluate_one(project_dir: &Path, check: &GateCheck) -> Result<Opti
                     reason: format!("critique missing: {}", full.display()),
                 }));
             }
-            let critique = Critique::load(&full)?;
-            if critique.has_blocking() {
-                let summary = critique
-                    .blocking()
-                    .into_iter()
-                    .map(|f| format!("  - {}: {}", marker(f), f.text()))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                return Ok(Some(GateFailure {
-                    description: description.clone(),
-                    reason: format!("critique has blocking findings:\n{summary}"),
-                }));
+            let meta = std::fs::metadata(&full).map_err(|source| Error::Io {
+                path: full.clone(),
+                source,
+            })?;
+            if meta.is_dir() {
+                evaluate_critique_dir_clean(&full, description)
+            } else {
+                let critique = Critique::load(&full)?;
+                if critique.has_blocking() {
+                    let summary = critique
+                        .blocking()
+                        .into_iter()
+                        .map(|f| format!("  - {}: {}", marker(f), f.text()))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    return Ok(Some(GateFailure {
+                        description: description.clone(),
+                        reason: format!("critique has blocking findings:\n{summary}"),
+                    }));
+                }
+                Ok(None)
             }
-            Ok(None)
         }
     }
+}
+
+/// Directory-mode `CritiqueClean`: scan every `*.json` critique file
+/// in `dir` (one level deep, non-recursive), collect EVERY blocking
+/// finding from EVERY file, and report them all as a single
+/// `GateFailure`. Never short-circuits on the first dirty file --
+/// the operator wants the full picture so they can fix everything
+/// in one pass.
+///
+/// An empty directory is treated as a missing critique: per-milestone
+/// shards mean "no shards landed" is structurally the same as
+/// "the single critique never wrote."
+fn evaluate_critique_dir_clean(dir: &Path, description: &str) -> Result<Option<GateFailure>> {
+    let entries = std::fs::read_dir(dir).map_err(|source| Error::Io {
+        path: dir.to_path_buf(),
+        source,
+    })?;
+    let mut json_files: Vec<PathBuf> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.to_ascii_lowercase().ends_with(".json") {
+            continue;
+        }
+        json_files.push(path);
+    }
+    if json_files.is_empty() {
+        return Ok(Some(GateFailure {
+            description: description.to_string(),
+            reason: format!("critique directory empty: {}", dir.display()),
+        }));
+    }
+    // Stable order so the diagnostic is reproducible across runs.
+    json_files.sort();
+    let mut all_blocking: Vec<String> = Vec::new();
+    for json in &json_files {
+        // Parse the JSON directly. `Critique::load` would treat the
+        // `.json` path as a markdown file when no `.md` sibling is
+        // resolved, regex-scanning the JSON body for line markers
+        // and finding none -- silently dropping every shard's
+        // findings.
+        let text = std::fs::read_to_string(json).map_err(|source| Error::Io {
+            path: json.clone(),
+            source,
+        })?;
+        let critique = Critique::from_json(&text)?;
+        if !critique.has_blocking() {
+            continue;
+        }
+        let shard = json
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("(unknown)")
+            .to_string();
+        for f in critique.blocking() {
+            all_blocking.push(format!("  - [{shard}] {}: {}", marker(f), f.text()));
+        }
+    }
+    if all_blocking.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(GateFailure {
+        description: description.to_string(),
+        reason: format!(
+            "critique directory has {} blocking finding(s) across {} shard(s):\n{}",
+            all_blocking.len(),
+            json_files.len(),
+            all_blocking.join("\n")
+        ),
+    }))
 }
 
 pub(super) fn marker(finding: &crate::critique::Finding) -> &'static str {

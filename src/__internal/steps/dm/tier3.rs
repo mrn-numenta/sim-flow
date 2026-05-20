@@ -117,7 +117,7 @@ pub(super) fn dm3ad() -> StepDescriptor {
                 ],
                 "docs/test-plan/ milestone files contain markdown checklist entries",
             ),
-            critique_clean("DM3ad"),
+            critique_dir_clean("DM3ad"),
         ],
         walk_gate_checks: vec![],
         work_artifacts: &["docs/test-plan/"],

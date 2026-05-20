@@ -75,6 +75,110 @@ fn critique_clean_fails_on_gate_failing_findings() {
     assert!(reason.contains("BLOCKER"));
 }
 
+fn write_shard_json(dir: &Path, shard: &str, body: &str) {
+    let p = dir.join(format!("{shard}.json"));
+    std::fs::write(p, body).unwrap();
+}
+
+#[test]
+fn critique_clean_dir_mode_passes_when_all_shards_clean() {
+    let tmp = tempdir().unwrap();
+    let shard_dir = tmp.path().join("docs/critiques/DM2cd");
+    std::fs::create_dir_all(&shard_dir).unwrap();
+    write_shard_json(
+        &shard_dir,
+        "milestone-01",
+        r#"{"step":"DM2cd","summary":"ok","findings":[],"notes":""}"#,
+    );
+    write_shard_json(
+        &shard_dir,
+        "milestone-02",
+        r#"{"step":"DM2cd","summary":"ok","findings":[],"notes":""}"#,
+    );
+    let report = evaluate(
+        tmp.path(),
+        &[GateCheck::CritiqueClean {
+            path: PathBuf::from("docs/critiques/DM2cd"),
+            description: "DM2cd shards clean".into(),
+        }],
+    )
+    .unwrap();
+    assert!(report.is_clean(), "got failures: {:?}", report.failures);
+}
+
+#[test]
+fn critique_clean_dir_mode_collects_blockers_across_all_shards() {
+    // Three shards: A and C blocking, B clean. The dir-mode gate
+    // must aggregate ALL of A's and C's blockers into a single
+    // failure reason -- not exit early on A.
+    let tmp = tempdir().unwrap();
+    let shard_dir = tmp.path().join("docs/critiques/DM2cd");
+    std::fs::create_dir_all(&shard_dir).unwrap();
+    write_shard_json(
+        &shard_dir,
+        "milestone-01",
+        r#"{"step":"DM2cd","summary":"","findings":[
+            {"kind":"blocker","section":"Tasks","title":"missing trace","body":"task 3"}
+        ],"notes":""}"#,
+    );
+    write_shard_json(
+        &shard_dir,
+        "milestone-02",
+        r#"{"step":"DM2cd","summary":"","findings":[],"notes":""}"#,
+    );
+    write_shard_json(
+        &shard_dir,
+        "milestone-03",
+        r#"{"step":"DM2cd","summary":"","findings":[
+            {"kind":"unresolved","section":"Trace","title":"vague trace","body":""},
+            {"kind":"blocker","section":"Scope","title":"scope too narrow","body":""}
+        ],"notes":""}"#,
+    );
+    let report = evaluate(
+        tmp.path(),
+        &[GateCheck::CritiqueClean {
+            path: PathBuf::from("docs/critiques/DM2cd"),
+            description: "DM2cd shards clean".into(),
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        report.failures.len(),
+        1,
+        "expected a single aggregated failure"
+    );
+    let reason = &report.failures[0].reason;
+    assert!(reason.contains("3 blocking finding(s) across 3 shard(s)"));
+    assert!(reason.contains("[milestone-01]"));
+    assert!(reason.contains("[milestone-03]"));
+    assert!(reason.contains("missing trace"));
+    assert!(reason.contains("scope too narrow"));
+    assert!(reason.contains("vague trace"));
+    // milestone-02 has no findings; should NOT appear in the listing.
+    assert!(!reason.contains("[milestone-02]"));
+}
+
+#[test]
+fn critique_clean_dir_mode_empty_dir_fails() {
+    let tmp = tempdir().unwrap();
+    let shard_dir = tmp.path().join("docs/critiques/DM2cd");
+    std::fs::create_dir_all(&shard_dir).unwrap();
+    let report = evaluate(
+        tmp.path(),
+        &[GateCheck::CritiqueClean {
+            path: PathBuf::from("docs/critiques/DM2cd"),
+            description: "DM2cd shards clean".into(),
+        }],
+    )
+    .unwrap();
+    assert_eq!(report.failures.len(), 1);
+    assert!(
+        report.failures[0]
+            .reason
+            .contains("critique directory empty")
+    );
+}
+
 fn write(path: &Path, body: &str) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).unwrap();

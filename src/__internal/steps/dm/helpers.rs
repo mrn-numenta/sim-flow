@@ -16,6 +16,19 @@ pub(super) fn critique_clean(step: &str) -> GateCheck {
     }
 }
 
+/// Sharded critique variant for the plan-detail parallel walks
+/// (DM2cd / DM3ad / DM4ad). Each parallel worker writes its own
+/// `docs/critiques/<step>/<milestone>.json` shard via
+/// [`crate::__internal::worktree::merge_contributions`]; this gate
+/// scans the whole directory and collects every blocker /
+/// unresolved across every shard without early exit.
+pub(super) fn critique_dir_clean(step: &str) -> GateCheck {
+    GateCheck::CritiqueClean {
+        path: PathBuf::from(format!("docs/critiques/{step}")),
+        description: format!("{step} per-milestone critique shards have no blockers"),
+    }
+}
+
 pub(super) fn file_exists(path: &str, description: &str) -> GateCheck {
     GateCheck::FileExists {
         path: PathBuf::from(path),

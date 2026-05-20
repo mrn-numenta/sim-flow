@@ -176,7 +176,7 @@ pub(super) fn dm2cd() -> StepDescriptor {
                 "<!-- detail-pending",
                 "every docs/impl-plan/milestone-NN-*.md stub has been detailed",
             ),
-            critique_clean("DM2cd"),
+            critique_dir_clean("DM2cd"),
         ],
         walk_gate_checks: vec![],
         work_artifacts: &["docs/impl-plan/"],
