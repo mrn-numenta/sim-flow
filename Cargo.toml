@@ -3,6 +3,21 @@ name = "sim-flow"
 version = "0.1.0"
 edition = "2024"
 publish = false
+# Keep cargo's package-discovery walk out of subtrees that contain
+# Cargo.toml files which are NOT real packages:
+#   - templates/model-project/Cargo.toml is a `cargo generate` template
+#     with `{{crate_name}}` placeholders that don't parse as TOML.
+#   - experiments/term-spike/** are throwaway probes that never need
+#     to participate in this crate's compile graph.
+# Without this exclude, cargo update / cargo metadata from a consumer
+# (e.g. sim-models) emits a noisy parse error on every invocation when
+# it walks sim-flow's source in the git cache. The error is currently
+# non-fatal but may become hard-failing in a future cargo release.
+exclude = [
+    "templates/**",
+    "experiments/**",
+    "studies/**",
+]
 
 [[bin]]
 name = "sim-flow"
