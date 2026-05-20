@@ -95,10 +95,12 @@ dependency diagram above.
     turn-boundary scheduling and auto→manual step-mode flip;
     tool registration; native function-call schemas;
     observability metrics.
-- [ ] [06-phase-dmf-dm0.md](06-phase-dmf-dm0.md)
+- [/] [06-phase-dmf-dm0.md](06-phase-dmf-dm0.md)
   - DM0 auto-populate logic (source-driven mode); Q&A loop
     driver (no-source mode); required-field traversal; DM0
-    prompt rewrite; gate-check changes.
+    prompt rewrite; gate-check changes. 13 of 14 milestones
+    complete; only the live RV12 outcome snapshot (6.14) is
+    outstanding (operational verification, not code work).
 - [ ] [07-phase-dmf-dm1-plus.md](07-phase-dmf-dm1-plus.md)
   - DM1 / DM2a / DM2b / DM2c / DM2d / DM3a / DM3b prompt
     updates; tool-usage nudges; DM2d signal-table-consistency
@@ -108,6 +110,15 @@ dependency diagram above.
   - Migration tool for existing projects' spec.md; end-to-end
     smoke against rgb_toy; replay validation; documentation
     updates.
+- [/] [09-phase-format-discovery.md](09-phase-format-discovery.md)
+  - Structured-spans pipeline driven by `pdf_oxide`'s structured
+    API + a `format.json` semantic descriptor; spec_md schema
+    extensions (CSRs, glossary, layer/role/domain tags, PMU
+    events); DM0 auto-populate consumes `format.json` directly.
+    14 of 16 milestones complete; remaining: deterministic
+    validation post-pass for the descriptor (9.5b), wiring
+    `discover::critique()` into the ingest CLI (9.6), and the
+    live RV12 outcome snapshot (9.16).
 
 ## Conventions for Phase Files
 

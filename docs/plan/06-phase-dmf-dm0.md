@@ -40,12 +40,12 @@ no-source project.
 
 ## Acceptance Gate
 
-- [ ] `cargo build --package sim-flow` succeeds.
-- [ ] `cargo test --package sim-flow dm0::` passes.
-- [ ] Integration: running DM0 (via `e2e_manual` or a
+- [x] `cargo build --package sim-flow` succeeds.
+- [x] `cargo test --package sim-flow dm0::` passes.
+- [x] Integration: running DM0 (via `e2e_manual` or a
       synthetic driver) against an ingested RV12 fixture
       produces a spec.md that passes the new gate.
-- [ ] Integration: running DM0 against a no-source fixture
+- [x] Integration: running DM0 against a no-source fixture
       with scripted Q&A answers produces a spec.md that
       passes the new gate.
 
@@ -53,65 +53,65 @@ no-source project.
 
 ### Milestone 6.1: DM0 module scaffolding
 
-- [ ] Create `src/__internal/session/dm0/mod.rs` and
+- [x] Create `src/__internal/session/dm0/mod.rs` and
       submodules: `auto_populate.rs`, `qa_loop.rs`,
       `gate.rs`, `prompts.rs`.
-- [ ] Wire from the existing DM0 step dispatch site.
-- [ ] Define the public entry: `run_dm0_work(opts:
+- [x] Wire from the existing DM0 step dispatch site.
+- [x] Define the public entry: `run_dm0_work(opts:
       &DmOpts, host: &mut AutoPresenter, llm: &mut dyn
       LlmAdapter) -> Result<DmOutcome>`.
-- [ ] Stub each helper so the wiring compiles.
+- [x] Stub each helper so the wiring compiles.
 
 Gate: `cargo build` succeeds.
 
 ### Milestone 6.2: Mode detection
 
-- [ ] Read the project's `.sim-flow/spec-ingest/manifest.toml`.
-- [ ] Branch on `source_kind`:
+- [x] Read the project's `.sim-flow/spec-ingest/manifest.toml`.
+- [x] Branch on `source_kind`:
   - `pdf | markdown | text` → source-driven mode.
   - `none` → interactive mode.
   - Missing manifest → emit a Diagnostic suggesting `sim-flow
     ingest` first, and either run interactive mode or fail
     depending on a flag.
-- [ ] Unit test: mode detection on three synthetic
+- [x] Unit test: mode detection on three synthetic
       manifests.
 
 Gate: mode-detection unit tests pass.
 
 ### Milestone 6.3: Auto-populate -- Metadata + Quantitative
 
-- [ ] In `auto_populate.rs`, implement
+- [x] In `auto_populate.rs`, implement
       `populate_metadata(manifest: &IngestManifest,
       spec: &mut SpecMd)` filling
       `SpecMd.metadata.source_documents` from
       `manifest.peers[]` plus the primary entry.
-- [ ] Implement
+- [x] Implement
       `populate_assumptions(corpus_root: &Path, spec: &mut
       SpecMd)` reading any quantitative facts the ingest
       pipeline detected (clock frequency, technology node)
       from a designated source. v1: scan parameter tables
       and chunks for known patterns.
-- [ ] Unit test on a synthetic ingest corpus.
+- [x] Unit test on a synthetic ingest corpus.
 
 Gate: metadata + quantitative auto-populate unit test
 passes.
 
 ### Milestone 6.4: Auto-populate -- Parameters, Encodings, Errors, FSMs
 
-- [ ] Implement
+- [x] Implement
       `populate_parameters(corpus_root: &Path, spec: &mut
       SpecMd)` reading
       `<root>/primary/tables/parameters/*.toml` and emitting
       `SpecMd.parameters[]`.
-- [ ] Implement `populate_encodings`, `populate_errors`,
+- [x] Implement `populate_encodings`, `populate_errors`,
       `populate_fsms` analogously.
-- [ ] Unit tests for each.
+- [x] Unit tests for each.
 
 Gate: per-section auto-populate unit tests pass.
 
 ### Milestone 6.5: Auto-populate -- Blocks (the hard one)
 
-- [ ] Implement `populate_blocks(corpus_root: &Path, spec:
+- [x] Implement `populate_blocks(corpus_root: &Path, spec:
       &mut SpecMd)`:
   - Read every
     `<root>/primary/tables/signals/NNN-<stage>.toml`.
@@ -121,33 +121,33 @@ Gate: per-section auto-populate unit tests pass.
     <rows>`.
   - Source anchors point at the source chunks the signal
     table came from.
-- [ ] Unit test with an RV12-like fixture (six signal tables
+- [x] Unit test with an RV12-like fixture (six signal tables
       → six blocks).
 
 Gate: blocks auto-populate unit test passes.
 
 ### Milestone 6.6: Auto-populate -- Figures, Anchors, Open Questions
 
-- [ ] Implement `populate_figures(corpus_root: &Path, spec:
+- [x] Implement `populate_figures(corpus_root: &Path, spec:
       &mut SpecMd)` emitting one FigureEntry per
       `figures/page-NNN.png` with source page + raster
       path; caption is left empty.
-- [ ] Implement `populate_anchors(spec: &mut SpecMd)`
+- [x] Implement `populate_anchors(spec: &mut SpecMd)`
       building the `Source-Spec Anchors` index by walking
       already-populated sections.
-- [ ] Implement
+- [x] Implement
       `populate_open_questions_from_tbds(corpus_root: &Path,
       spec: &mut SpecMd)` reading
       `<root>/primary/tbds.toml` and turning each entry into
       an OpenQuestion with breadcrumb context.
-- [ ] Unit tests.
+- [x] Unit tests.
 
 Gate: figures / anchors / TBDs auto-populate unit tests
 pass.
 
 ### Milestone 6.7: Source-driven DM0 work-prompt rewrite
 
-- [ ] Replace `prompts/dm0-specification.md` with a version
+- [x] Replace `prompts/dm0-specification.md` with a version
       that:
   - Describes the new structured template.
   - Lists the auto-populated artifacts the agent will see on
@@ -164,8 +164,8 @@ pass.
     `ask_user` for blocking TBDs / unanswered Open
     Questions, as the LAST tool call of the turn.
   - Specifies the final `write_file docs/spec.md` step.
-- [ ] Move the old prompt to `prompts/legacy/`.
-- [ ] Unit test: the new prompt parses cleanly (some prompts
+- [x] Move the old prompt to `prompts/legacy/`.
+- [x] Unit test: the new prompt parses cleanly (some prompts
       have syntactic structure verified by tests).
 
 Gate: new prompt file exists; tests pass.
@@ -177,13 +177,13 @@ top of the `ask_user` tool from Phase 5. It does NOT
 implement its own user-prompting machinery; every question
 goes through `ask_user`'s suspend/resume protocol.
 
-- [ ] In `qa_loop.rs`, implement
+- [x] In `qa_loop.rs`, implement
       `drive_qa_loop(spec: &mut SpecMd, llm: &mut dyn
       LlmAdapter) -> Result<()>`. Note: no direct
       `AutoPresenter` parameter — the loop emits `ask_user`
       tool calls and the orchestrator's existing
       `RequestUserInput` machinery surfaces them.
-- [ ] Loop, one thread per MissingField:
+- [x] Loop, one thread per MissingField:
   - Compute `spec.missing_required_fields()` via Phase 1's
     traversal.
   - If empty, exit (proceed to validation + write).
@@ -227,7 +227,7 @@ goes through `ask_user`'s suspend/resume protocol.
     N fields (configurable; default 5).
   - On thread cancel / abandon: record a TBD entry for the
     field in `Open Questions`, advance to the next field.
-- [ ] Handle Worked Examples specially: open a thread
+- [x] Handle Worked Examples specially: open a thread
       with `kind = "free-form"` and a richer prompt asking
       the user to walk through a representative scenario.
       If the user's first answer is sparse, chain a
@@ -237,7 +237,7 @@ goes through `ask_user`'s suspend/resume protocol.
       normalization pass to convert the accumulated
       free-text into Chapter 2 §2.3.18 format and persist
       via `record_as = "auto-decision"`.
-- [ ] Unit tests with a mock host:
+- [x] Unit tests with a mock host:
   - Single-turn-per-field path: every MissingField in a
     fixture `SpecMd::default()` is answered cleanly on
     the first reply; assert spec.md ends up populated.
@@ -253,25 +253,25 @@ Gate: Q&A-loop-via-ask_user unit tests pass.
 
 ### Milestone 6.9: SectionApplicability via ask_user
 
-- [ ] For OPTIONAL sections (State Machines, Encodings,
+- [x] For OPTIONAL sections (State Machines, Encodings,
       Memory Map, Connectivity, Error Handling,
       Cycle-Accurate Behavior, Figures), the loop emits an
       `ask_user` call with `kind = "choice"`, `choices =
       ["yes", "no", "skip"]`, `question = "Does this design
       have a <section>?"`. The orchestrator surfaces this
       as a quick-reply chip set in the chat panel.
-- [ ] On `yes`, drill into that section's MissingFields.
-- [ ] On `no`, mark the section as "not applicable" in the
+- [x] On `yes`, drill into that section's MissingFields.
+- [x] On `no`, mark the section as "not applicable" in the
       spec.md (a brief comment block + skip the section).
-- [ ] On `skip`, defer the section to a later pass; surface
+- [x] On `skip`, defer the section to a later pass; surface
       a top-level `ask_user` review at the end.
-- [ ] Unit test exercising all three branches.
+- [x] Unit test exercising all three branches.
 
 Gate: applicability unit tests pass.
 
 ### Milestone 6.10: DM0 critique-prompt rewrite
 
-- [ ] Replace `prompts/dm0-specification-critique.md` with a
+- [x] Replace `prompts/dm0-specification-critique.md` with a
       version that:
   - Loads `docs/spec.md` and parses it via the new parser.
   - Walks the structured `SpecMd` checking semantic
@@ -280,16 +280,16 @@ Gate: applicability unit tests pass.
     may have missed.
   - Writes findings to `docs/critiques/DM0-critique.json` in
     the existing format.
-- [ ] Move the old critique prompt to `prompts/legacy/`.
+- [x] Move the old critique prompt to `prompts/legacy/`.
 
 Gate: critique-prompt file exists.
 
 ### Milestone 6.11: DM0 gate-check replacement
 
-- [ ] In `gate.rs`, implement
+- [x] In `gate.rs`, implement
       `check_dm0_gate(spec_md_path: &Path, manifest: &Path)
       -> GateOutcome` per Architecture §6.2.4.
-- [ ] Steps:
+- [x] Steps:
   - Parse spec.md via Phase 1's parser. Hard fail on parse
     error.
   - Run `spec.validate()` (Phase 1's cross-ref check).
@@ -299,9 +299,9 @@ Gate: critique-prompt file exists.
     manifest's chunk ids.
   - Check Auto-decisions populated in automated mode (read
     the orchestrator's mode flag).
-- [ ] Replace the old DM0 regex-based gate dispatch with the
+- [x] Replace the old DM0 regex-based gate dispatch with the
       new function.
-- [ ] Unit test: synthesize a valid spec.md → gate passes;
+- [x] Unit test: synthesize a valid spec.md → gate passes;
       synthesize a spec.md missing `Clock frequency` →
       gate fails with the expected error.
 
@@ -309,13 +309,13 @@ Gate: gate unit tests pass.
 
 ### Milestone 6.12: Source-driven integration test
 
-- [ ] Create `tests/fixtures/rv12-project/` with the
+- [x] Create `tests/fixtures/rv12-project/` with the
       already-ingested RV12 corpus and an empty spec.md.
-- [ ] Integration test: invoke `run_dm0_work` programmatically
+- [x] Integration test: invoke `run_dm0_work` programmatically
       with a mock LLM that produces deterministic
       assistant-text responses (mock the LLM completion
       step).
-- [ ] Assert that auto-populate fills the expected sections
+- [x] Assert that auto-populate fills the expected sections
       and that the gate passes after the mock LLM completes
       its turn.
 
@@ -323,13 +323,13 @@ Gate: source-driven integration test passes.
 
 ### Milestone 6.13: No-source integration test
 
-- [ ] Create `tests/fixtures/empty-project/` (a project
+- [x] Create `tests/fixtures/empty-project/` (a project
       bootstrapped via `sim-flow new model` with no source
       spec).
-- [ ] Integration test: invoke `run_dm0_work` with a mock
+- [x] Integration test: invoke `run_dm0_work` with a mock
       `AutoPresenter` that scripts user answers for every
       MissingField.
-- [ ] Assert the spec.md ends up with all REQUIRED fields
+- [x] Assert the spec.md ends up with all REQUIRED fields
       populated and passes the gate.
 
 Gate: no-source integration test passes.

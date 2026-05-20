@@ -89,22 +89,22 @@ on RV12 end-to-end without further LLM calls.
 
 ## Acceptance Gate
 
-- [ ] `cargo build --package sim-flow` succeeds.
-- [ ] `cargo test --package sim-flow --lib` passes; the new
+- [x] `cargo build --package sim-flow` succeeds.
+- [x] `cargo test --package sim-flow --lib` passes; the new
       `spec_ingest::format` module has its own unit tests.
-- [ ] `cargo clippy --package sim-flow --all-targets --all-features -- -D warnings` clean.
-- [ ] `sim-flow ingest --no-format-discovery <markdown-spec>`
+- [x] `cargo clippy --package sim-flow --all-targets --all-features -- -D warnings` clean.
+- [x] `sim-flow ingest --no-format-discovery <markdown-spec>`
       produces the same chunks/tables as today on a markdown
       input.
-- [ ] `sim-flow ingest <pdf>` discovers `format.json`, validates
+- [x] `sim-flow ingest <pdf>` discovers `format.json`, validates
       cleanly, produces non-empty `tables_classified` and
       `glossary_entries` on each of the four reference specs.
-- [ ] `format.json` round-trips: a cached descriptor + the same
+- [x] `format.json` round-trips: a cached descriptor + the same
       source PDF produces identical chunks across machines.
-- [ ] DM0 auto-populate on the RV12 fixture (Phase 6 milestone
+- [x] DM0 auto-populate on the RV12 fixture (Phase 6 milestone
       6.12 integration test) populates `blocks[]`, `csrs[]`,
       `memory_regions[]`, and `glossary[]` from `format.json`.
-- [ ] Lance index build (`sim-flow build-spec-index`) writes the
+- [x] Lance index build (`sim-flow build-spec-index`) writes the
       new chunk columns; existing semantic-search smoke tests
       pass.
 
@@ -112,74 +112,74 @@ on RV12 end-to-end without further LLM calls.
 
 ### Milestone 9.1: spec_md type extensions
 
-- [ ] Add `Csr` + `CsrField` types to
+- [x] Add `Csr` + `CsrField` types to
       `spec_md/types.rs`. Top-level `SpecMd.csrs: Vec<Csr>`.
-- [ ] Add `GlossaryEntry` + `SpecMd.glossary: Vec<GlossaryEntry>`.
-- [ ] Add `ClockDomain` + `SpecMd.clock_domains:
+- [x] Add `GlossaryEntry` + `SpecMd.glossary: Vec<GlossaryEntry>`.
+- [x] Add `ClockDomain` + `SpecMd.clock_domains:
       Vec<ClockDomain>`. Same for `PowerDomain` /
       `ResetDomain` / `PrivilegeLevel`.
-- [ ] Add `NumericalConvention` + `SpecMd.numerical_conventions:
+- [x] Add `NumericalConvention` + `SpecMd.numerical_conventions:
       Vec<NumericalConvention>` (single entry usual; vec
       supports per-block overrides).
-- [ ] Add `PmuEvent` + `SpecMd.performance_counters:
+- [x] Add `PmuEvent` + `SpecMd.performance_counters:
       Vec<PmuEvent>`.
-- [ ] Add `layer: Layer` (`Architectural | Micro | Mixed |
+- [x] Add `layer: Layer` (`Architectural | Micro | Mixed |
       Unknown`) to `Block` and a section-level annotation on
       `SectionTree` nodes.
-- [ ] Add `role: SignalRole` (`Control | Data | Status |
+- [x] Add `role: SignalRole` (`Control | Data | Status |
       Unknown`) to `BlockSignalRow`.
-- [ ] Add `clock_domain`, `power_domain`, `reset_domain` as
+- [x] Add `clock_domain`, `power_domain`, `reset_domain` as
       optional refs on `Block`.
-- [ ] Add `required_privilege` ref on `MemoryRegion` and `Csr`.
-- [ ] Update parser + writer for every new section /
+- [x] Add `required_privilege` ref on `MemoryRegion` and `Csr`.
+- [x] Update parser + writer for every new section /
       annotation. Default values for new optional fields ensure
       round-trip stability with old spec.md files.
-- [ ] Update `missing_required_fields()` traversal so the new
+- [x] Update `missing_required_fields()` traversal so the new
       sections surface as MissingFields only when the spec's
       ingest discovered relevant tables (conditional
       requirement).
-- [ ] Unit tests on each new type: parse + write + round-trip.
+- [x] Unit tests on each new type: parse + write + round-trip.
 
 Gate: spec_md tests pass; round-trip on a fixture with every
 new section round-trips byte-equal at the parse level.
 
 ### Milestone 9.2: format.json descriptor types
 
-- [ ] `format/descriptor.rs`: define `FormatJson`,
+- [x] `format/descriptor.rs`: define `FormatJson`,
       `SectionRole`, `TableEntry`, `FigureEntry`,
       `GlossaryEntry`, `ChromeEntry`, `ValidationBlock` matching
       Chapter 7 §7.3 schema exactly.
-- [ ] Serde (de)serialisers; schema_version pinned to 1.
-- [ ] `FormatJson::load(path)` / `FormatJson::write(path)`.
-- [ ] `FormatJson::content_key()` returns
+- [x] Serde (de)serialisers; schema_version pinned to 1.
+- [x] `FormatJson::load(path)` / `FormatJson::write(path)`.
+- [x] `FormatJson::content_key()` returns
       `(source_sha256, model, prompt_version)`.
-- [ ] Unit tests on a hand-authored fixture descriptor.
+- [x] Unit tests on a hand-authored fixture descriptor.
 
 Gate: `cargo test format::descriptor` passes.
 
 ### Milestone 9.3: structural-skeleton builder
 
-- [ ] `format/discover.rs::build_skeleton(doc: &PdfDocument) ->
+- [x] `format/discover.rs::build_skeleton(doc: &PdfDocument) ->
       Skeleton`: per Chapter 7 §7.6 layout — DOCUMENT header
       with font clusters + page count + chrome candidates;
       HEADINGS section sorted by page; TABLES section listing
       each detected table's location + dimensions + first-row
       sample; FIGURES section; ACRONYM CANDIDATES section.
-- [ ] Heading detection: collect spans across all pages, k-means
+- [x] Heading detection: collect spans across all pages, k-means
       cluster on `font_size + font_weight`, take top N clusters
       as heading candidates, sort line-y within page.
-- [ ] Table detection: call `doc.extract_tables(page)` for every
+- [x] Table detection: call `doc.extract_tables(page)` for every
       page; emit `(page, first_line, rows×cols, first-row text)`.
-- [ ] Figure detection: pages with `extract_images()` ≥ 1 OR
+- [x] Figure detection: pages with `extract_images()` ≥ 1 OR
       `extract_paths()` above threshold per existing
       figures-stage config; emit `(page, raster path,
       neighbouring_heading)`.
-- [ ] Acronym candidate detection: regex
+- [x] Acronym candidate detection: regex
       `\b([A-Z][A-Za-z\-]+)\s*\(([A-Z][A-Z0-9]{1,5})\)\b` over
       span text; track first-mention page + later usage count.
-- [ ] Render `Skeleton` to a deterministic string the LLM
+- [x] Render `Skeleton` to a deterministic string the LLM
       consumes.
-- [ ] Unit test against synthetic 5-page PDF fixture.
+- [x] Unit test against synthetic 5-page PDF fixture.
 
 Gate: skeleton builder produces stable strings on RV12 across
 runs (deterministic).
@@ -190,10 +190,10 @@ Per Architecture Chapter 7 §7.4 + §7.6, the descriptor pipeline
 is two-pass: deterministic first cut then LLM critique. This
 milestone builds the first cut.
 
-- [ ] `format/first_cut.rs::classify(skeleton, doc) ->
+- [x] `format/first_cut.rs::classify(skeleton, doc) ->
       FormatJson`: maps pdf_oxide output to a provisional
       `FormatJson` using heuristic libraries.
-- [ ] **Section role heuristics**: match heading text against
+- [x] **Section role heuristics**: match heading text against
       a known-section library (case-insensitive prefix /
       substring): `"Glossary" → glossary`, `"Memory Map" |
       "Address Map" → memory_map`, `"CSR" | "Control and
@@ -205,7 +205,7 @@ milestone builds the first cut.
       `"Clock" → clock_domains`, `"Power" → power_domains`,
       etc. Acronym-stage pattern (`<Name> (<ACR>)`) → block.
       Unknown → kind="unknown".
-- [ ] **Table kind heuristics**: column-header keyword sets.
+- [x] **Table kind heuristics**: column-header keyword sets.
       `["Signal", "Direction", ("To/From"|"From/To"),
       "Description"]` (≥3 match) → signal_table.
       `["Parameter", ("Type"|"Kind"), ("Default"|"Value"),
@@ -219,25 +219,25 @@ milestone builds the first cut.
       `["State", "Transition", "Next"]` → fsm_transition_table.
       Plus a catalog for encoding / error / latency /
       connectivity / pmu. Unknown → kind="unknown".
-- [ ] **Column-map heuristics**: for each classified table,
+- [x] **Column-map heuristics**: for each classified table,
       project source column header words onto canonical
       spec_md row fields using a per-kind word→canonical
       mapping (e.g., signal_table:
       `Signal→name, Direction→direction,
       To/From→peer, Description→description`).
-- [ ] **Figure kind heuristics**: vector-path-rich page
+- [x] **Figure kind heuristics**: vector-path-rich page
       adjacent to a `block` section → block_diagram;
       adjacent to a `state_machines` section → state_diagram;
       adjacent to a `connectivity` section →
       connectivity_topology; etc. Default → generic.
-- [ ] **Glossary heuristics**: regex
+- [x] **Glossary heuristics**: regex
       `\b([A-Z][A-Za-z\-]+(?:\s+[A-Z][A-Za-z\-]+)*)\s+\(([A-Z][A-Z0-9]{1,5})\)`
       over span text; first-mention page + later-usage count.
-- [ ] **Chrome heuristics**: lines repeated on ≥ 60% of pages
+- [x] **Chrome heuristics**: lines repeated on ≥ 60% of pages
       → chrome regex (use existing chrome-strip-stage output);
       lines whose bbox Y is consistently within 5pt of page top
       / bottom → positional chrome rule.
-- [ ] Unit tests per heuristic with a small fixture library of
+- [x] Unit tests per heuristic with a small fixture library of
       column-header strings + section-heading strings + figure
       adjacency cases.
 
@@ -249,16 +249,16 @@ that's the LLM's job in 9.5).
 
 ### Milestone 9.5: format-discovery LLM critique pass
 
-- [ ] Prompt at `prompts/format-discovery.md` taking the
+- [x] Prompt at `prompts/format-discovery.md` taking the
       first-cut descriptor + the skeleton, with instructions
       to emit an **adjustments patch** (per-entry overrides
       with rationale), NOT a from-scratch descriptor. Patch
       shape: `[{ id, field, old_value, new_value, rationale }]`.
-- [ ] `format/discover.rs::critique(first_cut, skeleton, llm)
+- [x] `format/discover.rs::critique(first_cut, skeleton, llm)
       -> Result<FormatJson>`: build the prompt, call LLM,
       parse the patch, apply it to `first_cut`, return the
       adjusted descriptor.
-- [ ] Adjustments policy:
+- [x] Adjustments policy:
       - LLM may change any `kind` / `spec_md_role` / `layer` /
         `column_map.canonical` field with rationale.
       - LLM may add `unknown` entries it found that the first
@@ -267,11 +267,11 @@ that's the LLM's job in 9.5).
         line, row_count, col_count, bbox).
       - Each adjustment carries a `rationale: String` so the
         diff is auditable.
-- [ ] Error handling: malformed adjustments JSON → one retry
+- [x] Error handling: malformed adjustments JSON → one retry
       with the schema-violation feedback; second failure aborts
       with the LLM's raw output captured in
       `format.json::validation.warnings`.
-- [ ] Unit test with mock LLM returning a known-good patch +
+- [x] Unit test with mock LLM returning a known-good patch +
       a malformed patch.
 
 Gate: `critique()` correctly applies a patch fixture to a
@@ -319,59 +319,59 @@ RV12 fixture.
 
 ### Milestone 9.7: structured-spans loading.rs
 
-- [ ] Replace `LoadedPdf { document: Arc<PdfDocument> }` field
+- [x] Replace `LoadedPdf { document: Arc<PdfDocument> }` field
       uses with per-page `PageLayout { page_number, spans,
       tables, paths, images, raw_text }` records.
-- [ ] `load_pdf` populates the per-page records eagerly from
+- [x] `load_pdf` populates the per-page records eagerly from
       pdf_oxide's structured APIs. Text-only consumers (legacy
       ingest) still get a flat `text` field for backwards
       compatibility.
-- [ ] Drop the `<!-- spec-ingest:page=N -->` marker hack +
+- [x] Drop the `<!-- spec-ingest:page=N -->` marker hack +
       `recover_page_ranges_and_strip_markers` post-pass —
       replaced by direct page-number association in
       `PageLayout`.
-- [ ] Update tests accordingly.
+- [x] Update tests accordingly.
 
 Gate: loading tests pass; `LoadedSource` consumers (chrome,
 parse, classify, figures) compile against the new shape.
 
 ### Milestone 9.8: span-based parse.rs
 
-- [ ] Replace `parse_pdf` (already dropped post-Phase 8) and
+- [x] Replace `parse_pdf` (already dropped post-Phase 8) and
       the markdown-based PDF parse path with a span-based one:
       cluster span font sizes across pages, assign heading
       level per text-line based on cluster id, emit
       `SectionTree` with `Section.page_range` set natively.
-- [ ] Each section's body is the structured spans within that
+- [x] Each section's body is the structured spans within that
       section, NOT a markdown string. Spans pass through to
       classify / emit, which decide how to render.
-- [ ] `parse_markdown` for markdown / text inputs stays as-is.
-- [ ] Update `parse_hierarchy` to dispatch by SourceKind:
+- [x] `parse_markdown` for markdown / text inputs stays as-is.
+- [x] Update `parse_hierarchy` to dispatch by SourceKind:
       `SourceKind::Pdf → parse_spans`,
       `SourceKind::Markdown | Text → parse_markdown`.
-- [ ] Unit tests with synthetic spans fixtures.
+- [x] Unit tests with synthetic spans fixtures.
 
 Gate: parse tests pass; RV12 produces a `SectionTree` whose
 roots match the section headings detected in Milestone 9.3.
 
 ### Milestone 9.9: format-driven classify.rs
 
-- [ ] `classify.rs` reads `format.json::tables` and, for each
+- [x] `classify.rs` reads `format.json::tables` and, for each
       table's `(page, first_line)`, calls
       `doc.extract_tables(page)` and matches by location, then
       uses the descriptor's `column_map` to project pdf_oxide's
       `TableCell.text` into the spec_md row schema.
-- [ ] Apply `wrap_strategy` (merge_continuation_rows /
+- [x] Apply `wrap_strategy` (merge_continuation_rows /
       join_on_blank_first_col / single_row) before column
       mapping.
-- [ ] For each `spec_md_target.kind`, emit the appropriate
+- [x] For each `spec_md_target.kind`, emit the appropriate
       typed table TOML under `primary/tables/<kind>/` (current
       Phase 2 emit layout — extend with `csrs/`, `csr_fields/`,
       `register_files/`, etc.).
-- [ ] Unknown-kind tables are still emitted as raw text under
+- [x] Unknown-kind tables are still emitted as raw text under
       `primary/tables/unknown/` so DM0 can ask the user about
       them.
-- [ ] Unit tests for each table kind on synthetic descriptors +
+- [x] Unit tests for each table kind on synthetic descriptors +
       synthetic pdf_oxide `Table` outputs.
 
 Gate: classify tests pass; ingest of RV12 with hand-authored
@@ -379,27 +379,27 @@ Gate: classify tests pass; ingest of RV12 with hand-authored
 
 ### Milestone 9.10: chrome.rs hybrid positional + regex
 
-- [ ] `chrome.rs` reads `format.json::chrome` regexes AND uses
+- [x] `chrome.rs` reads `format.json::chrome` regexes AND uses
       span bboxes to identify lines whose Y is consistently in
       the top-of-page or bottom-of-page band across multiple
       pages.
-- [ ] Stripped chrome is removed from `PageLayout.spans` before
+- [x] Stripped chrome is removed from `PageLayout.spans` before
       parse runs.
-- [ ] Unit tests with synthetic chrome patterns.
+- [x] Unit tests with synthetic chrome patterns.
 
 Gate: chrome tests pass; running-header stripping on RV12
 removes the per-page banner without false positives.
 
 ### Milestone 9.11: emit.rs chunk tagging
 
-- [ ] Each emitted chunk's front matter (`chunks/*.md`)
+- [x] Each emitted chunk's front matter (`chunks/*.md`)
       includes per Chapter 7 §7.8:
       `spec_md_role`, `layer`, `acronyms_referenced`,
       `clock_domain`, `power_domain`, `reset_domain`,
       `contained_csr_tables`.
-- [ ] Manifest summary (`manifest.toml`) gains counts:
+- [x] Manifest summary (`manifest.toml`) gains counts:
       `csrs_count`, `glossary_entries_count`, etc.
-- [ ] Update existing snapshot tests for the new front-matter
+- [x] Update existing snapshot tests for the new front-matter
       keys.
 
 Gate: emit tests + snapshot tests pass; RV12 chunks land with
@@ -407,70 +407,70 @@ populated `spec_md_role` and `acronyms_referenced` fields.
 
 ### Milestone 9.12: DM0 auto-populate over format.json
 
-- [ ] `dm0::auto_populate::populate_csrs(corpus_root, spec)`:
+- [x] `dm0::auto_populate::populate_csrs(corpus_root, spec)`:
       reads `primary/tables/csrs/*.toml` and per-csr field
       tables, builds `Csr` + `CsrField` rows.
-- [ ] `populate_glossary(corpus_root, spec)` reads
+- [x] `populate_glossary(corpus_root, spec)` reads
       `format.json::glossary`.
-- [ ] `populate_clock_domains` / `populate_power_domains` /
+- [x] `populate_clock_domains` / `populate_power_domains` /
       `populate_reset_domains` / `populate_security_boundaries` /
       `populate_numerical_conventions` /
       `populate_performance_counters` — each from the
       corresponding format.json section + tables.
-- [ ] Existing `populate_blocks` / `populate_parameters` /
+- [x] Existing `populate_blocks` / `populate_parameters` /
       `populate_encodings` / `populate_errors` / `populate_fsms`
       switch from heading-text guessing to reading
       `format.json::tables[].spec_md_target` directly. Block
       ownership is `spec_md_target.block_name` (no inference).
-- [ ] Update `populate_blocks` to apply `BlockSignalRow.role`
+- [x] Update `populate_blocks` to apply `BlockSignalRow.role`
       per descriptor.
-- [ ] Update `run()` orchestrator to invoke the new populates.
-- [ ] Unit tests for each new populate on synthetic fixtures.
+- [x] Update `run()` orchestrator to invoke the new populates.
+- [x] Unit tests for each new populate on synthetic fixtures.
 
 Gate: per-populate tests pass; end-to-end DM0 RV12 fixture
 test (Phase 6 milestone 6.12) populates the new sections.
 
 ### Milestone 9.13: lance index column additions
 
-- [ ] Per Architecture Chapter 3 §3.x, add to `spec_chunks`
+- [x] Per Architecture Chapter 3 §3.x, add to `spec_chunks`
       table: `spec_md_role: Utf8`, `layer: Utf8`,
       `acronyms_referenced: List<Utf8>`, `clock_domain:
       Utf8?`, `power_domain: Utf8?`, `reset_domain: Utf8?`.
-- [ ] Update build / refresh code in
+- [x] Update build / refresh code in
       `lance_index::build::spec` to populate from chunk front
       matter.
-- [ ] Add semantic-search retrieval filters by `spec_md_role`
+- [x] Add semantic-search retrieval filters by `spec_md_role`
       / `layer` to `spec_semantic_search` tool args.
-- [ ] Unit tests on the build + a smoke test on retrieval-by-role.
+- [x] Unit tests on the build + a smoke test on retrieval-by-role.
 
 Gate: spec_chunks lance table builds with new columns;
 spec_semantic_search filters by role correctly.
 
 ### Milestone 9.14: built-in default descriptor
 
-- [ ] `format/default.rs::default_descriptor() -> FormatJson`:
+- [x] `format/default.rs::default_descriptor() -> FormatJson`:
       a hand-coded descriptor that produces today's behavior
       on Markdown inputs (`#`-style headings → role inferred
       from heading text; `|` pipe tables → kind inferred from
       column words).
-- [ ] Used by `--no-format-discovery` and as a starting point
+- [x] Used by `--no-format-discovery` and as a starting point
       for hand-authoring.
-- [ ] Unit test on a markdown fixture.
+- [x] Unit test on a markdown fixture.
 
 Gate: markdown ingest with the default descriptor produces
 the same chunks/tables as the markdown path produces today.
 
 ### Milestone 9.15: integration on four reference specs
 
-- [ ] Run `sim-flow ingest` on each of RV12, Numenta SoC,
+- [x] Run `sim-flow ingest` on each of RV12, Numenta SoC,
       Apical NoC, Spatial Pooler (PDF inputs in
       `~/Downloads/` and `~/nta/sim-models/.../rv12/docs/`).
-- [ ] For each, capture the discovered `format.json`,
+- [x] For each, capture the discovered `format.json`,
       validation block, and resulting manifest.
-- [ ] Record outcomes (counts of tables / glossary / chunks /
+- [x] Record outcomes (counts of tables / glossary / chunks /
       stubs / warnings) under
       `tests/fixtures/spec-ingest-snapshots/<spec>/format-summary.md`.
-- [ ] Manual review: are CSR tables classified correctly on
+- [x] Manual review: are CSR tables classified correctly on
       RV12? Memory map on NoC? Glossary on each? Note any
       `unknown` items for follow-up.
 
