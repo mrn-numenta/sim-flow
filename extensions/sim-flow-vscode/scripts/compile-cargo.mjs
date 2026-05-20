@@ -10,20 +10,33 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const extDir = resolve(here, "..");
-// extDir = <repo>/tools/sim-flow/extensions/sim-flow-vscode
-// → ../../../.. = <repo>. Mirrors bundle-bin.mjs.
-const repoRoot = resolve(extDir, "..", "..", "..", "..");
+// extDir = <repo>/extensions/sim-flow-vscode → ../.. = <repo>.
+// Mirrors bundle-bin.mjs.
+const repoRoot = resolve(extDir, "..", "..");
 const rustdocTargetDir = resolve(repoRoot, "target", "sim-flow-vscode-rustdoc");
 const normalizedDocsDir = resolve(repoRoot, "target", "sim-flow-vscode-api-docs");
 
-const buildResult = spawnSync(
-  "cargo",
-  ["build", "--release", "-p", "sim-flow"],
-  { cwd: repoRoot, stdio: "inherit" },
-);
-if (buildResult.status !== 0) {
-  console.error("compile:cargo: cargo build failed.");
-  process.exit(buildResult.status ?? 1);
+// When `SIM_FLOW_BUNDLE_BINARY` is set, bundle-bin.mjs uses that path
+// instead of `<repoRoot>/target/release/sim-flow`, so the cargo build
+// step here is redundant. Skip it. The cargo doc + rustdoc-normalize
+// steps below stay -- the VSIX still needs foundation docs even when
+// the binary was supplied externally (e.g. by sim-models' wrapper that
+// pre-built sim-flow against sim-models' Cargo.lock).
+const externalBinary = process.env.SIM_FLOW_BUNDLE_BINARY?.trim();
+if (externalBinary) {
+  console.log(
+    `compile:cargo: skipping cargo build (SIM_FLOW_BUNDLE_BINARY=${externalBinary}).`,
+  );
+} else {
+  const buildResult = spawnSync(
+    "cargo",
+    ["build", "--release", "-p", "sim-flow"],
+    { cwd: repoRoot, stdio: "inherit" },
+  );
+  if (buildResult.status !== 0) {
+    console.error("compile:cargo: cargo build failed.");
+    process.exit(buildResult.status ?? 1);
+  }
 }
 
 const docResult = spawnSync(

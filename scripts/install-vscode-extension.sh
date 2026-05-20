@@ -57,11 +57,29 @@ log() { echo "install-vscode-extension: $*"; }
 
 # 1. Build the sim-flow binary the bundler embeds into the VSIX.
 #    `bundle-bin.mjs` hard-fails when this binary is missing.
-log "building sim-flow binary (--${CARGO_PROFILE})"
-if [[ "${CARGO_PROFILE}" == "release" ]]; then
-    cargo build --release -p sim-flow --manifest-path "${ROOT_DIR}/Cargo.toml"
+#
+#    Consumers that need to install sim-flow built against a different
+#    workspace (e.g. sim-models invokes this script with sim-flow built
+#    against sim-models' Cargo.lock so the bundled binary sees the same
+#    foundation SHA that sim-models pins) can set SIM_FLOW_BUNDLE_BINARY
+#    to an absolute path. When set, this script skips the cargo build
+#    and exports the path so bundle-bin.mjs picks it up; compile-cargo.mjs
+#    also honors the same env var and skips its own cargo build, leaving
+#    cargo doc as the only remaining cargo invocation in the npm flow.
+if [[ -n "${SIM_FLOW_BUNDLE_BINARY:-}" ]]; then
+    if [[ ! -x "${SIM_FLOW_BUNDLE_BINARY}" ]]; then
+        echo "install-vscode-extension: SIM_FLOW_BUNDLE_BINARY=${SIM_FLOW_BUNDLE_BINARY} is not an executable file" >&2
+        exit 1
+    fi
+    log "using pre-built binary: ${SIM_FLOW_BUNDLE_BINARY}"
+    export SIM_FLOW_BUNDLE_BINARY
 else
-    cargo build -p sim-flow --manifest-path "${ROOT_DIR}/Cargo.toml"
+    log "building sim-flow binary (--${CARGO_PROFILE})"
+    if [[ "${CARGO_PROFILE}" == "release" ]]; then
+        cargo build --release -p sim-flow --manifest-path "${ROOT_DIR}/Cargo.toml"
+    else
+        cargo build -p sim-flow --manifest-path "${ROOT_DIR}/Cargo.toml"
+    fi
 fi
 
 # 2. Either reload (build + install) or package-only.
