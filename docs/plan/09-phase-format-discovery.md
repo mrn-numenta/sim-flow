@@ -279,20 +279,20 @@ first-cut fixture; retry + abort paths covered.
 
 ### Milestone 9.5: deterministic validation post-pass
 
-- [ ] `format/validate.rs::validate(descriptor, doc) ->
+- [x] `format/validate.rs::validate(descriptor, doc) ->
       ValidationBlock`: re-runs every table classification
       against the document, counts non-empty rows, flags
       zero-match warnings; re-runs every section_roles entry,
       checks heading-on-disk matches the descriptor; checks
       column_map canonicals against spec_md schema; checks
       chrome regex match counts.
-- [ ] Result is appended to `format.json::validation` before
+- [x] Result is appended to `format.json::validation` before
       writing.
-- [ ] Warning codes (per Chapter 7 §7.9):
+- [x] Warning codes (per Chapter 7 §7.9):
       `wrap_strategy_zero_merges`, `csrs_role_collision`,
       `unresolved_acronyms`, `chrome_over_match`,
       `unknown_canonical`.
-- [ ] Unit tests for each warning code on synthetic descriptors.
+- [x] Unit tests for each warning code on synthetic descriptors.
 
 Gate: validation tests pass; one descriptor with each warning
 code lands a specific warning.

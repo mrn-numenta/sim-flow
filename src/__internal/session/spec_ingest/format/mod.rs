@@ -18,6 +18,7 @@ pub mod descriptor;
 pub mod discover;
 pub mod first_cut;
 pub mod skeleton;
+pub mod validate;
 
 pub use descriptor::{
     ChromeEntry, ChromeKind, ColumnMapping, ContentKey, FigureEntry, FigureKind, FigureTarget,

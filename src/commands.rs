@@ -648,10 +648,38 @@ fn build_format_descriptor(
     project_root: Option<&std::path::Path>,
     warnings: &mut Vec<sim_flow::__internal::session::spec_ingest::IngestWarning>,
 ) -> FormatBuildOutcome {
-    use sim_flow::__internal::session::spec_ingest::format::{discover, first_cut, skeleton};
-
+    use sim_flow::__internal::session::spec_ingest::format::{skeleton, validate};
     let skeleton = skeleton::build_skeleton_with(loaded, config);
-    let mut first_cut = first_cut::classify(&skeleton);
+    let mut outcome = build_format_descriptor_inner(
+        &skeleton,
+        source_sha256,
+        no_format_discovery,
+        llm_config,
+        project_root,
+        warnings,
+    );
+    // Phase 9.5b: deterministic validation post-pass. Re-verifies
+    // the descriptor against the skeleton it was derived from and
+    // populates the `validation` block with counts + structured
+    // warnings. Always fires regardless of which build path
+    // (default / first-cut / LLM-critiqued) produced the
+    // descriptor, so the cached descriptor's `validation` block
+    // matches the descriptor body.
+    outcome.format.validation = validate::validate(&outcome.format, &skeleton);
+    outcome
+}
+
+fn build_format_descriptor_inner(
+    skeleton: &sim_flow::__internal::session::spec_ingest::format::skeleton::Skeleton,
+    source_sha256: &str,
+    no_format_discovery: bool,
+    llm_config: Option<&IngestLlmConfig<'_>>,
+    project_root: Option<&std::path::Path>,
+    warnings: &mut Vec<sim_flow::__internal::session::spec_ingest::IngestWarning>,
+) -> FormatBuildOutcome {
+    use sim_flow::__internal::session::spec_ingest::format::{discover, first_cut};
+
+    let mut first_cut = first_cut::classify(skeleton);
     first_cut.source_sha256 = source_sha256.to_string();
 
     if no_format_discovery {
@@ -725,7 +753,7 @@ fn build_format_descriptor(
     // overwritten before the operator could read it.
     let debug_dump_dir = project_root.map(|root| root.join(".sim-flow").join("debug"));
     match discover::discover_with_debug(
-        &skeleton,
+        skeleton,
         &first_cut,
         agent.as_mut(),
         warnings,

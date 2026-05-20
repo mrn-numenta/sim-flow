@@ -115,9 +115,9 @@ dependency diagram above.
     API + a `format.json` semantic descriptor; spec_md schema
     extensions (CSRs, glossary, layer/role/domain tags, PMU
     events); DM0 auto-populate consumes `format.json` directly.
-    15 of 16 milestones complete; remaining: deterministic
-    validation post-pass for the descriptor (9.5b) and the live
-    RV12 outcome snapshot (9.16).
+    Code-complete: 16 of 16 implementation milestones done; only
+    the live RV12 outcome snapshot (9.16) remains as operational
+    verification.
 
 ## Conventions for Phase Files
 
