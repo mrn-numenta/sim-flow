@@ -1,0 +1,96 @@
+name: Build CI Image
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/ci-image/**'
+      - '.github/workflows/build-ci-image.yml'
+      # Rebuild on Cargo.lock changes so the image's baked foundation mirror
+      # always contains the SHA pinned by the lockfile. Without this, a PR
+      # that bumps foundation would fail in CI on forks (which can't fetch
+      # the new SHA themselves) until a maintainer manually rebuilt.
+      - 'Cargo.lock'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: Build & push ci image
+    # Skip on forks: the image push targets NumentaCorp's GHCR namespace, and
+    # a fork's GITHUB_TOKEN has no write access there. Without this gate, any
+    # push to a fork's master that touches the watched paths would fail.
+    if: github.repository == 'NumentaCorp/sim-flow' || github.repository == 'mrn-numenta/sim-flow'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Manual checkout
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git init -q .
+          git config --global --add safe.directory "$PWD"
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          # Auth via inline `-c http.extraheader` so the token is scoped to
+          # the single fetch and never lands in `.git/config`.
+          AUTH=$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)
+          # Fetch by GITHUB_REF (always-advertised) rather than raw SHA.
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${AUTH}" \
+              fetch --depth=1 origin "${GITHUB_REF}:refs/remotes/origin/_ci_head"
+          git checkout -q "refs/remotes/origin/_ci_head"
+
+      - name: Resolve image name
+        run: |
+          set -euo pipefail
+          OWNER_LOWER="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          echo "IMAGE=ghcr.io/${OWNER_LOWER}/sim-flow-ci" >> "$GITHUB_ENV"
+
+      - name: Log in to ghcr.io
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "${GH_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+
+      - name: Build image
+        env:
+          # Passed to docker build as a BuildKit secret so the Dockerfile can
+          # clone the private NumentaCorp/sim-foundation repo over SSH and
+          # bake a local mirror into the image. The key never enters a layer
+          # — see the `--mount=type=secret` RUN in the Dockerfile.
+          FOUNDATION_DEPLOY_KEY: ${{ secrets.FOUNDATION_DEPLOY_KEY }}
+          # Force BuildKit so `--secret` and `# syntax=docker/dockerfile:1.6`
+          # are honored. ubuntu-latest's docker supports it; the daemon
+          # default still occasionally falls back to the legacy builder.
+          DOCKER_BUILDKIT: "1"
+        run: |
+          set -euo pipefail
+          if [ -z "${FOUNDATION_DEPLOY_KEY:-}" ]; then
+            echo "::error::FOUNDATION_DEPLOY_KEY repo secret is missing or empty." >&2
+            echo "::error::The image build needs it to clone the private foundation repo." >&2
+            exit 1
+          fi
+          docker build \
+            --secret id=foundation_deploy_key,env=FOUNDATION_DEPLOY_KEY \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            -t "${IMAGE}:${GITHUB_SHA}" \
+            .github/ci-image
+
+      - name: Push image
+        run: |
+          set -euo pipefail
+          docker push "${IMAGE}:${GITHUB_SHA}"
+          # Only stamp `:latest` from master pushes. Dispatching this workflow
+          # against a feature branch (the supported way to test image changes
+          # pre-merge) still publishes the SHA-tagged image — pin
+          # `vars.CI_IMAGE_TAG` to that SHA to test against it — but must not
+          # clobber the `:latest` tag that all PR/master CI runs consume.
+          if [ "${GITHUB_REF}" = "refs/heads/master" ]; then
+            docker tag "${IMAGE}:${GITHUB_SHA}" "${IMAGE}:latest"
+            docker push "${IMAGE}:latest"
+          else
+            echo "Skipping :latest push (ref=${GITHUB_REF}); only master updates :latest."
+          fi

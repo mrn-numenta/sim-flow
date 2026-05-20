@@ -1137,6 +1137,7 @@ dependencies = [
 [[package]]
 name = "block-diagram"
 version = "0.1.0"
+source = "git+ssh://git@github.com/NumentaCorp/sim-foundation.git#b34b2f44a71b8e6461941fcb8d68ea920a0d9413"
 dependencies = [
  "serde",
  "serde_json",
@@ -3299,7 +3300,8 @@ dependencies = [
 
 [[package]]
 name = "foundation-framework"
-version = "0.8.0"
+version = "0.1.0"
+source = "git+ssh://git@github.com/NumentaCorp/sim-foundation.git#b34b2f44a71b8e6461941fcb8d68ea920a0d9413"
 dependencies = [
  "clap",
  "flate2",
@@ -3317,14 +3319,16 @@ dependencies = [
 
 [[package]]
 name = "foundation-macros"
-version = "0.8.0"
+version = "0.1.0"
+source = "git+ssh://git@github.com/NumentaCorp/sim-foundation.git#b34b2f44a71b8e6461941fcb8d68ea920a0d9413"
 dependencies = [
  "foundation-macros-lib",
 ]
 
 [[package]]
 name = "foundation-macros-lib"
-version = "0.8.0"
+version = "0.1.0"
+source = "git+ssh://git@github.com/NumentaCorp/sim-foundation.git#b34b2f44a71b8e6461941fcb8d68ea920a0d9413"
 dependencies = [
  "proc-macro2",
  "quote",

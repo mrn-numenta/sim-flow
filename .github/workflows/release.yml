@@ -16,9 +16,12 @@ name: Release
 #     is skipped when there's no tag context; artifacts are still
 #     uploaded to the workflow run for inspection).
 #
-# sim-flow depends on `block-diagram` and `foundation-framework` via
-# path deps into `../sim-foundation/...`; each job checks out
-# sim-foundation as a sibling. Auth: `secrets.FOUNDATION_REPO_TOKEN`.
+# sim-flow depends on `block-diagram` + `foundation-framework` via git
+# deps against the private NumentaCorp/sim-foundation repo. The CI's
+# build-ci-image approach (baking a local mirror into a container) does
+# not extend to the macOS runner in this matrix, so each job sets up
+# an SSH deploy key from `secrets.FOUNDATION_DEPLOY_KEY` and routes
+# cargo's git fetches through the system git CLI.
 
 on:
   push:
@@ -32,10 +35,6 @@ permissions:
 defaults:
   run:
     shell: bash
-
-env:
-  FOUNDATION_REF: mneilly/ai-flow
-  FOUNDATION_REPO: NumentaCorp/sim-foundation
 
 jobs:
   # 1. Build sim-flow per target. Each job runs on a native runner so
@@ -55,18 +54,30 @@ jobs:
             exe: sim-flow
     runs-on: ${{ matrix.runs-on }}
     steps:
-      - name: Check out sim-flow
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          path: sim-flow
 
-      - name: Check out sim-foundation (sibling for path deps)
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.FOUNDATION_REPO }}
-          ref: ${{ env.FOUNDATION_REF }}
-          path: sim-foundation
-          token: ${{ secrets.FOUNDATION_REPO_TOKEN }}
+      - name: Set up SSH for sim-foundation
+        env:
+          FOUNDATION_DEPLOY_KEY: ${{ secrets.FOUNDATION_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${FOUNDATION_DEPLOY_KEY}" > ~/.ssh/id_ed25519_foundation
+          chmod 600 ~/.ssh/id_ed25519_foundation
+          cat >> ~/.ssh/config <<'EOC'
+          Host github.com
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/id_ed25519_foundation
+            IdentitiesOnly yes
+          EOC
+          chmod 600 ~/.ssh/config
+          # Pin github.com's ed25519 host key inline (TOFU/MITM-resistant).
+          # Source: https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints
+          printf '%s\n' 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
       - name: Cache Cargo registry + git
         uses: actions/cache@v4
@@ -74,8 +85,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            sim-flow/target
-          key: cargo-${{ matrix.target }}-${{ hashFiles('sim-flow/Cargo.lock') }}
+            target
+          key: cargo-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             cargo-${{ matrix.target }}-
 
@@ -83,13 +94,16 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build sim-flow (release)
-        working-directory: sim-flow
+        env:
+          # Route cargo's git ops through the system git so the SSH config
+          # above is honored. libgit2 (cargo's default) ignores ~/.ssh/config.
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: cargo build --release --bin sim-flow
 
       - name: Stage artifact
         run: |
           mkdir -p artifact/bin
-          cp sim-flow/target/release/${{ matrix.exe }} artifact/bin/${{ matrix.exe }}
+          cp target/release/${{ matrix.exe }} artifact/bin/${{ matrix.exe }}
           chmod +x artifact/bin/${{ matrix.exe }}
 
       - name: Upload binary artifact
@@ -108,18 +122,28 @@ jobs:
     if: github.repository == 'NumentaCorp/sim-flow' || github.repository == 'mrn-numenta/sim-flow'
     runs-on: ubuntu-latest
     steps:
-      - name: Check out sim-flow
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          path: sim-flow
 
-      - name: Check out sim-foundation (sibling for foundation rustdoc)
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.FOUNDATION_REPO }}
-          ref: ${{ env.FOUNDATION_REF }}
-          path: sim-foundation
-          token: ${{ secrets.FOUNDATION_REPO_TOKEN }}
+      - name: Set up SSH for sim-foundation
+        env:
+          FOUNDATION_DEPLOY_KEY: ${{ secrets.FOUNDATION_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${FOUNDATION_DEPLOY_KEY}" > ~/.ssh/id_ed25519_foundation
+          chmod 600 ~/.ssh/id_ed25519_foundation
+          cat >> ~/.ssh/config <<'EOC'
+          Host github.com
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/id_ed25519_foundation
+            IdentitiesOnly yes
+          EOC
+          chmod 600 ~/.ssh/config
+          printf '%s\n' 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
       - name: Cache Cargo (for doc build)
         uses: actions/cache@v4
@@ -127,8 +151,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            sim-flow/target
-          key: cargo-docs-${{ hashFiles('sim-flow/Cargo.lock') }}
+            target
+          key: cargo-docs-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             cargo-docs-
 
@@ -153,30 +177,31 @@ jobs:
           path: dl/linux-x64
 
       - name: Install extension dependencies
-        working-directory: sim-flow/extensions/sim-flow-vscode
+        working-directory: extensions/sim-flow-vscode
         run: npm ci
 
-      # Build only the foundation rustdoc + normalize step. We skip
-      # `npm run compile:cargo` because that also runs a full
-      # `cargo build --release -p sim-flow` -- the matrix jobs already
-      # produced those binaries and we downloaded them above; the
-      # packager run would re-do that work for nothing.
+      # Build the foundation rustdoc from the git source cargo fetched
+      # into ~/.cargo/git. We skip `npm run compile:cargo` because that
+      # also runs a full `cargo build --release -p sim-flow` -- the matrix
+      # jobs already produced those binaries and we downloaded them above;
+      # the packager run would re-do that work for nothing.
       - name: Build foundation rustdoc
-        working-directory: sim-foundation
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           cargo doc --no-deps \
-            --target-dir ../sim-flow-vscode-rustdoc \
+            --target-dir target/sim-flow-vscode-rustdoc \
             -p foundation-framework -p foundation-macros
 
       - name: Normalize rustdoc into VSIX-bundled API docs
-        working-directory: sim-flow/extensions/sim-flow-vscode
+        working-directory: extensions/sim-flow-vscode
         run: |
           node scripts/render-rustdoc-api.mjs \
-            "${{ github.workspace }}/sim-flow-vscode-rustdoc/doc" \
-            "${{ github.workspace }}/sim-flow-vscode-api-docs"
+            "${{ github.workspace }}/target/sim-flow-vscode-rustdoc/doc" \
+            "${{ github.workspace }}/target/sim-flow-vscode-api-docs"
 
       - name: Compile extension TypeScript
-        working-directory: sim-flow/extensions/sim-flow-vscode
+        working-directory: extensions/sim-flow-vscode
         run: npm run compile
 
       # Derive a clean release version from the tag (`v0.1.0` -> `0.1.0`).
@@ -188,7 +213,6 @@ jobs:
       # metadata, so we stick to `<major>.<minor>.<patch>-<prerelease>`.
       - name: Derive release version
         id: version
-        working-directory: sim-flow
         run: |
           ref="${GITHUB_REF_NAME:-}"
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
@@ -203,7 +227,7 @@ jobs:
           echo "Release version: $version"
 
       - name: Stage + package VSIX
-        working-directory: sim-flow/extensions/sim-flow-vscode
+        working-directory: extensions/sim-flow-vscode
         env:
           SIM_FLOW_RELEASE_VERSION: ${{ steps.version.outputs.version }}
           SIM_FLOW_BUNDLE_TARGETS: darwin-arm64,linux-x64
@@ -213,7 +237,7 @@ jobs:
 
       - name: Locate VSIX
         id: locate
-        working-directory: sim-flow/extensions/sim-flow-vscode
+        working-directory: extensions/sim-flow-vscode
         run: |
           vsix=$(ls -t build/*.vsix | head -1)
           echo "path=$vsix" >>"$GITHUB_OUTPUT"
@@ -224,7 +248,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: vsix
-          path: sim-flow/extensions/sim-flow-vscode/build/*.vsix
+          path: extensions/sim-flow-vscode/build/*.vsix
           retention-days: 30
 
   # 3. Attach to a GitHub Release. Only fires on tag push -- manual
