@@ -59,19 +59,26 @@ Detailed design and workflow docs live under `tools/sim-flow/docs/flow/`.
 
 `sim-flow` also ships with an internal VS Code extension under:
 
-`tools/sim-flow/extensions/sim-flow-vscode/`
+`extensions/sim-flow-vscode/`
 
 Useful entrypoints:
 
 ```sh
 # build + install the extension locally
-./scripts/install-vscode-extension.sh
+cargo run --release --bin sim-flow -- install-extension
+
+# or, from a sim-models clone where the binary should be linked
+# against sim-models' Cargo.lock:
+cd ~/nta/sim-models && cargo xtask install-sim-flow
 ```
 
+The install logic is a public lib function (`sim_flow::install::install_extension`)
+so consumers like sim-models' `xtask/` can drive it without shelling out.
+
 - Extension README:
-  `tools/sim-flow/extensions/sim-flow-vscode/README.md`
+  `extensions/sim-flow-vscode/README.md`
 - Extension architecture notes:
-  `tools/sim-flow/docs/flow/06-vscode-extension.md`
+  `docs/flow/06-vscode-extension.md`
 
 The dashboard's `Spec:` field is a spec path field, not a raw text box. The
 extension persists the typed path per project, passes it to `sim-flow auto`
