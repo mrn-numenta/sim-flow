@@ -469,3 +469,66 @@ fn explicit_format_leaves_supplied_file_untouched() {
     let before: FormatJson = serde_json::from_str(original_body).unwrap();
     assert_eq!(after, before);
 }
+
+// ---------------------------------------------------------------------
+// Scenario 7: PDF source with no LLM endpoint configured.
+// ---------------------------------------------------------------------
+
+/// Milestone 9.6 acceptance: a PDF ingest run without
+/// `--no-format-discovery` AND without any `--llm-*` flag must NOT
+/// fail; it falls back to the deterministic first-cut classifier and
+/// emits a stderr hint telling the operator how to enable the LLM
+/// critique pass.
+///
+/// This exercises the `let Some(llm) = llm_config else` arm in
+/// `build_format_descriptor`. Without this test, a regression that
+/// hard-errored when the LLM stack wasn't configured (instead of
+/// falling back) would slip past.
+#[test]
+fn pdf_without_llm_config_falls_back_to_first_cut() {
+    let pdf = rv12_fixture();
+    if !pdf.exists() {
+        eprintln!("rv12.pdf fixture missing; skipping no-llm-config fallback test");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path();
+
+    // No --no-format-discovery, no --llm-* flags. The resolver must
+    // fall through to the first-cut classifier. Explicitly clear the
+    // SIM_FLOW_INGEST_LLM_* env vars so a developer shell that has
+    // them set for live runs doesn't accidentally pass the "no LLM
+    // configured" branch -- the test would then exercise the
+    // discovery code path and likely fail on a missing endpoint.
+    let out = Command::new(bin())
+        .arg("--project")
+        .arg(project)
+        .arg("ingest")
+        .args(["--source", pdf.to_str().unwrap()])
+        .env_remove("SIM_FLOW_INGEST_LLM_BACKEND")
+        .env_remove("SIM_FLOW_INGEST_LLM_BASE_URL")
+        .env_remove("SIM_FLOW_INGEST_LLM_MODEL")
+        .env_remove("SIM_FLOW_INGEST_LLM_MODEL_FAMILY")
+        .env_remove("SIM_FLOW_INGEST_LLM_RUNTIME_PROFILE")
+        .output()
+        .expect("spawn sim-flow ingest");
+    assert_ok(&out, "pdf ingest without llm config");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("no --llm-backend configured"),
+        "expected first-cut-fallback hint, got stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("--no-format-discovery to suppress"),
+        "expected suppression hint, got stderr:\n{stderr}"
+    );
+
+    let cached = cache_path(project);
+    assert!(cached.exists(), "first-cut should still write the cache");
+    let descriptor = FormatJson::load(&cached).expect("load cache");
+    assert_eq!(
+        descriptor.model, "first-cut-builtin",
+        "fallback path must stamp the sentinel model"
+    );
+}

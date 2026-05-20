@@ -299,7 +299,7 @@ code lands a specific warning.
 
 ### Milestone 9.6: CLI integration
 
-- [ ] `sim-flow ingest` resolves `format.json`:
+- [x] `sim-flow ingest` resolves `format.json`:
       - If `--no-format-discovery` → use `default.rs`'s
         built-in markdown-friendly descriptor.
       - Else if `--format <path>` → load + validate that path.
@@ -307,11 +307,11 @@ code lands a specific warning.
         `content_key` matches the current input → reuse.
       - Else → call `discover()` (requires LLM endpoint in
         config); persist to `.sim-flow/spec-ingest/format.json`.
-- [ ] `--rediscover-format` always re-runs `discover()` and
+- [x] `--rediscover-format` always re-runs `discover()` and
       overwrites the cache.
-- [ ] Diagnostic output: discovery result counts + warnings
+- [x] Diagnostic output: discovery result counts + warnings
       printed to stderr.
-- [ ] Integration test: ingest with no LLM configured → falls
+- [x] Integration test: ingest with no LLM configured → falls
       back to `--no-format-discovery` with a stderr warning.
 
 Gate: CLI flags work end-to-end on a markdown fixture and an
