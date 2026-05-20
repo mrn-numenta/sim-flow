@@ -3,20 +3,24 @@ name = "sim-flow"
 version = "0.1.0"
 edition = "2024"
 publish = false
-# Keep cargo's package-discovery walk out of subtrees that contain
-# Cargo.toml files which are NOT real packages:
+
+# Declare sim-flow as its own (single-package) workspace and exclude
+# subtrees that contain Cargo.toml files which are NOT real packages.
+# Specifically:
 #   - templates/model-project/Cargo.toml is a `cargo generate` template
-#     with `{{crate_name}}` placeholders that don't parse as TOML.
-#   - experiments/term-spike/** are throwaway probes that never need
-#     to participate in this crate's compile graph.
-# Without this exclude, cargo update / cargo metadata from a consumer
-# (e.g. sim-models) emits a noisy parse error on every invocation when
-# it walks sim-flow's source in the git cache. The error is currently
-# non-fatal but may become hard-failing in a future cargo release.
+#     whose `{{crate_name}}` placeholders don't parse as TOML.
+#   - experiments/term-spike/** are throwaway probes.
+# `[package].exclude` (which we previously used) only affects
+# `cargo package`/publishing. `[workspace] exclude = …` excludes paths
+# from cargo's package-discovery walk, which is what consumers
+# (sim-models' `cargo clippy --workspace`) trip on when cargo
+# enumerates packages in this crate's git checkout looking for
+# `package = "…"`-resolvable names.
+[workspace]
 exclude = [
-    "templates/**",
-    "experiments/**",
-    "studies/**",
+    "templates",
+    "experiments",
+    "studies",
 ]
 
 [[bin]]
