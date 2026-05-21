@@ -16,11 +16,15 @@
 //!   1. Either build the sim-flow binary (`cargo build [-r] -p
 //!      sim-flow --manifest-path <root>/Cargo.toml`) or accept a
 //!      caller-supplied path via [`Options::prebuilt_binary`].
-//!   2. Spawn `npm` in `<root>/extensions/sim-flow-vscode/` with
+//!   2. Run `npm ci` in `<root>/extensions/sim-flow-vscode/` to
+//!      populate `node_modules` from `package-lock.json`. This is the
+//!      first thing that touches npm so it works on fresh checkouts
+//!      (cargo-install / CI / a fresh clone).
+//!   3. Spawn `npm` in `<root>/extensions/sim-flow-vscode/` with
 //!      `SIM_FLOW_BUNDLE_BINARY` pointing at the binary; `bundle-bin.mjs`
 //!      stages it into the VSIX, and `compile-cargo.mjs` skips its own
 //!      cargo build because the same env var is set.
-//!   3. With [`Options::package_only`] false, also runs `npm run
+//!   4. With [`Options::package_only`] false, also runs `npm run
 //!      reload` which force-installs the freshly-built VSIX via the
 //!      `code` CLI (`VSCODE_BIN`, or the macOS default location).
 
@@ -120,6 +124,11 @@ pub fn install_extension(opts: Options) -> Result<Outcome> {
         opts.profile,
         opts.prebuilt_binary.as_deref(),
     )?;
+
+    eprintln!("install-extension: npm ci (install extension deps)");
+    let mut npm_ci = Command::new("npm");
+    npm_ci.arg("ci").arg("--prefix").arg(&ext_dir);
+    run_status(&ext_dir, &mut npm_ci, "npm ci")?;
 
     let mut npm = Command::new("npm");
     npm.arg("--prefix").arg(&ext_dir);
