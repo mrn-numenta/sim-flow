@@ -213,7 +213,7 @@ describe("session/socketPump", () => {
       endMessage: "done",
     });
     expect(
-      mock.state.sockets[0]?.writes.some((line) => line.includes("\"event\":\"user-message\"")),
+      mock.state.sockets[0]?.writes.some((line) => line.includes('"event":"user-message"')),
     ).toBe(true);
 
     pump.dispose();
@@ -385,10 +385,7 @@ describe("session/socketPump", () => {
     const dispose = pump.onNextActionHint((msg) => observed.push({ label: msg.label }));
     const renderer = new RecordingRenderer();
     const settle2 = pump.settle(renderer);
-    socket.emit(
-      "data",
-      `${JSON.stringify({ event: "next-action-hint", label: "Run DM2c" })}\n`,
-    );
+    socket.emit("data", `${JSON.stringify({ event: "next-action-hint", label: "Run DM2c" })}\n`);
     socket.emit("data", `${JSON.stringify({ event: "next-action-hint", label: null })}\n`);
     socket.emit("data", `${JSON.stringify({ event: "request-user-input" })}\n`);
     await settle2;
@@ -455,10 +452,7 @@ describe("session/socketPump", () => {
         duration_ms: 12,
       })}\n`,
     );
-    socket.emit(
-      "data",
-      `${JSON.stringify({ event: "phase-changed", phase: "impl" })}\n`,
-    );
+    socket.emit("data", `${JSON.stringify({ event: "phase-changed", phase: "impl" })}\n`);
     socket.emit("data", `${JSON.stringify({ event: "request-user-input" })}\n`);
     await settle2;
     const out = rendered.join("");
@@ -476,10 +470,7 @@ describe("session/socketPump", () => {
     const settle2 = pump.settle({ markdown: (t) => rendered.push(t) });
     // state-advanced is NOT in the bypass list, so it queues until
     // flushQueuedEvents runs inside settle and reaches the renderer.
-    socket.emit(
-      "data",
-      `${JSON.stringify({ event: "state-advanced", from: "DM0", to: "DM1" })}\n`,
-    );
+    socket.emit("data", `${JSON.stringify({ event: "state-advanced", from: "DM0", to: "DM1" })}\n`);
     socket.emit("data", `${JSON.stringify({ event: "request-user-input" })}\n`);
     await settle2;
     const out = rendered.join("");
@@ -535,16 +526,12 @@ describe("session/socketPump", () => {
         event: "assistant-text",
         text: "",
         final_chunk: true,
-        tool_calls: [
-          { id: "t-1", name: "write_file", arguments_json: '{"path":"x.md"}' },
-        ],
+        tool_calls: [{ id: "t-1", name: "write_file", arguments_json: '{"path":"x.md"}' }],
       })}\n`,
     );
     socket.emit("data", `${JSON.stringify({ event: "request-user-input" })}\n`);
     await settle2;
-    expect(turns).toEqual([
-      { text: "", finalChunk: true, toolCallNames: ["write_file"] },
-    ]);
+    expect(turns).toEqual([{ text: "", finalChunk: true, toolCallNames: ["write_file"] }]);
     pump.dispose();
   });
 
@@ -599,14 +586,8 @@ describe("session/socketPump", () => {
     // orchestrator had emitted it. The pump tracks the latest mode
     // and notifies subscribers.
     const socket = mock.state.sockets[0];
-    socket?.emit(
-      "data",
-      `${JSON.stringify({ event: "step-mode-changed", mode: "manual" })}\n`,
-    );
-    socket?.emit(
-      "data",
-      `${JSON.stringify({ event: "step-mode-changed", mode: "auto" })}\n`,
-    );
+    socket?.emit("data", `${JSON.stringify({ event: "step-mode-changed", mode: "manual" })}\n`);
+    socket?.emit("data", `${JSON.stringify({ event: "step-mode-changed", mode: "auto" })}\n`);
 
     expect(observed).toEqual(["manual", "auto"]);
     expect(pump.stepMode).toBe("auto");

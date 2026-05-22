@@ -109,10 +109,16 @@ export async function testLmModel(_context: vscode.ExtensionContext): Promise<vo
     log("");
   }
   log("Interpretation:");
-  log("  * If A and B both empty but D non-empty -> Claude Code's provider rejects sim-flow callers.");
-  log("  * If C non-empty but A empty -> provider requires modelOptions.max_tokens; we'll plumb it.");
+  log(
+    "  * If A and B both empty but D non-empty -> Claude Code's provider rejects sim-flow callers.",
+  );
+  log(
+    "  * If C non-empty but A empty -> provider requires modelOptions.max_tokens; we'll plumb it.",
+  );
   log("  * If A and D both empty -> something in our code path is wrong (rebuild and retry).");
-  log("  * If everything non-empty -> the failure was specific to a long step prompt (e.g. DM2d); collapse system messages.");
+  log(
+    "  * If everything non-empty -> the failure was specific to a long step prompt (e.g. DM2d); collapse system messages.",
+  );
 }
 
 async function probeStream(

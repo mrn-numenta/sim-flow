@@ -42,13 +42,7 @@ const DS_STEP_ORDER: readonly string[] = [
  * generation is enabled, and as the per-flow ordering once
  * `sim-flow convert-sv` flips a project into this flow.
  */
-export const SV_STEP_ORDER: readonly string[] = [
-  "SV0",
-  "SV0d",
-  "SV1",
-  "SV2",
-  "SV3",
-];
+export const SV_STEP_ORDER: readonly string[] = ["SV0", "SV0d", "SV1", "SV2", "SV3"];
 
 /** Return the ordered step IDs for the given flow. */
 export function stepOrderFor(flow: Flow): readonly string[] {

@@ -73,7 +73,9 @@ export function readPidRecords(projectDir: string): PidRecord[] {
   }
   const out: PidRecord[] = [];
   for (const name of entries) {
-    if (!name.endsWith(".json")) continue;
+    if (!name.endsWith(".json")) {
+      continue;
+    }
     const file = path.join(dir, name);
     try {
       const raw = fs.readFileSync(file, "utf8");
@@ -227,9 +229,7 @@ export function cleanupStalePids(projectDir: string): CleanupSummary {
     try {
       removePidRecord(projectDir, record.sessionId);
     } catch (err) {
-      summary.removeFailures.push(
-        `${record.sessionId}: ${(err as Error).message ?? String(err)}`,
-      );
+      summary.removeFailures.push(`${record.sessionId}: ${(err as Error).message ?? String(err)}`);
     }
   }
   // Best-effort: also reap an empty pids dir so the next `git status`

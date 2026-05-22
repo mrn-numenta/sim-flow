@@ -76,15 +76,7 @@ export async function enumerateModels(opts: EnumerateOptions): Promise<Enumerate
     }
     case "openai":
       return {
-        models: [
-          "gpt-4o",
-          "gpt-4o-mini",
-          "gpt-4.1",
-          "gpt-4.1-mini",
-          "o1",
-          "o1-preview",
-          "o3-mini",
-        ],
+        models: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o1", "o1-preview", "o3-mini"],
       };
     case "anthropic":
       return {
@@ -131,13 +123,17 @@ async function enumerateVscode(opts: EnumerateOptions): Promise<EnumerateResult>
     // (and Copilot's quota ticks).
     const seen = new Set<string>();
     for (const m of models) {
-      const vendor = typeof (m as { vendor?: unknown }).vendor === "string"
-        ? (m as { vendor: string }).vendor
-        : "";
-      const family = typeof (m as { family?: unknown }).family === "string"
-        ? (m as { family: string }).family
-        : "";
-      if (family.length === 0) {continue;}
+      const vendor =
+        typeof (m as { vendor?: unknown }).vendor === "string"
+          ? (m as { vendor: string }).vendor
+          : "";
+      const family =
+        typeof (m as { family?: unknown }).family === "string"
+          ? (m as { family: string }).family
+          : "";
+      if (family.length === 0) {
+        continue;
+      }
       const key = vendor.length > 0 ? `${vendor}/${family}` : family;
       seen.add(key);
     }
@@ -147,10 +143,7 @@ async function enumerateVscode(opts: EnumerateOptions): Promise<EnumerateResult>
   }
 }
 
-async function fetchOpenAiModels(
-  url: string,
-  fetchImpl?: typeof fetch,
-): Promise<EnumerateResult> {
+async function fetchOpenAiModels(url: string, fetchImpl?: typeof fetch): Promise<EnumerateResult> {
   const doFetch = fetchImpl ?? globalThis.fetch;
   if (typeof doFetch !== "function") {
     return { models: [], error: "`fetch` is not available; Node 18+ or a polyfill is required." };

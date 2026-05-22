@@ -70,82 +70,66 @@ export const STEP_FULL_LABELS: Record<string, string> = {
 export const STEP_DESCRIPTIONS: Record<string, { title: string; body: string }> = {
   DM0: {
     title: "DM0 — Specification",
-    body:
-      "Ingest the user-supplied spec (markdown or PDF) into `docs/spec.md` / `docs/spec/`. The agent asks clarifying questions until the spec declares a clock frequency and an explicit gates-per-cycle budget. Critique gate passes when no blockers remain.",
+    body: "Ingest the user-supplied spec (markdown or PDF) into `docs/spec.md` / `docs/spec/`. The agent asks clarifying questions until the spec declares a clock frequency and an explicit gates-per-cycle budget. Critique gate passes when no blockers remain.",
   },
   DM1: {
     title: "DM1 — Modeling Setup",
-    body:
-      "Translate the spec into engineering targets and pick a UVM-lite testbench shape. Outputs `docs/targets.md` (quantitative targets) and `docs/testbench.md` (sequencer / driver / monitor / scoreboard plus a `lib:examples/<NN-name>` baseline DM3b will mirror).",
+    body: "Translate the spec into engineering targets and pick a UVM-lite testbench shape. Outputs `docs/targets.md` (quantitative targets) and `docs/testbench.md` (sequencer / driver / monitor / scoreboard plus a `lib:examples/<NN-name>` baseline DM3b will mirror).",
   },
   DM2a: {
     title: "DM2a — Decomposition",
-    body:
-      "Break the design into named operations under `docs/analysis/decomposition.md` and characterize each with a data-movement summary in `docs/analysis/data-movement.md`. Every operation that DM2b will map to pipeline stages must appear here.",
+    body: "Break the design into named operations under `docs/analysis/decomposition.md` and characterize each with a data-movement summary in `docs/analysis/data-movement.md`. Every operation that DM2b will map to pipeline stages must appear here.",
   },
   DM2b: {
     title: "DM2b — Pipeline Mapping",
-    body:
-      "Assign each operation to a pipeline stage in `docs/analysis/pipeline-mapping.md`. Defines the in-order shape DM2c's implementation plan and DM2d's model will follow.",
+    body: "Assign each operation to a pipeline stage in `docs/analysis/pipeline-mapping.md`. Defines the in-order shape DM2c's implementation plan and DM2d's model will follow.",
   },
   DM2c: {
     title: "DM2c — Implementation Plan",
-    body:
-      "Break the modeling work into milestones under `docs/impl-plan/milestone-NN-*.md`, each with a checklist that DM2d will tick off as the model is implemented. The milestone files are this step's only output.",
+    body: "Break the modeling work into milestones under `docs/impl-plan/milestone-NN-*.md`, each with a checklist that DM2d will tick off as the model is implemented. The milestone files are this step's only output.",
   },
   DM2d: {
     title: "DM2d — Model Execution",
-    body:
-      "Implement the SystemVerilog model milestone-by-milestone, ticking off `- [x]` entries in each `milestone-NN-*.md` as code lands. Critique runs between milestones; the gate clears once every milestone is fully resolved.",
+    body: "Implement the SystemVerilog model milestone-by-milestone, ticking off `- [x]` entries in each `milestone-NN-*.md` as code lands. Critique runs between milestones; the gate clears once every milestone is fully resolved.",
   },
   DM3a: {
     title: "DM3a — Test Plan",
-    body:
-      "Outline testbench scaffolding (`tb-milestone-NN-*.md`) and per-operation test sequences (`test-milestone-NN-*.md`) under `docs/test-plan/`. Both prefixes feed one pipeline that DM3b and DM3c walk in order.",
+    body: "Outline testbench scaffolding (`tb-milestone-NN-*.md`) and per-operation test sequences (`test-milestone-NN-*.md`) under `docs/test-plan/`. Both prefixes feed one pipeline that DM3b and DM3c walk in order.",
   },
   DM3b: {
     title: "DM3b — Testbench Build",
-    body:
-      "Implement the UVM-lite testbench components named in DM1's `docs/testbench.md`, ticking off the `tb-milestone-NN-*.md` rows. Lands the agents, scoreboard, and `SimEnvBuilder` wiring DM3c's tests will exercise.",
+    body: "Implement the UVM-lite testbench components named in DM1's `docs/testbench.md`, ticking off the `tb-milestone-NN-*.md` rows. Lands the agents, scoreboard, and `SimEnvBuilder` wiring DM3c's tests will exercise.",
   },
   DM3c: {
     title: "DM3c — Test Execution",
-    body:
-      "Run the per-operation tests scaffolded in DM3a's `test-milestone-NN-*.md`. Failures route back through critique; the gate clears once every test milestone is resolved.",
+    body: "Run the per-operation tests scaffolded in DM3a's `test-milestone-NN-*.md`. Failures route back through critique; the gate clears once every test milestone is resolved.",
   },
   DM4a: {
     title: "DM4a — Performance Plan",
-    body:
-      "Plan the perf experiments under `docs/perf-plan/perf-milestone-NN-*.md`. Each stub names the workload, the metric of interest, and how a run should be invoked.",
+    body: "Plan the perf experiments under `docs/perf-plan/perf-milestone-NN-*.md`. Each stub names the workload, the metric of interest, and how a run should be invoked.",
   },
   DM4b: {
     title: "DM4b — Performance Execution",
-    body:
-      "Execute each perf milestone, recording at least one run in `experiments.db`. The gate inspects experiment artifacts and clears once the perf plan is fully covered.",
+    body: "Execute each perf milestone, recording at least one run in `experiments.db`. The gate inspects experiment artifacts and clears once the perf plan is fully covered.",
   },
   SV0: {
     title: "SV0 — Verilog Plan",
-    body:
-      "Classify each Foundation module into a hardware pattern and stub RTL + UVM milestones under `generated/plan/`. Produces `generated/plan.md` (the index) plus per-area `rtl-milestone-NN-*.md` and `uvm-milestone-NN-*.md` files. Entered automatically after DM4b passes when Verilog generation is enabled.",
+    body: "Classify each Foundation module into a hardware pattern and stub RTL + UVM milestones under `generated/plan/`. Produces `generated/plan.md` (the index) plus per-area `rtl-milestone-NN-*.md` and `uvm-milestone-NN-*.md` files. Entered automatically after DM4b passes when Verilog generation is enabled.",
   },
   SV0d: {
     title: "SV0d — Plan Detail",
-    body:
-      "Fill in each milestone stub's task list. Walks every `rtl-milestone-` and `uvm-milestone-` placeholder under `generated/plan/` until every entry has been detailed.",
+    body: "Fill in each milestone stub's task list. Walks every `rtl-milestone-` and `uvm-milestone-` placeholder under `generated/plan/` until every entry has been detailed.",
   },
   SV1: {
     title: "SV1 — RTL Emission",
-    body:
-      "Emit synthesizable SystemVerilog into `generated/rtl/` one module per RTL milestone, including shared packed structs (`payloads.sv`) and top-level wiring (`top.sv`). Critique runs between milestones; the gate clears once every RTL milestone task is resolved.",
+    body: "Emit synthesizable SystemVerilog into `generated/rtl/` one module per RTL milestone, including shared packed structs (`payloads.sv`) and top-level wiring (`top.sv`). Critique runs between milestones; the gate clears once every RTL milestone task is resolved.",
   },
   SV2: {
     title: "SV2 — UVM Emission",
-    body:
-      "Emit UVM testbench scaffolding (sequence items, env, top) plus per-test files into `generated/test/`. Walks the `uvm-milestone-` set in `generated/plan/` until every UVM milestone task is resolved.",
+    body: "Emit UVM testbench scaffolding (sequence items, env, top) plus per-test files into `generated/test/`. Walks the `uvm-milestone-` set in `generated/plan/` until every UVM milestone task is resolved.",
   },
   SV3: {
     title: "SV3 — Build & Validate",
-    body:
-      "Generate the simulator file list (`sim.f`), a runnable `Makefile`, and a `validation.md` summary. Drives the emitted RTL through Verilator (or your configured simulator) and iterates the generated SystemVerilog until simulation passes.",
+    body: "Generate the simulator file list (`sim.f`), a runnable `Makefile`, and a `validation.md` summary. Drives the emitted RTL through Verilator (or your configured simulator) and iterates the generated SystemVerilog until simulation passes.",
   },
 };

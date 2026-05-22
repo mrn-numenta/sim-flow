@@ -90,13 +90,17 @@ describe("credentialsFilePath: per-platform layout", () => {
   });
 
   it("on darwin, lives under Library/Application Support/sim-flow", () => {
-    if (process.platform !== "darwin") return;
+    if (process.platform !== "darwin") {
+      return;
+    }
     const p = credentialsFilePath()!;
     expect(p).toContain(path.join("Library", "Application Support", "sim-flow"));
   });
 
   it("on linux, honors XDG_CONFIG_HOME", () => {
-    if (process.platform === "win32" || process.platform === "darwin") return;
+    if (process.platform === "win32" || process.platform === "darwin") {
+      return;
+    }
     const p = credentialsFilePath()!;
     expect(p.startsWith(path.join(tmpRoot, "sim-flow"))).toBe(true);
   });
@@ -108,7 +112,9 @@ describe("credentialsFilePath: per-platform layout", () => {
     // simple: on win32 the path is `%APPDATA%\sim-flow\config\credentials.toml`.
     // Asserted in the Rust matching test below; here we just verify
     // the function's branching honors APPDATA when on win32.
-    if (process.platform !== "win32") return;
+    if (process.platform !== "win32") {
+      return;
+    }
     const p = credentialsFilePath()!;
     expect(p).toContain(path.join("sim-flow", "config", "credentials.toml"));
   });
@@ -200,11 +206,7 @@ describe("write/clear round-trip", () => {
     // unknown table must still be intact.
     const filePath = credentialsFilePath()!;
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(
-      filePath,
-      "[vertex]\napi_key = \"vx-future\"\nproject = \"my-proj\"\n",
-      "utf8",
-    );
+    fs.writeFileSync(filePath, '[vertex]\napi_key = "vx-future"\nproject = "my-proj"\n', "utf8");
 
     writeApiKeyToConfigFile("anthropic", "ant-1");
     let body = fs.readFileSync(filePath, "utf8");
@@ -222,24 +224,26 @@ describe("write/clear round-trip", () => {
   it("clearApiKeyFromConfigFile removes one provider, idempotent thereafter", async () => {
     writeApiKeyToConfigFile("anthropic", "to-be-removed");
     expect(clearApiKeyFromConfigFile("anthropic")).toBe(true);
-    expect((await resolveApiKey("anthropic"))).toBeNull();
+    expect(await resolveApiKey("anthropic")).toBeNull();
     expect(clearApiKeyFromConfigFile("anthropic")).toBe(false);
   });
 
   it("sets 0600 permissions on POSIX", () => {
-    if (process.platform === "win32") return;
+    if (process.platform === "win32") {
+      return;
+    }
     const filePath = writeApiKeyToConfigFile("anthropic", "secret");
     const mode = fs.statSync(filePath).mode & 0o777;
     expect(mode).toBe(0o600);
   });
 
   it("does not leave a tempfile sibling after a successful write (POSIX)", () => {
-    if (process.platform === "win32") return;
+    if (process.platform === "win32") {
+      return;
+    }
     const filePath = writeApiKeyToConfigFile("anthropic", "secret");
     const dir = path.dirname(filePath);
-    const stragglers = fs
-      .readdirSync(dir)
-      .filter((n) => n.includes(".tmp-"));
+    const stragglers = fs.readdirSync(dir).filter((n) => n.includes(".tmp-"));
     expect(stragglers).toEqual([]);
   });
 

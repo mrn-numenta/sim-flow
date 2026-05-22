@@ -37,12 +37,7 @@ interface UiState {
   pendingActions: Set<string>;
 }
 
-type TabId =
-  | "experiments"
-  | "baselines"
-  | "sweeps"
-  | "prompts"
-  | "block-diagram";
+type TabId = "experiments" | "baselines" | "sweeps" | "prompts" | "block-diagram";
 
 const ui: UiState = {
   data: null,
@@ -323,10 +318,14 @@ function tabs(): HTMLElement {
     // addEventListener used to race with state-update redraws and
     // drop clicks intermittently when refreshes ran during the
     // mousedown -> mouseup window.
-    const tab = el("button", {
-      class: cls,
-      "data-tab": id,
-    }, label) as HTMLButtonElement;
+    const tab = el(
+      "button",
+      {
+        class: cls,
+        "data-tab": id,
+      },
+      label,
+    ) as HTMLButtonElement;
     bar.appendChild(tab);
   }
   return bar;
@@ -365,10 +364,7 @@ function installTabDelegationOnce(): void {
     if (!clickEl) {
       return;
     }
-    if (
-      clickEl instanceof HTMLButtonElement &&
-      clickEl.disabled
-    ) {
+    if (clickEl instanceof HTMLButtonElement && clickEl.disabled) {
       return;
     }
     if (clickEl.getAttribute("aria-disabled") === "true") {

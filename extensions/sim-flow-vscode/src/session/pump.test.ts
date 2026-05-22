@@ -100,6 +100,7 @@ vi.mock("../llm", () => {
 
   return {
     createBackend: () => ({
+      // eslint-disable-next-line require-yield
       stream: async function* () {
         return;
       },
@@ -412,8 +413,9 @@ describe("session/pump", () => {
   it("sendUserMessage writes a user-message host event to the subprocess stdin", () => {
     const { pump, process } = makePump();
     pump.sendUserMessage("hello orchestrator");
-    const written = process.stdin.writes
-      .map((line) => JSON.parse(line.trim()) as { event: string; text?: string });
+    const written = process.stdin.writes.map(
+      (line) => JSON.parse(line.trim()) as { event: string; text?: string },
+    );
     // The pump emits its initial `hello` handshake event on construct;
     // the last write should be the user-message we just sent.
     expect(written.at(-1)).toEqual({ event: "user-message", text: "hello orchestrator" });
@@ -436,8 +438,9 @@ describe("session/pump", () => {
   it("cancel writes a cancel host event", () => {
     const { pump, process } = makePump();
     pump.cancel();
-    const written = process.stdin.writes
-      .map((line) => JSON.parse(line.trim()) as { event: string });
+    const written = process.stdin.writes.map(
+      (line) => JSON.parse(line.trim()) as { event: string },
+    );
     expect(written.at(-1)).toEqual({ event: "cancel" });
   });
 
@@ -540,11 +543,10 @@ describe("session/pump", () => {
       endReason: "completed",
       endMessage: "ok",
     });
-    const written = process.stdin.writes
-      .map((line) => JSON.parse(line.trim()) as { event: string; text?: string });
-    expect(written.some((w) => w.event === "user-message" && w.text === "go ahead")).toBe(
-      true,
+    const written = process.stdin.writes.map(
+      (line) => JSON.parse(line.trim()) as { event: string; text?: string },
     );
+    expect(written.some((w) => w.event === "user-message" && w.text === "go ahead")).toBe(true);
   });
 
   it("handles chunked protocol lines and surfaces orchestrator-driven session end", async () => {

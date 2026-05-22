@@ -19,7 +19,17 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 // → ../../.. = <repo>. sim-flow is its own repo now; the historical
 // five-level walk was for the tools/sim-flow/ layout under
 // sim-foundation.
-const repoRoot = path.resolve(here, "..", "..", "..");
+//
+// `SIM_FLOW_REPO_ROOT` is set by package-dev.mjs when this script runs
+// from a staged copy under build/stage/scripts/ (where the relative
+// math above resolves inside the extension dir instead of the real
+// repo root). For direct `npm run codegen:protocol` invocations the
+// env var is unset and the fallback applies. Empty / whitespace-only
+// values are treated as unset so a forgotten env var doesn't silently
+// resolve paths against the process CWD.
+const envRoot = (globalThis as { process?: { env: Record<string, string | undefined> } }).process
+  ?.env.SIM_FLOW_REPO_ROOT?.trim();
+const repoRoot = envRoot && envRoot.length > 0 ? envRoot : path.resolve(here, "..", "..", "..");
 const schemaPath = path.join(
   repoRoot,
   "docs",
@@ -113,5 +123,5 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   console.error(err);
-  process.exit(1);
+  (globalThis as { process?: { exit(code?: number): never } }).process?.exit(1);
 });

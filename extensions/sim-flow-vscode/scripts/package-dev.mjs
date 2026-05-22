@@ -138,6 +138,11 @@ const result = spawnSync(
   env: {
     ...process.env,
     SIM_FOUNDATION_ROOT: repoRoot,
+    // codegen:protocol (generate-protocol-types.ts) reads the schema
+    // from <repo>/docs/flow/. The script's own relative resolution
+    // breaks when run from build/stage/scripts/; this env override
+    // pins it to the real repo root.
+    SIM_FLOW_REPO_ROOT: repoRoot,
   },
   stdio: "inherit",
   },

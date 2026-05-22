@@ -65,17 +65,15 @@ export class PerfPanelHost {
       {
         enableScripts: true,
         retainContextWhenHidden: true,
-        localResourceRoots: [
-          vscode.Uri.joinPath(this.opts.extensionUri, "dist", "webview"),
-        ],
+        localResourceRoots: [vscode.Uri.joinPath(this.opts.extensionUri, "dist", "webview")],
       },
     );
 
     this.panel.webview.html = this.renderHtml(this.panel.webview);
 
     this.disposables.push(
-      this.panel.webview.onDidReceiveMessage(
-        async (msg: WebviewMessage) => this.onWebviewMessage(msg),
+      this.panel.webview.onDidReceiveMessage(async (msg: WebviewMessage) =>
+        this.onWebviewMessage(msg),
       ),
       this.panel.onDidDispose(() => this.dispose()),
     );
@@ -192,13 +190,7 @@ export class PerfPanelHost {
   private renderHtml(webview: vscode.Webview): string {
     const nonce = nonceString();
     const scriptUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(
-        this.opts.extensionUri,
-        "dist",
-        "webview",
-        "perfPanel",
-        "panel.js",
-      ),
+      vscode.Uri.joinPath(this.opts.extensionUri, "dist", "webview", "perfPanel", "panel.js"),
     );
     const csp = [
       "default-src 'none'",
@@ -288,8 +280,7 @@ function trimRow(r: RunRow): PerfRunRow {
 
 function nonceString(): string {
   let text = "";
-  const possible =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
   for (let i = 0; i < 32; i += 1) {
     text += possible.charAt(Math.floor(Math.random() * possible.length));
   }

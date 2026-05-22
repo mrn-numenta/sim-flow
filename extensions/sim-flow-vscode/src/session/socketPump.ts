@@ -589,9 +589,7 @@ export class SocketSessionPump implements LiveSessionTransport {
    * after a context-menu Reset (without it, the rail stays pinned
    * to the pre-reset step until the next unrelated refresh).
    */
-  onStateAdvanced(
-    listener: (msg: { from: string; to: string | null }) => void,
-  ): () => void {
+  onStateAdvanced(listener: (msg: { from: string; to: string | null }) => void): () => void {
     const wrapped = (msg: SocketPumpBusEvent) => {
       if (msg.type === "state-advanced") {
         listener({ from: msg.from, to: msg.to });
@@ -608,47 +606,65 @@ export class SocketSessionPump implements LiveSessionTransport {
    * surfaces to the user via the existing diagnostic renderer.
    */
   setStepMode(mode: StepMode): void {
-    if (this.options.viewer) return;
+    if (this.options.viewer) {
+      return;
+    }
     this.sendHostEventAfterReady({ event: "set-step-mode", mode });
   }
 
   runStep(step: string, kind: SessionKindOut): void {
-    if (this.options.viewer) return;
+    if (this.options.viewer) {
+      return;
+    }
     this.sendHostEventAfterReady({ event: "run-step", step, kind });
   }
 
   runCritique(step: string): void {
-    if (this.options.viewer) return;
+    if (this.options.viewer) {
+      return;
+    }
     this.sendHostEventAfterReady({ event: "run-critique", step });
   }
 
   runGate(step: string): void {
-    if (this.options.viewer) return;
+    if (this.options.viewer) {
+      return;
+    }
     this.sendHostEventAfterReady({ event: "run-gate", step });
   }
 
   advance(step: string): void {
-    if (this.options.viewer) return;
+    if (this.options.viewer) {
+      return;
+    }
     this.sendHostEventAfterReady({ event: "advance", step });
   }
 
   reset(step: string): void {
-    if (this.options.viewer) return;
+    if (this.options.viewer) {
+      return;
+    }
     this.sendHostEventAfterReady({ event: "reset", step });
   }
 
   continueFlow(): void {
-    if (this.options.viewer) return;
+    if (this.options.viewer) {
+      return;
+    }
     this.sendHostEventAfterReady({ event: "continue-flow" });
   }
 
   setSpec(path: string): void {
-    if (this.options.viewer) return;
+    if (this.options.viewer) {
+      return;
+    }
     this.sendHostEventAfterReady({ event: "set-spec", path });
   }
 
   shutdown(): void {
-    if (this.options.viewer) return;
+    if (this.options.viewer) {
+      return;
+    }
     this.sendHostEventAfterReady({ event: "shutdown" });
   }
 
@@ -860,13 +876,7 @@ export class SocketSessionPump implements LiveSessionTransport {
         name: "sim-flow-vscode",
         version: "0.2.0",
       } as HostInfo,
-      capabilities: [
-        "text",
-        "markdown",
-        "user-input",
-        "tool-notifications",
-        "followups",
-      ],
+      capabilities: ["text", "markdown", "user-input", "tool-notifications", "followups"],
     });
   }
 
@@ -944,8 +954,6 @@ export class SocketSessionPump implements LiveSessionTransport {
     handleEvent(this as unknown as EventDispatchContext, event);
   }
 
-
-
   private sendHostEvent(event: HostEvent): void {
     if (this.terminated || !this.socket || this.socket.destroyed) {
       return;
@@ -971,4 +979,3 @@ function delay(ms: number): Promise<void> {
     setTimeout(resolve, ms);
   });
 }
-

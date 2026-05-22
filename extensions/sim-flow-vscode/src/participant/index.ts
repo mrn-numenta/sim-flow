@@ -233,8 +233,7 @@ async function runAutoCommand(
   const maxLlmRequests = config.get<number>("auto.maxLlmRequests") ?? 500;
   const noPreamble = config.get<boolean>("auto.noPreamble") ?? true;
   const cargoTimeoutSecs = config.get<number>("auto.cargoTimeoutSeconds") ?? 300;
-  const llmRetryBudgetSecs =
-    config.get<number>("llm.retryBudgetSeconds") ?? 600;
+  const llmRetryBudgetSecs = config.get<number>("llm.retryBudgetSeconds") ?? 600;
   const { specPath } = extractSpecPath(prompt);
 
   const args = ["auto"];
@@ -251,10 +250,7 @@ async function runAutoCommand(
   }
   args.push("--max-auto-iters", String(maxWorkIters));
   args.push("--max-critique-iters", String(maxCritiqueIters));
-  args.push(
-    "--max-critique-no-progress-iters",
-    String(maxCritiqueNoProgressIters),
-  );
+  args.push("--max-critique-no-progress-iters", String(maxCritiqueNoProgressIters));
   args.push("--max-llm-requests", String(maxLlmRequests));
   args.push("--no-preamble", String(noPreamble));
   args.push("--llm-retry-budget-secs", String(llmRetryBudgetSecs));
@@ -354,17 +350,17 @@ function buildPumpLlmConfig(
   let source: LlmSource = "vscode";
   let model = (config.get<string>("llm.model") ?? "").trim() || undefined;
   let modelFamilyId = (config.get<string>("llm.modelFamily") ?? "").trim() || undefined;
-  let runtimeProfileId =
-    (config.get<string>("llm.runtimeProfile") ?? "").trim() || undefined;
+  let runtimeProfileId = (config.get<string>("llm.runtimeProfile") ?? "").trim() || undefined;
   let baseUrl: string | undefined;
   // `server:<name>` references a row in `sim-flow.llm.servers`.
   // Resolve to the server's `kind` (passed to sim-flow as
   // `--llm-backend`) plus a derived base URL from host + port.
   if (rawSource.startsWith("server:")) {
     const name = rawSource.slice("server:".length);
-    const servers = (config.get<unknown>("llm.servers") as
-      | import("../webview/messages").LlmServerEntry[]
-      | undefined) ?? [];
+    const servers =
+      (config.get<unknown>("llm.servers") as
+        | import("../webview/messages").LlmServerEntry[]
+        | undefined) ?? [];
     const entry = servers.find((s) => s.name === name);
     if (entry) {
       source = entry.kind as LlmSource;

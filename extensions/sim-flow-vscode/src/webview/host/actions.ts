@@ -11,14 +11,22 @@
 
 import * as vscode from "vscode";
 
-import type { AutoSessionManager, ManagedAutoSessionState } from "../../chatPanel/autoSessionManager";
+import type {
+  AutoSessionManager,
+  ManagedAutoSessionState,
+} from "../../chatPanel/autoSessionManager";
 import type { SimFlowCli } from "../../cli/simflow";
 import {
   ControlSocketError,
   controlSocketLikelyPresent,
   sendCommand as sendControlCommand,
 } from "../../session/control-client";
-import { cliBackendArgFor, isTerminalLlmSource, type HostMessage, type LlmSourceTag } from "../messages";
+import {
+  cliBackendArgFor,
+  isTerminalLlmSource,
+  type HostMessage,
+  type LlmSourceTag,
+} from "../messages";
 import { buildSimulateAndIterateAppendix } from "./helpers";
 import { loadFlowState } from "./loaders";
 

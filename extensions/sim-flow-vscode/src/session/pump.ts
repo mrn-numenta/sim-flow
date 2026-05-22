@@ -274,9 +274,7 @@ export interface LiveSessionTransport {
    * nothing useful to suggest (e.g. no current step) -- render
    * the Continue button as disabled.
    */
-  onNextActionHint?(
-    listener: (msg: { label: string | null }) => void,
-  ): () => void;
+  onNextActionHint?(listener: (msg: { label: string | null }) => void): () => void;
   /**
    * Subscribe to prompt-stack compaction events. Each call carries
    * the message ids the orchestrator just evicted plus the reason
@@ -299,9 +297,7 @@ export interface LiveSessionTransport {
    * already; subscribers re-read it on each callback). Absent on
    * stdio / mock transports.
    */
-  onStateAdvanced?(
-    listener: (msg: { from: string; to: string | null }) => void,
-  ): () => void;
+  onStateAdvanced?(listener: (msg: { from: string; to: string | null }) => void): () => void;
   /**
    * True when this pump is attached as a read-only observer to a
    * `--watch-socket` tap. Dashboard / chat panel use this to
@@ -453,13 +449,7 @@ export class SessionPump {
         name: "sim-flow-vscode",
         version: "0.2.0",
       } as HostInfo,
-      capabilities: [
-        "text",
-        "markdown",
-        "user-input",
-        "tool-notifications",
-        "followups",
-      ],
+      capabilities: ["text", "markdown", "user-input", "tool-notifications", "followups"],
     });
   }
 

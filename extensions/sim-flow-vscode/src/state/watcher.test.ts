@@ -60,7 +60,9 @@ function makeEmitter<T>(): FakeEmitter<T> {
       return { dispose: () => {} };
     },
     fire(e) {
-      for (const l of this._listeners) l(e);
+      for (const l of this._listeners) {
+        l(e);
+      }
     },
     dispose() {
       this._listeners.length = 0;
@@ -133,14 +135,10 @@ describe("createStateWatcher", () => {
     const w = createStateWatcher("/proj");
     const events: Array<{ kind: string; uri: { fsPath: string } }> = [];
     w.onDidChange((e) => events.push({ kind: e.kind, uri: e.uri }));
-    const stateTomlWatcher = watchers.find(
-      (wr) => wr.pattern.pattern === ".sim-flow/state.toml",
-    );
+    const stateTomlWatcher = watchers.find((wr) => wr.pattern.pattern === ".sim-flow/state.toml");
     expect(stateTomlWatcher).toBeDefined();
     stateTomlWatcher!.changeCbs[0]({ fsPath: "/proj/.sim-flow/state.toml" });
-    expect(events).toEqual([
-      { kind: "state-toml", uri: { fsPath: "/proj/.sim-flow/state.toml" } },
-    ]);
+    expect(events).toEqual([{ kind: "state-toml", uri: { fsPath: "/proj/.sim-flow/state.toml" } }]);
     w.dispose();
   });
 
@@ -152,10 +150,7 @@ describe("createStateWatcher", () => {
     const mdW = watchers.find((wr) => wr.pattern.pattern === "docs/critiques/*.md")!;
     jsonW.createCbs[0]({ fsPath: "/proj/docs/critiques/DM0-critique.json" });
     mdW.changeCbs[0]({ fsPath: "/proj/docs/critiques/DM0-critique.md" });
-    expect(events).toEqual([
-      "critiques:DM0-critique.json",
-      "critiques:DM0-critique.md",
-    ]);
+    expect(events).toEqual(["critiques:DM0-critique.json", "critiques:DM0-critique.md"]);
     w.dispose();
   });
 

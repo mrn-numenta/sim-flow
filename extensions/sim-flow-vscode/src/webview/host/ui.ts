@@ -20,10 +20,7 @@ export interface UiContext {
   sendPromptsList(): Promise<void>;
 }
 
-export async function sendModelList(
-  ctx: UiContext,
-  source: LlmSourceTag | string,
-): Promise<void> {
+export async function sendModelList(ctx: UiContext, source: LlmSourceTag | string): Promise<void> {
   const config = vscode.workspace.getConfiguration("sim-flow");
   const ollamaBaseUrl = config.get<string>("llm.ollama.baseUrl") ?? undefined;
   const lmstudioBaseUrl = config.get<string>("llm.lmstudio.baseUrl") ?? undefined;
@@ -212,10 +209,7 @@ export async function openDocumentInEditor(absPath: string): Promise<void> {
   }
 }
 
-export async function openCritiqueInEditor(
-  ctx: UiContext,
-  stepId: string,
-): Promise<void> {
+export async function openCritiqueInEditor(ctx: UiContext, stepId: string): Promise<void> {
   const critique = path.join(
     ctx.options.projectDir,
     ".sim-flow",

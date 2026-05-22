@@ -385,7 +385,10 @@
         },
         "sim-flow.coverage.level": {
           "type": "string",
-          "enum": ["module", "total"],
+          "enum": [
+            "module",
+            "total"
+          ],
           "enumDescriptions": [
             "Every reported module must clear the threshold.",
             "Only the project-wide total must clear the threshold."

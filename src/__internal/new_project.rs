@@ -161,6 +161,10 @@ fn run_cargo_generate(
         .arg("--silent")
         .arg("--vcs")
         .arg("none");
+    // cargo-generate errors in headless/container environments where
+    // `$USER` is unset. Normalize it from common alternates or use a
+    // deterministic fallback so project scaffolding works in CI too.
+    cmd.env("USER", cargo_generate_user_env_value());
     // Pass custom placeholders explicitly. The built-ins
     // (`project-name`, `crate_name`) are derived by cargo-generate
     // from `--name`, so we skip those here even though they appear
@@ -196,6 +200,25 @@ fn run_cargo_generate(
         std::fs::rename(&tmpl, &real).map_err(|source| Error::Io { path: tmpl, source })?;
     }
     Ok(())
+}
+
+fn cargo_generate_user_env_value() -> String {
+    resolve_user_env_value(|key| std::env::var(key).ok())
+}
+
+fn resolve_user_env_value<F>(lookup: F) -> String
+where
+    F: Fn(&str) -> Option<String>,
+{
+    for key in ["USER", "USERNAME", "LOGNAME"] {
+        if let Some(value) = lookup(key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    "sim-flow".to_string()
 }
 
 fn validate_project_name(name: &str) -> Result<()> {
@@ -361,6 +384,42 @@ mod tests {
         // Only CLAUDE.md present.
         std::fs::write(dir.path().join("CLAUDE.md"), "body\n").unwrap();
         verify_client_file_equivalence(dir.path()).unwrap();
+    }
+
+    #[test]
+    fn resolve_user_env_value_prefers_user() {
+        let user = resolve_user_env_value(|key| match key {
+            "USER" => Some("alice".to_string()),
+            "USERNAME" => Some("bob".to_string()),
+            "LOGNAME" => Some("carol".to_string()),
+            _ => None,
+        });
+        assert_eq!(user, "alice");
+    }
+
+    #[test]
+    fn resolve_user_env_value_falls_back_to_username_then_logname() {
+        let username = resolve_user_env_value(|key| match key {
+            "USER" => Some("   ".to_string()),
+            "USERNAME" => Some("builder".to_string()),
+            "LOGNAME" => Some("ignored".to_string()),
+            _ => None,
+        });
+        assert_eq!(username, "builder");
+
+        let logname = resolve_user_env_value(|key| match key {
+            "USER" => None,
+            "USERNAME" => Some(String::new()),
+            "LOGNAME" => Some("runner".to_string()),
+            _ => None,
+        });
+        assert_eq!(logname, "runner");
+    }
+
+    #[test]
+    fn resolve_user_env_value_uses_default_when_unset() {
+        let user = resolve_user_env_value(|_| None);
+        assert_eq!(user, "sim-flow");
     }
 
     #[test]

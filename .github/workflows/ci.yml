@@ -28,10 +28,14 @@ jobs:
     if: github.repository == 'NumentaCorp/sim-flow' || github.repository == 'mrn-numenta/sim-flow'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/${{ github.repository_owner }}/sim-flow-ci:${{ vars.CI_IMAGE_TAG || 'latest' }}
+      image: ghcr.io/numentacorp/sim-flow-ci:${{ vars.CI_IMAGE_TAG || 'latest' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      # Incremental artifacts add substantial disk overhead in one-shot CI
+      # jobs without providing meaningful reuse.
+      CARGO_INCREMENTAL: "0"
     defaults:
       run:
         # Container jobs default to `sh` (dash on Debian), which does not
@@ -117,12 +121,21 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Run clippy
-        run: cargo clippy --all-targets -- -D warnings
+        # Lint only the shipping crate surface plus its unit/integration
+        # tests. The diagnostic utilities under src/bin are useful locally,
+        # but they are not part of the exercised CI surface and inflate the
+        # compile graph enough to trip GitHub runner disk limits.
+        run: cargo clippy --profile ci --lib --tests --bin sim-flow -- -D warnings
+
+      - name: Clean clippy artifacts before tests
+        run: cargo clean
 
       - name: Run tests
         # `#[ignore]`-marked tests carry forward six pre-existing failures
-        # from `mneilly/ai-flow`; the rest must pass.
-        run: cargo test
+        # from `mneilly/ai-flow`; the rest must pass. Limit CI to the main
+        # crate surface plus its real test targets so we do not build
+        # auxiliary binaries from src/bin that are not part of this gate.
+        run: cargo test --profile ci --lib --tests --bin sim-flow
 
   coverage:
     name: Coverage Gate
@@ -136,10 +149,14 @@ jobs:
       contents: write
       packages: read
     container:
-      image: ghcr.io/${{ github.repository_owner }}/sim-flow-ci:${{ vars.CI_IMAGE_TAG || 'latest' }}
+      image: ghcr.io/numentacorp/sim-flow-ci:${{ vars.CI_IMAGE_TAG || 'latest' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      # Coverage builds are the heaviest job in the workflow; disabling
+      # incremental avoids spending runner disk on transient caches.
+      CARGO_INCREMENTAL: "0"
     defaults:
       run:
         shell: bash
@@ -201,7 +218,11 @@ jobs:
           {
             echo "## Coverage"
             echo
-            head -40 target/llvm-cov/coverage-summary.txt
+            if [[ -f target/llvm-cov/coverage-summary.txt ]]; then
+              head -40 target/llvm-cov/coverage-summary.txt
+            else
+              echo "coverage summary unavailable because the coverage job did not produce target/llvm-cov/coverage-summary.txt"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish coverage history
@@ -220,16 +241,28 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
+        # Node steps run from the extension dir. The manual-checkout step
+        # below overrides `working-directory` because it has to operate on
+        # the repo root.
         working-directory: extensions/sim-flow-vscode
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
+      # Manual checkout: NumentaCorp Actions policy forbids third-party `uses:`,
+      # including actions/checkout, so we replicate it inline. (ubuntu-latest
+      # already provides Node 20+, so actions/setup-node isn't needed either.)
+      - name: Manual checkout
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git init -q .
+          git config --global --add safe.directory "$PWD"
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          AUTH=$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${AUTH}" \
+              fetch --depth=1 origin "${GITHUB_REF}:refs/remotes/origin/_ci_head"
+          git checkout -q "refs/remotes/origin/_ci_head"
 
       - name: Install dependencies
         run: |

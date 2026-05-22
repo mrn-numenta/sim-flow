@@ -96,10 +96,7 @@ export function deriveStepActionState(input: DeriveStepActionInput): StepActionS
   };
 }
 
-export function isStepSelectableInRail(
-  data: DashboardState,
-  stepId: string,
-): boolean {
+export function isStepSelectableInRail(data: DashboardState, stepId: string): boolean {
   const order = STEP_ORDER[data.flow.flow] ?? [];
   const currentIndex = order.indexOf(data.flow.current_step);
   const stepIndex = order.indexOf(stepId);

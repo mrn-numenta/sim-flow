@@ -13,9 +13,7 @@ const mock = vi.hoisted(() => {
       return uri;
     }
 
-    onDidReceiveMessage(
-      receiver: (message: unknown) => void | Promise<void>,
-    ): { dispose(): void } {
+    onDidReceiveMessage(receiver: (message: unknown) => void | Promise<void>): { dispose(): void } {
       this.receiver = receiver;
       return { dispose() {} };
     }
@@ -103,7 +101,6 @@ vi.mock("vscode", () => ({
     },
   },
 }));
-
 
 vi.mock("../state/experiments", () => ({
   openExperiments: () => null,

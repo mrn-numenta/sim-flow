@@ -69,9 +69,13 @@ function parseJsonCritique(text: string): { findings: Finding[]; hasBlocking: bo
   parsed.findings.forEach((f, idx) => {
     const kindRaw = typeof f?.kind === "string" ? f.kind.toLowerCase() : "";
     let kind: FindingKind | null = null;
-    if (kindRaw === "blocker") kind = "blocker";
-    else if (kindRaw === "unresolved") kind = "unresolved";
-    else if (kindRaw === "resolved") kind = "resolved";
+    if (kindRaw === "blocker") {
+      kind = "blocker";
+    } else if (kindRaw === "unresolved") {
+      kind = "unresolved";
+    } else if (kindRaw === "resolved") {
+      kind = "resolved";
+    }
     if (kind === null) {
       return;
     }

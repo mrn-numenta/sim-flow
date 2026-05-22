@@ -621,8 +621,7 @@ export class DashboardHost {
    */
   private isSessionActive(): boolean {
     return (
-      this.activeSession() !== undefined ||
-      controlSocketLikelyPresent(this.options.projectDir)
+      this.activeSession() !== undefined || controlSocketLikelyPresent(this.options.projectDir)
     );
   }
 
@@ -887,7 +886,6 @@ export class DashboardHost {
 </html>`;
   }
 }
-
 
 /**
  * Build the "Simulate and iterate" appendix that's tacked onto the

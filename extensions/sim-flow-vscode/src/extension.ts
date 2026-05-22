@@ -17,11 +17,7 @@ import {
 import { PICK_PROJECT_NEW, findProjectCandidates, pickProject, resolveProjectDir } from "./context";
 import { registerChatParticipant } from "./participant";
 import { SimFlowTerminal } from "./terminal";
-import {
-  CHAT_PANEL_CONTAINER_ID,
-  CHAT_PANEL_VIEW_ID,
-  ChatPanelProvider,
-} from "./chatPanel/host";
+import { CHAT_PANEL_CONTAINER_ID, CHAT_PANEL_VIEW_ID, ChatPanelProvider } from "./chatPanel/host";
 import { AutoSessionManager } from "./chatPanel/autoSessionManager";
 import { cleanupStalePidsAsync } from "./session/processRegistry";
 import { DashboardHost } from "./webview/host";
@@ -144,10 +140,8 @@ export function activate(context: vscode.ExtensionContext): void {
       (name?: unknown, currentProjectDir?: unknown) =>
         newProjectCommand(context, asString(name), asString(currentProjectDir)),
     ),
-    vscode.commands.registerCommand(
-      "sim-flow.renameProject",
-      (currentProjectDir?: unknown) =>
-        renameProjectCommand(context, asString(currentProjectDir)),
+    vscode.commands.registerCommand("sim-flow.renameProject", (currentProjectDir?: unknown) =>
+      renameProjectCommand(context, asString(currentProjectDir)),
     ),
     { dispose: disposeAllResources },
   );
@@ -191,7 +185,6 @@ function canonicalizePath(p: string): string {
     return p;
   }
 }
-
 
 function disposeAllResources(): void {
   for (const host of dashboardHosts.values()) {
@@ -244,13 +237,8 @@ async function openDashboard(context: vscode.ExtensionContext): Promise<void> {
   // `sim-flow.chatPanel.lastProjectDir` to workspaceState on every
   // launch; if it's still a valid sim-flow project, use it
   // verbatim and skip the picker entirely.
-  const remembered = context.workspaceState.get<string>(
-    "sim-flow.chatPanel.lastProjectDir",
-  );
-  if (
-    remembered &&
-    fs.existsSync(path.join(remembered, ".sim-flow", "state.toml"))
-  ) {
+  const remembered = context.workspaceState.get<string>("sim-flow.chatPanel.lastProjectDir");
+  if (remembered && fs.existsSync(path.join(remembered, ".sim-flow", "state.toml"))) {
     await openDashboardForProject(context, remembered);
     return;
   }
@@ -385,13 +373,19 @@ async function newProjectCommand(
     ignoreFocusOut: true,
     validateInput: (v) => {
       const t = v.trim();
-      if (t.length === 0) {return "directory is required";}
-      if (!path.isAbsolute(t)) {return "use an absolute path";}
+      if (t.length === 0) {
+        return "directory is required";
+      }
+      if (!path.isAbsolute(t)) {
+        return "use an absolute path";
+      }
       // A non-existent path is fine -- the CLI mkdir-p's it -- but
       // an existing FILE at the same path is not.
       try {
         const stat = fs.statSync(t);
-        if (!stat.isDirectory()) {return `${t} exists but is not a directory`;}
+        if (!stat.isDirectory()) {
+          return `${t} exists but is not a directory`;
+        }
       } catch {
         // missing is OK
       }
@@ -416,8 +410,12 @@ async function newProjectCommand(
       ignoreFocusOut: true,
       validateInput: (v) => {
         const t = v.trim();
-        if (t.length === 0) {return "name is required";}
-        if (!/^[a-zA-Z0-9._-]+$/.test(t)) {return "use letters, digits, ., _, -";}
+        if (t.length === 0) {
+          return "name is required";
+        }
+        if (!/^[a-zA-Z0-9._-]+$/.test(t)) {
+          return "use letters, digits, ., _, -";
+        }
         if (fs.existsSync(path.join(parentTrimmed, t))) {
           return `${path.join(parentTrimmed, t)} already exists`;
         }
@@ -487,7 +485,9 @@ function defaultProjectDestination(currentProjectDir: string | undefined): strin
         return path.join(cursor, "users", username);
       }
       const parent = path.dirname(cursor);
-      if (parent === cursor) {break;}
+      if (parent === cursor) {
+        break;
+      }
       cursor = parent;
     }
   }
@@ -547,7 +547,7 @@ async function bootstrapDefaultProject(): Promise<string | undefined> {
   const simModelsRoot = findSimModelsWorkspaceRoot();
   if (!simModelsRoot) {
     void vscode.window.showErrorMessage(
-      "sim-flow only runs against the sim-models repository. Open the sim-models repo as your workspace, or add it as a root in a multi-root workspace, then re-run \"Open Flow Dashboard\".",
+      'sim-flow only runs against the sim-models repository. Open the sim-models repo as your workspace, or add it as a root in a multi-root workspace, then re-run "Open Flow Dashboard".',
     );
     return undefined;
   }
@@ -687,9 +687,15 @@ async function renameProjectCommand(
     ignoreFocusOut: true,
     validateInput: (v) => {
       const t = v.trim();
-      if (t.length === 0) {return "name is required";}
-      if (!/^[a-zA-Z0-9._-]+$/.test(t)) {return "use letters, digits, ., _, -";}
-      if (t === oldName) {return "name unchanged";}
+      if (t.length === 0) {
+        return "name is required";
+      }
+      if (!/^[a-zA-Z0-9._-]+$/.test(t)) {
+        return "use letters, digits, ., _, -";
+      }
+      if (t === oldName) {
+        return "name unchanged";
+      }
       if (fs.existsSync(path.join(parent, t))) {
         return `${path.join(parent, t)} already exists`;
       }
@@ -722,9 +728,7 @@ async function renameProjectCommand(
     );
     return;
   }
-  void vscode.window.showInformationMessage(
-    `Renamed project: ${oldName} -> ${newName.trim()}.`,
-  );
+  void vscode.window.showInformationMessage(`Renamed project: ${oldName} -> ${newName.trim()}.`);
   await openDashboardForProject(context, newDir);
 }
 

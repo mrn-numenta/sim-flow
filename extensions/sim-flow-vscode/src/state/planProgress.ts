@@ -284,9 +284,7 @@ function countCheckboxes(text: string): CheckboxCounts {
  * `- [x]`, `- [-]`, and `- [ ]` together), and the total task-row
  * count for the milestone. `null` when no pending row remains.
  */
-function firstPendingRow(
-  text: string,
-): {
+function firstPendingRow(text: string): {
   text: string;
   line: number;
   taskIndex: number;

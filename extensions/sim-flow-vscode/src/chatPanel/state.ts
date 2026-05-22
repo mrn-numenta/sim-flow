@@ -38,9 +38,7 @@ export interface StoredChatConversation {
   nextId?: number;
 }
 
-export function createConversationState(
-  stored?: StoredChatConversation,
-): ChatConversationState {
+export function createConversationState(stored?: StoredChatConversation): ChatConversationState {
   const transcript = Array.isArray(stored?.transcript)
     ? filterPresentationEntries(stored.transcript)
     : [];
@@ -346,23 +344,18 @@ export function setEntryRequestTokensEstimate(
   };
 }
 
-export function toStoredConversation(
-  state: ChatConversationState,
-): StoredChatConversation {
+export function toStoredConversation(state: ChatConversationState): StoredChatConversation {
   return {
-    transcript: filterPresentationEntries(state.transcript)
-      .map((entry) => {
-        if (entry.kind !== "assistant") {
-          return entry;
-        }
-        return {
-          ...entry,
-          body: isOrchestratorAssistantEntry(entry)
-            ? stripProtocolFences(entry.body)
-            : entry.body,
-          streaming: false,
-        };
-      }),
+    transcript: filterPresentationEntries(state.transcript).map((entry) => {
+      if (entry.kind !== "assistant") {
+        return entry;
+      }
+      return {
+        ...entry,
+        body: isOrchestratorAssistantEntry(entry) ? stripProtocolFences(entry.body) : entry.body,
+        streaming: false,
+      };
+    }),
     nextId: state.nextId,
   };
 }
@@ -404,7 +397,9 @@ export function stripToolCallFences(text: string): string {
 }
 
 export function stripToolCallFencesForDisplay(text: string): string {
-  return stripToolCallFences(text).replace(/\n?```tool:[\s\S]*$/, "").trim();
+  return stripToolCallFences(text)
+    .replace(/\n?```tool:[\s\S]*$/, "")
+    .trim();
 }
 
 export function stripToolCallFencesForStreaming(text: string): string {
@@ -428,9 +423,10 @@ export function stripProtocolFences(text: string): string {
   return normalizeProtocolFenceText(text).trim();
 }
 
-export function summarizeTokenEstimates(
-  transcript: ChatTranscriptEntry[],
-): { input: number; output: number } {
+export function summarizeTokenEstimates(transcript: ChatTranscriptEntry[]): {
+  input: number;
+  output: number;
+} {
   // Orchestrator-emitted user/tool entries (meta starts with
   // "orchestrator-") carry the *full prompt-stack* the LLM was sent
   // that turn. Across turns the orchestrator re-emits the same
@@ -448,9 +444,9 @@ export function summarizeTokenEstimates(
     (totals, entry) => {
       if (entry.kind === "assistant" || entry.kind === "user") {
         const isOrchestratorEmitted =
-          entry.kind === "user"
-          && typeof entry.meta === "string"
-          && entry.meta.startsWith("orchestrator-");
+          entry.kind === "user" &&
+          typeof entry.meta === "string" &&
+          entry.meta.startsWith("orchestrator-");
         if (isOrchestratorEmitted) {
           const key = `${entry.meta}::${entry.body}`;
           if (!seenOrchestratorBodies.has(key)) {
@@ -472,9 +468,7 @@ export function filterPresentationEntries(
   transcript: ChatTranscriptEntry[],
 ): ChatTranscriptEntry[] {
   return transcript.filter(
-    (entry) =>
-      !isLegacyPresentationNote(entry) &&
-      !isHiddenOrchestratorAssistantEntry(entry),
+    (entry) => !isLegacyPresentationNote(entry) && !isHiddenOrchestratorAssistantEntry(entry),
   );
 }
 
@@ -506,8 +500,7 @@ function inferNextId(transcript: ChatTranscriptEntry[]): number {
 
 function isLegacyPresentationNote(entry: ChatTranscriptEntry): boolean {
   return (
-    entry.kind === "note" &&
-    (entry.title === "Tool activity" || entry.title === "Artifact written")
+    entry.kind === "note" && (entry.title === "Tool activity" || entry.title === "Artifact written")
   );
 }
 
@@ -524,9 +517,7 @@ function normalizeProtocolFenceText(text: string): string {
     .replace(/\n{3,}/g, "\n\n");
 }
 
-function isOrchestratorAssistantEntry(
-  entry: ChatTranscriptEntry,
-): boolean {
+function isOrchestratorAssistantEntry(entry: ChatTranscriptEntry): boolean {
   return entry.kind === "assistant" && entry.meta === "orchestrator";
 }
 

@@ -114,11 +114,8 @@ export async function readCoverageSettings(projectDir: string): Promise<Coverage
   const rawPct = sectionTable["threshold_pct"];
   const rawLevel = sectionTable["level"];
   const thresholdPct =
-    typeof rawPct === "number" && Number.isFinite(rawPct)
-      ? rawPct
-      : COVERAGE_DEFAULTS.thresholdPct;
-  const level =
-    rawLevel === "module" || rawLevel === "total" ? rawLevel : COVERAGE_DEFAULTS.level;
+    typeof rawPct === "number" && Number.isFinite(rawPct) ? rawPct : COVERAGE_DEFAULTS.thresholdPct;
+  const level = rawLevel === "module" || rawLevel === "total" ? rawLevel : COVERAGE_DEFAULTS.level;
   return { thresholdPct, level };
 }
 

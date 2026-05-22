@@ -146,10 +146,7 @@ export interface AutoSessionDriveDelegate {
     session: ManagedAutoSessionState,
     args: { text: string; finalChunk: boolean },
   ): void;
-  settled(
-    session: ManagedAutoSessionState,
-    result: PumpSettleResult,
-  ): Promise<void>;
+  settled(session: ManagedAutoSessionState, result: PumpSettleResult): Promise<void>;
 }
 
 const ACTIVE_AUTO_SESSION_KEY_PREFIX = "sim-flow.chatPanel.activeAutoSession.";
@@ -165,9 +162,7 @@ let pendingAutoSessionRecordWrites: Promise<void> = Promise.resolve();
  * fresh pump can land before the listener is wired and the dashboard
  * sits at `inSubSession=true` with everything except Reset disabled.
  */
-export type ActiveSessionListener = (
-  session: ManagedAutoSessionState | undefined,
-) => void;
+export type ActiveSessionListener = (session: ManagedAutoSessionState | undefined) => void;
 
 export class AutoSessionManager implements vscode.Disposable {
   private activeSession: ManagedAutoSessionState | undefined;
@@ -322,10 +317,7 @@ export class AutoSessionManager implements vscode.Disposable {
    * as disabled. Cleared back to `undefined` when a new sub-session
    * opens so a stale hint doesn't survive into the next park.
    */
-  setNextActionHint(
-    session: ManagedAutoSessionState,
-    label: string | null,
-  ): void {
+  setNextActionHint(session: ManagedAutoSessionState, label: string | null): void {
     if (!this.isActive(session)) {
       return;
     }
@@ -480,10 +472,7 @@ export class AutoSessionManager implements vscode.Disposable {
     this.activeSessionListeners.clear();
   }
 
-  private startDrive(
-    session: ManagedAutoSessionState,
-    delegate: AutoSessionDriveDelegate,
-  ): void {
+  private startDrive(session: ManagedAutoSessionState, delegate: AutoSessionDriveDelegate): void {
     const drive = this.driveSession(session, delegate).finally(() => {
       if (session.drivePromise === drive) {
         session.drivePromise = null;

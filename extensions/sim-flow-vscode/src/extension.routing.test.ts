@@ -6,7 +6,10 @@ const mock = vi.hoisted(() => {
     commandHandlers: new Map<string, (...args: unknown[]) => unknown>(),
     chatOpenArgs: [] as unknown[],
     terminalRuns: [] as string[],
-    autoSessionLaunches: [] as Array<{ specPath: string | undefined; projectDirHint: string | undefined }>,
+    autoSessionLaunches: [] as Array<{
+      specPath: string | undefined;
+      projectDirHint: string | undefined;
+    }>,
     stepSessionLaunches: [] as Array<{
       step: string;
       kind: "work" | "critique";
@@ -169,7 +172,11 @@ async function activateExtension(): Promise<void> {
     subscriptions: [],
     extensionUri: { fsPath: "/mock/extension" },
     workspaceState: { get: () => undefined, update: async () => undefined },
-    secrets: { get: async () => undefined, store: async () => undefined, delete: async () => undefined },
+    secrets: {
+      get: async () => undefined,
+      store: async () => undefined,
+      delete: async () => undefined,
+    },
   } as never);
 }
 
@@ -222,9 +229,7 @@ describe("extension routing", () => {
 
       expect(mock.state.chatOpenArgs).toEqual([]);
       expect(mock.state.terminalRuns).toEqual([]);
-      expect(mock.state.autoSessionLaunches).toEqual([
-        { specPath, projectDirHint: projectDir },
-      ]);
+      expect(mock.state.autoSessionLaunches).toEqual([{ specPath, projectDirHint: projectDir }]);
       expect(mock.state.stepSessionLaunches).toEqual([
         { step: "DM2a", kind: "work", projectDirHint: projectDir },
         { step: "DM2a", kind: "critique", projectDirHint: projectDir },
@@ -236,26 +241,23 @@ describe("extension routing", () => {
     ["claude-cli", "claude"],
     ["codex-cli", "codex"],
     ["gh-copilot-cli", "gh-copilot"],
-  ] as const)(
-    "routes %s play and step commands to a terminal session",
-    async (source, backend) => {
-      const projectDir = "/tmp/example";
-      const specPath = "/tmp/example/docs/spec.md";
-      mock.state.config.set("llm.source", source);
-      mock.state.config.set("llm.model", `${backend}-model`);
+  ] as const)("routes %s play and step commands to a terminal session", async (source, backend) => {
+    const projectDir = "/tmp/example";
+    const specPath = "/tmp/example/docs/spec.md";
+    mock.state.config.set("llm.source", source);
+    mock.state.config.set("llm.model", `${backend}-model`);
 
-      await execute("sim-flow.runFlowTerminal", backend, specPath, projectDir);
-      await execute("sim-flow.runStep", "DM3a", projectDir);
-      await execute("sim-flow.runCritique", "DM3a", projectDir);
+    await execute("sim-flow.runFlowTerminal", backend, specPath, projectDir);
+    await execute("sim-flow.runStep", "DM3a", projectDir);
+    await execute("sim-flow.runCritique", "DM3a", projectDir);
 
-      expect(mock.state.chatOpenArgs).toEqual([]);
-      expect(mock.state.autoSessionLaunches).toEqual([]);
-      expect(mock.state.stepSessionLaunches).toEqual([]);
-      expect(mock.state.terminalRuns).toEqual([
-        `/mock/bin/sim-flow auto --llm-backend ${backend} --session-mode per-step --llm-model ${backend}-model --spec ${specPath}`,
-        `/mock/bin/sim-flow session DM3a.work --llm-backend ${backend} --llm-model ${backend}-model`,
-        `/mock/bin/sim-flow session DM3a.critique --llm-backend ${backend} --llm-model ${backend}-model`,
-      ]);
-    },
-  );
+    expect(mock.state.chatOpenArgs).toEqual([]);
+    expect(mock.state.autoSessionLaunches).toEqual([]);
+    expect(mock.state.stepSessionLaunches).toEqual([]);
+    expect(mock.state.terminalRuns).toEqual([
+      `/mock/bin/sim-flow auto --llm-backend ${backend} --session-mode per-step --llm-model ${backend}-model --spec ${specPath}`,
+      `/mock/bin/sim-flow session DM3a.work --llm-backend ${backend} --llm-model ${backend}-model`,
+      `/mock/bin/sim-flow session DM3a.critique --llm-backend ${backend} --llm-model ${backend}-model`,
+    ]);
+  });
 });

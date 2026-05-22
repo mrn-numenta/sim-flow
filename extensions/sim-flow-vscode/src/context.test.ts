@@ -57,13 +57,8 @@ vi.mock("./cli", () => ({
   SimFlowCliError: class SimFlowCliError extends Error {},
 }));
 
-const {
-  PICK_PROJECT_NEW,
-  findProjectCandidates,
-  pickProject,
-  resolveContext,
-  resolveProjectDir,
-} = await import("./context");
+const { PICK_PROJECT_NEW, findProjectCandidates, pickProject, resolveContext, resolveProjectDir } =
+  await import("./context");
 
 function makeProject(dir: string): void {
   fs.mkdirSync(path.join(dir, ".sim-flow"), { recursive: true });

@@ -23,11 +23,7 @@ import {
   type HostMessage,
   type WebviewMessage,
 } from "./messages";
-import {
-  inferLangFromContent,
-  initShiki,
-  renderMarkdownFragment,
-} from "./renderMarkdown";
+import { inferLangFromContent, initShiki, renderMarkdownFragment } from "./renderMarkdown";
 import { stripProtocolFences, stripToolCallFencesForDisplay } from "./state";
 import {
   STEP_DESCRIPTIONS,
@@ -60,14 +56,13 @@ const PALETTES: ReadonlyArray<{ value: PaletteName; label: string }> = [
 const DEFAULT_PALETTE: PaletteName = "default";
 
 function isPaletteName(value: unknown): value is PaletteName {
-  return (
-    typeof value === "string" &&
-    (CHAT_PALETTE_NAMES as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && (CHAT_PALETTE_NAMES as readonly string[]).includes(value);
 }
 
 function isCustomPalette(value: unknown): value is ChatCustomPalette {
-  if (!value || typeof value !== "object") return false;
+  if (!value || typeof value !== "object") {
+    return false;
+  }
   const v = value as Partial<ChatCustomPalette>;
   return (
     typeof v.input === "string" &&
@@ -77,10 +72,7 @@ function isCustomPalette(value: unknown): value is ChatCustomPalette {
   );
 }
 
-type OpenPopup =
-  | null
-  | { kind: "help" }
-  | { kind: "critique"; step: string };
+type OpenPopup = null | { kind: "help" } | { kind: "critique"; step: string };
 
 interface UiState {
   state: ChatPanelState | null;
@@ -119,10 +111,7 @@ interface UiState {
    * step's findings. `undefined` for "not yet fetched";
    * `null` for "fetched and no critique on disk".
    */
-  critiqueData: Map<
-    string,
-    { findings: Finding[]; hasBlocking: boolean } | null
-  >;
+  critiqueData: Map<string, { findings: Finding[]; hasBlocking: boolean } | null>;
   /**
    * Right-click context menu anchored over the step rail. `null`
    * when nothing is open; otherwise carries the step id the user
@@ -174,8 +163,7 @@ const COLLAPSE_KIND_LABELS: Record<CollapseKind, string> = {
  */
 const COLLAPSE_KIND_SELECTORS: Record<Exclude<CollapseKind, "all">, string> = {
   system: ".x-row-system details.x-bubble-details",
-  user:
-    ".x-row-user:not(.x-row-orchestrator) details.x-bubble-details",
+  user: ".x-row-user:not(.x-row-orchestrator) details.x-bubble-details",
   assistant: ".x-row-assistant details.x-bubble-details",
   tools: ".x-row-tool details.x-bubble-details",
 };
@@ -248,10 +236,7 @@ const PALETTE_PUSH_SUPPRESS_MS = 600;
 let paletteLastPushAt = 0;
 
 function syncPaletteFromHost(state: ChatPanelState): void {
-  if (
-    paletteLastPushAt !== 0
-    && Date.now() - paletteLastPushAt < PALETTE_PUSH_SUPPRESS_MS
-  ) {
+  if (paletteLastPushAt !== 0 && Date.now() - paletteLastPushAt < PALETTE_PUSH_SUPPRESS_MS) {
     // Local push is still in flight; the host's view of
     // workspaceState may not yet reflect it. Trust the webview's
     // current palette until the suppression window elapses.
@@ -283,14 +268,8 @@ function applyPalette(): void {
   if (ui.palette === "custom") {
     document.body.style.setProperty("--x-palette-input", ui.customPalette.input);
     document.body.style.setProperty("--x-palette-tool", ui.customPalette.tool);
-    document.body.style.setProperty(
-      "--x-palette-output",
-      ui.customPalette.output,
-    );
-    document.body.style.setProperty(
-      "--x-palette-accent",
-      ui.customPalette.accent,
-    );
+    document.body.style.setProperty("--x-palette-output", ui.customPalette.output);
+    document.body.style.setProperty("--x-palette-accent", ui.customPalette.accent);
   } else {
     document.body.style.removeProperty("--x-palette-input");
     document.body.style.removeProperty("--x-palette-tool");
@@ -373,11 +352,7 @@ window.addEventListener("message", (event) => {
     // popup or clicked a different step. Drop the result unless
     // they're still looking at the matching critique popup.
     ui.critiqueData.set(msg.step, msg.data);
-    if (
-      ui.openPopup &&
-      ui.openPopup.kind === "critique" &&
-      ui.openPopup.step === msg.step
-    ) {
+    if (ui.openPopup && ui.openPopup.kind === "critique" && ui.openPopup.step === msg.step) {
       render();
     }
     return;
@@ -395,8 +370,7 @@ function insertIntoDraft(text: string): void {
   if (text.length === 0) {
     return;
   }
-  const needsSeparator =
-    ui.draft.length > 0 && !/\s$/.test(ui.draft);
+  const needsSeparator = ui.draft.length > 0 && !/\s$/.test(ui.draft);
   ui.draft = needsSeparator ? `${ui.draft} ${text}` : `${ui.draft}${text}`;
   persist();
   render();
@@ -404,9 +378,7 @@ function insertIntoDraft(text: string): void {
   // typing without a manual click. The render call replaces the DOM
   // node, so `document.activeElement` would otherwise have moved.
   queueMicrotask(() => {
-    const area = document.querySelector<HTMLTextAreaElement>(
-      ".x-composer-input",
-    );
+    const area = document.querySelector<HTMLTextAreaElement>(".x-composer-input");
     if (area) {
       area.focus();
       area.setSelectionRange(area.value.length, area.value.length);
@@ -452,8 +424,7 @@ function render(): void {
   // eviction-indicator CSS (`x-bubble-evicted`) only paints when
   // the user has the setting on. Re-applied every render in case
   // the setting just flipped.
-  document.body.dataset.showContextState =
-    ui.state?.showContextState === true ? "on" : "off";
+  document.body.dataset.showContextState = ui.state?.showContextState === true ? "on" : "off";
 
   const previousTranscript = app.querySelector<HTMLElement>(".x-transcript");
   if (previousTranscript) {
@@ -475,10 +446,7 @@ function render(): void {
       // across re-renders. Without this, morphdom would overwrite the
       // attribute with the freshly-built (collapsed) default each
       // time another transcript entry arrives.
-      if (
-        fromEl instanceof HTMLDetailsElement &&
-        toEl instanceof HTMLDetailsElement
-      ) {
+      if (fromEl instanceof HTMLDetailsElement && toEl instanceof HTMLDetailsElement) {
         if (fromEl.open) {
           toEl.setAttribute("open", "");
         } else {
@@ -494,10 +462,7 @@ function render(): void {
       // Don't clobber the composer textarea while it's focused: the
       // user may be mid-typing and morphdom assigning `value` would
       // collapse the IME composition or move the cursor.
-      if (
-        fromEl instanceof HTMLTextAreaElement &&
-        fromEl === document.activeElement
-      ) {
+      if (fromEl instanceof HTMLTextAreaElement && fromEl === document.activeElement) {
         return false;
       }
       return true;
@@ -520,10 +485,7 @@ function render(): void {
         transcriptRoot.scrollTop = transcriptRoot.scrollHeight;
         return;
       }
-      const maxScrollTop = Math.max(
-        0,
-        transcriptRoot.scrollHeight - transcriptRoot.clientHeight,
-      );
+      const maxScrollTop = Math.max(0, transcriptRoot.scrollHeight - transcriptRoot.clientHeight);
       transcriptRoot.scrollTop = Math.min(ui.scrollTop, maxScrollTop);
     });
   }
@@ -531,12 +493,7 @@ function render(): void {
 
 function buildShell(): Node[] {
   if (!ui.state) {
-    return [
-      div(
-        "x-shell x-loading",
-        div("x-loading-text", "Preparing chat panel..."),
-      ),
-    ];
+    return [div("x-shell x-loading", div("x-loading-text", "Preparing chat panel..."))];
   }
   const shell = div("x-shell");
   shell.appendChild(buildToolbar(ui.state));
@@ -602,9 +559,7 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   const filterScope = describeCollapseFilter();
   toggleBtn.setAttribute(
     "aria-label",
-    ui.bubblesExpanded
-      ? `Collapse ${filterScope} bubbles`
-      : `Expand ${filterScope} bubbles`,
+    ui.bubblesExpanded ? `Collapse ${filterScope} bubbles` : `Expand ${filterScope} bubbles`,
   );
   toggleBtn.title =
     `${ui.bubblesExpanded ? "Collapse" : "Expand"} ${filterScope} message bubbles. ` +
@@ -630,9 +585,7 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   projectBtn.className = "x-toolbar-project";
   if (state.sessionActive) {
     const projectName =
-      state.projectLabel && state.projectLabel.length > 0
-        ? state.projectLabel
-        : "No project";
+      state.projectLabel && state.projectLabel.length > 0 ? state.projectLabel : "No project";
     projectBtn.textContent = `Project: ${projectName}`;
     // Viewer mode: clicking still dispatches `switch-project`,
     // which tears down the viewer pump and launches a fresh
@@ -648,9 +601,7 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
     // loading; disable the button so a stray click doesn't try to
     // double-launch.
     const projectName =
-      state.projectLabel && state.projectLabel.length > 0
-        ? state.projectLabel
-        : "project";
+      state.projectLabel && state.projectLabel.length > 0 ? state.projectLabel : "project";
     projectBtn.textContent = `Launching ${projectName}…`;
     projectBtn.classList.add("x-toolbar-project-launching");
     projectBtn.disabled = true;
@@ -700,7 +651,7 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
       statusGlyph = "○";
       statusText = "No session";
       statusTitle =
-        "No sim-flow pump is anchored to this project. Click \"Start session\" to start one.";
+        'No sim-flow pump is anchored to this project. Click "Start session" to start one.';
     }
   } else if (state.isStreaming) {
     stateClass = "x-llm-working";
@@ -748,8 +699,7 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   dashboardBtn.className = "x-toolbar-dashboard";
   dashboardBtn.innerHTML = `<i class="codicon codicon-dashboard" aria-hidden="true"></i>`;
   dashboardBtn.setAttribute("aria-label", "Open dashboard");
-  dashboardBtn.title =
-    "Open the sim-flow dashboard for the current project.";
+  dashboardBtn.title = "Open the sim-flow dashboard for the current project.";
   dashboardBtn.addEventListener("click", () => {
     send({ type: "open-dashboard" });
   });
@@ -837,8 +787,7 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   // transcript summaries. Both are hidden when no session is
   // anchored.
   if (state.sessionActive) {
-    const usedTokens =
-      state.totalInputTokensEstimate + state.totalOutputTokensEstimate;
+    const usedTokens = state.totalInputTokensEstimate + state.totalOutputTokensEstimate;
     // Prefer the real context window the host queried from the
     // backend (Anthropic /v1/models, vLLM max_model_len, LM Studio
     // loaded_context_length, Ollama context_length); fall back to
@@ -846,9 +795,7 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
     const windowTokens = state.contextWindow ?? LLM_CONTEXT_WINDOW;
     const fraction = Math.max(0, Math.min(1, usedTokens / windowTokens));
     const pct = Math.round(fraction * 100);
-    rightZone.appendChild(
-      buildContextPie(fraction, pct, usedTokens, windowTokens),
-    );
+    rightZone.appendChild(buildContextPie(fraction, pct, usedTokens, windowTokens));
   }
 
   const totals = document.createElement("span");
@@ -856,8 +803,7 @@ function buildToolbar(state: ChatPanelState): HTMLElement {
   const upTotal = state.totalInputTokensEstimate;
   const downTotal = state.totalOutputTokensEstimate;
   totals.textContent = `↑ ${formatTokens(upTotal)}  ↓ ${formatTokens(downTotal)}`;
-  totals.title =
-    `Approximately ${upTotal} tokens sent to the LLM and ${downTotal} tokens received in this conversation.`;
+  totals.title = `Approximately ${upTotal} tokens sent to the LLM and ${downTotal} tokens received in this conversation.`;
   rightZone.appendChild(totals);
 
   root.append(leftZone, centerZone, rightZone);
@@ -893,9 +839,7 @@ function buildContextPie(
     wrap.classList.add("x-toolbar-context-pie-warn");
   }
   const windowSource =
-    windowTokens === LLM_CONTEXT_WINDOW
-      ? "estimated reference window"
-      : "queried from the backend";
+    windowTokens === LLM_CONTEXT_WINDOW ? "estimated reference window" : "queried from the backend";
   wrap.title =
     `Approximate context usage: ${pct}% (${usedTokens} tokens estimated against a ${formatTokens(windowTokens)}-token window, ${windowSource}). ` +
     "Cumulative across the whole conversation; actual usage per LLM call depends on the model's effective context size.";
@@ -992,9 +936,9 @@ function describeCollapseFilter(): string {
   if (ui.collapseFilter.has("all")) {
     return "all";
   }
-  const labels = COLLAPSE_KIND_ORDER.filter(
-    (k) => k !== "all" && ui.collapseFilter.has(k),
-  ).map((k) => COLLAPSE_KIND_LABELS[k]);
+  const labels = COLLAPSE_KIND_ORDER.filter((k) => k !== "all" && ui.collapseFilter.has(k)).map(
+    (k) => COLLAPSE_KIND_LABELS[k],
+  );
   if (labels.length === 0) {
     return "all";
   }
@@ -1137,9 +1081,7 @@ function buildTranscript(state: ChatPanelState): HTMLElement {
   const root = div("x-transcript");
 
   if (state.transcript.length === 0 && !state.isStreaming) {
-    root.appendChild(
-      div("x-empty", "No messages yet. Type below to start a conversation."),
-    );
+    root.appendChild(div("x-empty", "No messages yet. Type below to start a conversation."));
     return root;
   }
 
@@ -1211,9 +1153,7 @@ function buildTranscript(state: ChatPanelState): HTMLElement {
     if (entry.kind === "assistant" && body.length === 0 && !entry.streaming) {
       continue;
     }
-    const evictionReason = entry.messageId
-      ? (evictions.get(entry.messageId) ?? null)
-      : null;
+    const evictionReason = entry.messageId ? (evictions.get(entry.messageId) ?? null) : null;
     appendToActiveContainer(messageBubble(entry, body, evictionReason));
   }
   // Silence unused-locals lint for the bookkeeping variables; they
@@ -1270,9 +1210,7 @@ function evictionTooltip(reason: string): string {
   }
 }
 
-function noteRow(
-  entry: Extract<ChatTranscriptEntry, { kind: "note" }>,
-): HTMLElement {
+function noteRow(entry: Extract<ChatTranscriptEntry, { kind: "note" }>): HTMLElement {
   const row = div(`x-note${entry.tone === "error" ? " x-note-error" : ""}`);
   row.id = `entry-${entry.id}`;
   if (entry.title) {
@@ -1336,9 +1274,7 @@ function messageBubble(
     typeof entry.reasoning === "string" &&
     entry.reasoning.length > 0
   ) {
-    bubble.appendChild(
-      reasoningDetails(entry.reasoning, entry.reasoningStreaming === true),
-    );
+    bubble.appendChild(reasoningDetails(entry.reasoning, entry.reasoningStreaming === true));
   }
   if (body.length === 0 && entry.streaming) {
     bubble.appendChild(thinkingDots());
@@ -1355,13 +1291,7 @@ function messageBubble(
     // rather than a literal dump of `#` and `-` characters.
     const renderAsCode = tool && !isReadingMarkdownFile(body);
     bubble.appendChild(
-      bubbleDetails(
-        entry.title,
-        body,
-        !tool && !system,
-        renderAsCode,
-        tokenBadgeFor(entry, body),
-      ),
+      bubbleDetails(entry.title, body, !tool && !system, renderAsCode, tokenBadgeFor(entry, body)),
     );
   }
   row.appendChild(bubble);
@@ -1485,9 +1415,7 @@ function isReadingMarkdownFile(body: string): boolean {
 function wrapAsCodeBlock(content: string): string {
   const lang = inferLangFromContent(content);
   const fence = "`".repeat(16);
-  return lang
-    ? `${fence}${lang}\n${content}\n${fence}`
-    : `${fence}\n${content}\n${fence}`;
+  return lang ? `${fence}${lang}\n${content}\n${fence}` : `${fence}\n${content}\n${fence}`;
 }
 
 /**
@@ -1520,9 +1448,7 @@ function tokenBadgeFor(
   body: string,
 ): { text: string; title: string } | null {
   const isInput = entry.kind === "user";
-  const stored = isInput
-    ? entry.requestTokensEstimate
-    : entry.responseTokensEstimate;
+  const stored = isInput ? entry.requestTokensEstimate : entry.responseTokensEstimate;
   const fallback = body.length === 0 ? 0 : Math.max(1, Math.ceil(body.length / 4));
   const count = stored ?? fallback;
   if (count <= 0) {
@@ -1579,9 +1505,7 @@ function markdownBody(text: string): HTMLElement {
 }
 
 function looksLikeMarkdown(text: string): boolean {
-  return /(^|\n)(#{1,6}\s|[-*]\s|\d+\.\s|>\s|```|\|.+\||\*\*|__|`|\[.+\]\(.+\))/.test(
-    text,
-  );
+  return /(^|\n)(#{1,6}\s|[-*]\s|\d+\.\s|>\s|```|\|.+\||\*\*|__|`|\[.+\]\(.+\))/.test(text);
 }
 
 /**
@@ -1682,22 +1606,12 @@ function linkifyFilePaths(root: ParentNode): void {
 function buildOrchestratorBanner(state: ChatPanelState): HTMLElement | null {
   const notice = state.notice && state.notice.trim().length > 0 ? state.notice : null;
   const prompt =
-    state.currentPrompt && state.currentPrompt.trim().length > 0
-      ? state.currentPrompt
-      : null;
-  const idleHint =
-    state.idleQaHint && state.idleQaHint.trim().length > 0 ? state.idleQaHint : null;
+    state.currentPrompt && state.currentPrompt.trim().length > 0 ? state.currentPrompt : null;
+  const idleHint = state.idleQaHint && state.idleQaHint.trim().length > 0 ? state.idleQaHint : null;
   const showAwaiting = state.awaitingUserInput && !prompt;
   const rail = buildStepRail(state);
   const milestoneLine = buildMilestoneStatusLine(state);
-  if (
-    !notice &&
-    !prompt &&
-    !idleHint &&
-    !showAwaiting &&
-    !rail &&
-    !milestoneLine
-  ) {
+  if (!notice && !prompt && !idleHint && !showAwaiting && !rail && !milestoneLine) {
     return null;
   }
   const root = div("x-orchestrator-banner");
@@ -1751,9 +1665,7 @@ function buildMilestoneStatusLine(state: ChatPanelState): HTMLElement | null {
   }
   const ms = state.currentMilestone;
   const progress =
-    ms.taskIndex !== null && ms.taskTotal !== null
-      ? `(${ms.taskIndex}/${ms.taskTotal}) `
-      : "";
+    ms.taskIndex !== null && ms.taskTotal !== null ? `(${ms.taskIndex}/${ms.taskTotal}) ` : "";
   const sub = div("x-step-rail-substep");
   sub.textContent = `${progress}${ms.title}: ${ms.task}`;
   sub.title = sub.textContent;
@@ -1773,8 +1685,7 @@ function buildComposer(state: ChatPanelState): HTMLElement {
   area.id = "x-composer-textarea";
   area.rows = 1;
   area.value = ui.draft;
-  area.disabled =
-    state.isViewer || !state.supportsPromptEntry || state.isStreaming;
+  area.disabled = state.isViewer || !state.supportsPromptEntry || state.isStreaming;
   area.placeholder = area.disabled ? "Busy..." : "Available: Send a message...";
   autoResize(area);
   area.addEventListener("input", () => {
@@ -1791,9 +1702,7 @@ function buildComposer(state: ChatPanelState): HTMLElement {
     if (!s || s.isStreaming) {
       return;
     }
-    const liveSend = document.querySelector<HTMLButtonElement>(
-      "#x-composer-send",
-    );
+    const liveSend = document.querySelector<HTMLButtonElement>("#x-composer-send");
     if (liveSend) {
       liveSend.disabled = !canSend(s);
     }
@@ -1822,8 +1731,7 @@ function buildComposer(state: ChatPanelState): HTMLElement {
     browseBtn.textContent = "Upload Spec";
     browseBtn.title =
       "Pick a spec file or directory (markdown / text / PDF) and insert its absolute path into the message.";
-    browseBtn.disabled =
-      state.isViewer || !state.supportsPromptEntry || state.isStreaming;
+    browseBtn.disabled = state.isViewer || !state.supportsPromptEntry || state.isStreaming;
     browseBtn.addEventListener("click", () => {
       if (browseBtn.disabled) {
         return;
@@ -1841,11 +1749,7 @@ function buildComposer(state: ChatPanelState): HTMLElement {
   // typing (each chip submits the same UserMessage the textarea
   // would). Hidden in viewer mode -- viewers don't write back to the
   // session. See chat-panel audit #1 (2026-05-16).
-  if (
-    state.pendingFollowups
-    && state.pendingFollowups.length > 0
-    && !state.isViewer
-  ) {
+  if (state.pendingFollowups && state.pendingFollowups.length > 0 && !state.isViewer) {
     const followupsRow = div("x-composer-followups");
     for (const f of state.pendingFollowups) {
       const chip = document.createElement("button");
@@ -1923,10 +1827,7 @@ function buildComposerControls(state: ChatPanelState): HTMLElement {
       "Convert to SystemVerilog -- runs `sim-flow convert-sv` to flip the project into the SV flow at SV0, then reconnects the pump.";
   } else {
     playBtn.disabled = !continueReady;
-    playBtn.setAttribute(
-      "aria-label",
-      hintLabel ? `Continue: ${hintLabel}` : "Continue",
-    );
+    playBtn.setAttribute("aria-label", hintLabel ? `Continue: ${hintLabel}` : "Continue");
     playBtn.title = hintLabel
       ? `Continue: ${hintLabel}`
       : "Continue the flow from its current position. The orchestrator decides the next action based on state.toml.";
@@ -2044,9 +1945,7 @@ function submitPrompt(): void {
   // (silently no-op, ui.draft is empty) or typed more characters
   // which got concatenated onto the stale text and resubmitted as a
   // single message on the next send. See chat-panel audit #3.
-  const liveArea = document.getElementById("x-composer-textarea") as
-    | HTMLTextAreaElement
-    | null;
+  const liveArea = document.getElementById("x-composer-textarea") as HTMLTextAreaElement | null;
   if (liveArea) {
     liveArea.value = "";
     autoResize(liveArea);
@@ -2061,17 +1960,11 @@ function isNearBottom(node: HTMLElement): boolean {
 
 function canSend(state: ChatPanelState): boolean {
   return (
-    !state.isViewer &&
-    state.supportsPromptEntry &&
-    !state.isStreaming &&
-    ui.draft.trim().length > 0
+    !state.isViewer && state.supportsPromptEntry && !state.isStreaming && ui.draft.trim().length > 0
   );
 }
 
-function div(
-  className: string,
-  ...children: Array<Node | string>
-): HTMLElement {
+function div(className: string, ...children: Array<Node | string>): HTMLElement {
   const node = document.createElement("div");
   node.className = className;
   for (const child of children) {
@@ -2083,7 +1976,6 @@ function div(
 // ---------------------------------------------------------------
 // Step rail
 // ---------------------------------------------------------------
-
 
 /**
  * Render the horizontal step rail that lives in the composer's
@@ -2107,8 +1999,7 @@ function buildStepRail(state: ChatPanelState): HTMLElement | null {
   // can see the pipeline ahead of them. When the project has
   // already flipped to SV (post-DM4b convert-sv), the active
   // rail IS the SV one; nothing extra to show.
-  const showSvPreview =
-    state.flow === "direct-modeling" && state.verilogEnabled;
+  const showSvPreview = state.flow === "direct-modeling" && state.verilogEnabled;
   if (!showSvPreview) {
     return renderRailForFlow(state, state.flow, true);
   }
@@ -2136,10 +2027,7 @@ function renderRailForFlow(
   const currentStep = active ? state.currentStep : null;
   const rail = div("x-step-rail");
   rail.setAttribute("role", "tablist");
-  rail.setAttribute(
-    "aria-label",
-    active ? "Flow step rail" : "Upcoming SystemVerilog step rail",
-  );
+  rail.setAttribute("aria-label", active ? "Flow step rail" : "Upcoming SystemVerilog step rail");
   if (!active) {
     rail.classList.add("x-step-rail-preview");
   }
@@ -2147,11 +2035,7 @@ function renderRailForFlow(
   // but not actively streaming. A working pump reads as static
   // (no need to draw the user's eye); an idle / parked pump
   // pulses so the user notices it's their turn.
-  const pulseCurrent =
-    active &&
-    state.sessionActive &&
-    !state.isStreaming &&
-    !state.isViewer;
+  const pulseCurrent = active && state.sessionActive && !state.isStreaming && !state.isViewer;
   for (const stepId of order) {
     const tile = document.createElement("button");
     tile.type = "button";
@@ -2183,11 +2067,7 @@ function renderRailForFlow(
     tile.title = title;
     tile.setAttribute("aria-label", title);
     tile.addEventListener("click", () => {
-      if (
-        ui.openPopup &&
-        ui.openPopup.kind === "critique" &&
-        ui.openPopup.step === stepId
-      ) {
+      if (ui.openPopup && ui.openPopup.kind === "critique" && ui.openPopup.step === stepId) {
         ui.openPopup = null;
       } else {
         ui.openPopup = { kind: "critique", step: stepId };
@@ -2268,9 +2148,7 @@ function buildHelpBody(state: ChatPanelState): HTMLElement {
   // canonical ordering of their pipeline. Falls back to every
   // known DM step when no flow is anchored yet -- the user can
   // still read the help up-front before launching a session.
-  const order = state.flow
-    ? stepOrderFor(state.flow)
-    : Object.keys(STEP_DESCRIPTIONS);
+  const order = state.flow ? stepOrderFor(state.flow) : Object.keys(STEP_DESCRIPTIONS);
   for (const stepId of order) {
     const entry = STEP_DESCRIPTIONS[stepId];
     if (!entry) {
@@ -2312,12 +2190,7 @@ function buildCritiqueBody(step: string): HTMLElement {
   const unresolved = cached.findings.filter((f) => f.kind === "unresolved");
   const resolved = cached.findings.filter((f) => f.kind === "resolved");
   appendFindingSection(body, "Blockers", blockers, "x-popup-finding-blocker");
-  appendFindingSection(
-    body,
-    "Unresolved",
-    unresolved,
-    "x-popup-finding-unresolved",
-  );
+  appendFindingSection(body, "Unresolved", unresolved, "x-popup-finding-unresolved");
   appendFindingSection(body, "Resolved", resolved, "x-popup-finding-resolved");
   return body;
 }

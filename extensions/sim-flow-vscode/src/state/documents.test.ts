@@ -233,11 +233,7 @@ describe("enumerateProjectDocuments (previews)", () => {
 describe("enumerateProjectDocuments (source-spec rows)", () => {
   it("emits a TOC row when .sim-flow/source-spec-toc.md exists", () => {
     fs.mkdirSync(path.join(projectDir, ".sim-flow"));
-    fs.writeFileSync(
-      path.join(projectDir, ".sim-flow", "source-spec-toc.md"),
-      "TOC body",
-      "utf8",
-    );
+    fs.writeFileSync(path.join(projectDir, ".sim-flow", "source-spec-toc.md"), "TOC body", "utf8");
     const got = enumerateProjectDocuments({ projectDir, flow: "direct-modeling" });
     const toc = got.find((r) => r.relPath === ".sim-flow/source-spec-toc.md");
     expect(toc).toBeDefined();
@@ -248,11 +244,7 @@ describe("enumerateProjectDocuments (source-spec rows)", () => {
   it("emits a source-spec row for each known extension that's present", () => {
     fs.mkdirSync(path.join(projectDir, ".sim-flow"));
     for (const ext of ["md", "txt", "pdf"]) {
-      fs.writeFileSync(
-        path.join(projectDir, ".sim-flow", `source-spec.${ext}`),
-        "body",
-        "utf8",
-      );
+      fs.writeFileSync(path.join(projectDir, ".sim-flow", `source-spec.${ext}`), "body", "utf8");
     }
     const got = enumerateProjectDocuments({ projectDir, flow: "direct-modeling" });
     const specs = got.filter((r) => r.relPath.startsWith(".sim-flow/source-spec."));

@@ -67,16 +67,24 @@ import type { PumpLlmConfig } from "./session/pump";
 const MODEL = "mock-model";
 
 function findRepoRoot(): string {
+  // sim-flow is its own repo now; the root is the dir holding Cargo.toml
+  // and the extension subdir. The historical lookup was for the legacy
+  // tools/sim-flow/ layout under sim-foundation.
   let dir = __dirname;
   for (let depth = 0; depth < 8; depth += 1) {
-    if (fs.existsSync(path.join(dir, "tools", "sim-flow", "Cargo.toml"))) {
+    if (
+      fs.existsSync(path.join(dir, "Cargo.toml")) &&
+      fs.existsSync(path.join(dir, "extensions", "sim-flow-vscode"))
+    ) {
       return dir;
     }
     const parent = path.dirname(dir);
-    if (parent === dir) break;
+    if (parent === dir) {
+      break;
+    }
     dir = parent;
   }
-  throw new Error("could not locate sim-foundation root from test file");
+  throw new Error("could not locate sim-flow repo root from test file");
 }
 
 /**
@@ -87,7 +95,9 @@ function findRepoRoot(): string {
  * an empty `stop`-reason response on unrecognized inputs (lets the
  * orchestrator's auto pump retry / wind down naturally).
  */
-function buildMockServer(requestLog: Array<{ url: string; step: string | null; kind: string | null }>): http.Server {
+function buildMockServer(
+  requestLog: Array<{ url: string; step: string | null; kind: string | null }>,
+): http.Server {
   return http.createServer((req, res) => {
     if (req.method === "GET" && req.url?.startsWith("/v1/models")) {
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -136,10 +146,7 @@ function buildMockServer(requestLog: Array<{ url: string; step: string | null; k
 
       const writeFileCall = pickResponseForStep(step, kind);
       const id = `chatcmpl-mock-${Date.now()}`;
-      const tokensIn = parsed.messages.reduce(
-        (sum, m) => sum + (m.content?.length ?? 0),
-        0,
-      );
+      const tokensIn = parsed.messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
       const promptTokens = Math.ceil(tokensIn / 4);
       // Streaming branch: the orchestrator's new `dispatch_streaming`
       // path sends `stream: true` to enable live token rendering and
@@ -381,7 +388,29 @@ const CRITIQUE_JSON_FIXTURE = JSON.stringify(
   2,
 );
 
-describe("e2e auto smoke (mock LLM)", () => {
+// Skip when the sim-flow binary hasn't been built. The vscode-extension
+// CI job runs on a Node-only runner without cargo, so the binary won't
+// exist there; the test is intended for the rust-container quality job
+// and local dev. Set SIM_FLOW_E2E_REQUIRE_BIN=1 to error instead of
+// skipping (useful in jobs that DO build the binary, to catch a stale
+// or missing build).
+const _e2eSimFlowBin = path.join(
+  (() => {
+    try {
+      return findRepoRoot();
+    } catch {
+      return "";
+    }
+  })(),
+  "target",
+  "debug",
+  "sim-flow",
+);
+const _e2eBinPresent = _e2eSimFlowBin !== "" && fs.existsSync(_e2eSimFlowBin);
+const _e2eDescribe =
+  _e2eBinPresent || process.env.SIM_FLOW_E2E_REQUIRE_BIN === "1" ? describe : describe.skip;
+
+_e2eDescribe("e2e auto smoke (mock LLM)", () => {
   let foundationRoot: string;
   let simFlowBin: string;
   let tmpRoot: string;
@@ -555,11 +584,8 @@ ingested_at = "2026-01-01T00:00:00Z"
         await new Promise((r) => setTimeout(r, 200));
       }
       pump.shutdown();
-      await Promise.race([
-        settlePromise,
-        new Promise((r) => setTimeout(r, 10_000)),
-      ]);
-      // eslint-disable-next-line no-console
+      await Promise.race([settlePromise, new Promise((r) => setTimeout(r, 10_000))]);
+
       console.log(
         `[e2e-mock] settle: ${JSON.stringify(settled)}; ` +
           `requests=${requestLog.length}; ` +
@@ -568,19 +594,15 @@ ingested_at = "2026-01-01T00:00:00Z"
       );
 
       // Always preserve project state so failures can diagnose.
-      const debugCopy = path.join(
-        os.tmpdir(),
-        `e2e-mock-debug-${Date.now()}`,
-      );
+      const debugCopy = path.join(os.tmpdir(), `e2e-mock-debug-${Date.now()}`);
       try {
         fs.cpSync(projectDir, debugCopy, { recursive: true });
-        // eslint-disable-next-line no-console
+
         console.log(`[e2e-mock] preserved at: ${debugCopy}`);
       } catch {
         /* best-effort */
       }
       if (fs.existsSync(statePath)) {
-        // eslint-disable-next-line no-console
         console.log("[e2e-mock] state.toml:\n" + fs.readFileSync(statePath, "utf8"));
       }
       expect(fs.existsSync(statePath)).toBe(true);

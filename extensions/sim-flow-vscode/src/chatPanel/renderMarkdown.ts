@@ -184,9 +184,7 @@ function applyShikiHighlight(root: ParentNode): void {
     // upstream callers use when they couldn't decide a language).
     const explicit = inferLang(code as HTMLElement);
     const lang =
-      explicit && explicit !== "text"
-        ? explicit
-        : inferLangFromContent(code.textContent ?? "");
+      explicit && explicit !== "text" ? explicit : inferLangFromContent(code.textContent ?? "");
     if (!lang || !SHIKI_LANGS.includes(lang as BundledLanguage)) {
       continue;
     }
@@ -277,7 +275,7 @@ export function inferLangFromContent(text: string): string | null {
   }
   if (
     /\binterface\s+[\w_]+/.test(sample) ||
-    /\btype\s+[\w_]+\s*=\s*[\{<]/.test(sample) ||
+    /\btype\s+[\w_]+\s*=\s*[{<]/.test(sample) ||
     /:\s*[\w_]+(\[\])?\s*[,;)]/.test(sample)
   ) {
     return "typescript";
@@ -285,7 +283,7 @@ export function inferLangFromContent(text: string): string | null {
   if (
     /\bfunction\s+[\w_]+\s*\(/.test(sample) ||
     /\bconst\s+[\w_]+\s*=/.test(sample) ||
-    /=>\s*[\{\(]/.test(sample)
+    /=>\s*[{(]/.test(sample)
   ) {
     return "javascript";
   }

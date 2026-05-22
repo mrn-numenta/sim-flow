@@ -34,12 +34,7 @@ interface UiState {
   pendingActions: Set<string>;
 }
 
-type TabId =
-  | "experiments"
-  | "baselines"
-  | "sweeps"
-  | "prompts"
-  | "block-diagram";
+type TabId = "experiments" | "baselines" | "sweeps" | "prompts" | "block-diagram";
 
 const ui: UiState = {
   data: null,
@@ -268,11 +263,7 @@ function tabs(): HTMLElement {
     }
     const [id, label] = def;
     const cls = id === ui.activeTab ? "tab active" : "tab";
-    const tab = el(
-      "button",
-      { class: cls, "data-tab": id },
-      label,
-    ) as HTMLButtonElement;
+    const tab = el("button", { class: cls, "data-tab": id }, label) as HTMLButtonElement;
     bar.appendChild(tab);
   }
   return bar;
@@ -492,7 +483,6 @@ function renderBlockDiagramTab(): Node[] {
   return out;
 }
 
-
 // --------------------------------------------------------------
 // Prompts tab
 // --------------------------------------------------------------
@@ -631,7 +621,6 @@ function rowActions(entry: PromptListEntry): HTMLButtonElement[] {
 // --------------------------------------------------------------
 // Helpers
 // --------------------------------------------------------------
-
 
 function sep(): HTMLElement {
   const s = el("span", { class: "sep" }, "·");

@@ -205,10 +205,7 @@ describe("deriveStepActionState", () => {
   });
 
   it("prevents selecting future steps that have never been entered", () => {
-    const selectable = isStepSelectableInRail(
-      state({ flow: flowState("DM1") }),
-      "DM3a",
-    );
+    const selectable = isStepSelectableInRail(state({ flow: flowState("DM1") }), "DM3a");
 
     expect(selectable).toBe(false);
   });

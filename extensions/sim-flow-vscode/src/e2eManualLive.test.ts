@@ -71,8 +71,7 @@ import { SocketSessionPump } from "./session/socketPump";
 import type { PumpLlmConfig } from "./session/pump";
 
 const LIVE = process.env.SIM_FLOW_E2E_LIVE === "1";
-const BASE_URL =
-  process.env.SIM_FLOW_E2E_LIVE_BASE_URL ?? "http://localhost:8012/v1";
+const BASE_URL = process.env.SIM_FLOW_E2E_LIVE_BASE_URL ?? "http://localhost:8012/v1";
 const MODEL = process.env.SIM_FLOW_E2E_LIVE_MODEL ?? "qwen3.6";
 
 function findRepoRoot(): string {
@@ -82,7 +81,9 @@ function findRepoRoot(): string {
       return dir;
     }
     const parent = path.dirname(dir);
-    if (parent === dir) break;
+    if (parent === dir) {
+      break;
+    }
     dir = parent;
   }
   throw new Error("could not locate sim-foundation root from test file");
@@ -106,7 +107,9 @@ function vllmReachable(baseUrl: string, timeoutMs = 1500): Promise<boolean> {
 
 function readCurrentStep(projectDir: string): string | null {
   const statePath = path.join(projectDir, ".sim-flow", "state.toml");
-  if (!fs.existsSync(statePath)) return null;
+  if (!fs.existsSync(statePath)) {
+    return null;
+  }
   const body = fs.readFileSync(statePath, "utf8");
   const m = body.match(/^current_step\s*=\s*"([^"]+)"/m);
   return m ? m[1] : null;
@@ -330,7 +333,9 @@ describe.skipIf(!LIVE)("e2e manual smoke (live vLLM)", () => {
           const disposer = pump.onSubSessionChanged((busy) => {
             if (busy) {
               sawBusy = true;
-              if (startTimer) clearTimeout(startTimer);
+              if (startTimer) {
+                clearTimeout(startTimer);
+              }
               return;
             }
             // busy === false. Only treat as "command complete" once
@@ -339,7 +344,9 @@ describe.skipIf(!LIVE)("e2e manual smoke (live vLLM)", () => {
             // host event even reaches the orchestrator.
             if (sawBusy) {
               clearTimeout(completeTimer);
-              if (startTimer) clearTimeout(startTimer);
+              if (startTimer) {
+                clearTimeout(startTimer);
+              }
               disposer();
               resolve();
             }
@@ -360,10 +367,7 @@ describe.skipIf(!LIVE)("e2e manual smoke (live vLLM)", () => {
       // either the step changes or the timeout fires. A refused
       // advance leaves the step unchanged; the timeout is how we
       // detect that case.
-      async function waitForStepChange(
-        prev: string,
-        timeoutMs: number,
-      ): Promise<string | null> {
+      async function waitForStepChange(prev: string, timeoutMs: number): Promise<string | null> {
         const deadline = Date.now() + timeoutMs;
         // First tick: small wait so the orchestrator can read the
         // Advance from the socket and write state.toml. 50 ms is
@@ -384,25 +388,21 @@ describe.skipIf(!LIVE)("e2e manual smoke (live vLLM)", () => {
       // `afterEach` wipes `.sim-flow/logs/` before we can see why a
       // command was rejected / timed out.
       function snapshotDiagnostics(tag: string): void {
-        const debugCopy = path.join(
-          os.tmpdir(),
-          `e2e-manual-debug-${tag}-${Date.now()}`,
-        );
+        const debugCopy = path.join(os.tmpdir(), `e2e-manual-debug-${tag}-${Date.now()}`);
         try {
           fs.cpSync(projectDir, debugCopy, { recursive: true });
-          // eslint-disable-next-line no-console
+
           console.log(`[e2e-manual] preserved at: ${debugCopy}`);
         } catch (err) {
-          // eslint-disable-next-line no-console
           console.log(`[e2e-manual] preserve failed: ${(err as Error).message}`);
         }
         const logsDir = path.join(projectDir, ".sim-flow", "logs");
         if (fs.existsSync(logsDir)) {
           for (const f of fs.readdirSync(logsDir)) {
             const body = fs.readFileSync(path.join(logsDir, f), "utf8");
-            // eslint-disable-next-line no-console
+
             console.log(`[e2e-manual] ${f} (last 60 lines):`);
-            // eslint-disable-next-line no-console
+
             console.log(body.split("\n").slice(-60).join("\n"));
           }
         }

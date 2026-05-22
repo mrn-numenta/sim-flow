@@ -101,11 +101,7 @@ describe("readPlanProgress (milestone parsing)", () => {
 
   it("ignores files that don't match the prefix or end in -critique.md", async () => {
     writeMilestone("docs/impl-plan/milestone-01-foo.md", [" "]);
-    fs.writeFileSync(
-      path.join(projectDir, "docs", "impl-plan", "README.md"),
-      "ignored",
-      "utf8",
-    );
+    fs.writeFileSync(path.join(projectDir, "docs", "impl-plan", "README.md"), "ignored", "utf8");
     fs.writeFileSync(
       path.join(projectDir, "docs", "impl-plan", "milestone-01-foo-critique.md"),
       "ignored",

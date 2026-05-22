@@ -83,16 +83,12 @@ describe("writeSpecPath", () => {
 
   it("clears spec_path when writing an empty string", async () => {
     fs.mkdirSync(path.join(projectDir, ".sim-flow"));
-    fs.writeFileSync(
-      configPath(),
-      'spec_path = "/abs/spec.md"\n[client]\nname = "mock"\n',
-      "utf8",
-    );
+    fs.writeFileSync(configPath(), 'spec_path = "/abs/spec.md"\n[client]\nname = "mock"\n', "utf8");
     await writeSpecPath(projectDir, "");
     const text = fs.readFileSync(configPath(), "utf8");
     expect(text).not.toMatch(/spec_path/);
     // Other keys are preserved.
-    expect(text).toContain('[client]');
+    expect(text).toContain("[client]");
     expect(text).toContain('name = "mock"');
   });
 
@@ -100,14 +96,14 @@ describe("writeSpecPath", () => {
     fs.mkdirSync(path.join(projectDir, ".sim-flow"));
     fs.writeFileSync(
       configPath(),
-      ['[client]', 'name = "mock"', '', '[claude]', 'model = "sonnet"', ''].join("\n"),
+      ["[client]", 'name = "mock"', "", "[claude]", 'model = "sonnet"', ""].join("\n"),
       "utf8",
     );
     await writeSpecPath(projectDir, "/x/spec.md");
     const text = fs.readFileSync(configPath(), "utf8");
     expect(text).toContain('spec_path = "/x/spec.md"');
-    expect(text).toContain('[client]');
-    expect(text).toContain('[claude]');
+    expect(text).toContain("[client]");
+    expect(text).toContain("[claude]");
     expect(text).toContain('model = "sonnet"');
   });
 
@@ -132,11 +128,7 @@ describe("readCoverageSettings", () => {
 
   it("reads threshold_pct and level from the [coverage] section", async () => {
     fs.mkdirSync(path.join(projectDir, ".sim-flow"));
-    fs.writeFileSync(
-      configPath(),
-      '[coverage]\nthreshold_pct = 75.5\nlevel = "module"\n',
-      "utf8",
-    );
+    fs.writeFileSync(configPath(), '[coverage]\nthreshold_pct = 75.5\nlevel = "module"\n', "utf8");
     expect(await readCoverageSettings(projectDir)).toEqual({
       thresholdPct: 75.5,
       level: "module",
@@ -153,11 +145,7 @@ describe("readCoverageSettings", () => {
 
   it("falls back to defaults when level is missing or invalid", async () => {
     fs.mkdirSync(path.join(projectDir, ".sim-flow"));
-    fs.writeFileSync(
-      configPath(),
-      '[coverage]\nthreshold_pct = 50\nlevel = "garbage"\n',
-      "utf8",
-    );
+    fs.writeFileSync(configPath(), '[coverage]\nthreshold_pct = 50\nlevel = "garbage"\n', "utf8");
     const got = await readCoverageSettings(projectDir);
     expect(got.thresholdPct).toBe(50);
     expect(got.level).toBe(COVERAGE_DEFAULTS.level);
@@ -206,24 +194,24 @@ describe("writeCoverageSettings", () => {
     fs.writeFileSync(
       configPath(),
       [
-        '[client]',
+        "[client]",
         'name = "claude"',
-        '',
-        '[claude]',
+        "",
+        "[claude]",
         'model = "sonnet"',
         'allowed_tools = ["Read", "Edit"]',
-        '',
+        "",
       ].join("\n"),
       "utf8",
     );
     await writeCoverageSettings(projectDir, { thresholdPct: 70, level: "module" });
     const text = fs.readFileSync(configPath(), "utf8");
-    expect(text).toContain('[client]');
+    expect(text).toContain("[client]");
     expect(text).toContain('name = "claude"');
-    expect(text).toContain('[claude]');
+    expect(text).toContain("[claude]");
     expect(text).toContain('model = "sonnet"');
-    expect(text).toContain('[coverage]');
-    expect(text).toContain('threshold_pct = 70');
+    expect(text).toContain("[coverage]");
+    expect(text).toContain("threshold_pct = 70");
     expect(text).toContain('level = "module"');
   });
 
@@ -280,31 +268,19 @@ describe("readLlmSettings", () => {
 
   it("reads max_parallel_requests verbatim when present", async () => {
     fs.mkdirSync(path.join(projectDir, ".sim-flow"));
-    fs.writeFileSync(
-      configPath(),
-      "[llm]\nmax_parallel_requests = 4\n",
-      "utf8",
-    );
+    fs.writeFileSync(configPath(), "[llm]\nmax_parallel_requests = 4\n", "utf8");
     expect(await readLlmSettings(projectDir)).toEqual({ maxParallelRequests: 4 });
   });
 
   it("falls back to default when value is non-numeric", async () => {
     fs.mkdirSync(path.join(projectDir, ".sim-flow"));
-    fs.writeFileSync(
-      configPath(),
-      '[llm]\nmax_parallel_requests = "lots"\n',
-      "utf8",
-    );
+    fs.writeFileSync(configPath(), '[llm]\nmax_parallel_requests = "lots"\n', "utf8");
     expect(await readLlmSettings(projectDir)).toEqual(LLM_DEFAULTS);
   });
 
   it("falls back to default when value is negative", async () => {
     fs.mkdirSync(path.join(projectDir, ".sim-flow"));
-    fs.writeFileSync(
-      configPath(),
-      "[llm]\nmax_parallel_requests = -3\n",
-      "utf8",
-    );
+    fs.writeFileSync(configPath(), "[llm]\nmax_parallel_requests = -3\n", "utf8");
     expect(await readLlmSettings(projectDir)).toEqual(LLM_DEFAULTS);
   });
 });
@@ -331,40 +307,35 @@ describe("writeLlmSettings", () => {
     fs.writeFileSync(
       configPath(),
       [
-        '[client]',
+        "[client]",
         'name = "claude"',
-        '',
-        '[coverage]',
+        "",
+        "[coverage]",
         "threshold_pct = 85",
         'level = "module"',
-        '',
+        "",
       ].join("\n"),
       "utf8",
     );
     await writeLlmSettings(projectDir, { maxParallelRequests: 2 });
     const text = fs.readFileSync(configPath(), "utf8");
-    expect(text).toContain('[client]');
-    expect(text).toContain('[coverage]');
-    expect(text).toContain('threshold_pct = 85');
-    expect(text).toContain('[llm]');
-    expect(text).toContain('max_parallel_requests = 2');
+    expect(text).toContain("[client]");
+    expect(text).toContain("[coverage]");
+    expect(text).toContain("threshold_pct = 85");
+    expect(text).toContain("[llm]");
+    expect(text).toContain("max_parallel_requests = 2");
   });
 
   it("does not clobber sibling [llm] keys", async () => {
     fs.mkdirSync(path.join(projectDir, ".sim-flow"));
     fs.writeFileSync(
       configPath(),
-      [
-        '[llm]',
-        "max_parallel_requests = 1",
-        "some_future_knob = 99",
-        '',
-      ].join("\n"),
+      ["[llm]", "max_parallel_requests = 1", "some_future_knob = 99", ""].join("\n"),
       "utf8",
     );
     await writeLlmSettings(projectDir, { maxParallelRequests: 5 });
     const text = fs.readFileSync(configPath(), "utf8");
-    expect(text).toContain('max_parallel_requests = 5');
-    expect(text).toContain('some_future_knob = 99');
+    expect(text).toContain("max_parallel_requests = 5");
+    expect(text).toContain("some_future_knob = 99");
   });
 });

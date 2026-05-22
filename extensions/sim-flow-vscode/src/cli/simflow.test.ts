@@ -296,13 +296,7 @@ describe("SimFlowCli.planProgress / planProgressAll", () => {
     const cli = makeCli(execute);
     const out = await cli.planProgress("DM0");
     expect(out.plan_path).toBe("docs/impl-plan/plan.md");
-    expect(calls[0][1]).toEqual([
-      "--project",
-      "/proj",
-      "plan-progress",
-      "--current-step",
-      "DM0",
-    ]);
+    expect(calls[0][1]).toEqual(["--project", "/proj", "plan-progress", "--current-step", "DM0"]);
   });
 
   it("planProgressAll passes --all", async () => {
@@ -337,13 +331,7 @@ describe("SimFlowCli.documents", () => {
     const { execute, calls } = capturing("[]");
     const cli = makeCli(execute);
     await cli.documents("direct-modeling");
-    expect(calls[0][1]).toEqual([
-      "--project",
-      "/proj",
-      "documents",
-      "--flow",
-      "direct-modeling",
-    ]);
+    expect(calls[0][1]).toEqual(["--project", "/proj", "documents", "--flow", "direct-modeling"]);
   });
 });
 
@@ -418,13 +406,7 @@ describe("SimFlowCli describe / prompts / convertSv / blockDiagram", () => {
     const cli = makeCli(execute);
     const out = await cli.promptShow("dm0-spec", "critique");
     expect(out).toBe("raw prompt body\n");
-    expect(calls[0][1]).toEqual([
-      "--project",
-      "/proj",
-      "prompts",
-      "show",
-      "dm0-spec.critique",
-    ]);
+    expect(calls[0][1]).toEqual(["--project", "/proj", "prompts", "show", "dm0-spec.critique"]);
   });
 
   it("promptShow wraps subprocess errors into a typed SimFlowCliError", async () => {
@@ -484,7 +466,6 @@ describe("toCliError fallback (non-object throw)", () => {
     // A throw value that is not an Error / object exercises the
     // `toCliError` fallback branch (no .message, no .stderr).
     const execute: Execute = async () => {
-      // eslint-disable-next-line @typescript-eslint/no-throw-literal
       throw "not an object";
     };
     const cli = makeCli(execute);

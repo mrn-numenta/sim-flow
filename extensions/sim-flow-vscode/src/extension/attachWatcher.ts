@@ -41,9 +41,7 @@ export async function attachWatcherCommand(deps: AttachWatcherDeps): Promise<voi
       });
     } catch (err) {
       void vscode.window.showErrorMessage(
-        `sim-flow: cannot resolve sim-flow binary: ${
-          (err as Error).message ?? String(err)
-        }`,
+        `sim-flow: cannot resolve sim-flow binary: ${(err as Error).message ?? String(err)}`,
       );
       return undefined;
     }
@@ -54,18 +52,13 @@ export async function attachWatcherCommand(deps: AttachWatcherDeps): Promise<voi
 
   const { execFile } = await import("node:child_process");
   const stdout = await new Promise<string>((resolve, reject) => {
-    execFile(
-      cliBinary,
-      ["watchers", "list", "--json"],
-      { encoding: "utf8" },
-      (err, out) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        resolve(out);
-      },
-    );
+    execFile(cliBinary, ["watchers", "list", "--json"], { encoding: "utf8" }, (err, out) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve(out);
+    });
   }).catch((err) => {
     void vscode.window.showErrorMessage(
       `sim-flow: \`watchers list\` failed: ${err.message ?? String(err)}`,
@@ -81,9 +74,7 @@ export async function attachWatcherCommand(deps: AttachWatcherDeps): Promise<voi
     entries = JSON.parse(stdout) as WatcherEntry[];
   } catch (err) {
     void vscode.window.showErrorMessage(
-      `sim-flow: malformed JSON from \`watchers list\`: ${
-        (err as Error).message ?? String(err)
-      }`,
+      `sim-flow: malformed JSON from \`watchers list\`: ${(err as Error).message ?? String(err)}`,
     );
     return;
   }

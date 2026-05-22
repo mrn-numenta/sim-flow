@@ -9,7 +9,6 @@ publish = false
 # Specifically:
 #   - templates/model-project/Cargo.toml is a `cargo generate` template
 #     whose `{{crate_name}}` placeholders don't parse as TOML.
-#   - experiments/term-spike/** are throwaway probes.
 # `[package].exclude` (which we previously used) only affects
 # `cargo package`/publishing. `[workspace] exclude = …` excludes paths
 # from cargo's package-discovery walk, which is what consumers
@@ -19,7 +18,6 @@ publish = false
 [workspace]
 exclude = [
     "templates",
-    "experiments",
     "studies",
 ]
 
@@ -131,27 +129,23 @@ tokio = { version = "1", default-features = false, features = ["rt", "macros", "
 # v1 targets Lance format version 2.0 (the crate's current stable
 # default).
 lancedb = { version = "=0.29.0", default-features = false }
-# Bring the lance umbrella crate in directly with the `protoc`
-# feature enabled. Several lance sub-crates' build scripts invoke
-# the protobuf compiler to generate codec / table / index stubs;
-# without `protoc`, those builds expect `protoc` on `$PATH`. Lance's
-# `protoc` feature pulls in the vendored `protobuf-src` for every
-# affected sub-crate, so sim-flow's build is self-contained on
-# hosts that don't ship protoc.
+# Bring the lance crates in directly with the `protoc` feature
+# enabled even though sim-flow doesn't import their Rust APIs
+# directly. Several transitive lance sub-crates run protobuf codegen
+# in build scripts; enabling `protoc` here forces feature unification
+# onto the versions lancedb pulls so local builds stay self-contained
+# on hosts that don't ship `protoc`.
 lance = { version = "=6.0.0", features = ["protoc"] }
 lance-encoding = { version = "=6.0.0", features = ["protoc"] }
 lance-file = { version = "=6.0.0", features = ["protoc"] }
 lance-index = { version = "=6.0.0", features = ["protoc"] }
 lance-table = { version = "=6.0.0", features = ["protoc"] }
 lance-datafusion = { version = "=6.0.0", features = ["protoc"] }
-# Arrow record batches drive every write into Lance. The lancedb
-# crate re-exports arrow types but pulling the same arrow version
-# directly keeps the schema-construction code readable without
-# going through `lancedb::arrow::...` for every symbol. Version
-# tracked to whatever lancedb=0.29 pulls in transitively (58 at
-# time of writing); if Cargo's resolver picks a different minor it
-# will fail at link time and we update the pin.
-arrow = { version = "58", default-features = false }
+# Arrow record batches drive every write into Lance. We only import
+# `arrow-array` and `arrow-schema` directly; the umbrella `arrow`
+# crate stays transitive via lance/lancedb and does not need a direct
+# manifest entry here. Versions stay pinned to the Arrow 58 line that
+# lancedb 0.29 resolves today.
 arrow-array = { version = "58", default-features = false }
 arrow-schema = { version = "58", default-features = false }
 # Stream conversion when feeding Arrow record batches into Lance's
@@ -214,3 +208,34 @@ sha2 = "0.10"
 #[patch."ssh://git@github.com/NumentaCorp/sim-foundation.git"]
 #block-diagram = { path = "../sim-foundation/tools/block-diagram" }
 #foundation-framework = { path = "../sim-foundation/crates/framework" }
+
+# Strip dependency debuginfo in development-oriented profiles. Per
+# Cargo's profile-override rules, `package."*"` only applies to
+# non-workspace dependencies, so sim-flow itself keeps the profile's
+# own debug settings while the heavy lance/datafusion graph gets
+# smaller artifacts. Mirror the override into `test` because the
+# runner-disk failures were happening while linking test binaries
+# (`cargo test` / `cargo llvm-cov`), not only during clippy's dev
+# build.
+[profile.dev.package."*"]
+debug = 0
+debug-assertions = false
+strip = "debuginfo"
+
+[profile.test.package."*"]
+debug = 0
+debug-assertions = false
+strip = "debuginfo"
+
+# Dedicated CI profile: keep line tables for sim-flow's own code so
+# backtraces still land in our sources, but treat dependencies like
+# disposable build inputs and strip their debuginfo aggressively.
+[profile.ci]
+inherits = "dev"
+debug = "line-tables-only"
+incremental = false
+
+[profile.ci.package."*"]
+debug = 0
+debug-assertions = false
+strip = "debuginfo"

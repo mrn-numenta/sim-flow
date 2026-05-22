@@ -37,7 +37,11 @@ describe("chatPanel/state", () => {
     );
     let state = started.state;
     state = appendAssistantChunk(state, started.assistantId, "The build is failing");
-    state = appendAssistantChunk(state, started.assistantId, " because Cargo cannot find a feature.");
+    state = appendAssistantChunk(
+      state,
+      started.assistantId,
+      " because Cargo cannot find a feature.",
+    );
     state = completeAssistantTurn(state, started.assistantId);
 
     expect(state.transcript).toHaveLength(2);
@@ -65,12 +69,7 @@ describe("chatPanel/state", () => {
   });
 
   it("strips transient streaming state before persistence and restores next ids", () => {
-    const started = appendUserPrompt(
-      clearConversationState(),
-      "Ping",
-      undefined,
-      "LM Studio",
-    );
+    const started = appendUserPrompt(clearConversationState(), "Ping", undefined, "LM Studio");
     const stored = toStoredConversation(started.state);
     const restored = createConversationState(stored);
 
@@ -145,12 +144,7 @@ describe("chatPanel/state", () => {
   });
 
   it("can attach a request estimate to an existing entry when the pump reports it later", () => {
-    const started = appendUserPrompt(
-      clearConversationState(),
-      "Continue.",
-      undefined,
-      "sim-flow",
-    );
+    const started = appendUserPrompt(clearConversationState(), "Continue.", undefined, "sim-flow");
     const state = setEntryRequestTokensEstimate(started.state, started.userId, 88);
 
     expect(state.transcript[0]).toMatchObject({
@@ -164,7 +158,7 @@ describe("chatPanel/state", () => {
       "Here is the result.",
       "",
       "```tool:read_file",
-      "{\"path\":\"src/lib.rs\"}",
+      '{"path":"src/lib.rs"}',
       "```",
       "",
       "And here is the visible summary.",
@@ -176,7 +170,7 @@ describe("chatPanel/state", () => {
   });
 
   it("hides unterminated tool fences while a response is still streaming", () => {
-    const partial = ["Visible intro.", "", "```tool:read_file", "{\"path\":\"src/lib.rs\"}"].join("\n");
+    const partial = ["Visible intro.", "", "```tool:read_file", '{"path":"src/lib.rs"}'].join("\n");
     expect(stripToolCallFencesForDisplay(partial)).toBe("Visible intro.");
   });
 
@@ -232,13 +226,7 @@ describe("chatPanel/state", () => {
           id: "entry-1",
           kind: "assistant",
           title: "sim-flow",
-          body: [
-            "Visible summary.",
-            "",
-            "```docs/spec.md",
-            "# Spec",
-            "```",
-          ].join("\n"),
+          body: ["Visible summary.", "", "```docs/spec.md", "# Spec", "```"].join("\n"),
           meta: "orchestrator",
         },
       ],
@@ -250,9 +238,9 @@ describe("chatPanel/state", () => {
 
   it("preserves leading whitespace for streamed assistant chunks", () => {
     expect(stripToolCallFencesForStreaming(" begin by reading")).toBe(" begin by reading");
-    expect(
-      stripToolCallFencesForStreaming(" visible\n```tool:read_file\n{\"path\":\"x\"}"),
-    ).toBe(" visible");
+    expect(stripToolCallFencesForStreaming(' visible\n```tool:read_file\n{"path":"x"}')).toBe(
+      " visible",
+    );
   });
 
   it("appendOrchestratorUserEntry tallies body tokens at append time", () => {
@@ -291,12 +279,7 @@ describe("chatPanel/state", () => {
   });
 
   it("appendAssistantPlaceholder creates a streaming entry that chunks can attach to", () => {
-    const out = appendAssistantPlaceholder(
-      clearConversationState(),
-      "Assistant",
-      "openai",
-      99,
-    );
+    const out = appendAssistantPlaceholder(clearConversationState(), "Assistant", "openai", 99);
     expect(out.state.transcript[0]).toMatchObject({
       kind: "assistant",
       title: "Assistant",
@@ -348,11 +331,7 @@ describe("chatPanel/state", () => {
       "Assistant",
       undefined,
     );
-    let s = appendAssistantReasoningChunk(
-      placeholder.state,
-      placeholder.assistantId,
-      "step 1",
-    );
+    let s = appendAssistantReasoningChunk(placeholder.state, placeholder.assistantId, "step 1");
     s = completeAssistantReasoning(s, placeholder.assistantId);
     expect(s.transcript[0]).toMatchObject({
       kind: "assistant",
@@ -367,10 +346,7 @@ describe("chatPanel/state", () => {
       "Assistant",
       undefined,
     );
-    const after = completeAssistantReasoning(
-      placeholder.state,
-      placeholder.assistantId,
-    );
+    const after = completeAssistantReasoning(placeholder.state, placeholder.assistantId);
     // Entry preserved verbatim -- no spurious `reasoningStreaming: false`
     // on assistant turns that never had thinking.
     expect(after.transcript[0]).not.toHaveProperty("reasoning");

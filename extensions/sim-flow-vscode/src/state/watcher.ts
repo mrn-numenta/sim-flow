@@ -11,11 +11,7 @@
 
 import * as vscode from "vscode";
 
-export type StateChangeKind =
-  | "state-toml"
-  | "critiques"
-  | "experiments-db"
-  | "plan";
+export type StateChangeKind = "state-toml" | "critiques" | "experiments-db" | "plan";
 
 export interface StateChangeEvent {
   projectDir: string;

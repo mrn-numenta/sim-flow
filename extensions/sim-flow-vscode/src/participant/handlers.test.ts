@@ -18,19 +18,16 @@ vi.mock("node:child_process", () => ({
     cb: (err: Error | null, value: { stdout: string; stderr: string }) => void,
   ) => {
     execFileCalls.push({ bin, args });
-    if (execFileError) cb(execFileError, { stdout: "", stderr: "" });
-    else cb(null, { stdout: "", stderr: "" });
+    if (execFileError) {
+      cb(execFileError, { stdout: "", stderr: "" });
+    } else {
+      cb(null, { stdout: "", stderr: "" });
+    }
   },
 }));
 
-const {
-  handleStatus,
-  handleRuns,
-  handleGate,
-  handleAdvance,
-  handleReset,
-  handleInit,
-} = await import("./handlers");
+const { handleStatus, handleRuns, handleGate, handleAdvance, handleReset, handleInit } =
+  await import("./handlers");
 const { SimFlowCliError } = await import("../cli/errors");
 
 interface FakeStream {

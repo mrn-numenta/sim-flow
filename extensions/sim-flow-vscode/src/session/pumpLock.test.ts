@@ -23,17 +23,13 @@ afterEach(() => {
 
 const lockPath = (): string => path.join(projectDir, ".sim-flow", ".pump.lock");
 
-function expectAcquired(
-  result: AcquireResult | AcquireFailure,
-): asserts result is AcquireResult {
+function expectAcquired(result: AcquireResult | AcquireFailure): asserts result is AcquireResult {
   if (!result.ok) {
     throw new Error(`expected acquire to succeed, got: ${result.message}`);
   }
 }
 
-function expectFailed(
-  result: AcquireResult | AcquireFailure,
-): asserts result is AcquireFailure {
+function expectFailed(result: AcquireResult | AcquireFailure): asserts result is AcquireFailure {
   if (result.ok) {
     throw new Error("expected acquire to fail, got success");
   }

@@ -106,22 +106,30 @@ export class DebugLog {
   }
 
   logEventIn(event: ProtocolEvent): void {
-    if (!this.cats.events || this.fd === null) {return;}
+    if (!this.cats.events || this.fd === null) {
+      return;
+    }
     this.writeSection("←", event.event, event);
   }
 
   logEventOut(event: HostEvent): void {
-    if (!this.cats.events || this.fd === null) {return;}
+    if (!this.cats.events || this.fd === null) {
+      return;
+    }
     this.writeSection("→", event.event, event);
   }
 
   logRawIn(line: string): void {
-    if (!this.cats.raw || this.fd === null) {return;}
+    if (!this.cats.raw || this.fd === null) {
+      return;
+    }
     this.writeRaw("←", line);
   }
 
   logRawOut(line: string): void {
-    if (!this.cats.raw || this.fd === null) {return;}
+    if (!this.cats.raw || this.fd === null) {
+      return;
+    }
     this.writeRaw("→", line);
   }
 
@@ -132,7 +140,9 @@ export class DebugLog {
    * no way to tell whether it crashed, was killed, or returned cleanly.
    */
   logProcessSpawn(binary: string, args: readonly string[], pid: number | undefined): void {
-    if (this.fd === null) {return;}
+    if (this.fd === null) {
+      return;
+    }
     const argv = [binary, ...args].map((a) => JSON.stringify(a)).join(" ");
     fs.writeSync(
       this.fd,
@@ -141,12 +151,19 @@ export class DebugLog {
   }
 
   logSpawnError(message: string): void {
-    if (this.fd === null) {return;}
-    fs.writeSync(this.fd, `### ${this.elapsed()} process spawn error\n\`\`\`\n${message}\n\`\`\`\n\n`);
+    if (this.fd === null) {
+      return;
+    }
+    fs.writeSync(
+      this.fd,
+      `### ${this.elapsed()} process spawn error\n\`\`\`\n${message}\n\`\`\`\n\n`,
+    );
   }
 
   logProcessExit(code: number | null, signal: NodeJS.Signals | null, stderrTail: string): void {
-    if (this.fd === null) {return;}
+    if (this.fd === null) {
+      return;
+    }
     const tail = stderrTail.trim();
     const lines = [
       `### ${this.elapsed()} process exited`,
@@ -168,13 +185,20 @@ export class DebugLog {
   }
 
   private writeSection(direction: "→" | "←", kind: string, payload: unknown): void {
-    if (this.fd === null) {return;}
+    if (this.fd === null) {
+      return;
+    }
     const json = JSON.stringify(payload, null, 2);
-    fs.writeSync(this.fd, `### ${this.elapsed()} ${direction} ${kind}\n\`\`\`json\n${json}\n\`\`\`\n\n`);
+    fs.writeSync(
+      this.fd,
+      `### ${this.elapsed()} ${direction} ${kind}\n\`\`\`json\n${json}\n\`\`\`\n\n`,
+    );
   }
 
   private writeRaw(direction: "→" | "←", line: string): void {
-    if (this.fd === null) {return;}
+    if (this.fd === null) {
+      return;
+    }
     fs.writeSync(this.fd, `${this.elapsed()} raw${direction} \`${line.trimEnd()}\`\n`);
   }
 }

@@ -16,8 +16,7 @@ afterEach(() => {
   fs.rmSync(projectDir, { recursive: true, force: true });
 });
 
-const logPath = (): string =>
-  path.join(projectDir, ".sim-flow", "logs", "extension-chat.log");
+const logPath = (): string => path.join(projectDir, ".sim-flow", "logs", "extension-chat.log");
 
 function readLog(): string {
   return fs.existsSync(logPath()) ? fs.readFileSync(logPath(), "utf8") : "";

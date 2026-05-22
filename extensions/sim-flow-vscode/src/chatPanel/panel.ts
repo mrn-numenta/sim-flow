@@ -1,9 +1,4 @@
-import type {
-  ChatPanelState,
-  ChatTranscriptEntry,
-  HostMessage,
-  WebviewMessage,
-} from "./messages";
+import type { ChatPanelState, ChatTranscriptEntry, HostMessage, WebviewMessage } from "./messages";
 import { renderMarkdownFragment } from "./renderMarkdown";
 import { stripProtocolFences, stripToolCallFencesForDisplay } from "./state";
 
@@ -69,10 +64,7 @@ function render(): void {
 
   if (!ui.state) {
     app.replaceChildren(
-      section(
-        "chat-shell loading",
-        titleBlock("sim-flow Chat", "Preparing chat panel..."),
-      ),
+      section("chat-shell loading", titleBlock("sim-flow Chat", "Preparing chat panel...")),
     );
     return;
   }
@@ -125,10 +117,7 @@ function bottomStatusIndicator(state: ChatPanelState): HTMLElement | null {
     return renderIndicator("active", streamingLabel(state));
   }
   if (state.awaitingUserInput) {
-    return renderIndicator(
-      "parked",
-      "Waiting on user to select the next step.",
-    );
+    return renderIndicator("parked", "Waiting on user to select the next step.");
   }
   return null;
 }
@@ -141,9 +130,7 @@ function streamingLabel(state: ChatPanelState): string {
   // has scrolled away from the session banner. Falls back to no
   // prefix when the pump hasn't opened a sub-session yet.
   const stepPrefix =
-    state.sessionStep && state.sessionKind
-      ? `${state.sessionStep}.${state.sessionKind} · `
-      : "";
+    state.sessionStep && state.sessionKind ? `${state.sessionStep}.${state.sessionKind} · ` : "";
   const phase = state.currentPhase ? ` (${state.currentPhase})` : "";
   if (state.currentTool) {
     return `${stepPrefix}${humanizeToolAction(state.currentTool)}${phase}`;
@@ -195,10 +182,7 @@ function humanizeToolAction(toolSummary: string): string {
   }
 }
 
-function renderIndicator(
-  mode: "active" | "parked",
-  text: string,
-): HTMLElement {
+function renderIndicator(mode: "active" | "parked", text: string): HTMLElement {
   const root = section(`streaming-indicator streaming-indicator-${mode}`);
   const dots = section("streaming-indicator-dots");
   // Three dots in active mode (animated via CSS); a single static
@@ -223,9 +207,14 @@ function header(state: ChatPanelState): HTMLElement {
     section(
       "hero-actions",
       statusPill(state),
-      actionButton("Stop", state.canStop, () => {
-        send({ type: "stop-conversation" });
-      }, "hero-stop"),
+      actionButton(
+        "Stop",
+        state.canStop,
+        () => {
+          send({ type: "stop-conversation" });
+        },
+        "hero-stop",
+      ),
     ),
   );
 
@@ -268,13 +257,7 @@ function header(state: ChatPanelState): HTMLElement {
   // UserMessage is interpreted as a side-conversation Q&A turn.
   // The literal text is supplied by the host; we just style it.
   if (state.idleQaHint && state.idleQaHint.trim().length > 0) {
-    root.appendChild(
-      el(
-        "div",
-        { class: "hero-qa-hint", role: "note" },
-        state.idleQaHint,
-      ),
-    );
+    root.appendChild(el("div", { class: "hero-qa-hint", role: "note" }, state.idleQaHint));
   }
   return root;
 }
@@ -327,10 +310,7 @@ function renderTranscript(root: HTMLElement, entries: ChatTranscriptEntry[]): vo
         root.appendChild(
           section(
             `entry entry-${entry.kind}${entry.streaming ? " entry-streaming" : ""}`,
-            messageHeader(
-              entry.title,
-              entryMeta(entry),
-            ),
+            messageHeader(entry.title, entryMeta(entry)),
             markdownBody(body, false),
           ),
         );
@@ -340,10 +320,7 @@ function renderTranscript(root: HTMLElement, entries: ChatTranscriptEntry[]): vo
         root.appendChild(
           section(
             `entry entry-${entry.kind}${entry.streaming ? " entry-streaming" : ""}`,
-            messageHeader(
-              entry.title,
-              entryMeta(entry),
-            ),
+            messageHeader(entry.title, entryMeta(entry)),
             markdownBody(entry.body, false),
           ),
         );
@@ -573,9 +550,7 @@ function messageHeader(title: string, meta?: string): HTMLElement {
   return root;
 }
 
-function noteEntry(
-  entry: Extract<ChatTranscriptEntry, { kind: "note" }>,
-): HTMLElement {
+function noteEntry(entry: Extract<ChatTranscriptEntry, { kind: "note" }>): HTMLElement {
   return section(
     `entry entry-note entry-note-compact ${entry.tone === "error" ? "entry-note-error" : ""}`,
     el("div", { class: "entry-header" }, entry.title),
@@ -656,9 +631,7 @@ function formatTokenCount(tokens: number): string {
   return `~${tokens} tok`;
 }
 
-function renderableAssistantBody(
-  entry: ChatTranscriptEntry,
-): string {
+function renderableAssistantBody(entry: ChatTranscriptEntry): string {
   if (entry.kind !== "assistant") {
     return "";
   }

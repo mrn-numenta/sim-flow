@@ -213,9 +213,7 @@ async function summarizeExisting(
 function showEnvVarHowto(provider: ProviderId): void {
   const varName = envVarFor(provider);
   const isWindows = process.platform === "win32";
-  const snippet = isWindows
-    ? `setx ${varName} "sk-..."`
-    : `export ${varName}="sk-..."`;
+  const snippet = isWindows ? `setx ${varName} "sk-..."` : `export ${varName}="sk-..."`;
   const target = isWindows
     ? "your User environment variables (Settings → System → Environment Variables)"
     : `your shell rc (e.g. \`~/.zshrc\` or \`~/.bashrc\`)`;

@@ -8039,7 +8039,6 @@ dependencies = [
 name = "sim-flow"
 version = "0.1.0"
 dependencies = [
- "arrow",
  "arrow-array 58.3.0",
  "arrow-schema 58.3.0",
  "async-trait",

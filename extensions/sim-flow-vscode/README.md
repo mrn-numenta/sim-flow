@@ -155,7 +155,7 @@ npm install
 | `npm run test`              | `vitest run`.                                                    |
 | `npm run test:watch`        | `vitest` in watch mode.                                          |
 | `npm run ci`                | `compile && lint && format:check && test`.                       |
-| `npm run package`           | Stage the extension under `build/` and produce a VSIX there. |
+| `npm run package`           | Stage the extension under `build/` and produce a VSIX there.     |
 
 Run the dev host: open `tools/sim-flow/extensions/sim-flow-vscode/` in VS Code and
 press **F5** ("Run Extension"). Open any folder with

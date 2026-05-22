@@ -71,19 +71,14 @@ function render(): void {
     );
   } else if (state.totalRuns === 0) {
     root.appendChild(
-      div(
-        "empty",
-        "experiments.db is empty. Records will appear here as runs are logged.",
-      ),
+      div("empty", "experiments.db is empty. Records will appear here as runs are logged."),
     );
   } else {
     for (const group of state.groups) {
       root.appendChild(renderStudyGroup(group));
     }
     if (state.ungrouped.length > 0) {
-      root.appendChild(
-        renderStudyGroup({ name: "(no study)", runs: state.ungrouped }),
-      );
+      root.appendChild(renderStudyGroup({ name: "(no study)", runs: state.ungrouped }));
     }
   }
 

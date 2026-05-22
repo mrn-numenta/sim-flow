@@ -108,9 +108,7 @@ export class SimFlowCli {
    * previews. Orchestrator-mediated so the extension doesn't walk
    * `STEP_ARTIFACTS` paths or parse markdown tables itself.
    */
-  async documents(
-    flow: string,
-  ): Promise<import("../webview/messages").DocumentEntry[]> {
+  async documents(flow: string): Promise<import("../webview/messages").DocumentEntry[]> {
     return this.execJson<import("../webview/messages").DocumentEntry[]>([
       "documents",
       "--flow",

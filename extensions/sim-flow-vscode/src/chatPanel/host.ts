@@ -16,11 +16,7 @@ import { queryContextWindow } from "../llm/contextWindow";
 import { type PumpLlmConfig } from "../session/pump";
 import { clearStalePumpLockForSession } from "../session/pumpLock";
 import { SocketSessionPump } from "../session/socketPump";
-import {
-  SimFlowCli,
-  bundledCandidates,
-  resolveBinary,
-} from "../cli";
+import { SimFlowCli, bundledCandidates, resolveBinary } from "../cli";
 import { readCritique } from "../state/critiques";
 import { readFlowState } from "../state/flowState";
 import { readPlanProgress } from "../state/planProgress";
@@ -247,9 +243,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           // dashboard won't reach the live process. Prompt the user
           // to reconnect so a fresh orchestrator picks up the new
           // value. No-op when nothing's connected.
-          void this.promptReconnectIfLive(
-            "LLM settings changed.",
-          );
+          void this.promptReconnectIfLive("LLM settings changed.");
         }
         if (
           event.affectsConfiguration("sim-flow.coverage.thresholdPct") ||
@@ -266,16 +260,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           // value without waiting for the next state-update.
           void this.refresh();
         }
-        if (
-          event.affectsConfiguration("sim-flow.chatPanel.showContextState")
-        ) {
+        if (event.affectsConfiguration("sim-flow.chatPanel.showContextState")) {
           // Toggling the indicator should flip immediately, not at
           // the next file-watcher tick.
           void this.refresh();
         }
-        if (
-          event.affectsConfiguration("sim-flow.chatPanel.transcriptCap")
-        ) {
+        if (event.affectsConfiguration("sim-flow.chatPanel.transcriptCap")) {
           void this.refresh();
         }
       }),
@@ -300,33 +290,29 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     // and pinning it via the closure. Capture the disposer in
     // this.disposables so dispose() tears it down too. See
     // chat-panel audit #2 (2026-05-16).
-    const activeSessionDisposer = this.autoSessions.onActiveSessionChanged(
-      (session) => {
-        this.attachSubSessionListener(session);
-        this.attachRequestUserInputListener(session);
-        this.attachFollowupListener(session);
-        this.attachStepModeListener(session);
-        this.attachNextActionHintListener(session);
-        this.attachContextEvictedListener(session);
-        this.attachStateAdvancedListener(session);
-        // A newly attached/replaced session changes the panel's anchor
-        // immediately; refresh so OFFLINE flips to VIEWING/STREAMING
-        // without waiting for the next pump event. We intentionally do
-        // NOT auto-refresh on clear: the settle/stop paths already post
-        // an explicit final state for the session's project, and a
-        // follow-up refresh here can snap the panel back to whichever
-        // project the editor currently points at.
-        if (session) {
-          void this.refresh();
-        }
-      },
-    );
+    const activeSessionDisposer = this.autoSessions.onActiveSessionChanged((session) => {
+      this.attachSubSessionListener(session);
+      this.attachRequestUserInputListener(session);
+      this.attachFollowupListener(session);
+      this.attachStepModeListener(session);
+      this.attachNextActionHintListener(session);
+      this.attachContextEvictedListener(session);
+      this.attachStateAdvancedListener(session);
+      // A newly attached/replaced session changes the panel's anchor
+      // immediately; refresh so OFFLINE flips to VIEWING/STREAMING
+      // without waiting for the next pump event. We intentionally do
+      // NOT auto-refresh on clear: the settle/stop paths already post
+      // an explicit final state for the session's project, and a
+      // follow-up refresh here can snap the panel back to whichever
+      // project the editor currently points at.
+      if (session) {
+        void this.refresh();
+      }
+    });
     this.disposables.push({ dispose: () => activeSessionDisposer() });
   }
 
-  private attachStepModeListener(
-    session: ManagedAutoSessionState | undefined,
-  ): void {
+  private attachStepModeListener(session: ManagedAutoSessionState | undefined): void {
     if (this.stepModeListenerDispose) {
       this.stepModeListenerDispose();
       this.stepModeListenerDispose = null;
@@ -365,9 +351,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     });
   }
 
-  private attachNextActionHintListener(
-    session: ManagedAutoSessionState | undefined,
-  ): void {
+  private attachNextActionHintListener(session: ManagedAutoSessionState | undefined): void {
     if (this.nextActionHintListenerDispose) {
       this.nextActionHintListenerDispose();
       this.nextActionHintListenerDispose = null;
@@ -375,24 +359,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (!session || typeof session.pump.onNextActionHint !== "function") {
       return;
     }
-    this.nextActionHintListenerDispose = session.pump.onNextActionHint(
-      ({ label }) => {
-        const current = this.activePump;
-        if (!current) {
-          return;
-        }
-        this.autoSessions.setNextActionHint(current, label);
-        // Repaint so the Continue button label updates before the
-        // user clicks. Arrives right before each `request-user-input`
-        // in manual mode.
-        void this.refresh();
-      },
-    );
+    this.nextActionHintListenerDispose = session.pump.onNextActionHint(({ label }) => {
+      const current = this.activePump;
+      if (!current) {
+        return;
+      }
+      this.autoSessions.setNextActionHint(current, label);
+      // Repaint so the Continue button label updates before the
+      // user clicks. Arrives right before each `request-user-input`
+      // in manual mode.
+      void this.refresh();
+    });
   }
 
-  private attachContextEvictedListener(
-    session: ManagedAutoSessionState | undefined,
-  ): void {
+  private attachContextEvictedListener(session: ManagedAutoSessionState | undefined): void {
     if (this.contextEvictedListenerDispose) {
       this.contextEvictedListenerDispose();
       this.contextEvictedListenerDispose = null;
@@ -400,26 +380,22 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (!session || typeof session.pump.onContextEvicted !== "function") {
       return;
     }
-    this.contextEvictedListenerDispose = session.pump.onContextEvicted(
-      ({ ids, reason }) => {
-        const current = this.activePump;
-        if (!current) {
-          return;
-        }
-        for (const id of ids) {
-          current.evictedMessageIds.set(id, reason);
-        }
-        // Repaint so the ✗ + tooltip appears immediately. The chat
-        // panel toggle (`showContextState`) gates whether the user
-        // actually sees them; the host always tracks evictions.
-        void this.refresh();
-      },
-    );
+    this.contextEvictedListenerDispose = session.pump.onContextEvicted(({ ids, reason }) => {
+      const current = this.activePump;
+      if (!current) {
+        return;
+      }
+      for (const id of ids) {
+        current.evictedMessageIds.set(id, reason);
+      }
+      // Repaint so the ✗ + tooltip appears immediately. The chat
+      // panel toggle (`showContextState`) gates whether the user
+      // actually sees them; the host always tracks evictions.
+      void this.refresh();
+    });
   }
 
-  private attachStateAdvancedListener(
-    session: ManagedAutoSessionState | undefined,
-  ): void {
+  private attachStateAdvancedListener(session: ManagedAutoSessionState | undefined): void {
     if (this.stateAdvancedListenerDispose) {
       this.stateAdvancedListenerDispose();
       this.stateAdvancedListenerDispose = null;
@@ -443,9 +419,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     });
   }
 
-  private attachRequestUserInputListener(
-    session: ManagedAutoSessionState | undefined,
-  ): void {
+  private attachRequestUserInputListener(session: ManagedAutoSessionState | undefined): void {
     if (this.requestUserInputListenerDispose) {
       this.requestUserInputListenerDispose();
       this.requestUserInputListenerDispose = null;
@@ -472,9 +446,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     );
   }
 
-  private attachSubSessionListener(
-    session: ManagedAutoSessionState | undefined,
-  ): void {
+  private attachSubSessionListener(session: ManagedAutoSessionState | undefined): void {
     if (this.subSessionListenerDispose) {
       this.subSessionListenerDispose();
       this.subSessionListenerDispose = null;
@@ -482,80 +454,78 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (!session || typeof session.pump.onSubSessionChanged !== "function") {
       return;
     }
-    this.subSessionListenerDispose = session.pump.onSubSessionChanged(
-      (inSubSession) => {
-        // We only care about transitions INTO busy. The pump's
-        // effective `inSubSession` flips to true on
-        // `sub-session-started` (and on resume from a parked state
-        // via the next active-work event). If the chat panel was
-        // sitting in `awaiting-input` -- meaning the previous drive
-        // resolved and `currentRenderer` is null -- a new sub-session
-        // would otherwise queue events and stall the orchestrator.
-        if (!inSubSession) {
+    this.subSessionListenerDispose = session.pump.onSubSessionChanged((inSubSession) => {
+      // We only care about transitions INTO busy. The pump's
+      // effective `inSubSession` flips to true on
+      // `sub-session-started` (and on resume from a parked state
+      // via the next active-work event). If the chat panel was
+      // sitting in `awaiting-input` -- meaning the previous drive
+      // resolved and `currentRenderer` is null -- a new sub-session
+      // would otherwise queue events and stall the orchestrator.
+      if (!inSubSession) {
+        return;
+      }
+      const current = this.activePump;
+      if (!current) {
+        return;
+      }
+      // Fresh sub-session: any tool / artifact context from the
+      // prior session is stale. Clear before posting state so
+      // the indicator doesn't carry "Tool: read_file" from the
+      // last critique into the new work session. Same for the
+      // parked-prompt context -- if a new sub-session is starting,
+      // the orchestrator's earlier "what should I do?" question
+      // has been superseded.
+      current.currentTool = null;
+      current.currentArtifact = null;
+      current.currentPrompt = null;
+      current.currentPlaceholder = null;
+      // Followups belonged to the previous parked state; the
+      // new sub-session may or may not produce more.
+      current.pendingFollowups = [];
+      // Drop the session-level "awaiting input" flag synchronously.
+      // This listener is dispatched synchronously from
+      // `handleEvent("sub-session-started")`, but the microtask that
+      // sets `awaitingInput=true` (via `onManagedSessionSettled` ->
+      // `markAwaitingInput`) for the PREVIOUS park can still be
+      // pending: when `RequestUserInput` and `SubSessionStarted`
+      // arrive in the same wire chunk, settle's `onSettled` listener
+      // synchronously resolves the drive promise, but
+      // `delegate.settled` only runs as a microtask -- AFTER this
+      // listener executes. Without a synchronous clear, that pending
+      // microtask sets `awaitingInput=true` while `pump.inSubSession`
+      // is also true (the bracket flags were just flipped by the
+      // event), and the next postState surfaces the "WAITING ON YOU"
+      // pill + Stop button + disabled Play stuck state. The previous
+      // `resumeDriveOnly` call could not cover this because its own
+      // `if (session.drivePromise) return` early-exit also fires in
+      // the microtask-gap window (the `.finally()` that clears
+      // `drivePromise` is itself a microtask).
+      current.awaitingInput = false;
+      // Restart the drive when request-user-input + sub-session-started
+      // arrive in the same wire chunk (the Q&A path's
+      // park-then-immediately-start pattern; also any host command
+      // dispatched while parked). settle's bus listener has already
+      // synchronously resolved the drive promise and cleared
+      // `currentRenderer = null`, but `drivePromise` is only nulled
+      // out by startDrive's `.finally()` continuation -- a microtask.
+      // A Promise.resolve().then(...) check would itself run in the
+      // microtask queue and race against the finally, observing a
+      // stale non-null `drivePromise`. setTimeout(0) defers to the
+      // next macrotask AFTER all pending microtasks drain, so
+      // `drivePromise === null` accurately distinguishes "drive
+      // ended" from "drive truly mid-flight" (auto mode keeps drive
+      // running across sub-sessions; we must NOT restart there).
+      setTimeout(() => {
+        if (this.activePump !== current) {
           return;
         }
-        const current = this.activePump;
-        if (!current) {
+        if (current.drivePromise) {
           return;
         }
-        // Fresh sub-session: any tool / artifact context from the
-        // prior session is stale. Clear before posting state so
-        // the indicator doesn't carry "Tool: read_file" from the
-        // last critique into the new work session. Same for the
-        // parked-prompt context -- if a new sub-session is starting,
-        // the orchestrator's earlier "what should I do?" question
-        // has been superseded.
-        current.currentTool = null;
-        current.currentArtifact = null;
-        current.currentPrompt = null;
-        current.currentPlaceholder = null;
-        // Followups belonged to the previous parked state; the
-        // new sub-session may or may not produce more.
-        current.pendingFollowups = [];
-        // Drop the session-level "awaiting input" flag synchronously.
-        // This listener is dispatched synchronously from
-        // `handleEvent("sub-session-started")`, but the microtask that
-        // sets `awaitingInput=true` (via `onManagedSessionSettled` ->
-        // `markAwaitingInput`) for the PREVIOUS park can still be
-        // pending: when `RequestUserInput` and `SubSessionStarted`
-        // arrive in the same wire chunk, settle's `onSettled` listener
-        // synchronously resolves the drive promise, but
-        // `delegate.settled` only runs as a microtask -- AFTER this
-        // listener executes. Without a synchronous clear, that pending
-        // microtask sets `awaitingInput=true` while `pump.inSubSession`
-        // is also true (the bracket flags were just flipped by the
-        // event), and the next postState surfaces the "WAITING ON YOU"
-        // pill + Stop button + disabled Play stuck state. The previous
-        // `resumeDriveOnly` call could not cover this because its own
-        // `if (session.drivePromise) return` early-exit also fires in
-        // the microtask-gap window (the `.finally()` that clears
-        // `drivePromise` is itself a microtask).
-        current.awaitingInput = false;
-        // Restart the drive when request-user-input + sub-session-started
-        // arrive in the same wire chunk (the Q&A path's
-        // park-then-immediately-start pattern; also any host command
-        // dispatched while parked). settle's bus listener has already
-        // synchronously resolved the drive promise and cleared
-        // `currentRenderer = null`, but `drivePromise` is only nulled
-        // out by startDrive's `.finally()` continuation -- a microtask.
-        // A Promise.resolve().then(...) check would itself run in the
-        // microtask queue and race against the finally, observing a
-        // stale non-null `drivePromise`. setTimeout(0) defers to the
-        // next macrotask AFTER all pending microtasks drain, so
-        // `drivePromise === null` accurately distinguishes "drive
-        // ended" from "drive truly mid-flight" (auto mode keeps drive
-        // running across sub-sessions; we must NOT restart there).
-        setTimeout(() => {
-          if (this.activePump !== current) {
-            return;
-          }
-          if (current.drivePromise) {
-            return;
-          }
-          void this.autoSessions.resumeDriveOnly(current, this.autoSessionDelegate());
-        }, 0);
-      },
-    );
+        void this.autoSessions.resumeDriveOnly(current, this.autoSessionDelegate());
+      }, 0);
+    });
   }
 
   dispose(): void {
@@ -710,20 +680,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       case "set-verilog-enabled":
         await vscode.workspace
           .getConfiguration("sim-flow")
-          .update(
-            "verilog.enabled",
-            msg.enabled,
-            vscode.ConfigurationTarget.Workspace,
-          );
+          .update("verilog.enabled", msg.enabled, vscode.ConfigurationTarget.Workspace);
         return;
       case "set-show-context-state":
         await vscode.workspace
           .getConfiguration("sim-flow")
-          .update(
-            "chatPanel.showContextState",
-            msg.enabled,
-            vscode.ConfigurationTarget.Workspace,
-          );
+          .update("chatPanel.showContextState", msg.enabled, vscode.ConfigurationTarget.Workspace);
         return;
       case "convert-to-sv":
         await this.convertActiveProjectToSv();
@@ -790,8 +752,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       );
       return;
     }
-    const anchor =
-      this.activePump?.projectDir ?? this.anchoredProjectDir();
+    const anchor = this.activePump?.projectDir ?? this.anchoredProjectDir();
     let uri: vscode.Uri;
     if (rel.startsWith("/") || /^[A-Za-z]:[\\/]/.test(rel)) {
       // Absolute path on POSIX or Windows.
@@ -803,9 +764,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       // before normalization; the `..` check above already rejected
       // those, but this is defense in depth).
       const anchorNorm = path.normalize(anchor);
-      const anchorWithSep = anchorNorm.endsWith(path.sep)
-        ? anchorNorm
-        : anchorNorm + path.sep;
+      const anchorWithSep = anchorNorm.endsWith(path.sep) ? anchorNorm : anchorNorm + path.sep;
       if (!joined.startsWith(anchorWithSep) && joined !== anchorNorm) {
         void vscode.window.showWarningMessage(
           `sim-flow: refusing to open ${rel} -- resolves outside the anchored project.`,
@@ -840,8 +799,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
    */
   private async convertActiveProjectToSv(): Promise<void> {
     const session = this.activePump;
-    const projectDir =
-      session?.projectDir ?? this.anchoredProjectDir();
+    const projectDir = session?.projectDir ?? this.anchoredProjectDir();
     if (!projectDir) {
       void vscode.window.showWarningMessage(
         "sim-flow: no anchored project to convert to SystemVerilog.",
@@ -871,9 +829,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       await cli.convertSv(false);
     } catch (err) {
       void vscode.window.showWarningMessage(
-        `sim-flow: convert-sv failed: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+        `sim-flow: convert-sv failed: ${err instanceof Error ? err.message : String(err)}`,
       );
       return;
     }
@@ -899,9 +855,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
    * would otherwise have ended up at via its local persisted state.
    */
   private readSavedPalette(): ChatPalette {
-    const raw = this.workspaceState.get<string>(
-      ChatPanelProvider.PALETTE_KEY,
-    );
+    const raw = this.workspaceState.get<string>(ChatPanelProvider.PALETTE_KEY);
     return CHAT_PALETTE_NAMES.find((p) => p === raw) ?? "default";
   }
 
@@ -939,14 +893,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (!CHAT_PALETTE_NAMES.includes(palette)) {
       return;
     }
-    await this.workspaceState.update(
-      ChatPanelProvider.PALETTE_KEY,
-      palette,
-    );
-    await this.workspaceState.update(
-      ChatPanelProvider.CUSTOM_PALETTE_KEY,
-      custom,
-    );
+    await this.workspaceState.update(ChatPanelProvider.PALETTE_KEY, palette);
+    await this.workspaceState.update(ChatPanelProvider.CUSTOM_PALETTE_KEY, custom);
   }
 
   /**
@@ -1145,13 +1093,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       canSelectMany: false,
       openLabel: "Use as source spec",
       filters: {
-        "Spec (markdown, text, PDF)": [
-          "md",
-          "markdown",
-          "txt",
-          "text",
-          "pdf",
-        ],
+        "Spec (markdown, text, PDF)": ["md", "markdown", "txt", "text", "pdf"],
       },
     });
     if (!picked || picked.length === 0) {
@@ -1239,10 +1181,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
     await this.reconcileModeSwitches();
     const context = await this.readPanelContext();
-    if (
-      this.pendingAutoLaunch &&
-      this.pendingAutoLaunch.projectDir === context.projectDir
-    ) {
+    if (this.pendingAutoLaunch && this.pendingAutoLaunch.projectDir === context.projectDir) {
       return;
     }
     if (this.activePump) {
@@ -1401,7 +1340,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     conversation = appendNote(
       conversation,
       "Stopping",
-      "Cancel requested and step mode set to Manual. The orchestrator finishes the in-flight LLM turn before it parks, so this can take a few seconds; the chat indicator will switch to \"Waiting on you\" once the cancel lands.",
+      'Cancel requested and step mode set to Manual. The orchestrator finishes the in-flight LLM turn before it parks, so this can take a few seconds; the chat indicator will switch to "Waiting on you" once the cancel lands.',
     );
     await this.persistConversation(context.projectDir, conversation);
     await this.postState(context, conversation);
@@ -1444,9 +1383,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
    * resume reads as progress rather than as "no project anchored."
    */
   private isSessionLaunching(): boolean {
-    return (
-      this.pendingAutoLaunch !== undefined || this.pendingRelaunchAnchor !== null
-    );
+    return this.pendingAutoLaunch !== undefined || this.pendingRelaunchAnchor !== null;
   }
 
   private async readPanelContext(): Promise<PanelContext> {
@@ -1457,13 +1394,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     const gates = flowState?.gates ?? {};
     const flow = flowState?.flow ?? null;
     const currentMilestone =
-      projectDir && currentStep
-        ? await readCurrentMilestoneSafe(projectDir, currentStep)
-        : null;
+      projectDir && currentStep ? await readCurrentMilestoneSafe(projectDir, currentStep) : null;
     const projectLabel =
       projectDir !== null
         ? path.basename(projectDir)
-        : vscode.workspace.workspaceFolders?.[0]?.name ?? "No project selected";
+        : (vscode.workspace.workspaceFolders?.[0]?.name ?? "No project selected");
 
     return {
       projectLabel,
@@ -1515,16 +1450,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
    *     activePump or the relaunch anchor is set and we skip.
    */
   private async tryAutoResume(): Promise<void> {
-    if (
-      this.activePump ||
-      this.pendingAutoLaunch ||
-      this.pendingRelaunchAnchor
-    ) {
+    if (this.activePump || this.pendingAutoLaunch || this.pendingRelaunchAnchor) {
       return;
     }
-    const remembered = this.workspaceState.get<string>(
-      ChatPanelProvider.LAST_PROJECT_KEY,
-    );
+    const remembered = this.workspaceState.get<string>(ChatPanelProvider.LAST_PROJECT_KEY);
     if (!remembered) {
       return;
     }
@@ -1646,10 +1575,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     // launch can skip the picker. We record on every launch (not
     // just the auto-launch path) so dashboard-driven Connect clicks
     // also seed the memory.
-    await this.workspaceState.update(
-      ChatPanelProvider.LAST_PROJECT_KEY,
-      ctx.projectDir,
-    );
+    await this.workspaceState.update(ChatPanelProvider.LAST_PROJECT_KEY, ctx.projectDir);
 
     const settings = readPanelSettings();
     const trimmedSpec = normalizeSpecPath(specPath);
@@ -1661,9 +1587,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.activePump.sourceTag === settings.source &&
       this.activePump.model === settings.model
     ) {
-      await vscode.commands.executeCommand(
-        `workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`,
-      );
+      await vscode.commands.executeCommand(`workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`);
       return;
     }
     if (
@@ -1673,9 +1597,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.pendingAutoLaunch.sourceTag === settings.source &&
       this.pendingAutoLaunch.model === settings.model
     ) {
-      await vscode.commands.executeCommand(
-        `workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`,
-      );
+      await vscode.commands.executeCommand(`workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`);
       return;
     }
 
@@ -1705,9 +1627,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.rememberConversation(ctx.projectDir, clearConversationState());
     }
 
-    await vscode.commands.executeCommand(
-      `workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`,
-    );
+    await vscode.commands.executeCommand(`workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`);
 
     await this.startAutoSession(ctx, trimmedSpec, {
       resetConversation: !options.preserveConversation,
@@ -1825,9 +1745,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     // watcher's. The constructor's `onActiveSessionChanged` listener
     // also calls `refresh()` to belt-and-suspenders this.
     await this.autoSessions.attach(record, pump, this.autoSessionDelegate());
-    await vscode.commands.executeCommand(
-      `workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`,
-    );
+    await vscode.commands.executeCommand(`workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`);
     // Surface attach success so the user knows the viewer is live.
     // Without this, a successful attach is silent and is easy to
     // confuse with the failure path (where we DO show a notice) --
@@ -1853,10 +1771,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (!ctx) {
       return;
     }
-    await this.workspaceState.update(
-      ChatPanelProvider.LAST_PROJECT_KEY,
-      ctx.projectDir,
-    );
+    await this.workspaceState.update(ChatPanelProvider.LAST_PROJECT_KEY, ctx.projectDir);
 
     const settings = readPanelSettings();
     const stepRef: ManagedStepRef = { step, kind };
@@ -1869,9 +1784,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.activePump.sourceTag === settings.source &&
       this.activePump.model === settings.model
     ) {
-      await vscode.commands.executeCommand(
-        `workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`,
-      );
+      await vscode.commands.executeCommand(`workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`);
       return;
     }
 
@@ -1899,9 +1812,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     this.pendingAutoLaunch = launchAnchor;
     this.rememberConversation(ctx.projectDir, clearConversationState());
 
-    await vscode.commands.executeCommand(
-      `workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`,
-    );
+    await vscode.commands.executeCommand(`workbench.view.extension.${CHAT_PANEL_CONTAINER_ID}`);
 
     try {
       await this.startStepSession(ctx, stepRef, { resetConversation: true });
@@ -1966,10 +1877,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
     args.push("--max-auto-iters", String(maxWorkIters));
     args.push("--max-critique-iters", String(maxCritiqueIters));
-    args.push(
-      "--max-critique-no-progress-iters",
-      String(maxCritiqueNoProgressIters),
-    );
+    args.push("--max-critique-no-progress-iters", String(maxCritiqueNoProgressIters));
     args.push("--step-mode", stepMode);
     if (trimmedSpec) {
       args.push("--spec", trimmedSpec);
@@ -2133,10 +2041,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     );
   }
 
-  private buildState(
-    context: PanelContext,
-    conversation: ChatConversationState,
-  ): ChatPanelState {
+  private buildState(context: PanelContext, conversation: ChatConversationState): ChatPanelState {
     const tokenTotals = summarizeTokenEstimates(conversation.transcript);
     const hasInterruptedAutoSession =
       this.activePump?.projectDir !== context.projectDir &&
@@ -2157,12 +2062,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     // without opening a sub-session (so `inSubSession` stays false
     // even though the orchestrator is busy processing the message).
     const isStreaming =
-      (!!this.pendingAutoLaunch &&
-        this.pendingAutoLaunch.projectDir === context.projectDir) ||
+      (!!this.pendingAutoLaunch && this.pendingAutoLaunch.projectDir === context.projectDir) ||
       (!!this.activePump &&
         this.activePump.projectDir === context.projectDir &&
-        (this.activePump.pump.inSubSession === true ||
-          this.activePump.userMessageInFlight));
+        (this.activePump.pump.inSubSession === true || this.activePump.userMessageInFlight));
     const isViewer =
       !!this.activePump &&
       this.activePump.projectDir === context.projectDir &&
@@ -2183,17 +2086,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         .map(([step]) => step),
       currentStep: context.currentStep,
       currentPhase:
-        this.activePump?.projectDir === context.projectDir
-          ? this.activePump.currentPhase
-          : null,
+        this.activePump?.projectDir === context.projectDir ? this.activePump.currentPhase : null,
       currentTool:
-        this.activePump?.projectDir === context.projectDir
-          ? this.activePump.currentTool
-          : null,
+        this.activePump?.projectDir === context.projectDir ? this.activePump.currentTool : null,
       currentArtifact:
-        this.activePump?.projectDir === context.projectDir
-          ? this.activePump.currentArtifact
-          : null,
+        this.activePump?.projectDir === context.projectDir ? this.activePump.currentArtifact : null,
       source: context.source,
       sourceLabel: context.sourceLabel,
       model: context.model,
@@ -2209,9 +2106,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       totalOutputTokensEstimate: tokenTotals.output,
       transcript: capTranscriptForRender(
         filterPresentationEntries(conversation.transcript),
-        vscode.workspace
-          .getConfiguration("sim-flow")
-          .get<number>("chatPanel.transcriptCap") ?? 500,
+        vscode.workspace.getConfiguration("sim-flow").get<number>("chatPanel.transcriptCap") ?? 500,
       ),
       isStreaming,
       awaitingUserInput: awaitingPumpInput,
@@ -2224,9 +2119,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           ? (this.activePump.currentPlaceholder ?? null)
           : null,
       pendingFollowups:
-        this.activePump?.projectDir === context.projectDir
-          ? this.activePump.pendingFollowups
-          : [],
+        this.activePump?.projectDir === context.projectDir ? this.activePump.pendingFollowups : [],
       idleQaHint:
         // Show the idle Q&A helper when there's a live pump for
         // this project AND it's not currently in a sub-session and
@@ -2263,8 +2156,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         (!!this.activePump &&
           this.activePump.projectDir === context.projectDir &&
           !this.activePump.stopRequested) ||
-        (!!this.pendingAutoLaunch &&
-          this.pendingAutoLaunch.projectDir === context.projectDir),
+        (!!this.pendingAutoLaunch && this.pendingAutoLaunch.projectDir === context.projectDir),
       currentStepMode:
         this.activePump?.projectDir === context.projectDir
           ? (this.activePump.pump.stepMode ?? null)
@@ -2274,29 +2166,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         this.activePump.nextActionHint !== undefined
           ? { label: this.activePump.nextActionHint }
           : null,
-      sessionActive:
-        !!this.activePump && this.activePump.projectDir === context.projectDir,
+      sessionActive: !!this.activePump && this.activePump.projectDir === context.projectDir,
       sessionLaunching:
         this.isSessionLaunching() &&
         (this.pendingAutoLaunch?.projectDir === context.projectDir ||
           this.pendingRelaunchAnchor === context.projectDir),
       currentMilestone: context.currentMilestone,
       verilogEnabled:
-        vscode.workspace
-          .getConfiguration("sim-flow")
-          .get<boolean>("verilog.enabled") === true,
+        vscode.workspace.getConfiguration("sim-flow").get<boolean>("verilog.enabled") === true,
       showContextState:
-        vscode.workspace
-          .getConfiguration("sim-flow")
-          .get<boolean>("chatPanel.showContextState") === true,
+        vscode.workspace.getConfiguration("sim-flow").get<boolean>("chatPanel.showContextState") ===
+        true,
       evictedMessages:
         this.activePump?.projectDir === context.projectDir
           ? Array.from(this.activePump.evictedMessageIds.entries())
           : [],
       contextWindow:
-        this.activePump?.projectDir === context.projectDir
-          ? this.activePump.contextWindow
-          : null,
+        this.activePump?.projectDir === context.projectDir ? this.activePump.contextWindow : null,
       palette: this.readSavedPalette(),
       customPalette: this.readSavedCustomPalette(),
     };
@@ -2365,10 +2251,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       clearTimeout(timer);
       const cached = this.conversations.get(key);
       if (cached) {
-        const projectDir = key.replace(
-          /^sim-flow\.chatPanel\.conversation\./,
-          "",
-        );
+        const projectDir = key.replace(/^sim-flow\.chatPanel\.conversation\./, "");
         const resolvedDir = projectDir === "__workspace__" ? null : projectDir;
         void this.persistConversation(resolvedDir, cached);
       }
@@ -2434,25 +2317,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       // sessionActive doesn't, and both are correct. The violation
       // only fires for cases where the same shape appears without a
       // launch in flight.
-      violations.push(
-        "isStreaming=true && sessionActive=false (streaming without a live session)",
-      );
+      violations.push("isStreaming=true && sessionActive=false (streaming without a live session)");
     }
     if (violations.length === 0) {
       return;
     }
-    console.warn(
-      `sim-flow: chat-panel state invariant violation: ${violations.join("; ")}`,
-      {
-        projectDir: state.projectDir,
-        currentStep: state.currentStep,
-        currentStepMode: state.currentStepMode,
-        awaitingUserInput: state.awaitingUserInput,
-        isStreaming: state.isStreaming,
-        sessionActive: state.sessionActive,
-        isViewer: state.isViewer,
-      },
-    );
+    console.warn(`sim-flow: chat-panel state invariant violation: ${violations.join("; ")}`, {
+      projectDir: state.projectDir,
+      currentStep: state.currentStep,
+      currentStepMode: state.currentStepMode,
+      awaitingUserInput: state.awaitingUserInput,
+      isStreaming: state.isStreaming,
+      sessionActive: state.sessionActive,
+      isViewer: state.isViewer,
+    });
   }
 
   private async post(message: HostMessage): Promise<void> {
@@ -2475,21 +2353,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     session: ManagedAutoSessionState,
     context?: PanelContext,
   ): string | undefined {
-    return (
-      session.pump.subSessionStep ?? context?.currentStep ?? undefined
-    );
+    return session.pump.subSessionStep ?? context?.currentStep ?? undefined;
   }
 
-  private async sendPumpPrompt(
-    context: PanelContext,
-    prompt: string,
-  ): Promise<void> {
+  private async sendPumpPrompt(context: PanelContext, prompt: string): Promise<void> {
     const session = this.activePump;
     if (!session || session.projectDir !== context.projectDir) {
       return;
     }
     await this.autoSessions.waitForDrive(session);
-    if (!this.activePump || this.activePump !== session || session.projectDir !== context.projectDir) {
+    if (
+      !this.activePump ||
+      this.activePump !== session ||
+      session.projectDir !== context.projectDir
+    ) {
       return;
     }
     const started = appendUserPrompt(
@@ -2513,11 +2390,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     session.userMessageInFlight = true;
     await this.persistConversation(context.projectDir, started.state);
     await this.postState(context, started.state);
-    await this.autoSessions.resumeWithPrompt(
-      session,
-      prompt,
-      this.autoSessionDelegate(),
-    );
+    await this.autoSessions.resumeWithPrompt(session, prompt, this.autoSessionDelegate());
   }
 
   private async onManagedSessionSettled(
@@ -2565,11 +2438,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         "Stopped the running sim-flow session.",
       );
     } else if (result.endMessage && result.endMessage.trim().length > 0) {
-      conversation = appendNote(
-        conversation,
-        "Session ended",
-        result.endMessage,
-      );
+      conversation = appendNote(conversation, "Session ended", result.endMessage);
     }
     await this.autoSessions.clearIfActive(session);
     await this.persistConversation(session.projectDir, conversation);
@@ -2662,11 +2531,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       conversation = started.state;
     }
     if (args.text.length > 0 && session.assistantId) {
-      conversation = appendAssistantReasoningChunk(
-        conversation,
-        session.assistantId,
-        args.text,
-      );
+      conversation = appendAssistantReasoningChunk(conversation, session.assistantId, args.text);
     }
     if (args.finalChunk && session.assistantId) {
       conversation = completeAssistantReasoning(conversation, session.assistantId);
@@ -2785,11 +2650,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       conversation = started.state;
     }
     if (args.text.length > 0 && session.assistantId) {
-      conversation = appendAssistantChunk(
-        conversation,
-        session.assistantId,
-        args.text,
-      );
+      conversation = appendAssistantChunk(conversation, session.assistantId, args.text);
     }
     if (args.finalChunk) {
       // Tool-call lines append AFTER the prose so the model's
@@ -2824,10 +2685,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     void this.postStateForProject(session.projectDir, conversation);
   }
 
-  private appendPumpMarkdown(
-    session: ManagedAutoSessionState,
-    text: string,
-  ): void {
+  private appendPumpMarkdown(session: ManagedAutoSessionState, text: string): void {
     if (!this.activePump || this.activePump !== session || text.length === 0) {
       return;
     }
@@ -2866,12 +2724,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
     if (classified.kind === "note") {
-      conversation = appendNote(
-        conversation,
-        classified.title,
-        classified.body,
-        classified.tone,
-      );
+      conversation = appendNote(conversation, classified.title, classified.body, classified.tone);
       this.rememberConversation(session.projectDir, conversation);
       void this.postStateForProject(session.projectDir, conversation);
       return;
@@ -2901,19 +2754,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       session.currentTool = null;
       session.currentArtifact = null;
     }
-    conversation = appendAssistantChunk(
-      conversation,
-      session.assistantId,
-      classified.text,
-    );
+    conversation = appendAssistantChunk(conversation, session.assistantId, classified.text);
     this.rememberConversation(session.projectDir, conversation);
     void this.postStateForProject(session.projectDir, conversation);
   }
 
-  private recordPumpRequestTokensEstimate(
-    session: ManagedAutoSessionState,
-    tokens: number,
-  ): void {
+  private recordPumpRequestTokensEstimate(session: ManagedAutoSessionState, tokens: number): void {
     if (!this.activePump || this.activePump !== session) {
       return;
     }
@@ -2926,11 +2772,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       );
       session.pendingPromptEntryId = null;
     } else if (session.assistantId) {
-      conversation = setEntryRequestTokensEstimate(
-        conversation,
-        session.assistantId,
-        tokens,
-      );
+      conversation = setEntryRequestTokensEstimate(conversation, session.assistantId, tokens);
     } else {
       session.pendingRequestTokensEstimate = tokens;
       return;
@@ -2975,9 +2817,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     // whichever sim-flow project happens to win the workspace scan
     // first. Falls back to the workspace project only when no
     // remembered project exists yet (very first chat-panel use).
-    const remembered = this.workspaceState.get<string>(
-      ChatPanelProvider.LAST_PROJECT_KEY,
-    );
+    const remembered = this.workspaceState.get<string>(ChatPanelProvider.LAST_PROJECT_KEY);
     const projectDir = remembered ?? (await resolveProjectDirForPanel());
     if (!projectDir) {
       return;
@@ -2995,12 +2835,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
     const config = vscode.workspace.getConfiguration("sim-flow");
-    const reconnectLlm = buildReconnectableLlmConfig(
-      ctx,
-      this.secrets,
-      config,
-      record,
-    );
+    const reconnectLlm = buildReconnectableLlmConfig(ctx, this.secrets, config, record);
     const pump = new SocketSessionPump(
       {
         sessionId: record.sessionId,
@@ -3155,10 +2990,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       // (`resolveProjectDir`) so the "switch" verb requires the
       // user to actually be inside a different project's file.
       const directProjectDir = resolveProjectDir();
-      if (
-        directProjectDir &&
-        directProjectDir !== this.activePump.projectDir
-      ) {
+      if (directProjectDir && directProjectDir !== this.activePump.projectDir) {
         await this.stopActivePumpSession(
           this.activePump,
           "Project switched",
@@ -3231,15 +3063,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         });
         return;
       }
-      await this.startAutoSession(
-        ctx,
-        relaunch.launchSpecPath,
-        {
-          resetConversation: false,
-          launchTitle: "LLM source switched",
-          launchBody: `Relaunched sim-flow auto on the new source \`${settings.sourceLabel}\`.`,
-        },
-      );
+      await this.startAutoSession(ctx, relaunch.launchSpecPath, {
+        resetConversation: false,
+        launchTitle: "LLM source switched",
+        launchBody: `Relaunched sim-flow auto on the new source \`${settings.sourceLabel}\`.`,
+      });
     }
   }
 
@@ -3252,11 +3080,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     session.awaitingInput = false;
     session.stopRequested = true;
     session.pump.cancel();
-    const conversation = appendNote(
-      this.readConversation(session.projectDir),
-      title,
-      body,
-    );
+    const conversation = appendNote(this.readConversation(session.projectDir), title, body);
     await this.persistConversation(session.projectDir, conversation);
   }
 
@@ -3290,19 +3114,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
    * config.toml says.
    */
   private async pushCoverageSettingToActiveProject(): Promise<void> {
-    const projectDir =
-      this.activePump?.projectDir ?? this.pendingAutoLaunch?.projectDir;
+    const projectDir = this.activePump?.projectDir ?? this.pendingAutoLaunch?.projectDir;
     if (!projectDir) {
       return;
     }
     const cfg = vscode.workspace.getConfiguration("sim-flow");
-    const thresholdPct = cfg.get<number>(
-      "coverage.thresholdPct",
-      COVERAGE_DEFAULTS.thresholdPct,
-    );
+    const thresholdPct = cfg.get<number>("coverage.thresholdPct", COVERAGE_DEFAULTS.thresholdPct);
     const rawLevel = cfg.get<string>("coverage.level", COVERAGE_DEFAULTS.level);
-    const level: "module" | "total" =
-      rawLevel === "module" ? "module" : "total";
+    const level: "module" | "total" = rawLevel === "module" ? "module" : "total";
     try {
       await writeCoverageSettings(projectDir, { thresholdPct, level });
     } catch (err) {
@@ -3322,8 +3141,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
    * a new session start (existing sessions keep their old argv).
    */
   private async pushLlmSettingToActiveProject(): Promise<void> {
-    const projectDir =
-      this.activePump?.projectDir ?? this.pendingAutoLaunch?.projectDir;
+    const projectDir = this.activePump?.projectDir ?? this.pendingAutoLaunch?.projectDir;
     if (!projectDir) {
       return;
     }
@@ -3362,11 +3180,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       // have disconnected manually between the change firing and
       // their click.
       const stillActive = this.autoSessions.getActiveSession();
-      if (
-        choice !== "Reconnect" ||
-        !stillActive ||
-        stillActive.projectDir !== active.projectDir
-      ) {
+      if (choice !== "Reconnect" || !stillActive || stillActive.projectDir !== active.projectDir) {
         return;
       }
       await this.reconnectActivePump(stillActive);
@@ -3406,9 +3220,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   private queueConversationWrite(task: () => Promise<void>): Promise<void> {
-    const write = this.pendingConversationWrites
-      .catch(() => undefined)
-      .then(task);
+    const write = this.pendingConversationWrites.catch(() => undefined).then(task);
     this.pendingConversationWrites = write.catch(() => undefined);
     return write;
   }
@@ -3418,12 +3230,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   private async enqueuePost(task: () => Promise<void>): Promise<void> {
-    const next = this.postChain.catch(() => undefined).then(async () => {
-      if (this.disposed || !this.view) {
-        return;
-      }
-      await task();
-    });
+    const next = this.postChain
+      .catch(() => undefined)
+      .then(async () => {
+        if (this.disposed || !this.view) {
+          return;
+        }
+        await task();
+      });
     this.postChain = next.catch(() => undefined);
     await next;
   }
@@ -3431,9 +3245,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   private renderHtml(webview: vscode.Webview): string {
     const nonce = randomNonce();
     const experimental =
-      vscode.workspace
-        .getConfiguration("sim-flow")
-        .get<boolean>("dashboard.experimentalUi") === true;
+      vscode.workspace.getConfiguration("sim-flow").get<boolean>("dashboard.experimentalUi") ===
+      true;
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(
         this.extensionUri,
@@ -3601,8 +3414,7 @@ function readPanelSettings(): {
   const globalModelFamilyId = (config.get<string>("llm.modelFamily") ?? "").trim() || undefined;
   const globalRuntimeProfileId =
     (config.get<string>("llm.runtimeProfile") ?? "").trim() || undefined;
-  const servers =
-    (config.get<unknown>("llm.servers") as LlmServerEntry[] | undefined) ?? [];
+  const servers = (config.get<unknown>("llm.servers") as LlmServerEntry[] | undefined) ?? [];
   const resolved = resolveLlmSource(rawSource, servers);
   const fallback: LlmSourceTag = "vscode";
   if (resolved === null) {
@@ -3661,19 +3473,14 @@ async function resolveProjectDirForPanel(): Promise<string | null> {
  * about to lose. Returns true iff the user clicks the destructive
  * confirm action.
  */
-async function confirmReset(
-  targets: readonly string[],
-  pickedStep: string,
-): Promise<boolean> {
+async function confirmReset(targets: readonly string[], pickedStep: string): Promise<boolean> {
   const list = targets.join(", ");
   const detail =
     targets.length === 1
       ? `Resetting \`${pickedStep}\` will permanently delete the work artifacts, critique notes, and gate flag for that step.`
       : `Resetting from \`${pickedStep}\` will permanently delete the work artifacts, critique notes, and gate flags for: ${list}. The orchestrator will return to \`${pickedStep}\` and the listed later steps will need to be re-run from scratch.`;
   const choice = await vscode.window.showWarningMessage(
-    targets.length === 1
-      ? `Reset step \`${pickedStep}\`?`
-      : `Reset from step \`${pickedStep}\`?`,
+    targets.length === 1 ? `Reset step \`${pickedStep}\`?` : `Reset from step \`${pickedStep}\`?`,
     {
       modal: true,
       detail,
@@ -3688,9 +3495,7 @@ async function confirmReset(
  * Null on any failure so callers fall back to empty defaults rather
  * than crashing the panel mid-render.
  */
-async function readFlowStateSafe(
-  projectDir: string,
-): Promise<FlowState | null> {
+async function readFlowStateSafe(projectDir: string): Promise<FlowState | null> {
   try {
     return await readFlowState(projectDir);
   } catch {
@@ -3719,9 +3524,7 @@ async function readCurrentMilestoneSafe(
     if (progress.kind === "none" || progress.currentTask === null) {
       return null;
     }
-    const owner = progress.milestones.find(
-      (m) => m.filePath === progress.currentTaskFilePath,
-    );
+    const owner = progress.milestones.find((m) => m.filePath === progress.currentTaskFilePath);
     if (!owner) {
       return null;
     }
@@ -3741,10 +3544,11 @@ function buildNotice(context: PanelContext, isStreaming: boolean): string {
     return `${context.sourceLabel} is responding. The transcript updates in place as chunks arrive.`;
   }
   if (isTerminalLlmSource(context.source)) {
-    return 'This panel does not drive terminal-only backends. Switch `sim-flow.llm.source` to `lmstudio` or another API backend to chat here.';
+    return "This panel does not drive terminal-only backends. Switch `sim-flow.llm.source` to `lmstudio` or another API backend to chat here.";
   }
   if (context.source === "lmstudio") {
-    const modelDetail = context.model.length > 0 ? `model \`${context.model}\`` : "the currently loaded model";
+    const modelDetail =
+      context.model.length > 0 ? `model \`${context.model}\`` : "the currently loaded model";
     const baseUrl = context.lmstudioBaseUrl || "http://localhost:1234/v1";
     return `LM Studio chat is ready at \`${baseUrl}\`, using ${modelDetail}.`;
   }
@@ -3778,15 +3582,14 @@ type PumpChunk =
 
 function classifyPumpMarkdown(text: string): PumpChunk {
   const trimmed = text.trim();
-  const lines = trimmed.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+  const lines = trimmed
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
   if (trimmed.length === 0) {
     return { kind: "ignore" };
   }
-  if (
-    trimmed === "<details>" ||
-    trimmed === "</details>" ||
-    trimmed.startsWith("<summary>")
-  ) {
+  if (trimmed === "<details>" || trimmed === "</details>" || trimmed.startsWith("<summary>")) {
     return { kind: "ignore" };
   }
   if (lines.length === 1 && trimmed.startsWith("**Step `")) {
@@ -3812,17 +3615,12 @@ function classifyPumpMarkdown(text: string): PumpChunk {
   }
   if (lines.length === 1 && trimmed.startsWith("**Phase:**")) {
     const currentPhase = phaseFromPhaseChanged(trimmed);
-    return currentPhase
-      ? { kind: "phase-changed", currentPhase }
-      : { kind: "ignore" };
+    return currentPhase ? { kind: "phase-changed", currentPhase } : { kind: "ignore" };
   }
   if (lines.length === 1 && /^\*\*`.+`\*\* exited with status /.test(trimmed)) {
     return noteChunk("Build output", trimmed);
   }
-  if (
-    trimmed.startsWith("**Gate `") &&
-    lines.slice(1).every((line) => line.startsWith("- "))
-  ) {
+  if (trimmed.startsWith("**Gate `") && lines.slice(1).every((line) => line.startsWith("- "))) {
     return noteChunk("Gate result", trimmed);
   }
   if (lines.length === 1 && trimmed.startsWith("**Advanced past `")) {
@@ -3850,17 +3648,13 @@ function classifyPumpMarkdown(text: string): PumpChunk {
   return { kind: "assistant", text: visible };
 }
 
-function noteChunk(
-  title: string,
-  body: string,
-  tone: "info" | "error" = "info",
-): PumpChunk {
+function noteChunk(title: string, body: string, tone: "info" | "error" = "info"): PumpChunk {
   return { kind: "note", title, body, tone };
 }
 
 function firstPhaseFromSequence(text: string): string | null {
   const matches = Array.from(text.matchAll(/`([^`]+)`/g));
-  return matches.length > 0 ? matches[0]?.[1] ?? null : null;
+  return matches.length > 0 ? (matches[0]?.[1] ?? null) : null;
 }
 
 function phaseFromPhaseChanged(text: string): string | null {
@@ -3949,8 +3743,7 @@ function buildResolvedPumpLlmConfig(
   source: LlmSource,
   model: string | undefined,
 ): PumpLlmConfig {
-  const servers =
-    (config.get<unknown>("llm.servers") as LlmServerEntry[] | undefined) ?? [];
+  const servers = (config.get<unknown>("llm.servers") as LlmServerEntry[] | undefined) ?? [];
   const resolved = typeof source === "string" ? resolveLlmSource(source, servers) : null;
   const effectiveSource = (resolved?.source ?? source) as LlmSource;
   const effectiveModel = resolved?.model?.trim() || model;
@@ -3958,8 +3751,7 @@ function buildResolvedPumpLlmConfig(
   const globalRuntimeProfileId =
     (config.get<string>("llm.runtimeProfile") ?? "").trim() || undefined;
   const ollamaBaseUrl = (config.get<string>("llm.ollama.baseUrl") ?? "").trim() || undefined;
-  const lmstudioBaseUrl =
-    (config.get<string>("llm.lmstudio.baseUrl") ?? "").trim() || undefined;
+  const lmstudioBaseUrl = (config.get<string>("llm.lmstudio.baseUrl") ?? "").trim() || undefined;
   const settingTokens = (config.get<string[]>("debug") ?? []).join(",");
   const envTokens = (process.env["SIM_FOUNDATION_DEBUG"] ?? "").trim();
   const debugTokens = settingTokens.length > 0 ? settingTokens : envTokens;
@@ -3983,8 +3775,7 @@ function reconnectableSocketPath(sessionId: string): string {
 }
 
 function randomNonce(): string {
-  const alphabet =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
   let out = "";
   for (let i = 0; i < 16; i += 1) {
     out += alphabet[Math.floor(Math.random() * alphabet.length)];
@@ -4018,9 +3809,7 @@ function mapBackendToSourceTag(backend: string): LlmSourceTag {
 /** True when the user has opted into the experimental chat panel. */
 function isExperimentalChatPanel(): boolean {
   return (
-    vscode.workspace
-      .getConfiguration("sim-flow")
-      .get<boolean>("dashboard.experimentalUi") === true
+    vscode.workspace.getConfiguration("sim-flow").get<boolean>("dashboard.experimentalUi") === true
   );
 }
 
@@ -4036,9 +3825,7 @@ function labelForLlmRole(role: string): string {
     case "assistant":
       return "Assistant (replay)";
     default:
-      return role.length > 0
-        ? role.slice(0, 1).toUpperCase() + role.slice(1)
-        : "Prompt";
+      return role.length > 0 ? role.slice(0, 1).toUpperCase() + role.slice(1) : "Prompt";
   }
 }
 
@@ -4059,9 +3846,7 @@ function formatAssistantTurnBody(
     parts.push(text);
   }
   if (toolCalls.length > 0) {
-    const lines = toolCalls.map(
-      (c) => `- ${describeToolCall(c.name, c.argumentsJson)}`,
-    );
+    const lines = toolCalls.map((c) => `- ${describeToolCall(c.name, c.argumentsJson)}`);
     parts.push(lines.join("\n"));
   }
   return parts.join("\n\n");
@@ -4108,15 +3893,11 @@ function describeToolCall(name: string, argumentsJson: string): string {
     }
     case "declare_hypothesis": {
       const rationale = stringArg(args, "rationale");
-      return rationale
-        ? `Declare hypothesis: ${truncate(rationale, 200)}`
-        : "Declare hypothesis";
+      return rationale ? `Declare hypothesis: ${truncate(rationale, 200)}` : "Declare hypothesis";
     }
     case "declare_fix": {
       const rationale = stringArg(args, "rationale");
-      return rationale
-        ? `Declare fix: ${truncate(rationale, 200)}`
-        : "Declare fix";
+      return rationale ? `Declare fix: ${truncate(rationale, 200)}` : "Declare fix";
     }
     case "log_bug": {
       const issue = stringArg(args, "issue");
@@ -4131,9 +3912,7 @@ function describeToolCall(name: string, argumentsJson: string): string {
     }
     case "resolve_bug": {
       const resolution = stringArg(args, "resolution");
-      return resolution
-        ? `Resolve bug: ${truncate(resolution, 200)}`
-        : "Resolve bug";
+      return resolution ? `Resolve bug: ${truncate(resolution, 200)}` : "Resolve bug";
     }
     case "record_run": {
       const description = stringArg(args, "description");

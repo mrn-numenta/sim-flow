@@ -53,10 +53,7 @@ describe("enumerateModels", () => {
     const fakeFetch = (async (url: string) => {
       seenUrl = url;
       return jsonResponse({
-        data: [
-          { id: "qwen/qwen3-coder-next" },
-          { id: "text-embedding-nomic-embed-text-v1.5" },
-        ],
+        data: [{ id: "qwen/qwen3-coder-next" }, { id: "text-embedding-nomic-embed-text-v1.5" }],
       });
     }) as unknown as typeof fetch;
     const result = await enumerateModels({
@@ -137,5 +134,4 @@ describe("enumerateModels", () => {
     expect(result.models).toEqual([]);
     expect(result.error).toContain("ECONNRESET");
   });
-
 });

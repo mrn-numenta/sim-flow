@@ -20,8 +20,6 @@ describe("defaultExecute", () => {
   });
 
   test("rejects when the binary doesn't exist", async () => {
-    await expect(
-      defaultExecute("/this/binary/does/not/exist", []),
-    ).rejects.toBeInstanceOf(Error);
+    await expect(defaultExecute("/this/binary/does/not/exist", [])).rejects.toBeInstanceOf(Error);
   });
 });

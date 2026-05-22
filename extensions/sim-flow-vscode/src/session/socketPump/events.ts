@@ -262,9 +262,7 @@ export function handleEvent(ctx: EventDispatchContext, event: ProtocolEvent): vo
       // Still surface the suggestion in the transcript for any
       // text-only renderer (the chat panel will additionally
       // surface a clickable chip via the bus event below).
-      ctx.currentRenderer?.markdown(
-        `\n_Suggested next: ${event.label} (\`${event.action}\`)._\n`,
-      );
+      ctx.currentRenderer?.markdown(`\n_Suggested next: ${event.label} (\`${event.action}\`)._\n`);
       ctx.bus.emit("msg", {
         type: "followup",
         label: event.label,

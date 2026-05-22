@@ -28,12 +28,7 @@ import type { SecretStorage } from "./types";
 
 export type ProviderId = "anthropic" | "openai" | "ollama" | "lmstudio";
 
-export const ALL_PROVIDERS: readonly ProviderId[] = [
-  "anthropic",
-  "lmstudio",
-  "ollama",
-  "openai",
-];
+export const ALL_PROVIDERS: readonly ProviderId[] = ["anthropic", "lmstudio", "ollama", "openai"];
 
 /**
  * Wire-stable strings for `KeySource`. Match the Rust-side
@@ -122,13 +117,7 @@ export function credentialsFilePath(): string | null {
     if (!home) {
       return null;
     }
-    return path.join(
-      home,
-      "Library",
-      "Application Support",
-      "sim-flow",
-      CREDENTIALS_FILE_NAME,
-    );
+    return path.join(home, "Library", "Application Support", "sim-flow", CREDENTIALS_FILE_NAME);
   }
   // Linux / others: XDG_CONFIG_HOME first, then ~/.config.
   const xdg = process.env["XDG_CONFIG_HOME"];
@@ -265,14 +254,21 @@ function tomlBasicString(s: string): string {
   let out = '"';
   for (const c of s) {
     const code = c.charCodeAt(0);
-    if (c === "\\") out += "\\\\";
-    else if (c === '"') out += '\\"';
-    else if (code === 0x08) out += "\\b";
-    else if (code === 0x09) out += "\\t";
-    else if (code === 0x0a) out += "\\n";
-    else if (code === 0x0c) out += "\\f";
-    else if (code === 0x0d) out += "\\r";
-    else if (code < 0x20 || code === 0x7f) {
+    if (c === "\\") {
+      out += "\\\\";
+    } else if (c === '"') {
+      out += '\\"';
+    } else if (code === 0x08) {
+      out += "\\b";
+    } else if (code === 0x09) {
+      out += "\\t";
+    } else if (code === 0x0a) {
+      out += "\\n";
+    } else if (code === 0x0c) {
+      out += "\\f";
+    } else if (code === 0x0d) {
+      out += "\\r";
+    } else if (code < 0x20 || code === 0x7f) {
       out += `\\u${code.toString(16).padStart(4, "0").toUpperCase()}`;
     } else {
       out += c;
@@ -369,8 +365,7 @@ export async function resolveApiKey(
     const file = readCredentialsFile(filePath);
     if (file !== null) {
       const entry = file[provider] as ProviderEntryShape | undefined;
-      const trimmed =
-        typeof entry?.api_key === "string" ? entry.api_key.trim() : "";
+      const trimmed = typeof entry?.api_key === "string" ? entry.api_key.trim() : "";
       if (trimmed.length > 0) {
         return { key: trimmed, source: SOURCE_CODE_CONFIG_FILE };
       }
@@ -403,7 +398,9 @@ export function writeApiKeyToConfigFile(provider: ProviderId, key: string): stri
   }
   const existing = readCredentialsFile(filePath) ?? {};
   const entry = (
-    existing[provider] && typeof existing[provider] === "object" && !Array.isArray(existing[provider])
+    existing[provider] &&
+    typeof existing[provider] === "object" &&
+    !Array.isArray(existing[provider])
       ? (existing[provider] as Record<string, unknown>)
       : {}
   ) as Record<string, unknown>;

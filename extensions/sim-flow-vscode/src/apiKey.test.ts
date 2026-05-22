@@ -25,7 +25,9 @@ vi.mock("vscode", () => ({
   window: {
     showQuickPick: async (items: Array<{ label: string }>, opts?: { placeHolder?: string }) => {
       pickQuickPickHistory.push({ items, placeHolder: opts?.placeHolder });
-      if (pickedQuickPick === undefined) return undefined;
+      if (pickedQuickPick === undefined) {
+        return undefined;
+      }
       // Find the item matching the stubbed label.
       const match = items.find((i) => i.label === pickedQuickPick!.label);
       return match;
@@ -56,12 +58,16 @@ vi.mock("./llm/keyResolver", () => ({
   providerHasConfigFileEntry: () => providerHasConfigFileEntryValue,
   writeApiKeyToConfigFile: (provider: string, value: string) => {
     writeApiKeyToConfigFileCalls.push({ provider, value });
-    if (writeApiKeyToConfigFileImpl) return writeApiKeyToConfigFileImpl(provider, value);
+    if (writeApiKeyToConfigFileImpl) {
+      return writeApiKeyToConfigFileImpl(provider, value);
+    }
     return "/fake/credentials.toml";
   },
   clearApiKeyFromConfigFile: (provider: string) => {
     clearApiKeyFromConfigFileCalls.push(provider);
-    if (clearApiKeyFromConfigFileImpl) return clearApiKeyFromConfigFileImpl(provider);
+    if (clearApiKeyFromConfigFileImpl) {
+      return clearApiKeyFromConfigFileImpl(provider);
+    }
     return true;
   },
 }));
@@ -69,7 +75,11 @@ vi.mock("./llm/keyResolver", () => ({
 const { setApiKey, clearApiKey } = await import("./apiKey");
 
 function fakeContext(): {
-  secrets: { get: (k: string) => Promise<string | undefined>; store: (k: string, v: string) => Promise<void>; delete: (k: string) => Promise<void> };
+  secrets: {
+    get: (k: string) => Promise<string | undefined>;
+    store: (k: string, v: string) => Promise<void>;
+    delete: (k: string) => Promise<void>;
+  };
 } {
   return {
     secrets: {
@@ -130,7 +140,9 @@ describe("setApiKey", () => {
       items: Array<{ label: string }>,
     ) => {
       calls.push(items.length);
-      if (calls.length === 1) return items.find((i) => i.label === "Anthropic");
+      if (calls.length === 1) {
+        return items.find((i) => i.label === "Anthropic");
+      }
       return undefined;
     }) as typeof orig;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -148,7 +160,9 @@ describe("setApiKey", () => {
     (vscode.window as unknown as { showQuickPick: typeof orig }).showQuickPick = (async (
       items: Array<{ label: string }>,
     ) => {
-      if (items.length === 4) return items.find((i) => i.label === "OpenAI");
+      if (items.length === 4) {
+        return items.find((i) => i.label === "OpenAI");
+      }
       // Storage picker -- pick env-only.
       return items.find((i) => i.label === "I'll set the env var myself");
     }) as typeof orig;
@@ -169,7 +183,9 @@ describe("setApiKey", () => {
     (vscode.window as unknown as { showQuickPick: typeof orig }).showQuickPick = (async (
       items: Array<{ label: string }>,
     ) => {
-      if (items.length === 4) return items.find((i) => i.label === "Anthropic");
+      if (items.length === 4) {
+        return items.find((i) => i.label === "Anthropic");
+      }
       return items.find((i) => i.label === "Shared with CLI (recommended)");
     }) as typeof orig;
     inputBoxValue = "sk-shared-1234";
@@ -177,7 +193,9 @@ describe("setApiKey", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await setApiKey(fakeContext() as any);
     (vscode.window as unknown as { showQuickPick: typeof orig }).showQuickPick = orig;
-    expect(writeApiKeyToConfigFileCalls).toEqual([{ provider: "anthropic", value: "sk-shared-1234" }]);
+    expect(writeApiKeyToConfigFileCalls).toEqual([
+      { provider: "anthropic", value: "sk-shared-1234" },
+    ]);
     expect(secretStore.size).toBe(0);
     expect(infoMessages[0]).toContain("/cfg/credentials.toml");
   });
@@ -188,7 +206,9 @@ describe("setApiKey", () => {
     (vscode.window as unknown as { showQuickPick: typeof orig }).showQuickPick = (async (
       items: Array<{ label: string }>,
     ) => {
-      if (items.length === 4) return items.find((i) => i.label === "Anthropic");
+      if (items.length === 4) {
+        return items.find((i) => i.label === "Anthropic");
+      }
       return items.find((i) => i.label === "Shared with CLI (recommended)");
     }) as typeof orig;
     inputBoxValue = "sk-shared-broken";
@@ -210,7 +230,9 @@ describe("setApiKey", () => {
     (vscode.window as unknown as { showQuickPick: typeof orig }).showQuickPick = (async (
       items: Array<{ label: string }>,
     ) => {
-      if (items.length === 4) return items.find((i) => i.label === "OpenAI");
+      if (items.length === 4) {
+        return items.find((i) => i.label === "OpenAI");
+      }
       return items.find((i) => i.label === "VS Code keychain (this machine only)");
     }) as typeof orig;
     inputBoxValue = "   sk-openai-zzz   "; // padded -- should be trimmed before store
@@ -228,7 +250,9 @@ describe("setApiKey", () => {
     (vscode.window as unknown as { showQuickPick: typeof orig }).showQuickPick = (async (
       items: Array<{ label: string }>,
     ) => {
-      if (items.length === 4) return items.find((i) => i.label === "Anthropic");
+      if (items.length === 4) {
+        return items.find((i) => i.label === "Anthropic");
+      }
       return items.find((i) => i.label === "Shared with CLI (recommended)");
     }) as typeof orig;
     inputBoxValue = undefined; // user dismissed the input box
@@ -248,7 +272,9 @@ describe("setApiKey", () => {
     (vscode.window as unknown as { showQuickPick: typeof orig }).showQuickPick = (async (
       items: Array<{ label: string }>,
     ) => {
-      if (items.length === 4) return items.find((i) => i.label === "Anthropic");
+      if (items.length === 4) {
+        return items.find((i) => i.label === "Anthropic");
+      }
       return items.find((i) => i.label === "Shared with CLI (recommended)");
     }) as typeof orig;
     inputBoxValue = "sk-new";

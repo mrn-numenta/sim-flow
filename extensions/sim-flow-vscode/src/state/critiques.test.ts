@@ -99,7 +99,12 @@ describe("parseFindings", () => {
     ].join("\n");
     const { findings, hasBlocking } = parseFindings(body);
     expect(findings).toHaveLength(4);
-    expect(findings.map((f) => f.kind)).toEqual(["unresolved", "unresolved", "blocker", "resolved"]);
+    expect(findings.map((f) => f.kind)).toEqual([
+      "unresolved",
+      "unresolved",
+      "blocker",
+      "resolved",
+    ]);
     expect(findings[0].text).toBe("missing coverage for illegal opcodes.");
     expect(findings[2].text).toBe("testbench file missing entirely.");
     expect(hasBlocking).toBe(true);
@@ -142,11 +147,7 @@ describe("listCritiqueFiles / readCritique", () => {
     const dir = critiquesDir(projectDir);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, "DM0-critique.md"), "- BLOCKER: nope\n", "utf8");
-    fs.writeFileSync(
-      path.join(dir, "DM1-critique.md"),
-      "- RESOLVED: addressed earlier\n",
-      "utf8",
-    );
+    fs.writeFileSync(path.join(dir, "DM1-critique.md"), "- RESOLVED: addressed earlier\n", "utf8");
     // Non-critique files should be ignored.
     fs.writeFileSync(path.join(dir, "README.md"), "ignored", "utf8");
     const list = await listCritiqueFiles(projectDir);
@@ -221,11 +222,7 @@ describe("listCritiqueFiles / readCritique", () => {
   it("readCritique falls back to markdown when only the .md exists", async () => {
     const dir = critiquesDir(projectDir);
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(
-      path.join(dir, "DM2c-critique.md"),
-      "- BLOCKER: still legacy\n",
-      "utf8",
-    );
+    fs.writeFileSync(path.join(dir, "DM2c-critique.md"), "- BLOCKER: still legacy\n", "utf8");
     const got = await readCritique(projectDir, "DM2c");
     expect(got).not.toBeNull();
     expect(got!.hasBlocking).toBe(true);

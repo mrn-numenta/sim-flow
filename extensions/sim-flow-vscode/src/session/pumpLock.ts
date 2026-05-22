@@ -148,10 +148,7 @@ export function acquirePumpLock(
  * No-op when the lock file is missing or its sessionId doesn't
  * match (we don't want to steal a fresh sibling lock).
  */
-export function clearStalePumpLockForSession(
-  projectDir: string,
-  sessionId: string,
-): void {
+export function clearStalePumpLockForSession(projectDir: string, sessionId: string): void {
   const lockPath = path.join(projectDir, LOCK_FILE);
   const existing = readLockRecord(lockPath);
   if (!existing || existing.sessionId !== sessionId) {
@@ -161,9 +158,7 @@ export function clearStalePumpLockForSession(
     fs.unlinkSync(lockPath);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      console.error(
-        `sim-flow: failed to clear stale pump lock: ${(err as Error).message}`,
-      );
+      console.error(`sim-flow: failed to clear stale pump lock: ${(err as Error).message}`);
     }
   }
 }

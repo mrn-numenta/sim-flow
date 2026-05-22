@@ -30,9 +30,7 @@ const FETCH_TIMEOUT_MS = 4000;
  * throws -- network errors / schema mismatches / unknown sources
  * all resolve to `null`.
  */
-export async function queryContextWindow(
-  q: ContextWindowQuery,
-): Promise<number | null> {
+export async function queryContextWindow(q: ContextWindowQuery): Promise<number | null> {
   try {
     switch (q.source) {
       case "anthropic":
@@ -87,13 +85,17 @@ async function queryAnthropic(q: ContextWindowQuery): Promise<number | null> {
       "anthropic-version": "2023-06-01",
     },
   });
-  if (!body || typeof body !== "object") return null;
+  if (!body || typeof body !== "object") {
+    return null;
+  }
   const ctx = (body as Record<string, unknown>).context_window;
   return typeof ctx === "number" && ctx > 0 ? ctx : null;
 }
 
 async function queryLmStudio(q: ContextWindowQuery): Promise<number | null> {
-  if (!q.baseUrl) return null;
+  if (!q.baseUrl) {
+    return null;
+  }
   // LM Studio's OpenAI-compat URL ends in `/v1`; the native API
   // lives alongside at `/api/v0`. Strip a trailing `/v1` (with or
   // without trailing slash) and append the native path.
@@ -101,7 +103,9 @@ async function queryLmStudio(q: ContextWindowQuery): Promise<number | null> {
   const model = encodeURIComponent(q.model);
   const url = `${root}/api/v0/models/${model}`;
   const body = await fetchJson(url);
-  if (!body || typeof body !== "object") return null;
+  if (!body || typeof body !== "object") {
+    return null;
+  }
   const obj = body as Record<string, unknown>;
   const loaded = obj.loaded_context_length;
   if (typeof loaded === "number" && loaded > 0) {
@@ -112,7 +116,9 @@ async function queryLmStudio(q: ContextWindowQuery): Promise<number | null> {
 }
 
 async function queryOllama(q: ContextWindowQuery): Promise<number | null> {
-  if (!q.baseUrl) return null;
+  if (!q.baseUrl) {
+    return null;
+  }
   // Ollama's OpenAI-compat sits at /v1; the native API is at /api.
   const root = q.baseUrl.replace(/\/v1\/?$/, "");
   const url = `${root}/api/show`;
@@ -121,9 +127,13 @@ async function queryOllama(q: ContextWindowQuery): Promise<number | null> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name: q.model }),
   });
-  if (!body || typeof body !== "object") return null;
+  if (!body || typeof body !== "object") {
+    return null;
+  }
   const info = (body as Record<string, unknown>).model_info;
-  if (!info || typeof info !== "object") return null;
+  if (!info || typeof info !== "object") {
+    return null;
+  }
   // The key is `<arch>.context_length` and `<arch>` varies per model
   // (e.g. `llama.context_length`, `qwen2.context_length`). Take the
   // first matching key.
@@ -135,33 +145,35 @@ async function queryOllama(q: ContextWindowQuery): Promise<number | null> {
   return null;
 }
 
-async function queryOpenAiCompatModels(
-  q: ContextWindowQuery,
-): Promise<number | null> {
-  if (!q.baseUrl) return null;
+async function queryOpenAiCompatModels(q: ContextWindowQuery): Promise<number | null> {
+  if (!q.baseUrl) {
+    return null;
+  }
   // The OpenAI spec doesn't standardise context size, but vLLM adds
   // `max_model_len` to each model entry under /v1/models. Some
   // OpenAI-compat servers expose the same field.
   const url = `${q.baseUrl.replace(/\/$/, "")}/models`;
   const body = await fetchJson(url);
-  if (!body || typeof body !== "object") return null;
+  if (!body || typeof body !== "object") {
+    return null;
+  }
   const data = (body as Record<string, unknown>).data;
-  if (!Array.isArray(data)) return null;
+  if (!Array.isArray(data)) {
+    return null;
+  }
   const match = data.find(
     (entry) =>
-      entry && typeof entry === "object" &&
-      (entry as Record<string, unknown>).id === q.model,
+      entry && typeof entry === "object" && (entry as Record<string, unknown>).id === q.model,
   );
   const obj = match as Record<string, unknown> | undefined;
-  if (!obj) return null;
+  if (!obj) {
+    return null;
+  }
   const v = obj.max_model_len;
   return typeof v === "number" && v > 0 ? v : null;
 }
 
-async function fetchJson(
-  url: string,
-  init?: RequestInit,
-): Promise<unknown | null> {
+async function fetchJson(url: string, init?: RequestInit): Promise<unknown | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {

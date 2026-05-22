@@ -41,7 +41,12 @@ set -euo pipefail
 EXCLUDE_REGEX='(/src/bin/.*\.rs$|/auto_interactive\.rs$|/presenter\.rs$|/test_validation\.rs$|/block_diagram\.rs$)'
 
 # All other args (--html, --json, --summary-only, etc.) pass
-# through to cargo-llvm-cov.
+# through to cargo-llvm-cov. Scope coverage to the main crate surface:
+# library code, integration tests, and the shipping `sim-flow` binary.
 exec cargo llvm-cov -p sim-flow \
+    --profile ci \
+    --lib \
+    --tests \
+    --bin sim-flow \
     --ignore-filename-regex "$EXCLUDE_REGEX" \
     "$@"

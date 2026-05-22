@@ -18,12 +18,13 @@ run_fmt() {
 }
 
 run_clippy() {
-  run_cmd "cargo clippy --all-targets -- -D warnings" \
-    cargo clippy --all-targets -- -D warnings
+  run_cmd "cargo clippy --profile ci --lib --tests --bin sim-flow -- -D warnings" \
+    cargo clippy --profile ci --lib --tests --bin sim-flow -- -D warnings
 }
 
 run_test() {
-  run_cmd "cargo test" cargo test
+  run_cmd "cargo test --profile ci --lib --tests --bin sim-flow" \
+    cargo test --profile ci --lib --tests --bin sim-flow
 }
 
 # Fail if Cargo.toml has the local sim-foundation patch enabled. The patch
@@ -53,21 +54,28 @@ run_no_local_patch() {
 
 run_coverage() {
   local output_dir="target/llvm-cov"
+  # Keep the CI coverage surface aligned with scripts/coverage.sh: measure
+  # the orchestrator crate and exclude the diagnostic src/bin utilities plus
+  # other files that are intentionally outside the unit-testable surface.
+  local exclude_regex='(/src/bin/.*\.rs$|/auto_interactive\.rs$|/presenter\.rs$|/test_validation\.rs$|/block_diagram\.rs$)'
   mkdir -p "${output_dir}"
 
   # Run instrumented tests; defer report generation so we can emit multiple
   # output formats from one set of profraws.
-  run_cmd "cargo llvm-cov --no-report" \
-    cargo llvm-cov --no-report
+  run_cmd "cargo llvm-cov -p sim-flow --profile ci --lib --tests --bin sim-flow --ignore-filename-regex ${exclude_regex} --no-report" \
+    cargo llvm-cov -p sim-flow --profile ci --lib --tests --bin sim-flow \
+      --ignore-filename-regex "${exclude_regex}" --no-report
 
-  run_cmd "cargo llvm-cov report --json --output-path ${output_dir}/coverage.json" \
-    cargo llvm-cov report --json \
+  run_cmd "cargo llvm-cov report -p sim-flow --profile ci --json --ignore-filename-regex ${exclude_regex} --output-path ${output_dir}/coverage.json" \
+    cargo llvm-cov report -p sim-flow --profile ci --json \
+      --ignore-filename-regex "${exclude_regex}" \
       --output-path "${output_dir}/coverage.json"
 
   # cargo-llvm-cov nests the HTML output under <output-dir>/html/, so point
   # --output-dir at the parent so the report lands at target/llvm-cov/html/.
-  run_cmd "cargo llvm-cov report --html --output-dir ${output_dir}" \
-    cargo llvm-cov report --html \
+  run_cmd "cargo llvm-cov report -p sim-flow --profile ci --html --ignore-filename-regex ${exclude_regex} --output-dir ${output_dir}" \
+    cargo llvm-cov report -p sim-flow --profile ci --html \
+      --ignore-filename-regex "${exclude_regex}" \
       --output-dir "${output_dir}"
   cp "${output_dir}/html/index.html" "${output_dir}/coverage-summary.html"
 

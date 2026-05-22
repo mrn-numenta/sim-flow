@@ -11,14 +11,17 @@ import * as vscode from "vscode";
 
 import type { ManagedAutoSessionState } from "../../chatPanel/autoSessionManager";
 import type { StepMode } from "../../session/protocol-types";
-import { cliBackendArgFor, isTerminalLlmSource, type LlmSourceTag, type WebviewMessage } from "../messages";
+import {
+  cliBackendArgFor,
+  isTerminalLlmSource,
+  type LlmSourceTag,
+  type WebviewMessage,
+} from "../messages";
 
 export interface MessageHandlerContext {
   readonly options: { projectDir: string };
   refresh(): Promise<void>;
-  routeManualCommand(
-    dispatch: (pump: ManagedAutoSessionState["pump"]) => void,
-  ): boolean;
+  routeManualCommand(dispatch: (pump: ManagedAutoSessionState["pump"]) => void): boolean;
   tryControlSocketRunStep(step: string, kind: "work" | "critique"): Promise<boolean>;
   tryControlSocketRunGate(step: string): Promise<boolean>;
   tryControlSocketAdvance(step: string): Promise<boolean>;
@@ -167,11 +170,7 @@ export async function onWebviewMessage(
     case "set-fully-auto-enabled":
       await vscode.workspace
         .getConfiguration("sim-flow")
-        .update(
-          "dashboard.showFullyAutomated",
-          msg.enabled,
-          vscode.ConfigurationTarget.Workspace,
-        );
+        .update("dashboard.showFullyAutomated", msg.enabled, vscode.ConfigurationTarget.Workspace);
       await ctx.refresh();
       return;
     case "set-verilog-sim-enabled":
@@ -190,11 +189,7 @@ export async function onWebviewMessage(
       await vscode.commands.executeCommand("sim-flow.switchProject");
       return;
     case "new-project":
-      await vscode.commands.executeCommand(
-        "sim-flow.newProject",
-        msg.name,
-        ctx.options.projectDir,
-      );
+      await vscode.commands.executeCommand("sim-flow.newProject", msg.name, ctx.options.projectDir);
       return;
     case "rename-project":
       await vscode.commands.executeCommand("sim-flow.renameProject", ctx.options.projectDir);
@@ -299,11 +294,7 @@ export async function onWebviewMessage(
       if (await ctx.tryControlSocketReset(msg.step)) {
         return;
       }
-      await vscode.commands.executeCommand(
-        "sim-flow.resetStep",
-        msg.step,
-        ctx.options.projectDir,
-      );
+      await vscode.commands.executeCommand("sim-flow.resetStep", msg.step, ctx.options.projectDir);
       return;
     }
     case "open-critique":
