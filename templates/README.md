@@ -1,12 +1,7 @@
-# sim-foundation templates
+# sim-flow templates
 
-Project templates consumed by `sim-flow new`. Templates are expanded by a
-simple internal engine that substitutes `{{placeholder}}` tokens; no
-external `cargo generate` dependency is required.
-
-See [docs/architecture/ai-flow/05-templates.md](../docs/architecture/ai-flow/05-templates.md)
-for the design and [docs/plan/ai-flow/02-phase-project-templates.md](../docs/plan/ai-flow/02-phase-project-templates.md)
-for the implementation plan.
+Project templates consumed by `sim-flow new`. Templates are expanded by
+`cargo generate`, with `sim-flow` supplying the runtime placeholder values.
 
 | Directory | Status | Subcommand |
 | --------- | ------ | ---------- |
@@ -16,13 +11,18 @@ for the implementation plan.
 
 ## Placeholders
 
-Placeholders are inert `{{token}}` sequences in any template file. The
-engine performs whole-token substitution, leaving unknown tokens intact.
+Placeholders are inert `{{token}}` sequences in template files. `sim-flow`
+provides concrete values at generation time so the resulting project carries
+its own framework pin and generator provenance.
 
 Standard tokens:
 
 - `{{project-name}}` - user-provided name (as typed)
 - `{{crate_name}}` - snake_case of project-name
-- `{{foundation_path}}` - absolute path to the sim-foundation repo
+- `{{foundation_repo}}` - sim-foundation git URL
+- `{{foundation_rev}}` - exact sim-foundation git revision from sim-flow's Cargo.lock
 - `{{library_path}}` - relative path to `sim-models/library/` (default: `../../library`)
+- `{{sim_flow_repo}}` - sim-flow git URL
+- `{{sim_flow_rev}}` - sim-flow git revision that generated the project
+- `{{sim_flow_version}}` - sim-flow crate version that generated the project
 - `{{timestamp}}` - ISO-8601 generation timestamp (UTC)

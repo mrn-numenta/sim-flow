@@ -12,16 +12,40 @@
 [template]
 cargo_generate_version = ">=0.18.0"
 
-[placeholders.foundation_path]
+[placeholders.foundation_repo]
 type = "string"
-prompt = "Absolute path to the sim-foundation repo root"
-default = "/path/to/sim-foundation"
+prompt = "sim-foundation git URL"
+default = "ssh://git@github.com/NumentaCorp/sim-foundation.git"
 regex = ".+"
+
+[placeholders.foundation_rev]
+type = "string"
+prompt = "Pinned sim-foundation git revision"
+default = "0000000000000000000000000000000000000000"
+regex = "[a-f0-9]{40}"
 
 [placeholders.library_path]
 type = "string"
 prompt = "Relative path from the generated project to sim-models/library"
 default = "../../library"
+regex = ".+"
+
+[placeholders.sim_flow_repo]
+type = "string"
+prompt = "sim-flow git URL"
+default = "ssh://git@github.com/NumentaCorp/sim-flow.git"
+regex = ".+"
+
+[placeholders.sim_flow_rev]
+type = "string"
+prompt = "sim-flow git revision that generated this project"
+default = "unknown"
+regex = ".+"
+
+[placeholders.sim_flow_version]
+type = "string"
+prompt = "sim-flow crate version that generated this project"
+default = "0.1.0"
 regex = ".+"
 
 [placeholders.timestamp]

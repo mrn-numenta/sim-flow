@@ -48,11 +48,7 @@ pub fn new_model(options: &NewModelOptions) -> Result<NewModelOutcome> {
 
     ensure_cargo_generate_installed()?;
 
-    let placeholders = template::default_placeholders(
-        &options.project_name,
-        &options.foundation_root,
-        &options.library_path,
-    );
+    let placeholders = template::default_placeholders(&options.project_name, &options.library_path);
     run_cargo_generate(
         &template_dir,
         &options.destination,
@@ -60,7 +56,9 @@ pub fn new_model(options: &NewModelOptions) -> Result<NewModelOutcome> {
         &placeholders,
     )?;
 
-    if !options.skip_cargo_check {
+    if options.skip_cargo_check {
+        cargo_generate_lockfile(&project_dir)?;
+    } else {
         cargo_check(&project_dir)?;
     }
 
@@ -257,6 +255,25 @@ fn cargo_check(project_dir: &Path) -> Result<()> {
     }
 }
 
+fn cargo_generate_lockfile(project_dir: &Path) -> Result<()> {
+    let status = Command::new("cargo")
+        .arg("generate-lockfile")
+        .arg("--quiet")
+        .current_dir(project_dir)
+        .status();
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => Err(Error::State(format!(
+            "generated project failed `cargo generate-lockfile`: exit {:?}",
+            s.code()
+        ))),
+        Err(err) => Err(Error::Io {
+            path: project_dir.to_path_buf(),
+            source: err,
+        }),
+    }
+}
+
 /// Verify that `CLAUDE.md` and `AGENTS.md` inside a template directory
 /// have equivalent content below their HTML sync-note comments. Used by
 /// the template-validation integration test and could be reused as a
@@ -302,24 +319,10 @@ fn strip_sync_note(text: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Derive a sensible default `{{foundation_path}}` for the current
-/// generation. Uses a relative path when the destination is under a
-/// sibling of the foundation root; otherwise returns the absolute path.
-///
-/// Phase 2 keeps this simple — always return the absolute path. Phase 5
-/// can revisit for portability across user machines.
-pub fn resolve_foundation_path(foundation_root: &Path, _destination: &Path) -> PathBuf {
-    foundation_root.to_path_buf()
-}
-
 /// Default placeholder values used by the templates, with overrides from
 /// [`NewModelOptions`] applied on top.
 pub fn placeholder_map(options: &NewModelOptions) -> BTreeMap<String, String> {
-    template::default_placeholders(
-        &options.project_name,
-        &options.foundation_root,
-        &options.library_path,
-    )
+    template::default_placeholders(&options.project_name, &options.library_path)
 }
 
 #[cfg(test)]
@@ -345,8 +348,14 @@ mod tests {
 
     #[test]
     fn strip_sync_note_ignores_comment_block() {
-        let a = "<!-- sync with AGENTS.md -->\n# Title\nbody\n";
-        let b = "<!-- sync with CLAUDE.md -->\n# Title\nbody\n";
+        let a = "<!-- sync with AGENTS.md -->
+# Title
+body
+";
+        let b = "<!-- sync with CLAUDE.md -->
+# Title
+body
+";
         assert_eq!(strip_sync_note(a), strip_sync_note(b));
     }
 
@@ -355,12 +364,16 @@ mod tests {
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("CLAUDE.md"),
-            "<!-- sync with AGENTS.md -->\nbody\n",
+            "<!-- sync with AGENTS.md -->
+body
+",
         )
         .unwrap();
         std::fs::write(
             dir.path().join("AGENTS.md"),
-            "<!-- sync with CLAUDE.md -->\nbody\n",
+            "<!-- sync with CLAUDE.md -->
+body
+",
         )
         .unwrap();
         verify_client_file_equivalence(dir.path()).unwrap();
@@ -369,20 +382,31 @@ mod tests {
     #[test]
     fn client_file_equivalence_detects_drift() {
         let dir = tempdir().unwrap();
-        std::fs::write(dir.path().join("CLAUDE.md"), "body one\n").unwrap();
-        std::fs::write(dir.path().join("AGENTS.md"), "body two\n").unwrap();
+        std::fs::write(
+            dir.path().join("CLAUDE.md"),
+            "body one
+",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("AGENTS.md"),
+            "body two
+",
+        )
+        .unwrap();
         assert!(verify_client_file_equivalence(dir.path()).is_err());
     }
 
     #[test]
     fn client_file_equivalence_returns_ok_when_either_file_missing() {
-        // The verifier is opportunistic -- if either sister file is
-        // missing it succeeds rather than treating the absence as drift.
         let dir = tempdir().unwrap();
-        // Neither present.
         verify_client_file_equivalence(dir.path()).unwrap();
-        // Only CLAUDE.md present.
-        std::fs::write(dir.path().join("CLAUDE.md"), "body\n").unwrap();
+        std::fs::write(
+            dir.path().join("CLAUDE.md"),
+            "body
+",
+        )
+        .unwrap();
         verify_client_file_equivalence(dir.path()).unwrap();
     }
 
@@ -432,18 +456,7 @@ mod tests {
     #[test]
     fn strip_sync_note_drops_unclosed_comment_at_eof() {
         let a = "<!-- unterminated";
-        // Just verify no panic.
         let _ = strip_sync_note(a);
-    }
-
-    #[test]
-    fn resolve_foundation_path_returns_input_path_unchanged() {
-        use std::path::Path;
-        let foundation = Path::new("/abs/foundation");
-        let destination = Path::new("/abs/somewhere/else");
-        let out = resolve_foundation_path(foundation, destination);
-        // Current impl returns the foundation path verbatim.
-        assert_eq!(out, foundation);
     }
 
     #[test]
@@ -451,7 +464,7 @@ mod tests {
         let opts = super::NewModelOptions {
             project_name: "demo-model".into(),
             destination: std::path::PathBuf::from("/tmp/dest"),
-            foundation_root: std::path::PathBuf::from("/abs/foundation"),
+            foundation_root: std::path::PathBuf::from("/abs/sim-flow"),
             library_path: "../sim-models/library".into(),
             skip_cargo_check: true,
         };
@@ -461,8 +474,30 @@ mod tests {
             Some("demo-model")
         );
         assert_eq!(m.get("crate_name").map(String::as_str), Some("demo_model"));
-        assert!(m.contains_key("foundation_path"));
-        assert!(m.contains_key("library_path"));
+        assert_eq!(
+            m.get("foundation_repo").map(String::as_str),
+            Some(template::SIM_FOUNDATION_GIT_URL)
+        );
+        assert_eq!(
+            m.get("foundation_rev").map(String::as_str),
+            Some(template::foundation_rev())
+        );
+        assert_eq!(
+            m.get("library_path").map(String::as_str),
+            Some("../sim-models/library")
+        );
+        assert_eq!(
+            m.get("sim_flow_repo").map(String::as_str),
+            Some(template::SIM_FLOW_GIT_URL)
+        );
+        assert_eq!(
+            m.get("sim_flow_rev").map(String::as_str),
+            Some(template::sim_flow_rev())
+        );
+        assert_eq!(
+            m.get("sim_flow_version").map(String::as_str),
+            Some(template::sim_flow_version())
+        );
         assert!(m.contains_key("timestamp"));
     }
 }

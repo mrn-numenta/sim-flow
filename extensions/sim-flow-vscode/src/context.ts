@@ -36,7 +36,8 @@ export interface ResolveContextOptions {
  * Resolution order:
  *   1. `options.projectDir` (the chat `--project` flag or a
  *      dashboard-passed project) — verified to have
- *      `.sim-flow/state.toml`, otherwise we error.
+ *      `.sim-flow/state.toml` under an allowed `sim-models`
+ *      project path, otherwise we error.
  *   2. Walk up from the active editor / workspace folder roots.
  *   3. Workspace-wide scan via `findProjectCandidates()`; if
  *      exactly one candidate exists we use it, if multiple exist
@@ -76,7 +77,7 @@ async function resolveAnyProjectDir(
     const verified = verifyProjectDir(options.projectDir);
     if (!verified && showErrors) {
       void vscode.window.showErrorMessage(
-        `sim-flow: --project path "${options.projectDir}" does not contain a .sim-flow/state.toml.`,
+        `sim-flow: --project path "${options.projectDir}" is not an initialized project under sim-models/users/<user>/<project> or sim-models/library/<project>.`,
       );
     }
     return verified;
@@ -102,7 +103,7 @@ async function resolveAnyProjectDir(
   }
   if (showErrors) {
     void vscode.window.showErrorMessage(
-      "sim-flow: open a workspace folder that contains .sim-flow/state.toml to use this command.",
+      "sim-flow: open the sim-models workspace and select a project under users/ or library/ to use this command.",
     );
   }
   return undefined;
@@ -110,7 +111,9 @@ async function resolveAnyProjectDir(
 
 /**
  * Walk up from the active editor (or the first workspace folder) to
- * find the nearest directory that contains `.sim-flow/state.toml`.
+ * find the nearest allowed sim-flow project directory. Valid projects
+ * live only under `sim-models/users/<user>/<project>` or
+ * `sim-models/library/<project>`.
  */
 export function resolveProjectDir(): string | undefined {
   const candidates: string[] = [];
@@ -130,23 +133,27 @@ export function resolveProjectDir(): string | undefined {
   // Fallback: if only one workspace folder exists, use it even if
   // state.toml is missing; the caller can still initialize.
   const folders = vscode.workspace.workspaceFolders;
-  if (folders && folders.length === 1) {
+  if (folders && folders.length === 1 && looksLikeSimModelsRoot(folders[0].uri.fsPath)) {
     return folders[0].uri.fsPath;
   }
   return undefined;
 }
 
 /**
-/**
  * Enumerate every sim-flow project visible in the current workspace
  * (every directory under a workspace folder that contains
- * `.sim-flow/state.toml`). Results are absolute paths, deduplicated,
- * and sorted for stable QuickPick ordering. `templates/` subtrees
- * are excluded because sim-foundation ships template projects
- * (under `tools/sim-flow/templates/model-project/`) that are
- * scaffolding for `cargo generate`, not real projects.
+ * `.sim-flow/state.toml`). Results are limited to the `sim-models`
+ * repository's `users/` and `library/` trees, deduplicated, and
+ * sorted for stable QuickPick ordering. `templates/` subtrees are
+ * excluded because sim-foundation ships template projects (under
+ * `tools/sim-flow/templates/model-project/`) that are scaffolding
+ * for `cargo generate`, not real projects.
  */
 export async function findProjectCandidates(): Promise<string[]> {
+  const simModelsRoot = findSimModelsWorkspaceRoot();
+  if (!simModelsRoot) {
+    return [];
+  }
   const found = new Set<string>();
   const uris = await vscode.workspace.findFiles(
     "**/.sim-flow/state.toml",
@@ -157,16 +164,8 @@ export async function findProjectCandidates(): Promise<string[]> {
     // state.toml lives at <projectDir>/.sim-flow/state.toml, so the
     // project root is two levels up from the file.
     const dir = path.dirname(path.dirname(uri.fsPath));
-    if (!isTemplateDir(dir)) {
+    if (!isTemplateDir(dir) && isAllowedProjectDir(dir, simModelsRoot)) {
       found.add(dir);
-    }
-  }
-  // Also include workspace folders themselves in case findFiles
-  // skipped them (e.g. when `.sim-flow/` is at the folder root).
-  for (const folder of vscode.workspace.workspaceFolders ?? []) {
-    const candidate = folder.uri.fsPath;
-    if (!isTemplateDir(candidate) && existsSync(path.join(candidate, ".sim-flow", "state.toml"))) {
-      found.add(candidate);
     }
   }
   return [...found].sort();
@@ -261,7 +260,12 @@ function workspaceRelativeLabel(dir: string): string {
 
 function verifyProjectDir(candidate: string): string | undefined {
   const abs = path.isAbsolute(candidate) ? candidate : path.resolve(candidate);
-  if (existsSync(path.join(abs, ".sim-flow", "state.toml"))) {
+  const simModelsRoot = findSimModelsWorkspaceRoot();
+  if (
+    simModelsRoot &&
+    isAllowedProjectDir(abs, simModelsRoot) &&
+    existsSync(path.join(abs, ".sim-flow", "state.toml"))
+  ) {
     return abs;
   }
   return undefined;
@@ -269,6 +273,10 @@ function verifyProjectDir(candidate: string): string | undefined {
 
 function findUpwards(start: string): string | undefined {
   let current = path.resolve(start);
+  const simModelsRoot = findSimModelsWorkspaceRoot();
+  if (!simModelsRoot) {
+    return undefined;
+  }
   // If the start path is a file, step up once to its directory.
   try {
     const stat = statSync(current);
@@ -279,7 +287,10 @@ function findUpwards(start: string): string | undefined {
     // start may not exist yet; treat as directory path anyway.
   }
   while (true) {
-    if (existsSync(path.join(current, ".sim-flow", "state.toml"))) {
+    if (
+      existsSync(path.join(current, ".sim-flow", "state.toml")) &&
+      isAllowedProjectDir(current, simModelsRoot)
+    ) {
       return current;
     }
     const parent = path.dirname(current);
@@ -306,4 +317,47 @@ function tryResolveBinary(): string | undefined {
 function getStringSetting(key: string, fallback: string): string {
   const value = vscode.workspace.getConfiguration("sim-flow").get<string>(key);
   return typeof value === "string" && value.length > 0 ? value : fallback;
+}
+
+function findSimModelsWorkspaceRoot(): string | undefined {
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  for (const folder of folders) {
+    if (path.basename(folder.uri.fsPath) === "sim-models") {
+      return folder.uri.fsPath;
+    }
+  }
+  for (const folder of folders) {
+    if (looksLikeSimModelsRoot(folder.uri.fsPath)) {
+      return folder.uri.fsPath;
+    }
+  }
+  return undefined;
+}
+
+function looksLikeSimModelsRoot(dir: string): boolean {
+  try {
+    return (
+      existsSync(path.join(dir, "docs", "modeling-guide")) && existsSync(path.join(dir, "examples"))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedProjectDir(projectDir: string, simModelsRoot: string): boolean {
+  if (isTemplateDir(projectDir)) {
+    return false;
+  }
+  const rel = path.relative(simModelsRoot, projectDir);
+  if (rel.length === 0 || rel.startsWith("..") || path.isAbsolute(rel)) {
+    return false;
+  }
+  const parts = rel.split(path.sep).filter((part) => part.length > 0);
+  if (parts.length === 2 && parts[0] === "library") {
+    return true;
+  }
+  if (parts.length === 3 && parts[0] === "users") {
+    return true;
+  }
+  return false;
 }

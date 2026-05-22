@@ -64,16 +64,18 @@ Detailed design and workflow docs live under `tools/sim-flow/docs/flow/`.
 Useful entrypoints:
 
 ```sh
-# build + install the extension locally
+# install sim-flow itself
+cargo install --locked --git ssh://git@github.com/NumentaCorp/sim-flow.git sim-flow
+
+# build + install the extension from an existing checkout
 cargo run --release --bin sim-flow -- install-extension
 
-# or, from a sim-models clone where the binary should be linked
-# against sim-models' Cargo.lock:
-cd ~/nta/sim-models && cargo xtask install-sim-flow
+# or install the extension from the installed binary
+sim-flow install-extension
 ```
 
 The install logic is a public lib function (`sim_flow::install::install_extension`)
-so consumers like sim-models' `xtask/` can drive it without shelling out.
+so CLI and editor entrypoints share one packaging path.
 
 - Extension README:
   `extensions/sim-flow-vscode/README.md`

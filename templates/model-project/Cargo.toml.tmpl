@@ -14,6 +14,13 @@ name = "{{crate_name}}"
 version = "0.1.0"
 edition = "2024"
 
+[package.metadata.sim-flow]
+generated_by_version = "{{sim_flow_version}}"
+generated_by_rev = "{{sim_flow_rev}}"
+generated_by_repo = "{{sim_flow_repo}}"
+foundation_repo = "{{foundation_repo}}"
+foundation_rev = "{{foundation_rev}}"
+
 [lib]
 path = "src/lib.rs"
 
@@ -23,7 +30,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
-foundation-framework = { path = "{{foundation_path}}/crates/framework" }
+foundation-framework = { git = "{{foundation_repo}}", rev = "{{foundation_rev}}" }
 
 # sim-models library modules (uncomment as needed).
 # soc               = { path = "{{library_path}}/soc" }

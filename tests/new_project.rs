@@ -27,11 +27,10 @@ fn new_model_produces_buildable_project() {
         destination: tmp.path().to_path_buf(),
         foundation_root: root.clone(),
         library_path: "../../library".to_string(),
-        // `cargo check` runs `cargo` recursively with a fresh target dir,
-        // which is slow and pulls the whole foundation-framework compile
-        // graph. The workspace-level build already validates framework
-        // compilation, so we skip here and run a cheap manual cargo
-        // metadata below instead.
+        // `cargo check` pulls the full foundation-framework compile graph.
+        // We skip that here, but `sim-flow new model` still runs the much
+        // cheaper `cargo generate-lockfile` path so the generated project
+        // carries its own pinned Cargo.lock.
         skip_cargo_check: true,
     };
     let outcome = new_model(&options).expect("generation must succeed");
@@ -75,8 +74,16 @@ fn new_model_produces_buildable_project() {
         "Cargo.toml should carry snake_case crate name: {cargo_toml}"
     );
     assert!(cargo_toml.contains(&format!(
-        "foundation-framework = {{ path = \"{}/crates/framework\" }}",
-        root.display()
+        "foundation-framework = {{ git = \"ssh://git@github.com/NumentaCorp/sim-foundation.git\", rev = \"{}\" }}",
+        env!("SIM_FLOW_FOUNDATION_REV")
+    )));
+    assert!(cargo_toml.contains(&format!(
+        "generated_by_version = \"{}\"",
+        env!("CARGO_PKG_VERSION")
+    )));
+    assert!(cargo_toml.contains(&format!(
+        "generated_by_rev = \"{}\"",
+        env!("SIM_FLOW_GIT_REV")
     )));
 
     let main_rs = std::fs::read_to_string(project_dir.join("src/main.rs")).unwrap();
@@ -85,6 +92,9 @@ fn new_model_produces_buildable_project() {
         main_rs.contains("smoke-model"),
         "project-name placeholder should be expanded in main.rs"
     );
+
+    let cargo_lock = std::fs::read_to_string(project_dir.join("Cargo.lock")).unwrap();
+    assert!(cargo_lock.contains(env!("SIM_FLOW_FOUNDATION_REV")));
 
     let state = std::fs::read_to_string(project_dir.join(".sim-flow/state.toml")).unwrap();
     assert!(state.contains("flow = \"direct-modeling\""));
@@ -114,12 +124,32 @@ fn new_model_produces_buildable_project() {
                 entry.display()
             );
             assert!(
-                !text.contains("{{foundation_path}}"),
+                !text.contains("{{foundation_repo}}"),
+                "unresolved placeholder in {}",
+                entry.display()
+            );
+            assert!(
+                !text.contains("{{foundation_rev}}"),
                 "unresolved placeholder in {}",
                 entry.display()
             );
             assert!(
                 !text.contains("{{library_path}}"),
+                "unresolved placeholder in {}",
+                entry.display()
+            );
+            assert!(
+                !text.contains("{{sim_flow_repo}}"),
+                "unresolved placeholder in {}",
+                entry.display()
+            );
+            assert!(
+                !text.contains("{{sim_flow_rev}}"),
+                "unresolved placeholder in {}",
+                entry.display()
+            );
+            assert!(
+                !text.contains("{{sim_flow_version}}"),
                 "unresolved placeholder in {}",
                 entry.display()
             );

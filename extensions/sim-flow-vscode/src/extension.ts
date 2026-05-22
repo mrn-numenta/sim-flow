@@ -353,59 +353,34 @@ async function newProjectCommand(
   nameArg: string | undefined,
   currentProjectDir: string | undefined,
 ): Promise<void> {
+  const simModelsRoot = findSimModelsWorkspaceRoot();
+  if (!simModelsRoot) {
+    void vscode.window.showErrorMessage(
+      "sim-flow only creates projects inside the sim-models repository. Open sim-models as a workspace root and try again.",
+    );
+    return;
+  }
   const binary = tryResolveBinary();
   if (!binary) {
     return;
   }
-
-  // Two-step prompt: first the parent directory (where the new project
-  // will live), then the project name. We can't show both fields in
-  // one modal -- VS Code's `showInputBox` is single-field and the only
-  // multi-field surface is a full webview, which is overkill for a
-  // bootstrap dialog. Chained inputs are the standard VS Code pattern
-  // (compare: the built-in "Create New File" / "Move To" wizards).
-  const defaultParent = defaultProjectDestination(currentProjectDir);
-  const parent = await vscode.window.showInputBox({
-    title: "New sim-flow project — directory (1 of 2)",
-    prompt: "Parent directory in which the project folder will be created.",
-    value: defaultParent,
-    valueSelection: [defaultParent.length, defaultParent.length],
-    ignoreFocusOut: true,
-    validateInput: (v) => {
-      const t = v.trim();
-      if (t.length === 0) {
-        return "directory is required";
-      }
-      if (!path.isAbsolute(t)) {
-        return "use an absolute path";
-      }
-      // A non-existent path is fine -- the CLI mkdir-p's it -- but
-      // an existing FILE at the same path is not.
-      try {
-        const stat = fs.statSync(t);
-        if (!stat.isDirectory()) {
-          return `${t} exists but is not a directory`;
-        }
-      } catch {
-        // missing is OK
-      }
-      return undefined;
-    },
-  });
-  if (!parent) {
+  const userDir = path.join(simModelsRoot, "users", currentUsername());
+  try {
+    fs.mkdirSync(userDir, { recursive: true });
+  } catch (err) {
+    void vscode.window.showErrorMessage(
+      `sim-flow: could not create ${userDir}: ${(err as Error).message ?? String(err)}`,
+    );
     return;
   }
-  const parentTrimmed = parent.trim();
 
   let name: string | undefined;
   if (nameArg && nameArg.trim().length > 0) {
     name = nameArg.trim();
   } else {
-    const fullPathPreview = (candidate: string): string =>
-      path.join(parentTrimmed, candidate.trim() || "<name>");
     name = await vscode.window.showInputBox({
-      title: `New sim-flow project — name (2 of 2). Will be created at: ${fullPathPreview("<name>")}`,
-      prompt: "Project name (appended to the directory above).",
+      title: "New sim-flow project",
+      prompt: `Project name. It will be created under ${userDir}.`,
       placeHolder: "e.g. my-accelerator",
       ignoreFocusOut: true,
       validateInput: (v) => {
@@ -416,8 +391,8 @@ async function newProjectCommand(
         if (!/^[a-zA-Z0-9._-]+$/.test(t)) {
           return "use letters, digits, ., _, -";
         }
-        if (fs.existsSync(path.join(parentTrimmed, t))) {
-          return `${path.join(parentTrimmed, t)} already exists`;
+        if (fs.existsSync(path.join(userDir, t))) {
+          return `${path.join(userDir, t)} already exists`;
         }
         return undefined;
       },
@@ -429,7 +404,7 @@ async function newProjectCommand(
 
   const cli = new SimFlowCli({
     binary,
-    projectDir: currentProjectDir ?? process.cwd(),
+    projectDir: currentProjectDir ?? simModelsRoot,
     foundationRoot: getStringSetting("foundationRoot", ""),
   });
   try {
@@ -441,7 +416,7 @@ async function newProjectCommand(
       },
       async (progress) => {
         progress.report({ message: "scaffolding project files…" });
-        const created = await cli.newModel({ name, destination: parentTrimmed });
+        const created = await cli.newModel({ name, destination: userDir });
         progress.report({ message: "opening dashboard…" });
         await openDashboardForProject(context, created.project_dir);
         return created;
@@ -458,53 +433,13 @@ async function newProjectCommand(
 }
 
 /**
- * Default *parent* directory for a new project. The CLI's
- * `sim-flow new model <name> --destination <parent>` treats the
- * destination as the parent and appends `<name>` itself, so we MUST
- * NOT append `<name>` here -- doing that produces the doubled
- * `.../htm-smoke-test/htm-smoke-test/` that prompted the original
- * fix. Always resolves to `<sim-models>/users/<USER>` because the
- * extension is hard-coded to live inside that repo; if the workspace
- * isn't sim-models, every entry point that reaches this function has
- * already been gated by `bootstrapDefaultProject` showing an error.
- * The fallback branches stay only as defense for unusual call orders.
- */
-function defaultProjectDestination(currentProjectDir: string | undefined): string {
-  const username = currentUsername();
-  const simModels = findSimModelsWorkspaceRoot();
-  if (simModels) {
-    return path.join(simModels, "users", username);
-  }
-  // Defensive fallback: walk up from the current project (if any) to
-  // re-detect the library root signature. Reachable only when this
-  // function is invoked outside the dashboard's bootstrap path.
-  if (currentProjectDir) {
-    let cursor = currentProjectDir;
-    for (let i = 0; i < 16; i++) {
-      if (looksLikeLibraryRoot(cursor)) {
-        return path.join(cursor, "users", username);
-      }
-      const parent = path.dirname(cursor);
-      if (parent === cursor) {
-        break;
-      }
-      cursor = parent;
-    }
-  }
-  return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
-}
-
-/**
  * Resolve a project for a dashboard action:
  * 1. If exactly one project is visible in the workspace, use it.
  * 2. If multiple exist, QuickPick.
  * 3. Walk-up from the active editor for projects that sit outside
  *    workspace.findFiles reach.
- * 4. Bootstrap: when none of the above find a project, verify the
- *    workspace is rooted at `sim-models` and auto-create
- *    `<sim-models>/users/<USER>/untitled_project`. The user picked
- *    this UX so the first launch lands on a usable project without
- *    a multi-step wizard.
+ * 4. If none of the above find a project, create a new user project
+ *    under `sim-models/users/<USER>/`.
  */
 async function selectProjectDir(): Promise<string | undefined> {
   const candidates = await findProjectCandidates();
@@ -523,80 +458,8 @@ async function selectProjectDir(): Promise<string | undefined> {
   if (fallback && fs.existsSync(path.join(fallback, ".sim-flow", "state.toml"))) {
     return fallback;
   }
-  return await bootstrapDefaultProject();
-}
-
-/**
- * Auto-bootstrap a default project when the workspace has none. The
- * extension is hard-coded to live inside the `sim-models` repo, so
- * this function:
- *
- *   1. Locates the sim-models workspace root (single-folder workspace
- *      OR one of the roots in a multi-root workspace). If absent we
- *      surface a popup explaining the constraint and bail; the
- *      dashboard never opens against a foreign repo.
- *   2. Ensures `<sim-models>/users/<USER>/` exists.
- *   3. Creates `untitled_project` (or the next available
- *      `untitled_project_N`) inside that user dir via the CLI's
- *      `new model`, and returns its path.
- *
- * If the project already exists on disk with a `state.toml` we just
- * return it -- subsequent bootstraps reuse the existing default.
- */
-async function bootstrapDefaultProject(): Promise<string | undefined> {
-  const simModelsRoot = findSimModelsWorkspaceRoot();
-  if (!simModelsRoot) {
-    void vscode.window.showErrorMessage(
-      'sim-flow only runs against the sim-models repository. Open the sim-models repo as your workspace, or add it as a root in a multi-root workspace, then re-run "Open Flow Dashboard".',
-    );
-    return undefined;
-  }
-  const binary = tryResolveBinary();
-  if (!binary) {
-    return undefined;
-  }
-  const username = currentUsername();
-  const userDir = path.join(simModelsRoot, "users", username);
-  try {
-    fs.mkdirSync(userDir, { recursive: true });
-  } catch (err) {
-    void vscode.window.showErrorMessage(
-      `sim-flow: could not create ${userDir}: ${(err as Error).message ?? String(err)}`,
-    );
-    return undefined;
-  }
-  const projectName = pickFirstAvailableProjectName(userDir, "untitled_project");
-  const existing = path.join(userDir, projectName);
-  if (fs.existsSync(path.join(existing, ".sim-flow", "state.toml"))) {
-    return existing;
-  }
-  const cli = new SimFlowCli({
-    binary,
-    projectDir: simModelsRoot,
-    foundationRoot: getStringSetting("foundationRoot", ""),
-  });
-  try {
-    const result = await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: `sim-flow: creating default project "${projectName}"`,
-        cancellable: false,
-      },
-      async (progress) => {
-        progress.report({ message: "scaffolding project files…" });
-        return await cli.newModel({ name: projectName, destination: userDir });
-      },
-    );
-    void vscode.window.showInformationMessage(
-      `Created default project at ${result.project_dir}. Use "Rename..." to give it a permanent name.`,
-    );
-    return result.project_dir;
-  } catch (err) {
-    void vscode.window.showErrorMessage(
-      `sim-flow: failed to create default project: ${(err as Error).message ?? String(err)}`,
-    );
-    return undefined;
-  }
+  await vscode.commands.executeCommand("sim-flow.newProject");
+  return undefined;
 }
 
 /**
@@ -634,29 +497,6 @@ function looksLikeLibraryRoot(dir: string): boolean {
 
 function currentUsername(): string {
   return process.env.USER ?? process.env.USERNAME ?? process.env.LOGNAME ?? "user";
-}
-
-/**
- * Find the first project name in the form `<base>` / `<base>_2` /
- * `<base>_3` / ... whose target directory either doesn't exist or
- * already holds a valid sim-flow project (state.toml present). Lets
- * the bootstrap reuse an existing `untitled_project` while still
- * sidestepping a half-created stub directory.
- */
-function pickFirstAvailableProjectName(parentDir: string, base: string): string {
-  for (let i = 1; i <= 1000; i++) {
-    const name = i === 1 ? base : `${base}_${i}`;
-    const target = path.join(parentDir, name);
-    if (!fs.existsSync(target)) {
-      return name;
-    }
-    if (fs.existsSync(path.join(target, ".sim-flow", "state.toml"))) {
-      return name;
-    }
-  }
-  // Astronomically unlikely; fall back to a timestamped name so we
-  // don't loop forever.
-  return `${base}_${Date.now()}`;
 }
 
 /**

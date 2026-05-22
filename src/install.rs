@@ -1,16 +1,16 @@
 //! Build sim-flow + the VS Code extension, optionally install the VSIX.
 //!
 //! This module replaces the legacy `scripts/install-vscode-extension.sh`
-//! and is the canonical entry point for consumers (sim-models' `xtask`
-//! crate, the `sim-flow install-extension` CLI subcommand, etc.) that
+//! and is the canonical entry point for consumers (the `sim-flow
+//! install-extension` CLI subcommand, future installers, etc.) that
 //! want to install sim-flow without going through the shell.
 //!
 //! Lifting the install flow out of bash means callers can supply
 //! sim-flow's own crate root and a pre-built binary together, so the
 //! VSIX embeds a binary linked against whatever Cargo.lock the caller
 //! is resolving — critical for sim-models, which needs the bundled
-//! `sim-flow` binary to see the same `sim-foundation` SHA the rest of
-//! sim-models is built against.
+//! `sim-flow` binary to see the same `sim-foundation` SHA the generated
+//! model project will later pin in its own manifest / lockfile.
 //!
 //! Pipeline:
 //!   1. Either build the sim-flow binary (`cargo build [-r] -p

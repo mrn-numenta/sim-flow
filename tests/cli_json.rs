@@ -176,6 +176,7 @@ fn new_model_json_describes_generated_project() {
         "project_dir: {:?}",
         v["project_dir"]
     );
+    assert!(dest.join("smoke-model").join("Cargo.lock").is_file());
 }
 
 // -----------------------------------------------------------------

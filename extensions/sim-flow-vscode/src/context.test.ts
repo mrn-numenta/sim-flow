@@ -65,6 +65,14 @@ function makeProject(dir: string): void {
   fs.writeFileSync(path.join(dir, ".sim-flow", "state.toml"), 'flow = "direct-modeling"\n');
 }
 
+function setupSimModelsWorkspace(root: string): string {
+  const simModelsRoot = path.join(root, "sim-models");
+  fs.mkdirSync(path.join(simModelsRoot, "docs", "modeling-guide"), { recursive: true });
+  fs.mkdirSync(path.join(simModelsRoot, "examples"), { recursive: true });
+  workspaceFolders = [{ uri: { fsPath: simModelsRoot }, name: "sim-models", index: 0 }];
+  return simModelsRoot;
+}
+
 let tmpRoot: string;
 
 beforeEach(() => {
@@ -83,7 +91,8 @@ afterEach(() => {
 
 describe("resolveContext with --project hint", () => {
   it("trusts a valid hint and skips workspace scanning", async () => {
-    const projectA = path.join(tmpRoot, "model-a");
+    const simModelsRoot = setupSimModelsWorkspace(tmpRoot);
+    const projectA = path.join(simModelsRoot, "users", "tester", "model-a");
     makeProject(projectA);
 
     const ctx = await resolveContext({ projectDir: projectA });
@@ -92,9 +101,10 @@ describe("resolveContext with --project hint", () => {
     expect(errorMessages).toEqual([]);
   });
 
-  it("rejects a hint that does not point at a sim-flow project and surfaces a helpful error", async () => {
-    const notAProject = path.join(tmpRoot, "random-dir");
-    fs.mkdirSync(notAProject, { recursive: true });
+  it("rejects a hint outside the allowed sim-models project roots", async () => {
+    setupSimModelsWorkspace(tmpRoot);
+    const notAProject = path.join(tmpRoot, "sim-foundation", "scratch");
+    makeProject(notAProject);
 
     const ctx = await resolveContext({ projectDir: notAProject });
     expect(ctx).toBeNull();
@@ -104,14 +114,18 @@ describe("resolveContext with --project hint", () => {
 });
 
 describe("findProjectCandidates", () => {
-  it("discovers every .sim-flow/state.toml in the workspace and dedupes", async () => {
-    const a = path.join(tmpRoot, "model-a");
-    const b = path.join(tmpRoot, "studies", "model-b");
+  it("discovers only sim-models user and library projects and dedupes", async () => {
+    const simModelsRoot = setupSimModelsWorkspace(tmpRoot);
+    const a = path.join(simModelsRoot, "users", "tester", "model-a");
+    const b = path.join(simModelsRoot, "library", "model-b");
+    const ignored = path.join(tmpRoot, "sim-foundation", "model-c");
     makeProject(a);
     makeProject(b);
+    makeProject(ignored);
     findFilesResults = [
       { fsPath: path.join(a, ".sim-flow", "state.toml") },
       { fsPath: path.join(b, ".sim-flow", "state.toml") },
+      { fsPath: path.join(ignored, ".sim-flow", "state.toml") },
       { fsPath: path.join(a, ".sim-flow", "state.toml") }, // duplicate, should dedupe
     ];
 
@@ -119,20 +133,22 @@ describe("findProjectCandidates", () => {
     expect(found).toEqual([a, b].sort());
   });
 
-  it("backfills workspace folders whose root has .sim-flow even if findFiles missed them", async () => {
+  it("returns no candidates when sim-models is not in the workspace", async () => {
     const rootProject = path.join(tmpRoot, "rootish");
     makeProject(rootProject);
-    workspaceFolders = [{ uri: { fsPath: rootProject }, name: "rootish", index: 0 }];
-    findFilesResults = [];
+    workspaceFolders = [
+      { uri: { fsPath: path.join(tmpRoot, "sim-foundation") }, name: "sim-foundation", index: 0 },
+    ];
+    findFilesResults = [{ fsPath: path.join(rootProject, ".sim-flow", "state.toml") }];
 
-    const found = await findProjectCandidates();
-    expect(found).toEqual([rootProject]);
+    expect(await findProjectCandidates()).toEqual([]);
   });
 });
 
 describe("resolveProjectDir", () => {
   it("walks up from the active editor's file path to find .sim-flow", () => {
-    const proj = path.join(tmpRoot, "model-x");
+    const simModelsRoot = setupSimModelsWorkspace(tmpRoot);
+    const proj = path.join(simModelsRoot, "users", "tester", "model-x");
     makeProject(proj);
     // Active editor inside a deeply-nested src/ file.
     const nestedFile = path.join(proj, "src", "deep", "lib.rs");
@@ -142,29 +158,44 @@ describe("resolveProjectDir", () => {
     expect(resolveProjectDir()).toBe(proj);
   });
 
-  it("walks up from a workspace folder when there is no active editor", () => {
-    const proj = path.join(tmpRoot, "model-y");
-    makeProject(proj);
-    workspaceFolders = [{ uri: { fsPath: proj }, name: "model-y", index: 0 }];
-    expect(resolveProjectDir()).toBe(proj);
+  it("falls back to the sim-models workspace root when no project is initialized yet", () => {
+    const simModelsRoot = setupSimModelsWorkspace(tmpRoot);
+    expect(resolveProjectDir()).toBe(simModelsRoot);
   });
 
-  it("falls back to the sole workspace folder when no state.toml is found anywhere", () => {
+  it("does not treat an arbitrary single-root workspace as a project", () => {
     const root = path.join(tmpRoot, "fresh-workspace");
     fs.mkdirSync(root, { recursive: true });
     workspaceFolders = [{ uri: { fsPath: root }, name: "fresh-workspace", index: 0 }];
-    expect(resolveProjectDir()).toBe(root);
+    expect(resolveProjectDir()).toBeUndefined();
   });
 
   it("returns undefined with no active editor AND multiple workspace folders", () => {
+    const simModelsRoot = setupSimModelsWorkspace(tmpRoot);
     workspaceFolders = [
-      { uri: { fsPath: path.join(tmpRoot, "a") }, name: "a", index: 0 },
-      { uri: { fsPath: path.join(tmpRoot, "b") }, name: "b", index: 1 },
+      { uri: { fsPath: simModelsRoot }, name: "sim-models", index: 0 },
+      { uri: { fsPath: path.join(tmpRoot, "sim-foundation") }, name: "sim-foundation", index: 1 },
     ];
     expect(resolveProjectDir()).toBeUndefined();
   });
 
   it("returns undefined with no editor and no workspace folders", () => {
+    expect(resolveProjectDir()).toBeUndefined();
+  });
+
+  it("ignores projects outside sim-models when walking up from the active editor", () => {
+    const simModelsRoot = setupSimModelsWorkspace(tmpRoot);
+    const disallowed = path.join(tmpRoot, "sim-foundation", "scratch");
+    makeProject(disallowed);
+    workspaceFolders = [
+      { uri: { fsPath: simModelsRoot }, name: "sim-models", index: 0 },
+      { uri: { fsPath: path.join(tmpRoot, "sim-foundation") }, name: "sim-foundation", index: 1 },
+    ];
+    const nestedFile = path.join(disallowed, "src", "main.rs");
+    fs.mkdirSync(path.dirname(nestedFile), { recursive: true });
+    fs.writeFileSync(nestedFile, "// stub\n");
+    activeTextEditorPath = nestedFile;
+
     expect(resolveProjectDir()).toBeUndefined();
   });
 });

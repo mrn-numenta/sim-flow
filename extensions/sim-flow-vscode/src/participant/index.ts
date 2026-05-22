@@ -469,14 +469,14 @@ async function renderResolutionError(
 ): Promise<void> {
   if (hint) {
     stream.markdown(
-      `**Cannot resolve \`${hint}\`.** That path does not contain a \`.sim-flow/state.toml\`. Pass a different \`--project <path>\` or run \`/init\` to initialize a project there.\n`,
+      `**Cannot resolve \`${hint}\`.** Use an initialized project under \`sim-models/users/<user>/<project>\` or \`sim-models/library/<project>\`.\n`,
     );
     return;
   }
   const candidates = await findProjectCandidates();
   if (candidates.length === 0) {
     stream.markdown(
-      "**Cannot run sim-flow here.** Open a workspace that contains `.sim-flow/state.toml` or initialize one with `/init`.\n",
+      "**Cannot run sim-flow here.** Open the `sim-models` workspace and create or select a project under `users/` or `library/`.\n",
     );
     return;
   }

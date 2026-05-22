@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 /// next to `prompts/` and `extensions/` at the repo root; all
 /// sim-flow-specific assets sit in one tree.
 pub const TEMPLATES_DIR: &str = "templates";
+pub const SIM_FOUNDATION_GIT_URL: &str = "ssh://git@github.com/NumentaCorp/sim-foundation.git";
+pub const SIM_FLOW_GIT_URL: &str = "ssh://git@github.com/NumentaCorp/sim-flow.git";
 
 /// Convert a human-facing project name (e.g. "my-model") to a valid cargo
 /// crate identifier (snake_case, ASCII, leading digit stripped).
@@ -43,6 +45,18 @@ pub fn crate_name(project_name: &str) -> String {
         out.insert(0, '_');
     }
     out
+}
+
+pub fn foundation_rev() -> &'static str {
+    env!("SIM_FLOW_FOUNDATION_REV")
+}
+
+pub fn sim_flow_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+pub fn sim_flow_rev() -> &'static str {
+    env!("SIM_FLOW_GIT_REV")
 }
 
 /// Produce an ISO-8601 UTC timestamp suitable for the `{{timestamp}}`
@@ -98,28 +112,25 @@ fn is_leap(y: i64) -> bool {
 /// `project-name` / `crate_name` entries are informational -- they
 /// match cargo-generate's built-in derivations from `--name` and the
 /// caller can read them back without re-running the same logic. The
-/// custom keys (`foundation_path`, `library_path`, `timestamp`) are
-/// the values cargo-generate needs via `--define`.
-pub fn default_placeholders(
-    project_name: &str,
-    foundation_root: &Path,
-    library_path: &str,
-) -> BTreeMap<String, String> {
+/// custom keys carry the per-project provenance sim-flow stamps into
+/// the generated manifest.
+pub fn default_placeholders(project_name: &str, library_path: &str) -> BTreeMap<String, String> {
     let mut m = BTreeMap::new();
     m.insert("project-name".into(), project_name.to_string());
     m.insert("crate_name".into(), crate_name(project_name));
-    m.insert(
-        "foundation_path".into(),
-        foundation_root.display().to_string(),
-    );
+    m.insert("foundation_repo".into(), SIM_FOUNDATION_GIT_URL.to_string());
+    m.insert("foundation_rev".into(), foundation_rev().to_string());
     m.insert("library_path".into(), library_path.to_string());
+    m.insert("sim_flow_repo".into(), SIM_FLOW_GIT_URL.to_string());
+    m.insert("sim_flow_rev".into(), sim_flow_rev().to_string());
+    m.insert("sim_flow_version".into(), sim_flow_version().to_string());
     m.insert("timestamp".into(), utc_timestamp_now());
     m
 }
 
-/// Resolve the path to a named template inside the foundation root.
-pub fn template_path(foundation_root: &Path, template_name: &str) -> PathBuf {
-    foundation_root.join(TEMPLATES_DIR).join(template_name)
+/// Resolve the path to a named template inside the sim-flow root.
+pub fn template_path(sim_flow_root: &Path, template_name: &str) -> PathBuf {
+    sim_flow_root.join(TEMPLATES_DIR).join(template_name)
 }
 
 #[cfg(test)]
@@ -145,42 +156,50 @@ mod tests {
     }
 
     #[test]
-    fn template_path_joins_under_foundation_templates_dir() {
-        let p = template_path(std::path::Path::new("/abs/foundation"), "model-project");
+    fn template_path_joins_under_sim_flow_templates_dir() {
+        let p = template_path(std::path::Path::new("/abs/sim-flow"), "model-project");
         assert!(p.ends_with("templates/model-project"));
     }
 
     #[test]
     fn default_placeholders_populates_canonical_keys() {
-        let m = default_placeholders(
-            "demo-model",
-            std::path::Path::new("/abs/foundation"),
-            "../sim-models/library",
-        );
+        let m = default_placeholders("demo-model", "../sim-models/library");
         assert_eq!(
             m.get("project-name").map(String::as_str),
             Some("demo-model")
         );
         assert_eq!(m.get("crate_name").map(String::as_str), Some("demo_model"));
         assert_eq!(
-            m.get("foundation_path").map(String::as_str),
-            Some("/abs/foundation"),
+            m.get("foundation_repo").map(String::as_str),
+            Some(SIM_FOUNDATION_GIT_URL),
+        );
+        assert_eq!(
+            m.get("foundation_rev").map(String::as_str),
+            Some(foundation_rev()),
         );
         assert_eq!(
             m.get("library_path").map(String::as_str),
             Some("../sim-models/library"),
         );
-        // Timestamp must be present + non-empty (full shape tested elsewhere).
+        assert_eq!(
+            m.get("sim_flow_repo").map(String::as_str),
+            Some(SIM_FLOW_GIT_URL),
+        );
+        assert_eq!(
+            m.get("sim_flow_rev").map(String::as_str),
+            Some(sim_flow_rev()),
+        );
+        assert_eq!(
+            m.get("sim_flow_version").map(String::as_str),
+            Some(sim_flow_version()),
+        );
         assert!(m.get("timestamp").is_some_and(|t| !t.is_empty()));
     }
 
     #[test]
     fn is_leap_handles_century_and_400_year_edges() {
-        // 2000 is a leap year (divisible by 400).
         assert!(is_leap(2000));
-        // 1900 is NOT (divisible by 100 but not 400).
         assert!(!is_leap(1900));
-        // 2024 is leap; 2025 is not.
         assert!(is_leap(2024));
         assert!(!is_leap(2025));
     }
